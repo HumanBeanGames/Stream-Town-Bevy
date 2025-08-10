@@ -25,7 +25,7 @@ namespace Settings
 
 		private bool _presetChange;
 
-		private SavePreset _savePreset;
+		[Inject] private SavePreset _savePreset;
 
 		//save variables
 
