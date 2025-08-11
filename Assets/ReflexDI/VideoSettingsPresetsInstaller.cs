@@ -2,10 +2,10 @@ using Reflex.Core;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class SettingPresetsInstaller : MonoBehaviour, IInstaller
+public class VideoSettingsPresetsInstaller : MonoBehaviour, IInstaller
 {
     [SerializeField]
-    List<SettingPreset> presets;
+    List<VideoSettingsPreset> presets;
     public void InstallBindings(ContainerBuilder containerBuilder)
     {
         containerBuilder.AddSingleton(presets.ToArray());

@@ -1,1 +1,0 @@
-public class Access_BorderDetectionSensitivityText : Access_Text { }

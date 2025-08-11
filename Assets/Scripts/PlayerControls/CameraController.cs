@@ -1,451 +1,500 @@
+﻿// CameraController.cs
+//
+// Purpose:
+//   Player-controlled RTS-style camera with pan (MMB drag), zoom (mouse wheel),
+//   keyboard/edge scrolling movement, and a simple "command move" coroutine for
+//   scripted camera motions. Runtime tuning is driven by injected SettingsData.
+//
+// Key design notes:
+//   • Uses SmoothDamp for pan/move/zoom for framerate-independent, velocity-based smoothing.
+//   • Reads user-tunable speeds/toggles (pan/zoom/wasd sensitivity, mouse controls, edge scroll, etc.)
+//     from SettingsData (injected).
+//   • All user input is ignored while IsIdle == true (e.g., during cutscenes).
+//   • CommandMove coroutine runs only when IsIdle == true. Starting a manual pan cancels it.
+//
+// Integration points:
+//   • Requires a Camera component (see RequireComponent).
+//   • Subscribes to PlayerInput (new Input System) for keyboard movement,
+//     and to PlayerInputManager.OnMouseScroll for mouse wheel.
+//   • GameStateManager.ReadiedPlayer → enables this component when game is ready.
+//   • Optionally interacts with SelectionManager in SetTarget() (if you wire that up).
+//
+
 using Managers;
 using UnityEngine;
 using Utils;
 using System.Collections;
 using World;
 using UnityEngine.EventSystems;
+using Reflex.Attributes;
 
 namespace PlayerControls
 {
-	public class CameraController : MonoBehaviour
-	{
-		[Header("Camera Constraints")]
+    [RequireComponent(typeof(Camera))]
+    public class CameraController : MonoBehaviour
+    {
+        // Source of truth for user-tunable camera settings (sensitivities, toggles, etc.)
+        [Inject] SettingsData CurrentSettings;
 
-		[SerializeField]
-		private float _maxCameraHeight = 30.0f;
+        #region Inspector Fields (Constraints & Tunables)
 
-		[SerializeField]
-		private float _minCameraHeight = 15.0f;
-
-		[SerializeField]
-		private Vector2 _minimumCameraPosition = Vector2.zero;
-
-		[SerializeField]
-		private Vector2 _maximumCameraPosition = Vector2.zero;
-
-		[Header("Pan")]
-
-		[SerializeField]
-		private bool _canPan = true;
-
-		[SerializeField]
-		private float _panSensitivity = 1.0f;
-
-		[SerializeField]
-		private float _panSmoothness = 0.5f;
-
-		[Header("Zoom")]
-
-		[SerializeField]
-		private bool _canZoom = true;
-
-		[SerializeField]
-		private float _zoomSenitivity = 1.0f;
-
-		[SerializeField]
-		private float _zoomSmoothness;
-
-		[Header("Move")]
-
-		[SerializeField]
-		private bool _canMove = true;
-
-		[SerializeField]
-		private bool _borderDetection;
-
-		[SerializeField]
-		private bool _mouseControls;
-
-		[SerializeField]
-		private int _edgeSize = 5;
-
-		[SerializeField]
-		private float _wasdSenitivity = 1.0f;
-
-		[SerializeField]
-		private float _borderDetectionSenitivity = 20.0f;
-
-		[SerializeField]
-		private float _moveSmoothness;
-
-		[Header("Command Settings")]
-
-		[SerializeField]
-		private float _moveTime = 2f;
-
-		//Private variables
-		private GameManager _gameManager;
-
-		private Transform _transform = null;
-
-		private Camera _camera = null;
-
-		private SelectableObject _target = null;
-
-		private PlayerInput _playerInput;
-
-		private float _scrollWheelInput = 0.0f;
-		private float _scrollPosition = 15.0f;
-		private float _transitionTime = 0.0f;
-
-		private bool _autofollow = false;
-		private bool _isPanning;
-		private bool _movingWithMouse;
-		private bool _isIdle = false;
-
-		private Vector2 _keyboardInput;
-
-		private Vector3 _oldMovePosition;
-		private Vector3 _newMovePosition;
-		private Vector3 _startPosDuringMovement;
-		private Vector3 _movePos;
-
-		public Vector3 StartPosition { get; private set; }
-		public bool BorderDetection
-		{
-			get { return _borderDetection; }
-			set { _borderDetection = value; }
-		}
-		public bool MouseControls
-		{
-			get { return _mouseControls; }
-			set { _mouseControls = value; }
-		}
-		public float PanSensitivity
-		{
-			get { return _panSensitivity; }
-			set { _panSensitivity = value; }
-		}
-		public float ZoomSensitivity
-		{
-			get { return _zoomSenitivity; }
-			set { _zoomSenitivity = value; }
-		}
-		public float WasdSensitivity
-		{
-			get { return _wasdSenitivity; }
-			set { _wasdSenitivity = value; }
-		}
-		public float BorderDetectionSensitivity
-		{
-			get { return _borderDetectionSenitivity; }
-			set { _borderDetectionSenitivity = value;}
-		}
-		public bool IsIdle
-		{
-			get { return _isIdle; }
-			set { _isIdle = value; }
-		}
-
-		/// <summary>
-		/// Runs everything for the camera to update
-		/// </summary>
-		private void UpdateCamera()
-		{
-			if (!_isIdle)
-			{
-				Pan();
-				Move();
-			}
-
-			Zoom();
-		}
-
-		/// <summary>
-		/// Pans by physically moving the camera on the X/Z - axis
-		/// </summary>
-		private void Pan()
-		{
-			if (_canPan && MouseControls)
-			{
-				if (PlayerInputManager.IsButtonHeld(PlayerInputManager.Button.MiddleMouse))
-				{
-					_isPanning = true;
-					_autofollow = false;
-
-					StopCoroutine(SmoothCameraMovement());
-
-					Vector3 movementVec = new Vector3(PlayerInputManager.MousePositionDelta.y, 0, -PlayerInputManager.MousePositionDelta.x);
-					movementVec *= _panSensitivity;
-					Vector3 movementVecLerped = Vector3.Lerp(new Vector3(0, 0, 0), movementVec, Time.fixedUnscaledDeltaTime * _panSmoothness);
-					_transform.position += movementVecLerped;
-					_transform.position = MoveConstraints(_transform.position);
-
-					_oldMovePosition = _transform.position;
-					_newMovePosition = _transform.position;
-					_movePos = transform.position;
-				}
-				else
-				{
-					_isPanning = false;
-				}
-			}
-			else
-			{
-				_isPanning = false;
-			}
-		}
-
-		/// <summary>
-		/// Zooms by phisically moving the camera on the Y - axis
-		/// </summary>
-		private void Zoom()
-		{
-			if (_canZoom)
-			{
-				Vector3 direction = Vector3.zero;
-				Vector3 oldPos = _transform.position;
-				if (_target != null && _autofollow)
-					direction = (_transform.position - _target.transform.position).normalized;
-				else
-					direction = Vector3.up;
-
-				_scrollPosition += _scrollWheelInput * _zoomSenitivity * 0.004f;
-				_scrollPosition = Mathf.Clamp(_scrollPosition, _minCameraHeight, _maxCameraHeight);
-
-				Vector3 movementVecLerped = Vector3.Lerp(_transform.position, new Vector3(0, _scrollPosition, 0), Time.fixedUnscaledDeltaTime * _zoomSmoothness);
-				movementVecLerped = new Vector3(_transform.position.x, movementVecLerped.y, transform.position.z);
-				_transform.position = movementVecLerped;
-
-				_scrollWheelInput = 0.0f;
-			}
-		}
-
-		private void Move()
-		{
-			if (_canMove && !_isPanning)
-			{
-				if (Application.isFocused)
-				{
-					if (_mouseControls && _borderDetection)
-					{
-						Vector2 mouseInput = new Vector2();
-						if (PlayerInputManager.MousePosition.x > Screen.width - _edgeSize)
-						{
-							mouseInput.x = 1;
-							_movingWithMouse = true;
-						}
-						else if (PlayerInputManager.MousePosition.x < _edgeSize)
-						{
-							mouseInput.x = -1;
-							_movingWithMouse = true;
-						}
-						else
-						{
-							mouseInput.x = 0;
-							_movingWithMouse = false;
-						}
-
-						if (PlayerInputManager.MousePosition.y > Screen.height - _edgeSize)
-						{
-							mouseInput.y = 1;
-							_movingWithMouse = true;
-						}
-						else if (PlayerInputManager.MousePosition.y < _edgeSize)
-						{
-							mouseInput.y = -1;
-							_movingWithMouse = true;
-						}
-						else
-						{
-							mouseInput.y = 0;
-							_movingWithMouse = false;
-						}
-						_movePos += new Vector3(mouseInput.y, 0, -mouseInput.x).normalized * _borderDetectionSenitivity * Time.fixedUnscaledDeltaTime * 2;
-						_movePos = MoveConstraints(_movePos);
-
-						Vector3 movementVecLerped = Vector3.Lerp(_transform.position, _movePos, Time.fixedUnscaledDeltaTime * _moveSmoothness);
-						movementVecLerped.y = _transform.position.y;
-
-						_transform.position = movementVecLerped;
-					}
-					else
-					{
-						_movingWithMouse = false;
-					}
-
-					if (!_movingWithMouse)
-					{
-						float zoomOutBoost = _scrollPosition / (_maxCameraHeight - _minCameraHeight);
-						zoomOutBoost += 1;
-						zoomOutBoost = Mathf.Pow(zoomOutBoost, zoomOutBoost);
-						_movePos += new Vector3(_keyboardInput.y, 0, -_keyboardInput.x) * (zoomOutBoost *_wasdSenitivity) * Time.fixedUnscaledDeltaTime * 2;
-						_movePos = MoveConstraints(_movePos);
-
-						Vector3 movementVecLerped = Vector3.Lerp(_transform.position, _movePos, Time.fixedUnscaledDeltaTime * _moveSmoothness);
-						movementVecLerped.y = _transform.position.y;
-
-						_transform.position = movementVecLerped;
-					}
-				}
-			}
-		}
-
-		private IEnumerator SmoothCameraMovement()
-		{
-			Vector3 newPos = new Vector3();
-
-			while (_transitionTime / _moveTime < 1)
-			{
-				_transitionTime += Time.fixedUnscaledDeltaTime;
-
-				newPos = Vector3.Lerp(_startPosDuringMovement, _newMovePosition, Easings.EaseInOutCubic(Mathf.Clamp(_transitionTime / _moveTime, 0.0f, 1.0f)));
-				newPos.y = _transform.position.y;
-				_movePos = _transform.position;
-				_transform.position = newPos;
-
-				yield return null;
-			}
-			_transform.position = new Vector3(_newMovePosition.x, _transform.position.y, _newMovePosition.z);
-		}
-
-		/// <summary>
-		/// Sets the target position for orbiting
-		/// </summary>
-		/// <param name="button"></param>
-		private void SetTarget(PlayerInputManager.Button button)
-		{
-			Debug.Log("Clicked");
-			if (Physics.Raycast(_camera.ScreenPointToRay(PlayerInputManager.MousePosition), out RaycastHit hitInfo, float.MaxValue))
-			{
-				SelectableObject obj = hitInfo.transform.GetComponentInChildren<SelectableObject>();
-				if (obj != null)
-				{
-					_target = obj;
-					_gameManager.SelectionManager.OnObjectSelected.Invoke(_target, _target.Data);
-					_autofollow = true;
-				}
-				else
-					_gameManager.SelectionManager.HideUI();
-			}
-		}
-
-		private void UpdateScrollWheelInput(float value)
-		{
-			if (!_isIdle && !WorldUtils.IsPointerOverUI(EventSystem.current) && _mouseControls)
-			{
-				_scrollWheelInput = -value;
-			}
-		}
-
-		/// <summary>
-		/// Applies constraints to the cameras movement
-		/// </summary>
-
-		private Vector3 MoveConstraints(Vector3 movement)
-		{
-			// Camera XZ position constraints
-			if (movement.x < _minimumCameraPosition.x)
-				movement = new Vector3(_minimumCameraPosition.x, movement.y, movement.z);
-			if (_minimumCameraPosition.y > movement.z)
-				movement = new Vector3(movement.x, movement.y, _minimumCameraPosition.y);
-
-			if (_maximumCameraPosition.x < movement.x)
-				movement = new Vector3(_maximumCameraPosition.x, movement.y, movement.z);
-			if (_maximumCameraPosition.y < movement.z)
-				movement = new Vector3(movement.x, movement.y, _maximumCameraPosition.y);
-			return movement;
-		}
-
-		/// <summary>
-		/// Command Movements
-		/// </summary>
-
-		public void MoveCamera(Vector3 moveVec)
-		{
-			if (_isIdle)
-			{
-				_oldMovePosition = new Vector3(_newMovePosition.x, 0, _newMovePosition.z);
-				_newMovePosition = _oldMovePosition + moveVec;
-				_startPosDuringMovement = _transform.position;
-
-				_transitionTime = 0;
-
-				_newMovePosition = MoveConstraints(_newMovePosition);
-
-				StopCoroutine(SmoothCameraMovement());
-				StartCoroutine(SmoothCameraMovement());
-			}
-		}
-
-		public void ZoomCamera(int zoomFactor)
-		{
-			if (_isIdle)
-			{
-				_scrollPosition += zoomFactor;
-				_scrollPosition = Mathf.Clamp(_scrollPosition, _minCameraHeight, _maxCameraHeight);
-			}
-		}
-
-		public void ResetCamera()
-		{
-			if (_isIdle)
-			{
-				_newMovePosition = StartPosition;
-				_oldMovePosition = StartPosition;
-				_scrollPosition = 20f;
-				_transform.position = StartPosition;
-			}
-		}
-
-		private void Awake()
-		{
-			GameManager.Instance.CameraController = this;
-			_playerInput = new PlayerInput();
-
-			if (!TryGetComponent(out _transform))
-				Debug.LogError("CameraController: missing transform component" + this);  // should never occur
-
-			if (!TryGetComponent(out _camera))
-				Debug.LogError("CameraController: missing camera component" + this);
-
-			if (_maxCameraHeight - _minCameraHeight < 0)
-				Debug.LogError("CameraController: MaxCameraHeight is lower than MinCameraHeight" + this);
-
-			if (_maximumCameraPosition.x - _minimumCameraPosition.x < 0)
-				Debug.LogError("CameraController: MaximumCameraPosition.x is lower than MinimumCamerPosition.x" + this);
-
-			if (_maximumCameraPosition.y - _minimumCameraPosition.y < 0)
-				Debug.LogError("CameraController: MaximumCameraPosition.y is lower than MinimumCamerPosition.y" + this);
-			if (!_gameManager)
-				_gameManager = GameManager.Instance;
-
-			StartPosition = transform.position;
-
-			if (_gameManager)
-			{
-				_panSensitivity = _gameManager.SettingsData.panSensitivity;
-				_zoomSenitivity = _gameManager.SettingsData.zoomSensitivity;
-				_wasdSenitivity = _gameManager.SettingsData.wasdSensitivity;
-			}
-			else
-				Debug.LogError("No game manager presetned in scene");
-
-			_playerInput.BasicControls.KeyboardMovement.performed += ctx => _keyboardInput = ctx.ReadValue<Vector2>();
-			_playerInput.BasicControls.KeyboardMovement.canceled += ctx => _keyboardInput = Vector2.zero;
-
-			_newMovePosition = transform.position;
-			_oldMovePosition = transform.position;
-			_scrollPosition = 15.0f;
-			_movePos = transform.position;
-			this.enabled = false;
-		}
-
-		private void OnEnable()
-		{
-			PlayerInputManager.OnMouseScroll += UpdateScrollWheelInput;
-			_playerInput.Enable();
-		}
-
-		private void OnDisable()
-		{
-			PlayerInputManager.OnMouseScroll -= UpdateScrollWheelInput;
-			_playerInput.Disable();
-		}
-
-		private void Update()
-		{
-			UpdateCamera();
-		}
-	}
+        [Header("Camera Constraints")]
+        [SerializeField] private float _maxCameraHeight = 30.0f;     // Upper clamp for zoom height
+        [SerializeField] private float _minCameraHeight = 15.0f;     // Lower clamp for zoom height
+        [SerializeField] private Vector2 _minimumCameraPosition = Vector2.zero; // XZ min bounds (x → X, y → Z)
+        [SerializeField] private Vector2 _maximumCameraPosition = Vector2.zero; // XZ max bounds (x → X, y → Z)
+
+        [Header("Pan")]
+        [SerializeField] private bool _canPan = true;               // Global enable/disable for panning
+        [SerializeField] private float _panSmoothness = 0.5f;        // SmoothDamp time (seconds) for pan
+
+        [Header("Zoom")]
+        [SerializeField] private bool _canZoom = true;              // Global enable/disable for zooming
+        [SerializeField] private float _zoomSmoothness = 0.5f;       // SmoothDamp time (seconds) for zoom height
+
+        [Header("Move")]
+        [SerializeField] private bool _canMove = true;              // Global enable/disable for movement
+        [SerializeField] private int _edgeSize = 5;                // Pixel threshold near screen edges for edge scroll
+        [SerializeField] private float _moveSmoothness = 0.5f;       // SmoothDamp time (seconds) for move
+
+        [Header("Command Settings")]
+        [SerializeField] private float _moveTime = 2f;               // Duration used by the command-move coroutine
+
+        #endregion
+
+        #region Runtime Smoothing State (used by SmoothDamp)
+
+        // Velocity refs used by Vector3.SmoothDamp and Mathf.SmoothDamp
+        private Vector3 _panVelocity = Vector3.zero;
+        private Vector3 _moveVelocity = Vector3.zero;
+        private float _zoomVelocity = 0f;
+
+        #endregion
+
+        #region Private State & Dependencies
+
+        private GameManager _gameManager;            // Cached GameManager
+        private Transform _transform = null;       // Cached Transform
+        private Camera _camera = null;          // Cached Camera, used by SetTarget()
+        private SelectableObject _target = null;     // Optional: selected object target (if you wire SetTarget)
+
+        private PlayerInput _playerInput;            // New Input System wrapper (project-specific)
+
+        private float _scrollWheelInput = 0.0f;      // Accumulated scroll delta since last zoom step
+        private float _scrollPosition = 15.0f;     // Target zoom height (interpolated toward)
+        private float _transitionTime = 0.0f;      // Timer for command-move coroutine
+
+        private bool _isPanning = false;             // True while MMB is held and pan is active
+        private bool _isIdle = false;             // If true, ignore user-driven pan/move; allow command moves
+
+        private Vector2 _keyboardInput;              // WASD/arrow input vector from Input System
+
+        // Command-move state (used only by SmoothCameraMovement coroutine)
+        private Vector3 _newMovePosition;            // Destination XZ for command move
+        private Vector3 _startPosDuringMovement;     // Start position for current command move
+        private Vector3 _movePos;                    // Accumulated movement target for free movement (pan/edge/keyboard)
+
+        public Vector3 StartPosition { get; private set; } // Initial world position
+
+        private Coroutine _moveRoutine;              // Handle for the command-move coroutine
+
+        /// <summary>
+        /// Global flag to pause/resume player-driven camera updates (pan/move/zoom).
+        /// When set true, Pan() and Move() are skipped; ZoomCamera/MoveCamera can still be used for scripted motion.
+        /// </summary>
+        public bool IsIdle
+        {
+            get => _isIdle;
+            set => _isIdle = value;
+        }
+
+        #endregion
+
+        #region Main Update
+
+        /// <summary>
+        /// Central per-frame camera update. Pan/Move are skipped while idle; Zoom always allowed
+        /// (but Zoom() will early-out if no scroll input).
+        /// </summary>
+        private void UpdateCamera()
+        {
+            if (!_isIdle)
+            {
+                Pan();
+                Move();
+            }
+
+            Zoom();
+        }
+
+        #endregion
+
+        #region Pan (Middle-Mouse Drag)
+
+        /// <summary>
+        /// Pans camera in XZ by dragging with the middle mouse button while mouse controls are enabled.
+        /// Uses SmoothDamp for framerate-independent smoothing toward the constrained target.
+        /// </summary>
+        private void Pan()
+        {
+            // Block if globally disabled or if mouse controls are disabled via settings
+            if (!_canPan || !CurrentSettings.mouseControls)
+            {
+                _isPanning = false;
+                return;
+            }
+
+            // Only pan while MMB is held
+            if (!PlayerInputManager.IsButtonHeld(PlayerInputManager.Button.MiddleMouse))
+            {
+                _isPanning = false;
+                return;
+            }
+
+            _isPanning = true;
+
+            // If a command-move is running, cancel it on manual pan
+            if (_moveRoutine != null)
+            {
+                StopCoroutine(_moveRoutine);
+                _moveRoutine = null;
+            }
+
+            // Convert mouse delta to a world-space pan vector (XZ), scaled by user pan sensitivity
+            var delta = PlayerInputManager.MousePositionDelta;
+            var movementVec = new Vector3(delta.y, 0f, -delta.x) * CurrentSettings.panSensitivity;
+
+            // Constrain target within XZ bounds
+            var targetPos = MoveConstraints(_transform.position + movementVec);
+
+            // Smoothly move toward target (XZ) while preserving smoothing velocity state
+            var next = Vector3.SmoothDamp(
+                _transform.position,
+                targetPos,
+                ref _panVelocity,
+                _panSmoothness,          // smoothTime in seconds (smaller = snappier)
+                Mathf.Infinity,
+                Time.deltaTime
+            );
+
+            _transform.position = next;
+        }
+
+        #endregion
+
+        #region Zoom (Mouse Wheel → Smooth height)
+
+        /// <summary>
+        /// Smoothly adjusts camera Y height in response to mouse wheel input.
+        /// _scrollPosition is the "desired" height and is smoothed via Mathf.SmoothDamp into the actual transform.y.
+        /// </summary>
+        private void Zoom()
+        {
+            if (!_canZoom) return;
+            if (Mathf.Approximately(_scrollWheelInput, 0f)) return;
+
+            // Convert scroll delta to desired height change using user zoom sensitivity
+            _scrollPosition += _scrollWheelInput * CurrentSettings.zoomSensitivity * 0.004f;
+            _scrollWheelInput = 0f;
+
+            // Clamp to allowed height range
+            float targetHeight = Mathf.Clamp(_scrollPosition, _minCameraHeight, _maxCameraHeight);
+
+            // Smooth current height toward desired height
+            float y = Mathf.SmoothDamp(
+                _transform.position.y,
+                targetHeight,
+                ref _zoomVelocity,
+                _zoomSmoothness,         // smoothTime in seconds
+                Mathf.Infinity,
+                Time.deltaTime
+            );
+
+            // Apply new height, preserve XZ
+            _transform.position = new Vector3(_transform.position.x, y, _transform.position.z);
+        }
+
+        #endregion
+
+        #region Move (Edge Scroll + Keyboard)
+
+        /// <summary>
+        /// Moves camera in XZ via:
+        ///   • Edge scrolling: when mouse is near screen edges (if enabled in settings)
+        ///   • Keyboard input: WASD/arrow keys via Input System
+        /// A "zoom-out boost" raises speed at higher zoom heights to maintain perceived speed.
+        /// </summary>
+        private void Move()
+        {
+            // Skip if movement disabled or if we're actively panning this frame, or app not focused
+            if (!_canMove || _isPanning) return;
+            if (!Application.isFocused) return;
+
+            // Edge scrolling: mouse near screen edges, if both mouse movement and edge scroll are enabled
+            if (CurrentSettings.mouseControls &&
+                CurrentSettings.edgeScrolling &&
+                TryGetEdgeInput(out var edge))
+            {
+                var dir = new Vector3(edge.y, 0f, -edge.x).normalized;  // Map screen-edge to world XZ
+                ApplyMove(dir * CurrentSettings.edgeScrollingSensitivity);
+                return; // Edge scroll consumes this frame's move
+            }
+
+            // Keyboard movement path:
+            // Increase speed the more zoomed-out we are (keeps travel speed "feeling" consistent)
+            float zoomOutBoost = _scrollPosition / (_maxCameraHeight - _minCameraHeight);
+            zoomOutBoost = Mathf.Pow(zoomOutBoost + 1f, zoomOutBoost + 1f);
+
+            var keyboardDir = new Vector3(_keyboardInput.y, 0f, -_keyboardInput.x); // map input to world XZ
+            ApplyMove(keyboardDir * (zoomOutBoost * CurrentSettings.wasdSensitivity));
+        }
+
+        /// <summary>
+        /// Applies a delta (already in world XZ space) to the running movement target, constrained and smoothed.
+        /// </summary>
+        private void ApplyMove(Vector3 delta)
+        {
+            // Accumulate a target position and clamp within bounds
+            _movePos += delta * Time.deltaTime;
+            _movePos = MoveConstraints(_movePos);
+
+            // SmoothDamp toward that target; keep the current Y (move is XZ-only)
+            var next = Vector3.SmoothDamp(
+                _transform.position,
+                _movePos,
+                ref _moveVelocity,
+                _moveSmoothness,         // smoothTime in seconds
+                Mathf.Infinity,
+                Time.deltaTime
+            );
+
+            next.y = _transform.position.y;
+            _transform.position = next;
+        }
+
+        #endregion
+
+        #region Command Movement (scripted)
+
+        /// <summary>
+        /// Coroutine that moves camera smoothly over _moveTime from start to _newMovePosition (XZ only).
+        /// Intended for scripted/cinematic moves while IsIdle == true.
+        /// </summary>
+        private IEnumerator SmoothCameraMovement()
+        {
+            Vector3 newPos = new Vector3();
+
+            while (_transitionTime / _moveTime < 1f)
+            {
+                _transitionTime += Time.deltaTime;
+
+                newPos = Vector3.Lerp(
+                    _startPosDuringMovement,
+                    _newMovePosition,
+                    Easings.EaseInOutCubic(Mathf.Clamp01(_transitionTime / _moveTime))
+                );
+
+                // Maintain current Y; only move in XZ
+                newPos.y = _transform.position.y;
+                _movePos = _transform.position;
+                _transform.position = newPos;
+
+                yield return null;
+            }
+
+            _transform.position = new Vector3(_newMovePosition.x, _transform.position.y, _newMovePosition.z);
+        }
+
+        /// <summary>
+        /// Starts a scripted move by a world-space delta (XZ) when the camera is idle.
+        /// Cancels any prior command-move and begins a new one.
+        /// </summary>
+        public void MoveCamera(Vector3 moveVec)
+        {
+            if (!_isIdle) return;
+
+            _startPosDuringMovement = _transform.position;
+            _newMovePosition = MoveConstraints(_startPosDuringMovement + moveVec);
+            _transitionTime = 0f;
+
+            // NOTE: If _moveRoutine is null the following StopCoroutine would throw.
+            // Guard if needed: if (_moveRoutine != null) StopCoroutine(_moveRoutine);
+            if (_moveRoutine != null) StopCoroutine(_moveRoutine);
+            _moveRoutine = StartCoroutine(SmoothCameraMovement());
+        }
+
+        /// <summary>
+        /// Adjusts desired zoom height immediately by an integer step (when idle).
+        /// The actual height is still smoothed in Zoom().
+        /// </summary>
+        public void ZoomCamera(int zoomFactor)
+        {
+            if (_isIdle)
+            {
+                _scrollPosition += zoomFactor;
+                _scrollPosition = Mathf.Clamp(_scrollPosition, _minCameraHeight, _maxCameraHeight);
+            }
+        }
+
+        /// <summary>
+        /// Resets camera to its StartPosition and a default height. Clears smoothing velocities.
+        /// </summary>
+        public void ResetCamera()
+        {
+            if (!_isIdle)
+                return;
+
+            _newMovePosition = StartPosition;
+            _scrollPosition = 20f;
+            _transform.position = StartPosition;
+
+            // Reset smoothing velocities so there’s no residual motion after a reset
+            _panVelocity = Vector3.zero;
+            _moveVelocity = Vector3.zero;
+            _zoomVelocity = 0f;
+        }
+
+        #endregion
+
+        #region Helpers & Input Plumbing
+
+        /// <summary>
+        /// Converts current mouse position to an edge direction (if within edge bands).
+        /// Returns true if any edge band is active.
+        /// </summary>
+        private bool TryGetEdgeInput(out Vector2 dir)
+        {
+            dir = Vector2.zero;
+            var mp = PlayerInputManager.MousePosition;
+
+            if (mp.x > Screen.width - _edgeSize) dir.x = 1f;
+            else if (mp.x < _edgeSize) dir.x = -1f;
+
+            if (mp.y > Screen.height - _edgeSize) dir.y = 1f;
+            else if (mp.y < _edgeSize) dir.y = -1f;
+
+            return dir != Vector2.zero;
+        }
+
+        /// <summary>
+        /// Constrains an XZ world position within the configured bounds.
+        /// </summary>
+        private Vector3 MoveConstraints(Vector3 p)
+        {
+            float x = Mathf.Clamp(p.x, _minimumCameraPosition.x, _maximumCameraPosition.x);
+            float z = Mathf.Clamp(p.z, _minimumCameraPosition.y, _maximumCameraPosition.y);
+            return new Vector3(x, p.y, z);
+        }
+
+        /// <summary>
+        /// Optional: raycasts under the cursor to set a "target" (if you wire an input event to call this).
+        /// Demonstrates SelectionManager usage but is not required for camera motion.
+        /// </summary>
+        private void SetTarget(PlayerInputManager.Button button)
+        {
+            Debug.Log("Clicked");
+            if (Physics.Raycast(_camera.ScreenPointToRay(PlayerInputManager.MousePosition), out RaycastHit hitInfo, float.MaxValue))
+            {
+                SelectableObject obj = hitInfo.transform.GetComponentInChildren<SelectableObject>();
+                if (obj != null)
+                {
+                    _target = obj;
+                    _gameManager.SelectionManager.OnObjectSelected.Invoke(_target, _target.Data);
+                }
+                else
+                {
+                    _gameManager.SelectionManager.HideUI();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Mouse wheel callback → caches scroll delta for Zoom().
+        /// Ignored while idle or when cursor is over UI, or if mouse controls are disabled.
+        /// </summary>
+        private void UpdateScrollWheelInput(float value)
+        {
+            if (!_isIdle && !WorldUtils.IsPointerOverUI(EventSystem.current) && CurrentSettings.mouseControls)
+            {
+                _scrollWheelInput = -value;
+            }
+        }
+
+        #endregion
+
+        #region Unity Lifecycle
+
+        private void Awake()
+        {
+            GameManager.Instance.CameraController = this;
+            _playerInput = new PlayerInput();
+
+            if (!TryGetComponent(out _transform))
+                Debug.LogError("CameraController: missing transform component " + this);
+
+            if (!TryGetComponent(out _camera))
+                Debug.LogError("CameraController: missing camera component " + this);
+
+            // Validate constraint setup
+            if (_maxCameraHeight - _minCameraHeight < 0)
+                Debug.LogError("CameraController: MaxCameraHeight is lower than MinCameraHeight " + this);
+
+            if (_maximumCameraPosition.x - _minimumCameraPosition.x < 0)
+                Debug.LogError("CameraController: MaximumCameraPosition.x is lower than MinimumCamerPosition.x " + this);
+
+            if (_maximumCameraPosition.y - _minimumCameraPosition.y < 0)
+                Debug.LogError("CameraController: MaximumCameraPosition.y is lower than MinimumCamerPosition.y " + this);
+
+            if (!_gameManager)
+                _gameManager = GameManager.Instance;
+
+            StartPosition = transform.position;
+
+            // Keyboard movement input wiring (project-specific input action names)
+            _playerInput.BasicControls.KeyboardMovement.performed += ctx => _keyboardInput = ctx.ReadValue<Vector2>();
+            _playerInput.BasicControls.KeyboardMovement.canceled += ctx => _keyboardInput = Vector2.zero;
+
+            // Initialize move targets to current position
+            _newMovePosition = transform.position;
+            _scrollPosition = 15.0f;
+            _movePos = transform.position;
+
+            // Start disabled; will be enabled when the game signals "ready"
+            this.enabled = false;
+            GameStateManager.ReadiedPlayer += EnableSelf;
+        }
+
+        private void OnDestroy()
+        {
+            GameStateManager.ReadiedPlayer -= EnableSelf;
+        }
+
+        /// <summary>
+        /// One-shot callback from GameStateManager when the playable state is ready.
+        /// </summary>
+        private void EnableSelf()
+        {
+            this.enabled = true;
+            GameStateManager.ReadiedPlayer -= EnableSelf; // ensure one-shot
+        }
+
+        private void OnEnable()
+        {
+            PlayerInputManager.OnMouseScroll += UpdateScrollWheelInput;
+            _playerInput.Enable();
+        }
+
+        private void OnDisable()
+        {
+            PlayerInputManager.OnMouseScroll -= UpdateScrollWheelInput;
+            _playerInput.Disable();
+        }
+
+        private void Update()
+        {
+            UpdateCamera();
+        }
+
+        #endregion
+    }
 }

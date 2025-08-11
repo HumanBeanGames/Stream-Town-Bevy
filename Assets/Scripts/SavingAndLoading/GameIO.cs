@@ -2,7 +2,6 @@ using UnityEngine;
 using System.IO;
 using System.Runtime.Serialization.Formatters.Binary;
 using SavingAndLoading.Structs;
-using static Settings.SettingsManager;
 
 namespace SavingAndLoading
 {
@@ -50,17 +49,17 @@ namespace SavingAndLoading
 			Debug.Log("GameIO: Saving to -> " + System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + SAVE_FILEPATH + PLAYER_SAVE_FILEPATH);
 		}
 
-		public static void SaveSettingsData(SavePreset savePreset)
+		public static void SaveSettingsData(SettingsData savePreset)
 		{
 			string data = JsonUtility.ToJson(savePreset);
 			File.WriteAllText(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + "/Panda Belly/Stream Town/SettingsData.json", data);
 			Debug.Log("File location : " + System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + "/Panda Belly/Stream Town/SettingsData.json");
 		}
 
-		public static SavePreset LoadSettingsData()
+		public static SettingsData LoadSettingsData()
 		{
 			string fileContents = File.ReadAllText(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + "/Panda Belly/Stream Town/SettingsData.json");
-			return JsonUtility.FromJson<SavePreset>(fileContents);
+			return JsonUtility.FromJson<SettingsData>(fileContents);
 		}
 
 		public static bool DoesSaveFileExist(SaveFileType type)

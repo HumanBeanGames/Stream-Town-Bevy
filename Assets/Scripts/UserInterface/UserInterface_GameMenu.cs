@@ -25,8 +25,8 @@ namespace UserInterface
 		private GameObject _mainMenuPanel;
 		
 		private GameObject _settingsPanel;
-		private SettingsManager _settingsManager;
-		private CameraApplyChanges _cameraApplyChanges;
+		[Inject] SettingsManager _settingsManager;
+
 		private LoadingManager _loadingManager;
 		private bool _savedGame;
 
@@ -38,7 +38,6 @@ namespace UserInterface
 		public void ToggleGameMenu()
 		{
 			_gameMenu.SetActive(!_gameMenu.activeSelf);
-			_cameraApplyChanges.gameObject.GetComponent<CameraController>().enabled = !_gameMenu.activeSelf;
 		}
 
 		public void ToggleSettingsPanel()
@@ -67,24 +66,16 @@ namespace UserInterface
 			_loadingManager.LoadNonWorldScenes(1);
 		}
 
-		public void ToggleIdleMode(bool toggle)
-		{
-			_cameraApplyChanges.gameObject.GetComponent<CameraController>().IsIdle = toggle;
-		}
 
 		[Inject] private Autosave Autosave;
-		private void Start()
+        [Inject] SettingsData CurrentSettings;
+        private void Start()
 		{
-			_cameraApplyChanges = FindObjectOfType<CameraApplyChanges>();
 			_loadingManager = FindObjectOfType<LoadingManager>();
-			if (FindObjectOfType<SettingsManager>())
-			{
-				//REVISIT
-				//_settingsManager.SetUpCamera();
-				_settingsManager.GameSettingData(_cameraApplyChanges);
-				if (GameManager.Instance)
-					GameManager.Instance.SaveManager.SetAutosaveTime(Autosave.Intervals[GameManager.Instance.SettingsData.autosaveTime] * 60.0f);
-			}
+
+			//REVISIT
+			if (GameManager.Instance)
+				GameManager.Instance.SaveManager.SetAutosaveTime(Autosave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
 		}
 
 		private void Update()

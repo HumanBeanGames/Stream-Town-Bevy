@@ -1,3 +1,4 @@
+using Reflex.Core;
 using TMPro;
 using UnityEngine;
 
@@ -5,10 +6,14 @@ using UnityEngine;
 public abstract class Access_Dropdown : UIElementWrapper<TMP_Dropdown>
 {
     public TMP_Dropdown dropDown;
-    public int val { get; set; } //REVISIT TO MAKE SET PRIVATE
+    public int val {
+        get=> dropDown.value;
+        set=> dropDown.value = value;
+    }
 
-    private void Awake()
-    {   
+    public override void InstallBindings(ContainerBuilder containerBuilder)
+    {
+        base.InstallBindings(containerBuilder);
         dropDown = GetComponent<TMP_Dropdown>();
         dropDown.onValueChanged.AddListener(OnValueChanged);
     }

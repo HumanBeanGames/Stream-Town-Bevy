@@ -1,4 +1,5 @@
 using Character;
+using Reflex.Attributes;
 using Scriptables;
 using UnityEngine;
 
@@ -8,9 +9,9 @@ namespace UserInterface
 	{
 		[SerializeField]
 		private GameObject _displayUI;
-		
+
+		[Inject] SettingsData CurrentSettings;
 		[SerializeField]
-		private SettingsScriptable _settingsScriptable;
 
 		private bool _initialized = false;
 
@@ -28,7 +29,7 @@ namespace UserInterface
 			if (_player == null)
 				return;
 			
-			switch (_settingsScriptable.displayName)
+			switch (CurrentSettings.displayNames)
 			{
 				case 1:
 					_displaySettingOption = UsernameDisplayOption.Subscribers;

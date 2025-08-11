@@ -24,7 +24,7 @@ namespace UserInterface.MainMenu
 		private Button _loadButton;
 
 		[SerializeField]
-		private SettingsScriptable _settingsScriptable;
+		[Inject] SettingsData CurrentSettings;
 
 		[SerializeField]
 		private GameObject _channelNameUI;
@@ -36,14 +36,12 @@ namespace UserInterface.MainMenu
 		private LoadType _loadType;
 
 		private string _channelName;
-	
+
 		public void ConfirmChannelName()
 		{
 			if (_channelName != null && _channelName != "")
 			{
-				_settingsManager.SetChannelName(_channelName);
-
-				_settingsScriptable.channelName = _channelName;
+				CurrentSettings.channelName = _channelName;
 				_settingsManager.SaveSettings();
 
 				_loading = true;
@@ -67,7 +65,7 @@ namespace UserInterface.MainMenu
 		{
 			if (!_loading)
 			{
-				if (_settingsScriptable.channelName != null && _settingsScriptable.channelName != "")
+				if (CurrentSettings.channelName != null && CurrentSettings.channelName != "")
 				{
 					_loading = true;
 					_metaData.LoadType = LoadType.Generate;
@@ -87,7 +85,7 @@ namespace UserInterface.MainMenu
 		{
 			if (!_loading)
 			{
-				if (_settingsScriptable.channelName != null && _settingsScriptable.channelName != "")
+				if (CurrentSettings.channelName != null && CurrentSettings.channelName != "")
 				{
 					_loading = true;
 					_metaData.LoadType = LoadType.Load;
@@ -123,7 +121,7 @@ namespace UserInterface.MainMenu
 		{
 			_loadingManager = FindObjectOfType<LoadingManager>();
 			_metaData = FindObjectOfType<MetaData.MetaData>();
-			_settingsManager.LoadSettings();
+			_settingsManager.LoadedSettingsToUI();
 
 			if (GameIO.DoesSaveFileExist(GameIO.SaveFileType.GameSave))
 				return;

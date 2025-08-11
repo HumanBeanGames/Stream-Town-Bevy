@@ -10,6 +10,7 @@ using Pets.Enumerations;
 using System;
 using UnityEngine.InputSystem;
 using GameEventSystem.Events;
+using Reflex.Attributes;
 
 namespace Twitch
 {
@@ -22,6 +23,7 @@ namespace Twitch
 
 		private string _channelName = "";
 
+		[Inject] SettingsData CurrentSettings;
 		/// <summary>
 		/// Initalizes the Twitch Lib Client and connect the bot to the Twitch Channel.
 		/// </summary>
@@ -33,7 +35,7 @@ namespace Twitch
 			ConnectionCredentials credentials = new ConnectionCredentials(TL_Secrets.BotName, TL_Secrets.BotAccessToken);
 			Client = new Client();
 
-            _channelName = GameManager.Instance.SettingsData.channelName.ToLower();
+            _channelName = CurrentSettings.channelName.ToLower();
 
 			Client.Initialize(credentials, _channelName);
 			Client.AddChatCommandIdentifier('!');

@@ -12,6 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d6fbfddcd24a29c47ba4f21b96b1ae46, type: 3}
   m_Name: Settings3
   m_EditorClassIdentifier: 
+  presetName: High
   antiAliasing: 2
   shadowType: 2
   shadowResolution: 3

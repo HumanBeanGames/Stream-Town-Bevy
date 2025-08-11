@@ -3,8 +3,11 @@ using UnityEngine;
 
 public abstract class UIElementWrapper<T> : MonoBehaviour, IInstaller
 {
-    public void InstallBindings(ContainerBuilder containerBuilder)
+    public virtual void InstallBindings(ContainerBuilder containerBuilder)
     {
+        Initialize();
         containerBuilder.AddSingleton(this, GetType());
     }
+
+    protected virtual void Initialize() { }
 }

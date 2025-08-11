@@ -5,9 +5,21 @@ using UnityEngine.UI;
 public abstract class Access_Slider : UIElementWrapper<Slider>
 {
     Slider slider;
-    public float val { get; set; } //REVISIT TO MAKE SET PRIVATE
+    public float val {
+        get => slider.value;
+        set => slider.value = value;
+    }
+    public bool interactable
+    {
+        get => slider && slider.interactable;
+        set
+        {
+            if (!slider) slider = GetComponent<Slider>();
+            slider.interactable = value;
+        }
+    }
 
-    private void Awake()
+    protected override void Initialize()
     {   
         slider = GetComponent<Slider>();
         slider.onValueChanged.AddListener(OnValueChanged);

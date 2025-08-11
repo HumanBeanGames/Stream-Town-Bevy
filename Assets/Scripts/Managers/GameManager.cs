@@ -24,6 +24,7 @@ using Scriptables;
 using Utils.Pooling;
 using Twitch;
 using Audio;
+using Reflex.Attributes;
 
 namespace Managers
 {
@@ -38,8 +39,8 @@ namespace Managers
 		private Transform _playerSpawnPosition = null;
 		[SerializeField]
 		private EnemySpawner _enemySpawner;
-		[SerializeField]
-		private SettingsScriptable _settingsData;
+		[Inject] SettingsData CurrentSettings;
+
 		[SerializeField]
 		private GameObject _connectPanel;
 
@@ -120,8 +121,6 @@ namespace Managers
 		public AudioSourcesManager AudioSourcesManager => _audioSourcesManager;
 
 		public MetaData.MetaData MetaDatas => _metaData;
-
-		public SettingsScriptable SettingsData => _settingsData;
 
 		//Temp
 		private Player _fakePlayer;

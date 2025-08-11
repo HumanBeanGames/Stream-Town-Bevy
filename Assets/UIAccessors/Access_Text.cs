@@ -5,18 +5,14 @@ using UnityEngine;
 public abstract class Access_Text : UIElementWrapper<TextMeshProUGUI>
 {
     TextMeshProUGUI text;
-    public string val { get; set; } //REVISIT TO MAKE SET PRIVATE
-
-    private void Awake()
-    {   
-        text = GetComponent<TextMeshProUGUI>();
-        //REVISIT
-        //text.onValueChanged.AddListener(OnValueChanged);
+    public string val
+    {
+        get => text.text;
+        set => text.text = value;
     }
 
-    //REVISIT
-    /*public void OnValueChanged(int inValue)
+    protected override void Initialize()
     {
-        _val =E inValue;
-    }*/
+        text = GetComponent<TextMeshProUGUI>();
+    }
 }

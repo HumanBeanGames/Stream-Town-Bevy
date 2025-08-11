@@ -1,1 +1,0 @@
-public class Access_BorderDetectionToggle : Access_Toggle { }
