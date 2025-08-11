@@ -10,7 +10,7 @@ public class Access_AADropdown : Access_Dropdown
     //[Inject] private Access_Preset _preset;
     [Inject] private ProjectCamera _camera;
     [Inject] private SaveState SaveState;
-    [Inject] private Access_CameraAA _cameraAA; // Adjust type if necessary
+    [Inject] private Access_CameraAADropdown _cameraAA; // Adjust type if necessary
 
     public override void OnValueChanged(int v)
     {
@@ -45,7 +45,7 @@ public class Access_AADropdown : Access_Dropdown
             _cameraData.antialiasingQuality = AntialiasingQuality.High;
         }
         */
-        _cameraAA.Val = v;
+        _cameraAA.val = v;
 
         SaveState.SafeSave();
     }

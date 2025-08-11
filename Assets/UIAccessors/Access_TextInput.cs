@@ -5,10 +5,13 @@ using UnityEngine.UI;
 [RequireComponent(typeof(TMP_InputField))]
 public abstract class Access_TextInput : UIElementWrapper<TMP_InputField>
 {
-    TMP_InputField textField;
-    public string text { get; set; } //REVISIT TO MAKE SET PRIVATE
+    public TMP_InputField textField;
+    public string text {
+        get => textField.text;
+        set => textField.text = value;
+    }
 
-    private void Awake()
+    protected override void Initialize()
     {   
         textField = GetComponent<TMP_InputField>();
         textField.onValueChanged.AddListener(OnValueChanged);
