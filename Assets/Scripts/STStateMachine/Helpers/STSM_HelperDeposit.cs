@@ -1,5 +1,6 @@
 using Character;
 using Managers;
+using Reflex.Attributes;
 using Sensors;
 using STStateMachine.States;
 using UnityEngine;
@@ -15,7 +16,7 @@ namespace STStateMachine.Helpers
 		private STSM_Action_DepositResource _depositState;
 		private RoleHandler _roleHandler;
 		private StationSensor _stationSensor;
-		private TownResourceManager _townResourceManager;
+		[Inject] private TownResourceManager _townResourceManager;
 		private STSM_Idle_Player _idle;
 
 		public override void Init()
@@ -25,7 +26,6 @@ namespace STStateMachine.Helpers
 			_roleHandler = GetComponent<RoleHandler>();
 			_stationSensor = GetComponent<StationSensor>();
 			_idle = (STSM_Idle_Player)_stateMachine.GetStateByName("Idle");
-			_townResourceManager = GameManager.Instance.TownResourceManager;
 		}
 
 		public override void InvokeHelper()

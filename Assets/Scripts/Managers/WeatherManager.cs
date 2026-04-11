@@ -3,12 +3,13 @@ using System.Collections;
 using UnityEngine;
 using UnityEngine.VFX;
 using Utils;
+using Reflex.Attributes;
 
 namespace Managers
 {
 	public class WeatherManager : MonoBehaviour
 	{
-		private SeasonManager _seasonManager;
+		[Inject] private SeasonManager _seasonManager;
 		private VisualEffect _currentVFX;
 
 		[SerializeField]
@@ -66,7 +67,6 @@ namespace Managers
 
 		private void Start()
 		{
-			_seasonManager = GameManager.Instance.SeasonManager;
 			SetDataVFX();
 		}
 	}

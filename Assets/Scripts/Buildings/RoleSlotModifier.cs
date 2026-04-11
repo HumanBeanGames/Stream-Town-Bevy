@@ -1,6 +1,7 @@
 using Managers;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Buildings
 {
@@ -33,16 +34,11 @@ namespace Buildings
 		private int _totalAmount = 0;
 
 		// Required Components.
-		private RoleManager _roleManager;
+		[Inject] private RoleManager _roleManager;
 
 		public RoleManager RoleManager
 		{
-			get
-			{
-				if (_roleManager == null)
-					_roleManager = GameManager.Instance.RoleManager;
-				return _roleManager;
-			}
+			get { return _roleManager; }
 		}
 
 		// Properties.

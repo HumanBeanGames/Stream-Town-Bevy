@@ -3,11 +3,24 @@ using GameEventSystem.Events;
 using Managers;
 using System;
 using TwitchLib.Client.Events;
+using Reflex.Attributes;
 
 namespace Twitch.Commands 
 {
     public static class EventCommands 
 	{
+		private static PlayerManager _playerManager;
+		private static GameEventManager _gameEventManager;
+		[Inject] private static TownResourceManager _townResourceManager;
+		[Inject] private static ObjectPoolingManager _poolingManager;
+		[Inject] private static GameManager _gameManager;
+
+		public static void Initialize(PlayerManager playerManager, GameEventManager gameEventManager)
+		{
+			_playerManager = playerManager;
+			_gameEventManager = gameEventManager;
+		}
+
         public static bool EventMessage(OnMessageReceivedArgs e)
 		{
 			string[] words = e.ChatMessage.RawIrcMessage.Split(';');
@@ -28,7 +41,7 @@ namespace Twitch.Commands
 
 		private static void ProcessReward(string[] split, OnMessageReceivedArgs e)
 		{
-			if (!GameManager.Instance.PlayerManager.PlayerExistsByID(e.ChatMessage.UserId, out int index))
+			if (!_playerManager.PlayerExistsByID(e.ChatMessage.UserId, out int index))
 				return;
 
 			switch(split[1])
@@ -42,7 +55,7 @@ namespace Twitch.Commands
 
 		public static void HandleFishGodEvent()
 		{
-			GameEventManager eventManager = GameManager.Instance.GameEventManager;
+			GameEventManager eventManager = _gameEventManager;
 
 			if(eventManager.CurrentEvent != null && eventManager.CurrentEvent.Event == GameEvent.EventType.FishGod)
 			{
@@ -56,7 +69,7 @@ namespace Twitch.Commands
 			int rand = UnityEngine.Random.Range(0, 10);
 
 			if (rand == 0)
-				eventManager.AddEvent(new FishGodEvent(0));
+				eventManager.AddEvent(new FishGodEvent(0, _gameEventManager, _townResourceManager, _playerManager, _poolingManager, _gameManager.UIManager.EventInterface));
 		}
 	}
 }

@@ -5,6 +5,7 @@ using Managers;
 using System.Collections.Generic;
 using Scriptables;
 using Character;
+using Reflex.Attributes;
 
 namespace UserInterface
 {
@@ -16,9 +17,8 @@ namespace UserInterface
 		[SerializeField]
 		private GameObject _rolePanel;
 
-		//private Dictionary<PlayerRole, Text>
-
-		private RoleManager _roleManager;
+		[Inject] private RoleManager _roleManager;
+		[Inject] private PlayerManager _playerManager;
 
 		[SerializeField]
 		private GameObject _roleUIPrefab;
@@ -49,7 +49,6 @@ namespace UserInterface
 		private void Start()
 		{
 			_roleDisplays = new Dictionary<PlayerRole, UIRoleDisplay>();
-			_roleManager = GameManager.Instance.RoleManager;
 			_roleManager.OnRoleSlotsChangedEvent.AddListener(OnRoleSlotsChanged);
 			List<RoleDataScriptable> _resourceRoles = new List<RoleDataScriptable>();
 			List<RoleDataScriptable> _combatRoles = new List<RoleDataScriptable>();
@@ -62,7 +61,7 @@ namespace UserInterface
 			for (int i = 0; i < (int)PlayerRole.Count; i++)
 			{
 				_roleManager.OnRoleSlotsChangedEvent.Invoke((PlayerRole)i);
-				RoleDataScriptable rds = GameManager.Instance.RoleManager.GetRoleData((PlayerRole)i);
+				RoleDataScriptable rds = _roleManager.GetRoleData((PlayerRole)i);
 
 				if (rds.RoleFlags == PlayerRoleType.Damage || rds.RoleFlags == PlayerRoleType.Healer)
 				{
@@ -83,7 +82,7 @@ namespace UserInterface
 
 			// Ruler
 			AddNewRoleDataUI(_ruler, new Color32(255, 242, 197, 255));
-			GameManager.Instance.PlayerManager.OnRulerChanged += OnRulerChanged;
+			_playerManager.OnRulerChanged += OnRulerChanged;
 			AddNewRoleDataUI(_builder, Color.white);
 			for (int i = 0; i < _resourceRoles.Count; i++)
 				AddNewRoleDataUI(_resourceRoles[i], new Color32(230, 255, 210, 255));

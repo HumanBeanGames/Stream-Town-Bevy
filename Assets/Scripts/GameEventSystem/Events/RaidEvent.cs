@@ -26,10 +26,12 @@ namespace GameEventSystem.Events
 
 		protected StationMask _prevEnemyStationMask;
 		protected GameEventManager _eventManager;
+		protected EnemySpawner _enemySpawner;
+		protected PlayerManager _playerManager;
 
 		protected bool _forceStop = false;
 
-		public RaidEvent(double delay, double eventDuration, string[] enemies, int waves = 5, int enemiesPerWave = 50, string boss = null, EventType eventType = EventType.MonsterRaid, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
+		public RaidEvent(double delay, double eventDuration, string[] enemies, ObjectPoolingManager poolingManager, UserInterface_Event eventInterface, GameEventManager eventManager, EnemySpawner enemySpawner, PlayerManager playerManager, int waves = 5, int enemiesPerWave = 50, string boss = null, EventType eventType = EventType.MonsterRaid, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
 		{
 			_pooledEnemyNames = enemies;
 			_waves = waves;
@@ -44,9 +46,11 @@ namespace GameEventSystem.Events
 
 			}
 
-			_poolingManager = GameManager.Instance.PoolingManager;
-			_eventInterface = GameManager.Instance.UIManager.EventInterface;
-			_eventManager = GameManager.Instance.GameEventManager;
+			_poolingManager = poolingManager;
+			_eventInterface = eventInterface;
+			_eventManager = eventManager;
+			_enemySpawner = enemySpawner;
+			_playerManager = playerManager;
 
 			_trackedEnemies = new List<Enemy>();
 		}
@@ -63,15 +67,15 @@ namespace GameEventSystem.Events
 			_eventInterface.TitleTMP.text = "Raid";
 			_eventInterface.DescriptionTMP.text = "";
 			_eventInterface.ActivateEventContainer();
-			GameManager.Instance.GameEventManager.StartCoroutine(HandleWaves());
+			_eventManager.StartCoroutine(HandleWaves());
 
-			GameManager.Instance.EnemySpawner.CanSpawnEnemies = false;
+			_enemySpawner.CanSpawnEnemies = false;
 		}
 
 		protected override void OnStopped()
 		{
 			_forceStop = true;
-			GameManager.Instance.GameEventManager.StopCoroutine(HandleWaves());
+			_eventManager.StopCoroutine(HandleWaves());
 
 			for (int i = _trackedEnemies.Count - 1; i >= 0; i--)
 			{
@@ -79,7 +83,7 @@ namespace GameEventSystem.Events
 			}
 
 			_eventInterface.DeactivateEventContainer();
-			GameManager.Instance.EnemySpawner.CanSpawnEnemies = true;
+			_enemySpawner.CanSpawnEnemies = true;
 		}
 
 		public override void Update()
@@ -131,7 +135,7 @@ namespace GameEventSystem.Events
 					Enemy enemy = go.GetComponent<Enemy>();
 					enemy.OnDied += OnEnemyDeath;
 					_trackedEnemies.Add(enemy);
-					enemy.transform.position = GameManager.Instance.EnemySpawner.GetRandomSpawnLocation().position;
+					enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
 					enemy.gameObject.SetActive(true);
 				}
 			}
@@ -141,9 +145,9 @@ namespace GameEventSystem.Events
 				Enemy enemy = go.GetComponent<Enemy>();
 				enemy.OnDied += OnEnemyDeath;
 				_trackedEnemies.Add(enemy);
-				enemy.HealthHandler.SetMaxHealth(Mathf.Max(1000, 50 * (GameManager.Instance.PlayerManager.PlayerCount() + GameManager.Instance.PlayerManager.RecruitCount())));
+				enemy.HealthHandler.SetMaxHealth(Mathf.Max(1000, 50 * (_playerManager.PlayerCount() + _playerManager.RecruitCount())));
 				enemy.gameObject.SetActive(true);
-				enemy.transform.position = GameManager.Instance.EnemySpawner.GetRandomSpawnLocation().position;
+				enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
 			}
 
 			UpdateSlider();

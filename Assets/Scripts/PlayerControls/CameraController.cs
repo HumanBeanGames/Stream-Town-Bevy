@@ -35,6 +35,7 @@ namespace PlayerControls
     {
         // Source of truth for user-tunable camera settings (sensitivities, toggles, etc.)
         [Inject] SettingsData CurrentSettings;
+        [Inject] private ObjectSelectionManager _selectionManager;
 
         #region Inspector Fields (Constraints & Tunables)
 
@@ -73,7 +74,6 @@ namespace PlayerControls
 
         #region Private State & Dependencies
 
-        private GameManager _gameManager;            // Cached GameManager
         private Transform _transform = null;       // Cached Transform
         private Camera _camera = null;          // Cached Camera, used by SetTarget()
         private SelectableObject _target = null;     // Optional: selected object target (if you wire SetTarget)
@@ -88,6 +88,7 @@ namespace PlayerControls
         private bool _isIdle = false;             // If true, ignore user-driven pan/move; allow command moves
 
         private Vector2 _keyboardInput;              // WASD/arrow input vector from Input System
+        private Vector2 _previousMousePosition;       // Previous frame mouse position for delta calculation
 
         // Command-move state (used only by SmoothCameraMovement coroutine)
         private Vector3 _newMovePosition;            // Destination XZ for command move
@@ -161,7 +162,8 @@ namespace PlayerControls
             }
 
             // Convert mouse delta to a world-space pan vector (XZ), scaled by user pan sensitivity
-            var delta = PlayerInputManager.MousePositionDelta;
+            var delta = _playerInput.BasicControls.MousePosition.ReadValue<Vector2>() - _previousMousePosition;
+            _previousMousePosition = _playerInput.BasicControls.MousePosition.ReadValue<Vector2>();
             var movementVec = new Vector3(delta.y, 0f, -delta.x) * CurrentSettings.panSensitivity;
 
             // Constrain target within XZ bounds
@@ -365,7 +367,7 @@ namespace PlayerControls
         private bool TryGetEdgeInput(out Vector2 dir)
         {
             dir = Vector2.zero;
-            var mp = PlayerInputManager.MousePosition;
+            var mp = _playerInput.BasicControls.MousePosition.ReadValue<Vector2>();
 
             if (mp.x > Screen.width - _edgeSize) dir.x = 1f;
             else if (mp.x < _edgeSize) dir.x = -1f;
@@ -399,11 +401,11 @@ namespace PlayerControls
                 if (obj != null)
                 {
                     _target = obj;
-                    _gameManager.SelectionManager.OnObjectSelected.Invoke(_target, _target.Data);
+                    _selectionManager.OnObjectSelected.Invoke(_target, _target.Data);
                 }
                 else
                 {
-                    _gameManager.SelectionManager.HideUI();
+                    _selectionManager.HideUI();
                 }
             }
         }
@@ -426,7 +428,6 @@ namespace PlayerControls
 
         private void Awake()
         {
-            GameManager.Instance.CameraController = this;
             _playerInput = new PlayerInput();
 
             if (!TryGetComponent(out _transform))
@@ -445,9 +446,6 @@ namespace PlayerControls
             if (_maximumCameraPosition.y - _minimumCameraPosition.y < 0)
                 Debug.LogError("CameraController: MaximumCameraPosition.y is lower than MinimumCamerPosition.y " + this);
 
-            if (!_gameManager)
-                _gameManager = GameManager.Instance;
-
             StartPosition = transform.position;
 
             // Keyboard movement input wiring (project-specific input action names)
@@ -458,6 +456,7 @@ namespace PlayerControls
             _newMovePosition = transform.position;
             _scrollPosition = 15.0f;
             _movePos = transform.position;
+            _previousMousePosition = _playerInput.BasicControls.MousePosition.ReadValue<Vector2>();
 
             // Start disabled; will be enabled when the game signals "ready"
             this.enabled = false;

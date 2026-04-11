@@ -1,5 +1,6 @@
 using Reflex.Injectors;
 using Reflex.Logging;
+using Reflex.Extensions;
 using UnityEngine;
 using UnityEngine.Pool;
 

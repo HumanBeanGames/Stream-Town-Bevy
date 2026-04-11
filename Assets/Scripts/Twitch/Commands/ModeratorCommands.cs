@@ -1,4 +1,5 @@
 using Character;
+using GameEventSystem;
 using Managers;
 using UnityEngine;
 
@@ -9,15 +10,24 @@ namespace Twitch.Commands
 	/// </summary>
 	public static class ModeratorCommands
 	{
+		private static PlayerManager _playerManager;
+		private static GameEventManager _gameEventManager;
+
+		public static void Initialize(PlayerManager playerManager, GameEventManager gameEventManager)
+		{
+			_playerManager = playerManager;
+			_gameEventManager = gameEventManager;
+		}
+
 		public static void StartKingVote(Player player)
 		{
 			if (!player.IsModerator())
 				return;
 
-			if (GameManager.Instance.PlayerManager.Ruler == null)
-				GameManager.Instance.GameEventManager.StartNewRulerVote();
+			if (_playerManager.Ruler == null)
+				_gameEventManager.StartNewRulerVote();
 			else
-				GameManager.Instance.GameEventManager.StartKeepRulerVote();
+				_gameEventManager.StartKeepRulerVote();
 		}
 
 		public static void ChangePlayerRole(Player player, string command, params string[] args)
@@ -30,9 +40,9 @@ namespace Twitch.Commands
 
 			string playerNameArg = args[0].ToLower();
 
-			if (GameManager.Instance.PlayerManager.PlayerExistsByNameToLower(playerNameArg, out int index))
+			if (_playerManager.PlayerExistsByNameToLower(playerNameArg, out int index))
 			{
-				Player targetPlayer = GameManager.Instance.PlayerManager.GetPlayer(index);
+				Player targetPlayer = _playerManager.GetPlayer(index);
 				string[] newArgs = new string[] { args[1] };
 
 				RoleCommands.TryChangeRole(targetPlayer, command, newArgs);

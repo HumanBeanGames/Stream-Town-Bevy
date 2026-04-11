@@ -3,6 +3,7 @@ using UnityEngine.Events;
 using Managers;
 using System;
 using Target;
+using Reflex.Attributes;
 
 namespace Units
 {
@@ -35,7 +36,7 @@ namespace Units
 
 		private int _baseMaxHealth;
 
-		private TownResourceManager _resourceManager;
+		[Inject] private TownResourceManager _resourceManager;
 		private bool _deathInvoked = false;
 		public bool Dead => _health <= 0 ? true : false;
 		public int Health => _health;
@@ -186,7 +187,6 @@ namespace Units
 		{
 			_baseMaxHealth = _maxHealth;
 			_health = _maxHealth;
-			_resourceManager = GameManager.Instance.TownResourceManager;
 		}
 
 		private void Update()

@@ -5,6 +5,7 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.Rendering;
 using Managers;
 using System;
+using Reflex.Attributes;
 
 namespace Environment
 {
@@ -15,6 +16,8 @@ namespace Environment
 
 		[SerializeField]
 		private Light _mainLightSource;
+
+		[Inject] private TimeManager _timeManager;
 
 		[SerializeField]
 		private float _dayLength;
@@ -145,8 +148,8 @@ namespace Environment
 
 		private void Start()
 		{
-			_dayLength = GameManager.Instance.TimeManager.SecondsPerDay * _DAY_PERCENTAGE - _transitionLength;
-			_nightLength = GameManager.Instance.TimeManager.SecondsPerDay * (1-_DAY_PERCENTAGE) - _transitionLength;
+			_dayLength = _timeManager.SecondsPerDay * _DAY_PERCENTAGE - _transitionLength;
+			_nightLength = _timeManager.SecondsPerDay * (1-_DAY_PERCENTAGE) - _transitionLength;
 		}
 
 		private void Update()

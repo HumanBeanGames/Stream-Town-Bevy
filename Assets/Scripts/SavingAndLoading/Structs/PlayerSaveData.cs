@@ -93,9 +93,8 @@ namespace SavingAndLoading.Structs
 		/// Converts PlayerSaveData to Player,
 		/// </summary>
 		/// <returns>PlayerSaveData to class</returns>
-		public Player ToPlayer(uint gUID, uint targetGUID, uint stationGUID)
+		public Player ToPlayer(uint gUID, uint targetGUID, uint stationGUID, GameManager gameManager, ObjectPoolingManager poolingManager)
 		{
-			GameManager manager = GameManager.Instance;
 			Player player = new Player(new TwitchUser(TwitchID, TwitchName));
 
 			if (GameUserType == GameUserType.GameMaster && !GameMasterCommands.IsGameMaster(player))
@@ -107,7 +106,7 @@ namespace SavingAndLoading.Structs
 			player.TwitchUser.GameUserType = GameUserType;
 			player.TwitchUser.IsBroadcaster = IsBroadcaster;
 
-			player.Character = manager.PoolingManager.GetPooledObject("Player").gameObject;
+			player.Character = poolingManager.GetPooledObject("Player").gameObject;
 			player.HealthHandler = player.Character.GetComponent<HealthHandler>();
 			player.StationSensor = player.Character.GetComponent<StationSensor>();
 			player.TargetSensor = player.Character.GetComponent<TargetSensor>();
@@ -133,7 +132,7 @@ namespace SavingAndLoading.Structs
 					unlockedPets.Add((PetType)i, false);
 			}
 
-			PoolableObject petObj = GameManager.Instance.PoolingManager.GetPooledObject("Pet");
+			PoolableObject petObj = poolingManager.GetPooledObject("Pet");
 			Pet pet = petObj.GetComponent<Pet>();
 
 			player.Pet = pet;
@@ -148,7 +147,7 @@ namespace SavingAndLoading.Structs
 			}
 
 			if (IsBroadcaster)
-				GameManager.Instance.SetUserPlayer(player);
+				gameManager.SetUserPlayer(player);
 
 			player.Pet = pet;
 			player.PetsUnlocked = unlockedPets;
@@ -156,10 +155,10 @@ namespace SavingAndLoading.Structs
 			comp.SetGUID(gUID);
 
 			//if (stationGUID != 0)
-			//	player.StationSensor.TrySetStation(GameManager.Instance.GUIDManager.GetComponentFromID(stationGUID).gameObject.GetComponent<Station>());
+			//	player.StationSensor.TrySetStation(gameManager.GUIDManager.GetComponentFromID(stationGUID).gameObject.GetComponent<Station>());
 
 			//if (targetGUID != 0)
-			//	player.TargetSensor.TrySetTarget(GameManager.Instance.GUIDManager.GetComponentFromID(TargetGUID).gameObject.GetComponent<Targetable>());
+			//	player.TargetSensor.TrySetTarget(gameManager.GUIDManager.GetComponentFromID(TargetGUID).gameObject.GetComponent<Targetable>());
 
 			player.RoleHandler.Player = player;
 

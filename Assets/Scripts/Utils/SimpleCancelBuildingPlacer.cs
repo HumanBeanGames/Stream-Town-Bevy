@@ -2,19 +2,19 @@ using Character;
 using Managers;
 using UnityEngine;
 using UnityEngine.Events;
+using Reflex.Attributes;
 
 namespace Utils
 {
 	public class SimpleCancelBuildingPlacer : MonoBehaviour
 	{
 		[SerializeField]
-		private bool _resetOnEnable = true;
-		[SerializeField]
 		private float _timeInSeconds = 300;
 
 		private float _timer = 0;
 
 		private Player _player;
+		[Inject] private BuildingManager _buildingManager;
 
 		public void SetPlayer(Player player)
 		{
@@ -33,7 +33,7 @@ namespace Utils
 
 			if (_timer <= 0)
 			{
-				GameManager.Instance.BuildingManager.TryCancelBuilding(_player);
+				_buildingManager.TryCancelBuilding(_player);
 				ResetTimer();
 			}
 		}

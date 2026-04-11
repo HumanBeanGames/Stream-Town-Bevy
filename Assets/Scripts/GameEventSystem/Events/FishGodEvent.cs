@@ -15,17 +15,25 @@ namespace GameEventSystem.Events
 		private GameObject _fishGod;
 		private Animator _animator;
 		private UserInterface_Event _eventInterface;
+		private GameEventManager _gameEventManager;
+		private TownResourceManager _townResourceManager;
+		private PlayerManager _playerManager;
+		private ObjectPoolingManager _poolingManager;
 
-		public FishGodEvent(double startTime, double eventDuration = 300, EventType eventType = EventType.FishGod, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(startTime, eventDuration, EventType.FishGod, data, overrideCurrentEvent, timeout)
+		public FishGodEvent(double startTime, GameEventManager gameEventManager, TownResourceManager townResourceManager, PlayerManager playerManager, ObjectPoolingManager poolingManager, UserInterface_Event eventInterface, double eventDuration = 300, EventType eventType = EventType.FishGod, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(startTime, eventDuration, EventType.FishGod, data, overrideCurrentEvent, timeout)
 		{
-			GetFishGodGameObject();
+			_gameEventManager = gameEventManager;
+			_townResourceManager = townResourceManager;
+			_playerManager = playerManager;
+			_poolingManager = poolingManager;
+			_eventInterface = eventInterface;
 
-			_eventInterface = GameManager.Instance.UIManager.EventInterface;
+			GetFishGodGameObject();
 		}
 
 		protected override void OnStarted()
 		{
-			GameManager.Instance.GameEventManager.FallingFishVFX.gameObject.SetActive(true);
+			_gameEventManager.FallingFishVFX.gameObject.SetActive(true);
 			_eventInterface.Slider.gameObject.SetActive(true);
 			UpdateSlider();
 			_eventInterface.TitleTMP.text = "Fish God";
@@ -36,21 +44,20 @@ namespace GameEventSystem.Events
 		protected override void OnStopped()
 		{
 			_animator.SetTrigger("Exit");
-			GameManager.Instance.GameEventManager.StartCoroutine(DisableAfterTime());
-			GameManager.Instance.GameEventManager.FallingFishVFX.gameObject.SetActive(false);
+			_gameEventManager.StartCoroutine(DisableAfterTime());
+			_gameEventManager.FallingFishVFX.gameObject.SetActive(false);
 			_eventInterface.DeactivateEventContainer();
 
 			if (Success)
 			{
-				GameManager.Instance.TownResourceManager.AddResource(Utils.Resource.Food, 1000, true);
+				_townResourceManager.AddResource(Utils.Resource.Food, 1000, true);
 
 				// Try to give a player a fish pet if roll hits
 				int roll = Random.Range(0, 100);
 
 				if (roll < 70)
 				{
-					PlayerManager playerManager = GameManager.Instance.PlayerManager;
-					if (playerManager.PlayerCount() <= 0)
+					if (_playerManager.PlayerCount() <= 0)
 						return;
 					
 					Player player = null;
@@ -61,8 +68,8 @@ namespace GameEventSystem.Events
 						if (iters >= 50)
 							break;
 
-						int playerIndex = Random.Range(0, GameManager.Instance.PlayerManager.PlayerCount());
-						player = playerManager.GetPlayer(playerIndex);
+						int playerIndex = Random.Range(0, _playerManager.PlayerCount());
+						player = _playerManager.GetPlayer(playerIndex);
 						if (player.IsNPC)
 							continue;
 					}
@@ -73,7 +80,6 @@ namespace GameEventSystem.Events
 
 					player.PetsUnlocked[PetType.FishGod] = true;
 					MessageSender.SendMessage($"{player.TwitchUser.Username} unlocked the fishgod pet!");
-
 				}
 			}
 		}
@@ -96,9 +102,9 @@ namespace GameEventSystem.Events
 
 		private void GetFishGodGameObject()
 		{
-			_fishGod = GameManager.Instance.PoolingManager.GetPooledObject("FishGod").gameObject;
+			_fishGod = _poolingManager.GetPooledObject("FishGod").gameObject;
 			_animator = _fishGod.GetComponentInChildren<Animator>();
-			_fishGod.transform.position = GameManager.Instance.GameEventManager.FishGodSpawn.position;
+			_fishGod.transform.position = _gameEventManager.FishGodSpawn.position;
 			_fishGod.SetActive(true);
 		}
 

@@ -16,12 +16,16 @@ using Sensors;
 using PlayerControls;
 using System;
 using Pets.Enumerations;
+using TechTree;
 using TechTree.ScriptableObjects;
+using TownGoal;
 using TownGoal.Data;
+using GameEventSystem;
 using Enemies;
 using Utils.Pooling;
 using SavingAndLoading.SavableObjects;
 using Target;
+using Reflex.Attributes;
 
 namespace SavingAndLoading
 {
@@ -31,6 +35,16 @@ namespace SavingAndLoading
 		private ProceduralWorldGenerator _generationObject = null;
 		private List<Player> _players = null;
 		private List<Enemy> _enemies = null;
+		[Inject] private GameManager _gameManager;
+		[Inject] private ObjectPoolingManager _poolingManager;
+		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private TimeManager _timeManager;
+		[Inject] private TechTreeManager _techTreeManager;
+		[Inject] private GameEventManager _gameEventManager;
+		[Inject] private PlayerManager _playerManager;
+		[Inject] private GUIDManager _guidManager;
+		[Inject] private TownGoalManager _townGoalManager;
+		[Inject] private SeasonManager _seasonManager;
 
 		private bool _autosave = false;
 		private float _autosaveTime = 0.0f;
@@ -39,7 +53,6 @@ namespace SavingAndLoading
 		private int _loadPercent = 0;
 		public int LoadPercent => _loadPercent;
 
-		public event Action<float> UpdateProgress;
 		private void EscapePressed()
 		{
 			SceneManager.LoadScene(0);
@@ -146,7 +159,7 @@ namespace SavingAndLoading
 			_enemies = new List<Enemy>();
 			for (int i = 0; i < (int)EnemyType.Count; i++)
 			{
-				List<PoolableObject> objs = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType(((EnemyType)i).ToString());
+				List<PoolableObject> objs = _poolingManager.GetAllActivePooledObjectsOfType(((EnemyType)i).ToString());
 				for (int o = 0; o < objs.Count; o++)
 				{
 					enemySaveData.Add((EnemySaveData)((SaveableEnemy)objs[o].SaveableObject).SaveData());
@@ -164,7 +177,7 @@ namespace SavingAndLoading
 		{
 			List<PlayerSaveData> playerSaveDatas = new List<PlayerSaveData>();
 
-			List<PoolableObject> players = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType("Player");
+			List<PoolableObject> players = _poolingManager.GetAllActivePooledObjectsOfType("Player");
 			_players = new List<Player>();
 
 			for (int i = 0; i < players.Count; i++)
@@ -185,7 +198,7 @@ namespace SavingAndLoading
 			WorldGenSaveData worldGenData = new WorldGenSaveData();
 
 			// The generated mesh 
-			worldGenData.MapMesh = new MeshSaveData(GameManager.Instance.ProceduralWorldGenerator.GeneratedMesh);
+			worldGenData.MapMesh = new MeshSaveData(_gameManager.ProceduralWorldGenerator.GeneratedMesh);
 
 			// The generated resources
 			List<ResourceSaveData> resources = new List<ResourceSaveData>();
@@ -194,7 +207,7 @@ namespace SavingAndLoading
 			{
 				if ((ResourceType)i != ResourceType.Fish)
 				{
-					List<PoolableObject> objs = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType(((ResourceType)i).ToString());
+					List<PoolableObject> objs = _poolingManager.GetAllActivePooledObjectsOfType(((ResourceType)i).ToString());
 					for (int o = 0; o < objs.Count; o++)
 					{
 						resources.Add((ResourceSaveData)((SaveableResource)objs[o].SaveableObject).SaveData());
@@ -208,7 +221,7 @@ namespace SavingAndLoading
 
 			for (int i = 0; i < (int)FoliageSaveType.Count; i++)
 			{
-				List<PoolableObject> objs = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType(((FoliageSaveType)i).ToString());
+				List<PoolableObject> objs = _poolingManager.GetAllActivePooledObjectsOfType(((FoliageSaveType)i).ToString());
 
 				for (int o = 0; o < objs.Count; o++)
 				{
@@ -221,10 +234,10 @@ namespace SavingAndLoading
 			// The generated enemy camps
 			List<EnemyCampSaveData> camps = new List<EnemyCampSaveData>();
 
-			List<PoolableObject> campObjects = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType(SaveItem.EnemyCamp_Goblin);
+			List<PoolableObject> campObjects = _poolingManager.GetAllActivePooledObjectsOfType(SaveItem.EnemyCamp_Goblin);
 			for (int i = 0; i < campObjects.Count; i++)
 			{
-				EnemyCampSaveData enemyCampSaveData = new EnemyCampSaveData(campObjects[i].transform, ((SaveableEnemyCamp)campObjects[i].SaveableObject).HealthHandler.Health, GameManager.Instance.GUIDManager.CreateGUIDandAddToDictionary(campObjects[i]));
+				EnemyCampSaveData enemyCampSaveData = new EnemyCampSaveData(campObjects[i].transform, ((SaveableEnemyCamp)campObjects[i].SaveableObject).HealthHandler.Health, _guidManager.CreateGUIDandAddToDictionary(campObjects[i]));
 				camps.Add(enemyCampSaveData);
 			}
 			worldGenData.EnemyCamps = camps;
@@ -241,7 +254,7 @@ namespace SavingAndLoading
 			List<BuildingSaveData> buildings = new List<BuildingSaveData>();
 			for (int i = 0; i < (int)BuildingType.Count; i++)
 			{
-				List<PoolableObject> objs = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType(((BuildingType)i).ToString());
+				List<PoolableObject> objs = _poolingManager.GetAllActivePooledObjectsOfType(((BuildingType)i).ToString());
 				if (objs != null)
 					for (int o = 0; o < objs.Count; o++)
 						buildings.Add((BuildingSaveData)((SaveableBuilding)objs[o].SaveableObject).SaveData());
@@ -257,23 +270,23 @@ namespace SavingAndLoading
 		private WorldSaveData GetWorldData()
 		{
 			WorldSaveData worldSaveData = new WorldSaveData();
-			worldSaveData.WoodResourceAmount = GameManager.Instance.TownResourceManager.GetResourceAmount(Resource.Wood);
-			worldSaveData.OreResourceAmount = GameManager.Instance.TownResourceManager.GetResourceAmount(Resource.Ore);
-			worldSaveData.GoldResourceAmount = GameManager.Instance.TownResourceManager.GetResourceAmount(Resource.Gold);
-			worldSaveData.FoodResourceAmount = GameManager.Instance.TownResourceManager.GetResourceAmount(Resource.Food);
-			worldSaveData.WorldAgeInSeconds = GameManager.Instance.TimeManager.WorldTimePassed;
+			worldSaveData.WoodResourceAmount = _townResourceManager.GetResourceAmount(Resource.Wood);
+			worldSaveData.OreResourceAmount = _townResourceManager.GetResourceAmount(Resource.Ore);
+			worldSaveData.GoldResourceAmount = _townResourceManager.GetResourceAmount(Resource.Gold);
+			worldSaveData.FoodResourceAmount = _townResourceManager.GetResourceAmount(Resource.Food);
+			worldSaveData.WorldAgeInSeconds = _timeManager.WorldTimePassed;
 
 
 			// Tech Tree
 			TechTreeSaveData techTree = new TechTreeSaveData();
-			techTree.UnlockedTechs = GameManager.Instance.TechTreeManager.TechTree.GetUnlockedNodes();
+			techTree.UnlockedTechs = _techTreeManager.TechTree.GetUnlockedNodes();
 
-			if (GameManager.Instance.TechTreeManager.CurrentTech != null)
+			if (_techTreeManager.CurrentTech != null)
 			{
-				techTree.CurrentTechName = GameManager.Instance.TechTreeManager.CurrentTech.name;
+				techTree.CurrentTechName = _techTreeManager.CurrentTech.name;
 				List<ObjectiveSaveData> objectives = new List<ObjectiveSaveData>();
-				Node_SO currentNode = GameManager.Instance.TechTreeManager.CurrentTech;
-				Goal goal = GameManager.Instance.TownGoalManager.CurrentGoals[0];
+				Node_SO currentNode = _techTreeManager.CurrentTech;
+				Goal goal = _townGoalManager.CurrentGoals[0];
 				List<Objective> objs = new List<Objective>();
 
 				foreach (KeyValuePair<Objective, bool> obj in goal.ObjectivesStatuses)
@@ -287,11 +300,11 @@ namespace SavingAndLoading
 			else
 				techTree.TechAvailable = false;
 
-			worldSaveData.IsCurrentRuler = GameManager.Instance.PlayerManager.Ruler == null ? false : true;
+			worldSaveData.IsCurrentRuler = _playerManager.Ruler == null ? false : true;
 
-			worldSaveData.TimeUntillNextRulerVote = GameManager.Instance.GameEventManager.TimeTillRulerVote;
+			worldSaveData.TimeUntillNextRulerVote = _gameEventManager.TimeTillRulerVote;
 			if (worldSaveData.IsCurrentRuler)
-				worldSaveData.RulerName = GameManager.Instance.PlayerManager.Ruler.TwitchUser.Username;
+				worldSaveData.RulerName = _playerManager.Ruler.TwitchUser.Username;
 
 			worldSaveData.TechTree = techTree;
 			return worldSaveData;
@@ -313,9 +326,15 @@ namespace SavingAndLoading
 		/// <returns></returns>
 		private IEnumerator DelayedLoadGame()
 		{
+			System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
 			yield return null;
+
+			stopwatch.Restart();
 			SaveGameData gameData = GameIO.LoadGameData();
 			SavePlayersData playersData = GameIO.LoadPlayersData();
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] File I/O and JSON deserialization: {stopwatch.ElapsedMilliseconds}ms");
 
 			WorldGenSaveData genData = gameData.WorldGenData;
 			List<BuildingSaveData> buildings = gameData.BuildingSaveData;
@@ -325,57 +344,77 @@ namespace SavingAndLoading
 			List<PlayerSaveData> playerSaveDatas = playersData.PlayerSaveDatas;
 
 			// World generation mesh
+			stopwatch.Restart();
 			Mesh meshData = genData.MapMesh.GetMeshFromData();
-
-			GameManager.Instance.ProceduralWorldGenerator.SetMesh(meshData);
+			_gameManager.ProceduralWorldGenerator.SetMesh(meshData);
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Mesh reconstruction and application: {stopwatch.ElapsedMilliseconds}ms");
 
 			// Resources
+			stopwatch.Restart();
 			for (int i = 0; i < genData.Resources.Count; i++)
 			{
-				((SaveableResource)((GameManager.Instance.PoolingManager.GetPooledObject(genData.Resources[i].ResourceType, false)).SaveableObject)).LoadData((object)genData.Resources[i]);
+				((SaveableResource)((_poolingManager.GetPooledObject(genData.Resources[i].ResourceType, false)).SaveableObject)).LoadData((object)genData.Resources[i]);
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Resource spawning ({genData.Resources.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Foliage
+			stopwatch.Restart();
 			for (int i = 0; i < genData.Foliage.Count; i++)
 			{
-				((SaveablFoliage)((GameManager.Instance.PoolingManager.GetPooledObject(genData.Foliage[i].FoliageType, false)).SaveableObject)).LoadData((object)genData.Foliage[i]);
+				((SaveablFoliage)((_poolingManager.GetPooledObject(genData.Foliage[i].FoliageType, false)).SaveableObject)).LoadData((object)genData.Foliage[i]);
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Foliage spawning ({genData.Foliage.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Enemy camps
+			stopwatch.Restart();
 			for (int i = 0; i < genData.EnemyCamps.Count; i++)
 			{
-				((SaveableEnemyCamp)((GameManager.Instance.PoolingManager.GetPooledObject("EnemyCamp_Goblin", false)).SaveableObject)).LoadData((object)genData.EnemyCamps[i]);
+				((SaveableEnemyCamp)((_poolingManager.GetPooledObject("EnemyCamp_Goblin", false)).SaveableObject)).LoadData((object)genData.EnemyCamps[i]);
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Enemy camp spawning ({genData.EnemyCamps.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			//  Buildings
+			stopwatch.Restart();
 			List<UpdateGraphBounds> buildingsToUpdate = new List<UpdateGraphBounds>();
 			for (int i = 0; i < buildings.Count; i++)
 			{
-				var building = GameManager.Instance.PoolingManager.GetPooledObject(buildings[i].BuildingType, false);
+				var building = _poolingManager.GetPooledObject(buildings[i].BuildingType, false);
 				 ((SaveableBuilding)((building).SaveableObject)).LoadData((object)buildings[i]);
 
 				UpdateGraphBounds ugb = building.GetComponent<UpdateGraphBounds>();
 				if (ugb)
 					buildingsToUpdate.Add(ugb);
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Building spawning ({buildings.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Creates enemies
+			stopwatch.Restart();
 			List<PoolableObject> enemyObjs = new List<PoolableObject>();// fill list with enemy objs
 			for (int i = 0; i < enemies.Count; i++)
 			{
-				PoolableObject temp = GameManager.Instance.PoolingManager.GetPooledObject((enemies[i].EnemyType.ToString()), false);
+				PoolableObject temp = _poolingManager.GetPooledObject((enemies[i].EnemyType.ToString()), false);
 				((SaveableEnemy)temp.SaveableObject).LoadData((object)enemies[i]);
 				enemyObjs.Add(temp);
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Enemy spawning ({enemies.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Creates players
+			stopwatch.Restart();
 			List<PoolableObject> playerObjs = new List<PoolableObject>(); // fill list with player objs
 																		  // Create players
 			for (int i = 0; i < playerSaveDatas.Count; i++)
 			{
-				playerObjs.Add(GameManager.Instance.PlayerManager.AddExistingPlayer(playerSaveDatas[i].ToPlayer(playerSaveDatas[i].GUID, playerSaveDatas[i].TargetGUID, playerSaveDatas[i].StationGUID), playerSaveDatas[i].CurrentRole).PoolableObject);
+				playerObjs.Add(_playerManager.AddExistingPlayer(playerSaveDatas[i].ToPlayer(playerSaveDatas[i].GUID, playerSaveDatas[i].TargetGUID, playerSaveDatas[i].StationGUID, _gameManager, _poolingManager), playerSaveDatas[i].CurrentRole).PoolableObject);
 				//GameManager.Instance.GUIDManager.AddToDictionary(playerObjs[playerObjs.Count - 1]);
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Player spawning ({playerSaveDatas.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// TODO: Test this, problem where players/enemies automaticly go to the closest target/station
 
@@ -392,38 +431,44 @@ namespace SavingAndLoading
 			//for (int i = 0; i < enemyObjs.Count; i++)
 			//{
 			//	if (enemies[i].TargetGUID != 0)
-			//		((SaveableEnemy)enemyObjs[i].SaveableObject).Enemy.TargetSensor.TrySetTarget(((SaveableObject)GameManager.Instance.GUIDManager.GetComponentFromID(enemies[i].TargetGUID).SaveableObject).Target);
+			//		((SaveableEnemy)enemyObjs[i].SaveableObject).Enemy.TargetSensor.TrySetTarget(((SaveableObject)_guidManager.GetComponentFromID(enemies[i].TargetGUID).SaveableObject).Target);
 			//	if (enemies[i].CampGUID != 0)
-			//		((SaveableEnemy)enemyObjs[i].SaveableObject).Enemy.StationSensor.TrySetStation(((SaveableEnemy)GameManager.Instance.GUIDManager.GetComponentFromID(enemies[i].CampGUID).SaveableObject).Enemy.StationSensor.CurrentStation);
+			//		((SaveableEnemy)enemyObjs[i].SaveableObject).Enemy.StationSensor.TrySetStation(((SaveableEnemy)_guidManager.GetComponentFromID(enemies[i].CampGUID).SaveableObject).Enemy.StationSensor.CurrentStation);
 			//}
 
 			//Load worldSaveData
-			GameManager.Instance.TownResourceManager.SetResourceAmount(Resource.Wood, worldData.WoodResourceAmount);
-			GameManager.Instance.TownResourceManager.SetResourceAmount(Resource.Ore, worldData.OreResourceAmount);
-			GameManager.Instance.TownResourceManager.SetResourceAmount(Resource.Food, worldData.FoodResourceAmount);
-			GameManager.Instance.TownResourceManager.SetResourceAmount(Resource.Gold, worldData.GoldResourceAmount);
-			GameManager.Instance.TimeManager.WorldTimePassed = worldData.WorldAgeInSeconds;
-			GameManager.Instance.TimeManager.CalculateDayCount();
-			GameManager.Instance.SeasonManager.SetSeasonByTimePassed();
-			GameManager.Instance.TechTreeManager.TechTree.SetUnlockedNodes(worldData.TechTree.UnlockedTechs);
+			stopwatch.Restart();
+			_townResourceManager.SetResourceAmount(Resource.Wood, worldData.WoodResourceAmount);
+			_townResourceManager.SetResourceAmount(Resource.Ore, worldData.OreResourceAmount);
+			_townResourceManager.SetResourceAmount(Resource.Food, worldData.FoodResourceAmount);
+			_townResourceManager.SetResourceAmount(Resource.Gold, worldData.GoldResourceAmount);
+			_timeManager.WorldTimePassed = worldData.WorldAgeInSeconds;
+			_timeManager.CalculateDayCount();
+			_seasonManager.SetSeasonByTimePassed();
+			_techTreeManager.TechTree.SetUnlockedNodes(worldData.TechTree.UnlockedTechs);
 			if (worldData.TechTree.TechAvailable)
 			{
-				Goal goal = GameManager.Instance.TechTreeManager.StartGoalFromNode(GameManager.Instance.TechTreeManager.TechTree.GetNodeFromName(worldData.TechTree.CurrentTechName));
+				Goal goal = _techTreeManager.StartGoalFromNode(_techTreeManager.TechTree.GetNodeFromName(worldData.TechTree.CurrentTechName));
 				goal.SetobjectivesFromSave(worldData.TechTree.CurrentTechData);
 			}
 			else
-				GameManager.Instance.TechTreeManager.StartNewTechVote(20);
+				_techTreeManager.StartNewTechVote(20);
 
-			GameManager.Instance.GameEventManager.TimeTillRulerVote = worldData.TimeUntillNextRulerVote;
+			_gameEventManager.TimeTillRulerVote = worldData.TimeUntillNextRulerVote;
 
 			// Sets ruler
-			if (worldData.IsCurrentRuler && GameManager.Instance.PlayerManager.PlayerExistsByNameToLower(worldData.RulerName, out int index))
-				GameManager.Instance.PlayerManager.SetRuler(GameManager.Instance.PlayerManager.GetPlayer(index));
+			if (worldData.IsCurrentRuler && _playerManager.PlayerExistsByNameToLower(worldData.RulerName, out int index))
+				_playerManager.SetRuler(_playerManager.GetPlayer(index));
 			else
-				GameManager.Instance.GameEventManager.StartNewRulerVote();
+				_gameEventManager.StartNewRulerVote();
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] World data application: {stopwatch.ElapsedMilliseconds}ms");
 
 			// Force all buildings to update their graph bounds.
+			stopwatch.Restart();
 			_generationObject.ScanWorld();
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] A* graph scan: {stopwatch.ElapsedMilliseconds}ms");
 
 			yield return new WaitForSeconds(25);
 			for(int i = 0; i < buildingsToUpdate.Count;i++)

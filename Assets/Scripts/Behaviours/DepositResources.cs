@@ -1,4 +1,5 @@
 using Managers;
+using Reflex.Attributes;
 using UnityEngine;
 using Utils;
 
@@ -9,6 +10,7 @@ namespace Behaviours
 	/// </summary>
 	public class DepositResources : MonoBehaviour
 	{
+		[Inject] private TownResourceManager _townResourceManager;
 		/// <summary>
 		/// Deposits resources of the determined type to the Town's Resource Manager.
 		/// </summary>
@@ -16,7 +18,7 @@ namespace Behaviours
 		/// <param name="amount"></param>
 		public void Deposit(Utils.Resource type, int amount)
 		{
-			GameManager.Instance.TownResourceManager.AddResource(type, amount);
+			_townResourceManager.AddResource(type, amount);
 		}
 	}
 }

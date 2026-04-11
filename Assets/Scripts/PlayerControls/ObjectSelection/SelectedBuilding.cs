@@ -5,11 +5,15 @@ using Units;
 using Level;
 using Managers;
 using GameResources;
+using Reflex.Attributes;
 
 namespace PlayerControls.ObjectSelection
 {
 	public class SelectedBuilding : SelectedObject
 	{
+		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private BuildingManager _buildingManager;
+
 		public override void SetDisplay(object data)
 		{
 			base.SetDisplay(data);
@@ -73,7 +77,7 @@ namespace PlayerControls.ObjectSelection
 
 			OnButtonTwoClick += OnBuildingLevelUp;
 			_selectedObjectTypeUI.SelectionButtonTwo.onClick.AddListener(OnButtonTwoClick);
-			GameManager.Instance.TownResourceManager.OnAnyResourceChangeEvent.AddListener(OnResourcesAdded);
+			_townResourceManager.OnAnyResourceChangeEvent.AddListener(OnResourcesAdded);
 		}
 
 		private void OnResourcesAdded(Utils.Resource resource, int amount, bool yes)
@@ -121,14 +125,14 @@ namespace PlayerControls.ObjectSelection
 		public void RemoveBuilding()
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
-			if (GameManager.Instance.BuildingManager.TryRemoveBuilding(building))
+			if (_buildingManager.TryRemoveBuilding(building))
 				_selectedObjectTypeUI.HideContext();
 		}
 
 		public void OnBuildingLevelUp()
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
-			if (!GameManager.Instance.BuildingManager.CanLevelBuilding(building))
+			if (!_buildingManager.CanLevelBuilding(building))
 				_selectedObjectTypeUI.SelectionButtonTwo.interactable = false;
 			else if (building.LevelHandler.Level == building.LevelHandler.MaxLevel)
 			{

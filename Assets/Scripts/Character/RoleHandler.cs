@@ -6,10 +6,12 @@ using Scriptables;
 using Sensors;
 using System;
 using System.Collections.Generic;
+using TechTree;
 using Units;
 using UnityEngine;
 using UnityEngine.Events;
 using Utils;
+using Reflex.Attributes;
 
 namespace Character
 {
@@ -31,7 +33,10 @@ namespace Character
 		private CollectResource _collectResource;
 		private AnimationHandler _animationHandler;
 		private CharacterModelHandler _equipmentHandler;
-		private RoleManager _roleManager;
+		[Inject] private RoleManager _roleManager;
+		[Inject] private TechTreeManager _techTreeManager;
+		[Inject] private GameManager _gameManager;
+		[Inject] private PlayerManager _playerManager;
 
 		//Sensors
 		private TargetSensor _targetSensor;
@@ -95,7 +100,7 @@ namespace Character
 		/// <param name="role"></param>
 		public void SetStarterRole(PlayerRole role)
 		{
-			if (_roleManager.SlotsFull(role) && GameManager.Instance.PlayerRoleLimits)
+			if (_roleManager.SlotsFull(role) && _gameManager.PlayerRoleLimits)
 				return;
 
 			_starterRole = role;
@@ -148,14 +153,13 @@ namespace Character
 			_collectResource = GetComponent<CollectResource>();
 			_animationHandler = GetComponentInChildren<AnimationHandler>();
 			_equipmentHandler = GetComponent<CharacterModelHandler>();
-			_roleManager = GameManager.Instance.RoleManager;
 			_healthHandler = GetComponent<HealthHandler>();
 			_aiPath = GetComponent<AIPath>();
 			_playerRoleData = new PlayerRoleData[(int)PlayerRole.Count];
 
 			for (int i = 0; i < (int)PlayerRole.Count; i++)
 			{
-				_playerRoleData[i] = new PlayerRoleData((PlayerRole)i, _roleManager, _inventory, _aiPath, _healthHandler, this);
+				_playerRoleData[i] = new PlayerRoleData((PlayerRole)i, _roleManager, _inventory, _aiPath, _healthHandler, this, _playerManager);
 			}
 
 			_characterGlobalPassives = new Dictionary<StatType, float>();
@@ -174,7 +178,7 @@ namespace Character
 
 		private void OnEnable()
 		{
-			GameManager.Instance.TechTreeManager.OnStatBoostUnlocked += OnStatBoostUnlocked;
+			_techTreeManager.OnStatBoostUnlocked += OnStatBoostUnlocked;
 		}
 
 		private void OnStatBoostUnlocked(PlayerRole role, StatType type)

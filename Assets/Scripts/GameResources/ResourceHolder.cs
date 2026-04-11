@@ -26,8 +26,6 @@ namespace GameResources
 		private int _minAmount;
 		[SerializeField]
 		private int _maxAmount;
-		[SerializeField]
-		private float _multiplierByDistanceSqr = 5;
 
 		private object _ownerObject;
 

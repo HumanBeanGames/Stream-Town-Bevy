@@ -16,6 +16,7 @@ using Sensors;
 using Target;
 using SavingAndLoading.SavableObjects;
 using PlayerControls.ObjectSelection;
+using Reflex.Attributes;
 
 namespace Managers
 {
@@ -27,7 +28,6 @@ namespace Managers
 		private UnityEvent<SelectableObject, object> _onObjectSelected = new UnityEvent<SelectableObject, object>();
 
 		private bool _startedGroupSelection = false;
-		private bool _startedSelection = false;
 		private Vector3 _startedSelectionPosition = Vector3.zero;
 		private Vector3 _endedSelectionPosition = Vector3.zero;
 
@@ -36,6 +36,8 @@ namespace Managers
 
 		private List<RoleHandler> _selectedPlayerGroup;
 		private bool _groupSelected = false;
+
+		[Inject] private ObjectPoolingManager _poolingManager;
 
 		public UnityEvent<SelectableObject, object> OnObjectSelected => _onObjectSelected;
 
@@ -80,7 +82,6 @@ namespace Managers
 
 		private void Select(PlayerInputManager.Button button)
 		{
-			_startedSelection = true;
 			if (RayTraceFromCamera(Camera.main, PlayerInputManager.MousePosition, out Vector3 hitPos))
 				_startedSelectionPosition = hitPos;
 
@@ -145,7 +146,7 @@ namespace Managers
 				else
 					Debug.LogError("This should not be happening" + this);
 
-				List<PoolableObject> objs = GameManager.Instance.PoolingManager.GetAllActiveObjectsOfTypeWithinAABB(_startedSelectionPosition, _endedSelectionPosition, "Player");
+				List<PoolableObject> objs = _poolingManager.GetAllActiveObjectsOfTypeWithinAABB(_startedSelectionPosition, _endedSelectionPosition, "Player");
 				List<RoleHandler> roleHandlers = new List<RoleHandler>();
 				for (int i = 0; i < objs.Count; i++)
 				{
@@ -175,7 +176,6 @@ namespace Managers
 				}
 				Debug.Log("Ended selections");
 				_startedGroupSelection = false;
-				_startedSelection = false;
 
 			}
 			if (!_objectSelected && !_groupSelected)

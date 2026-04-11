@@ -1,6 +1,7 @@
 using Managers;
 using Pathfinding;
 using UnityEngine;
+using Reflex.Attributes;
 
 namespace World
 {
@@ -10,6 +11,7 @@ namespace World
     public class PathProbe : MonoBehaviour
     {
         private GraphNode _thisNode = null;
+        [Inject] private GameManager _gameManager;
 
         /// <summary>
         /// Returns true if a path is possible to this probe.
@@ -21,7 +23,7 @@ namespace World
         private void Start()
         {
             _thisNode = AstarPath.active.GetNearest(transform.position, NNConstraint.Default).node;
-            GameManager.Instance.AddPathProbe(this);
+            _gameManager.AddPathProbe(this);
         }
     }
 }

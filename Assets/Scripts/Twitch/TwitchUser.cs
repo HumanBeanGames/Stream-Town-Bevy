@@ -24,9 +24,9 @@ namespace Twitch
 			Username = username;
 		}
 
-		public void UpdateActivity()
+		public void UpdateActivity(TimeManager timeManager)
 		{
-			float time = GameManager.Instance.TimeManager.WorldTimePassed - TimeSinceLastMessage;
+			float time = timeManager.WorldTimePassed - TimeSinceLastMessage;
 
 			if (time < 300)
 				ActivityStatus = ActivityStatus.Active;

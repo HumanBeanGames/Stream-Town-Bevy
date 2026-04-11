@@ -1,5 +1,6 @@
 using Character;
 using Managers;
+using Reflex.Attributes;
 using STStateMachine.Helpers;
 using UnityEngine;
 using Utils;
@@ -13,6 +14,7 @@ namespace STStateMachine.States
 	{
 		private RoleHandler _roleHandler;
 		private PlayerInventory _inventory;
+		[Inject] private TownResourceManager _townResourceManager;
 
 		// State References.
 		private STSM_Action_GatherResource _gatherResourceAction;
@@ -78,7 +80,7 @@ namespace STStateMachine.States
 			//Check inventory is not full and town resource isnt full
 			Utils.Resource resourceType = _roleHandler.RoleData_SO.Resource;
 
-			if (GameManager.Instance.TownResourceManager.ResourceFull(resourceType))
+			if (_townResourceManager.ResourceFull(resourceType))
 				return false;
 
 			if (_inventory.ResourceFull(resourceType))

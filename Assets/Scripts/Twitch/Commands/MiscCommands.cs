@@ -15,6 +15,13 @@ namespace Twitch.Commands
 	/// </summary>
 	public static class MiscCommands
 	{
+		private static BuildingManager _buildingManager;
+
+		public static void Initialize(BuildingManager buildingManager)
+		{
+			_buildingManager = buildingManager;
+		}
+
 		public static readonly Dictionary<BuildingType, string> BuildingDescriptions = new Dictionary<BuildingType, string>
 		{
 			{ BuildingType.Barracks, "Barracks: Unlocks Soldier slots. "},
@@ -168,7 +175,7 @@ namespace Twitch.Commands
 
 		public static string GetBuildingInfo(BuildingType building, string[] args)
 		{
-			BuildingManager manager = GameManager.Instance.BuildingManager;
+			BuildingManager manager = _buildingManager;
 
 			// Gets information for the building type
 			if (args.Count() == 1 || building == BuildingType.Townhall)

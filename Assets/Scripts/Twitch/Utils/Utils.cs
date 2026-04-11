@@ -46,12 +46,19 @@ namespace Twitch.Utils
 
 	public static class TwitchUtils
 	{
+		private static PlayerManager _playerManager;
+
+		public static void Initialize(PlayerManager playerManager)
+		{
+			_playerManager = playerManager;
+		}
+
 		public static bool TryGetPlayer(string nameArg, out Player player)
 		{
 			player = null;
-			if (GameManager.Instance.PlayerManager.PlayerExistsByNameToLower(nameArg.ToLower(), out int index))
+			if (_playerManager.PlayerExistsByNameToLower(nameArg.ToLower(), out int index))
 			{
-				player = GameManager.Instance.PlayerManager.GetPlayer(index);
+				player = _playerManager.GetPlayer(index);
 				return true;
 			}
 

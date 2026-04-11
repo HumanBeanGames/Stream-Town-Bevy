@@ -8,6 +8,8 @@ using Units;
 using UnityEngine;
 using UnityEngine.Events;
 using Utils;
+using Reflex.Attributes;
+using GridSystem.Partitioning;
 
 namespace Sensors
 {
@@ -31,7 +33,8 @@ namespace Sensors
 		[SerializeField]
 		private bool _attackAttacker = false;
 
-		private TargetManager _targetManager;
+		[Inject] private TargetManager _targetManager;
+		[Inject] private CellSpacePartitioning _cellSpacePartition;
 
 		public Targetable CurrentTarget => _currentTarget;
 
@@ -158,7 +161,7 @@ namespace Sensors
 		{
 			List<Targetable> validTargets = new List<Targetable>();
 
-			GameManager.Instance.CellPartitionGrid.GetTargetablesInRange(_targetMask, transform.position, _targetSearchRange, ref validTargets);
+			_cellSpacePartition.GetTargetablesInRange(_targetMask, transform.position, _targetSearchRange, ref validTargets);
 
 			// Get closest target
 			float closestDistSqr = float.MaxValue;
@@ -236,7 +239,7 @@ namespace Sensors
 			if (_targetMask.HasFlag(target.TargetType))
 				_currentTarget = target;
 		}
-		// Unity Functions.
+
 		private void OnDisable()
 		{
 			ClearTarget();
@@ -244,7 +247,6 @@ namespace Sensors
 
 		private void Start()
 		{
-			_targetManager = GameManager.Instance.TargetManager;
 			UpdateTarget = true;
 
 			if (TryGetComponent(out HealthHandler h))

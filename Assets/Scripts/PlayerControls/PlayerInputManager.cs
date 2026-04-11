@@ -16,9 +16,11 @@ namespace PlayerControls
 		}
 
 		private static PlayerInput _playerInput;
+		private static bool _isInitialized = false;
 
 		private static Dictionary<Button, bool> _heldKeys = new Dictionary<Button, bool>();
-		public static bool IsButtonHeld(Button button) => _heldKeys[button];
+		public static bool IsButtonHeld(Button button) => _heldKeys.TryGetValue(button, out bool held) ? held : false;
+		public static bool IsInitialized => _isInitialized;
 
 		public static event Action<Button> OnLeftClickPress;
 		public static event Action<Button> OnLeftClickHold;
@@ -35,8 +37,6 @@ namespace PlayerControls
 		public static event Action<float> OnMouseScroll;
 
 		public static event Action<Vector2> OnMousePosition;
-
-		public static event Action OnEscape;
 
 		public static event Action OnBuildMenu;
 
@@ -60,14 +60,14 @@ namespace PlayerControls
 
 		public static Vector2 MousePosition
 		{
-			get { return _playerInput.BasicControls.MousePosition.ReadValue<Vector2>(); }
+			get { return _playerInput != null ? _playerInput.BasicControls.MousePosition.ReadValue<Vector2>() : Vector2.zero; }
 		}
 
 		public static Vector2 MousePositionDelta => _mouseDelta;
 		public static Vector2 MouseLastClickPosition => _mouseLastClickPosition;
 		public static bool EscapePressed
 		{
-			get { return _playerInput.BasicControls.Escape.ReadValue<float>() > 0.01f ? true : false; }
+			get { return _playerInput != null ? _playerInput.BasicControls.Escape.ReadValue<float>() > 0.01f : false; }
 		}
 
 		/// <summary>
@@ -172,6 +172,7 @@ namespace PlayerControls
 		private void OnEnable()
 		{
 			_playerInput?.Enable();
+			_isInitialized = true;
 
 			PlayerInputManager.OnLeftClickPress += ButtonPressed;
 			PlayerInputManager.OnLeftClickHold += ButtonHeld;

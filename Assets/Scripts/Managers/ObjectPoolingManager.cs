@@ -1,9 +1,14 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using Reflex.Injectors;
+using Reflex.Extensions;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using Utils.Pooling;
 using Utils;
+using Reflex.Attributes;
+using Reflex.Core;
 
 namespace Managers
 {
@@ -12,6 +17,9 @@ namespace Managers
 	/// </summary>
 	public class ObjectPoolingManager : MonoBehaviour
 	{
+		[Inject] private Container _container;
+		[Inject] private Container _sceneContainer;
+
 		[SerializeField]
 		private List<PooledObjectData> _objectsToPool;
 
@@ -32,11 +40,14 @@ namespace Managers
 
 		/// <summary>
 		/// Starts the pooling process.
+		/// Call this after SceneScope is built to ensure dependencies are available.
 		/// </summary>
 		public IEnumerator InitializePooling()
 		{
+			Debug.Log($"[ObjectPoolingManager] InitializePooling called, activeSelf: {gameObject.activeSelf}, activeInHierarchy: {gameObject.activeInHierarchy}, has parent: {transform.parent != null}");
 			DateTime before = DateTime.Now;
 			yield return StartCoroutine(PoolObjectsCoroutine());
+
 			//PoolObjects();
 			DateTime after = DateTime.Now;
 			_poolingDuration = after.Subtract(before);
@@ -64,6 +75,11 @@ namespace Managers
 				if (!go.gameObject.activeInHierarchy)
 				{
 					_pooledObjects[name].Dequeue();
+					go.gameObject.SetActive(true);
+
+					if (go is Utils.Pooling.IPooledObjectReset resettable)
+						resettable.OnReset();
+
 					return go;
 				}
 			}
@@ -156,7 +172,11 @@ namespace Managers
 					//_pooledObjects[name].Enqueue(poolObj);
 					_allObjects[name].Add(poolObj);
 					obj.name = name + _allObjects[name].Count;
-					obj.SetActive(false);
+					obj.SetActive(true);
+
+					if (poolObj is Utils.Pooling.IPooledObjectReset resettable)
+						resettable.OnReset();
+
 					return poolObj;
 				}
 			}
@@ -187,6 +207,7 @@ namespace Managers
 				for (int j = 0; j < _objectsToPool[i].PoolAmount; j++)
 				{
 					GameObject obj = Instantiate(_objectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
+					obj.SetActive(false); // Disable immediately to prevent OnEnable from firing
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
 					if (poolObj == null)
 						poolObj = obj.AddComponent<PoolableObject>();
@@ -194,8 +215,6 @@ namespace Managers
 					//_pooledObjects[objName].Enqueue(poolObj);
 					_allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName, this);
-					obj.SetActive(false);
-
 				}
 				DateTime after = DateTime.Now;
 				TimeSpan duration = after.Subtract(before);
@@ -226,6 +245,7 @@ namespace Managers
 				for (int j = 0; j < _objectsToPool[i].PoolAmount; j++)
 				{
 					GameObject obj = Instantiate(_objectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
+					obj.SetActive(false); // Disable immediately to prevent OnEnable from firing
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
 					if (poolObj == null)
 						poolObj = obj.AddComponent<PoolableObject>();
@@ -233,8 +253,6 @@ namespace Managers
 					//_pooledObjects[objName].Enqueue(poolObj);
 					_allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName, this);
-					obj.SetActive(false);
-
 				}
 			}
 		}
@@ -247,6 +265,29 @@ namespace Managers
 			{
 				objects[i].gameObject.SetActive(false);
 			}
+		}
+
+		/// <summary>
+		/// Injects all pooled objects at once using the SceneScope container.
+		/// Call this after SceneScope is built.
+		/// </summary>
+		public void InjectAllPooledObjects(Container sceneContainer)
+		{
+			if (_allObjects == null)
+			{
+				Debug.LogWarning($"[ObjectPoolingManager] InjectAllPooledObjects called before pooling initialization. Skipping injection.");
+				return;
+			}
+
+			foreach (var kvp in _allObjects)
+			{
+				foreach (var poolObj in kvp.Value)
+				{
+					GameObjectInjector.InjectRecursive(poolObj.gameObject, sceneContainer);
+				}
+			}
+
+			Debug.Log($"[ObjectPoolingManager] Injected all pooled objects using SceneScope container");
 		}
 	}
 }

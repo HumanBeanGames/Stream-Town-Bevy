@@ -10,6 +10,17 @@ namespace Twitch.Commands
 	/// </summary>
 	public static class RoleCommands
 	{
+		private static PlayerManager _playerManager;
+		private static StationManager _stationManager;
+		private static RoleManager _roleManager;
+
+		public static void Initialize(PlayerManager playerManager, StationManager stationManager, RoleManager roleManager)
+		{
+			_playerManager = playerManager;
+			_stationManager = stationManager;
+			_roleManager = roleManager;
+		}
+
 		/// <summary>
 		/// Attempts to change the role of the User.
 		/// </summary>
@@ -23,7 +34,7 @@ namespace Twitch.Commands
 
 			if (Enum.TryParse(r, out PlayerRole role))
 			{
-				if (role == PlayerRole.Ruler && GameManager.Instance.PlayerManager.Ruler != player)
+				if (role == PlayerRole.Ruler && _playerManager.Ruler != player)
 					return;
 
 				if (player.RoleHandler.TrySetRole(role))
@@ -85,7 +96,7 @@ namespace Twitch.Commands
 		/// <param name="player"></param>
 		public static void DisplayStationIDs(Player player)
 		{
-			GameManager.Instance.StationManager.DisplayStationIdByType(player.StationSensor.StationMask);
+			_stationManager.DisplayStationIdByType(player.StationSensor.StationMask);
 		}
 
 		/// <summary>
@@ -99,7 +110,7 @@ namespace Twitch.Commands
 
 			if (int.TryParse(args[0], out int index))
 			{
-				var station = GameManager.Instance.StationManager.GetStationByFlaggedIndex(player.StationSensor.StationMask, index - 1);
+				var station = _stationManager.GetStationByFlaggedIndex(player.StationSensor.StationMask, index - 1);
 				player.StationSensor.UpdateStation = false;
 				player.StationSensor.TrySetStation(station);
 				MessageSender.SendPlayerMessage(player, "Station Switched!");

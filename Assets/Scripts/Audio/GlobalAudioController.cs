@@ -2,6 +2,8 @@ using Managers;
 using System.Collections;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
+using Environment;
 
 namespace Audio
 {
@@ -30,6 +32,9 @@ namespace Audio
 		[SerializeField]
 		private bool _playAmbienceDuringMusic = true;
 
+		[Inject] private SeasonManager _seasonManager;
+		[Inject] private DayAndNightManager _dayNightManager;
+
 		private float _timeUntilMusicPlays = 30;
 
 		private void OnSeasonChange(Season season)
@@ -44,8 +49,8 @@ namespace Audio
 
 		private IEnumerator DayTimeChangeRoutine(bool day)
 		{
-			yield return StopMusic(GameManager.Instance.SeasonManager.CurrentSeason);
-			StartNextTrack(GameManager.Instance.SeasonManager.CurrentSeason, day);
+			yield return StopMusic(_seasonManager.CurrentSeason);
+			StartNextTrack(_seasonManager.CurrentSeason, day);
 		}
 
 		private void StartNextTrack(Season season, bool day)
@@ -230,10 +235,10 @@ namespace Audio
 				return;
 			}
 
-			GameManager.Instance.SeasonManager.OnSeasonChanging += OnSeasonChange;
-			GameManager.Instance.DayNightManager.OnNightStarting += OnNightStarted;
-			GameManager.Instance.DayNightManager.OnDayStarting += OnDayStarted;
-			StartMusic(GameManager.Instance.SeasonManager.CurrentSeason, true);
+			_seasonManager.OnSeasonChanging += OnSeasonChange;
+			_dayNightManager.OnNightStarting += OnNightStarted;
+			_dayNightManager.OnDayStarting += OnDayStarted;
+			StartMusic(_seasonManager.CurrentSeason, true);
 			_ambienceSource.volume = _maxAmbienceVolume;
 		}
 
@@ -248,7 +253,7 @@ namespace Audio
 			}
 			else
 			{
-				StartNextTrack(GameManager.Instance.SeasonManager.CurrentSeason, GameManager.Instance.DayNightManager.IsDayTime);
+				StartNextTrack(_seasonManager.CurrentSeason, _dayNightManager.IsDayTime);
 				_ambienceSource.Play();
 				_musicSource.Play();
 			}

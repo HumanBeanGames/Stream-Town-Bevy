@@ -19,6 +19,7 @@ using URP;
 using ShadowResolution = UnityEngine.Rendering.Universal.ShadowResolution;
 using PlayerControls;
 using Managers;
+using SavingAndLoading;
 using Reflex.Attributes;
 using System.Linq;
 
@@ -28,6 +29,7 @@ namespace Settings
     {
         // UI: Resolution dropdown wrapper (DI via Reflex)
         [Inject] Access_ResolutionDropdown _resolutionDropdown;
+        [Inject] private SaveManager _saveManager;
 
         // Visual quality presets exposed in the UI.
         public enum Preset { Low, Medium, High, Ultra, Custom };
@@ -392,8 +394,8 @@ namespace Settings
 
             // --- GAMEPLAY / MISC ---
             // Example of wiring autosave interval to SaveManager
-            if (GameManager.Instance)
-                GameManager.Instance.SaveManager.SetAutosaveTime(_autoSave.Intervals[s.autosaveTime] * 60.0f);
+            if (_saveManager != null)
+                _saveManager.SetAutosaveTime(_autoSave.Intervals[s.autosaveTime] * 60.0f);
         }
 
         // Try to find SSAO feature once and cache it (robust against renderer feature ordering).
@@ -540,8 +542,8 @@ namespace Settings
             FOVOnChange();
 
             // Example of pushing autosave interval to SaveManager
-            if (GameManager.Instance)
-                GameManager.Instance.SaveManager.SetAutosaveTime(_autoSave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
+            if (_saveManager != null)
+                _saveManager.SetAutosaveTime(_autoSave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
         }
 
         /// <summary>

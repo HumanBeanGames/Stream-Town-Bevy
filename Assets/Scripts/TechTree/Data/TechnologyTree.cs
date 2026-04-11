@@ -1,4 +1,5 @@
 using Managers;
+using SavingAndLoading;
 using System;
 using System.Collections.Generic;
 using TechTree.ScriptableObjects;
@@ -22,12 +23,17 @@ namespace TechTree.Data
 
 		private static bool _debugUnlocks = false;
 
-		public TechnologyTree(TechTree_SO tree, TechTreeManager manager)
+		private TechTreeManager _techTreeManager;
+		private MetaData.MetaData _metaData;
+
+		public TechnologyTree(TechTree_SO tree, TechTreeManager manager, MetaData.MetaData metaData)
 		{
 			Profiler.BeginSample("Initialize Tech Tree");
 			_tree = tree;
 			_availableNodes = new List<Node_SO>();
 			_unlockedNodes = new Dictionary<Node_SO, bool>();
+			_techTreeManager = manager;
+			_metaData = metaData;
 			Profiler.EndSample();
 			TechUnlocked += manager.OnTechUnlocked;
 			InitializeData();
@@ -82,7 +88,7 @@ namespace TechTree.Data
 
 			foreach (Node_SO node in _unlockedNodes.Keys)
 			{
-				if (node == GameManager.Instance.TechTreeManager.CurrentTech)
+				if (node == _techTreeManager.CurrentTech)
 					break;
 				i++;
 			}
@@ -132,8 +138,14 @@ namespace TechTree.Data
 			//TODO: This should probably be done in the editor tool...
 			ConnectParents(ref allNodes);
 			SetRootNode(ref allNodes);
-			if (GameManager.Instance.MetaDatas.LoadType == MetaData.LoadType.Generate)
+			if (_metaData != null && _metaData.LoadType == MetaData.LoadType.Generate)
 			{
+				ForceUnlockNode(_rootNode);
+				RecursivelyAddAvailableNodes(_rootNode);
+			}
+			else if (_metaData == null)
+			{
+				// Default to generating if no metadata is present
 				ForceUnlockNode(_rootNode);
 				RecursivelyAddAvailableNodes(_rootNode);
 			}

@@ -1,5 +1,6 @@
 using GUIDSystem;
 using Managers;
+using Reflex.Attributes;
 using SavingAndLoading.Structs;
 using Target;
 using Units;
@@ -10,6 +11,7 @@ namespace SavingAndLoading.SavableObjects
     public class SaveableEnemyCamp : SaveableObject
 	{
 		public HealthHandler HealthHandler;
+		[Inject] private GUIDManager _guidManager;
 
 		public override object SaveData()
 		{
@@ -26,7 +28,7 @@ namespace SavingAndLoading.SavableObjects
 			HealthHandler.SetHealth(enemyCampData.Health);
 
 			GUIDComponent.SetGUID(enemyCampData.GUID);
-			GameManager.Instance.GUIDManager.AddToDictionary(PoolableObject);
+			_guidManager.AddToDictionary(PoolableObject);
 		}
 
 		public void SetVariables(Targetable target, GUIDComponent component, string poolName, PoolableObject poolableObject, HealthHandler healthHandler)

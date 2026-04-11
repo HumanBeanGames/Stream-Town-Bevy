@@ -1,4 +1,5 @@
 using Character;
+using GameEventSystem;
 using GameEventSystem.Events.Voting;
 using Managers;
 using Pets.Enumerations;
@@ -15,6 +16,15 @@ namespace Twitch.Commands
 	/// </summary>
 	public static class PlayerCommands
 	{
+		private static PlayerManager _playerManager;
+		private static GameEventManager _gameEventManager;
+
+		public static void Initialize(PlayerManager playerManager, GameEventManager gameEventManager)
+		{
+			_playerManager = playerManager;
+			_gameEventManager = gameEventManager;
+		}
+
 		/// <summary>
 		/// Attempts to create a player and will set it's role if provided in the arguments.
 		/// </summary>
@@ -69,7 +79,7 @@ namespace Twitch.Commands
 
 			Player player = new Player(user);
 
-			GameManager.Instance.PlayerManager.AddNewPlayer(player, role);
+			_playerManager.AddNewPlayer(player, role);
 
 			if (isSub)
 				TL_Client.UserIsSubscribed(player.TwitchUser.UserID);
@@ -175,7 +185,7 @@ namespace Twitch.Commands
 
 		public static void Vote(Player player, string command, params string[] args)
 		{
-			var currentEvent = GameManager.Instance.GameEventManager.CurrentEvent;
+			var currentEvent = _gameEventManager.CurrentEvent;
 
 			if (currentEvent == null)
 			{

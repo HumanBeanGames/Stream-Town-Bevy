@@ -4,6 +4,7 @@ using UnityEngine;
 using Character;
 using UnityEngine.Events;
 using Scriptables;
+using Reflex.Attributes;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -37,6 +38,9 @@ namespace Managers
 		private Dictionary<PlayerRole, RoleSlot> _roleSlotsDictionary;
 
 		private UnityEvent<PlayerRole> _onRoleSlotsChangedEvent = new UnityEvent<PlayerRole>();
+
+		[Inject] private PlayerManager _playerManager;
+		[Inject] private GameManager _gameManager;
 
 		public AllRoleDataScriptable AllRoleData => _allRoleData;
 		public UnityEvent<PlayerRole> OnRoleSlotsChangedEvent => _onRoleSlotsChangedEvent;
@@ -131,7 +135,7 @@ namespace Managers
 				return false;
 			}
 
-			if (_roleSlotsDictionary[newRole].Full && GameManager.Instance.PlayerRoleLimits)
+			if (_roleSlotsDictionary[newRole].Full && _gameManager.PlayerRoleLimits)
 			{
 				if (TryReplaceInactivePlayer(newRole, out Player player))
 				{
@@ -202,7 +206,7 @@ namespace Managers
 		{
 			player = null;
 
-			PlayerManager playerManager = GameManager.Instance.PlayerManager;
+			PlayerManager playerManager = _playerManager;
 
 			for (int i = 0; i < playerManager.PlayerCount(); i++)
 			{

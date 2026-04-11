@@ -1,5 +1,6 @@
 using UnityEngine;
 using Settings;
+using SavingAndLoading;
 using UnityEngine.UI;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
@@ -26,6 +27,8 @@ namespace UserInterface
 		
 		private GameObject _settingsPanel;
 		[Inject] SettingsManager _settingsManager;
+		[Inject] private GameManager _gameManager;
+		[Inject] private SaveManager _saveManager;
 
 		private LoadingManager _loadingManager;
 		private bool _savedGame;
@@ -71,11 +74,11 @@ namespace UserInterface
         [Inject] SettingsData CurrentSettings;
         private void Start()
 		{
-			_loadingManager = FindObjectOfType<LoadingManager>();
+			_loadingManager = FindAnyObjectByType<LoadingManager>();
 
 			//REVISIT
-			if (GameManager.Instance)
-				GameManager.Instance.SaveManager.SetAutosaveTime(Autosave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
+			if (_gameManager != null)
+				_saveManager.SetAutosaveTime(Autosave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
 		}
 
 		private void Update()

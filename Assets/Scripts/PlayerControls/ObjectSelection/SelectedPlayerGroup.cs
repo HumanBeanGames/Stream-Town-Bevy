@@ -5,12 +5,17 @@ using Managers;
 using Units;
 using UnityEngine.Events;
 using System.Collections.Generic;
+using Reflex.Attributes;
 
 namespace PlayerControls.ObjectSelection
 {
 	public class SelectedPlayerGroup : SelectedObject
 	{
 		private List<GameObject> _outlines;
+		[Inject] private RoleManager _roleManager;
+		[Inject] private PlayerManager _playerManager;
+		[Inject] private ObjectPoolingManager _poolingManager;
+
 		public override void SetDisplay(object data)
 		{
 			base.SetDisplay(data);
@@ -24,7 +29,7 @@ namespace PlayerControls.ObjectSelection
 			List<RoleHandler> players = ((List<RoleHandler>)_selectedObject);
 			for (int i = 0; i < players.Count; i++)
 				if (players[i] != null)
-					players[i].TrySetRole(GameManager.Instance.RoleManager.GetAvailableRoleFromIndex(index));
+					players[i].TrySetRole(_roleManager.GetAvailableRoleFromIndex(index));
 		}
 
 		protected override void AttachEvents()
@@ -34,8 +39,8 @@ namespace PlayerControls.ObjectSelection
 
 			_selectedObjectTypeUI.SelectionDropdown.ClearOptions();
 
-			_selectedObjectTypeUI.SelectionDropdown.AddOptions(GameManager.Instance.RoleManager.GetAvailableRolesAsString());
-			_selectedObjectTypeUI.SelectionDropdown.SetValueWithoutNotify(GameManager.Instance.RoleManager.GetRoleIndex(Utils.PlayerRole.Builder));
+			_selectedObjectTypeUI.SelectionDropdown.AddOptions(_roleManager.GetAvailableRolesAsString());
+			_selectedObjectTypeUI.SelectionDropdown.SetValueWithoutNotify(_roleManager.GetRoleIndex(Utils.PlayerRole.Builder));
 
 			OnButtonClick += OnDismissButtonClick;
 			_selectedObjectTypeUI.SelectionButton.onClick.AddListener(OnButtonClick);
@@ -57,7 +62,7 @@ namespace PlayerControls.ObjectSelection
 			List<RoleHandler> players = ((List<RoleHandler>)_selectedObject);
 			for (int i = 0; i < players.Count; i++)
 				if (players[i] != null)
-					GameManager.Instance.PlayerManager.DismissRecruit(players[i].Player);
+					_playerManager.DismissRecruit(players[i].Player);
 			_selectedObjectTypeUI.HideContext();
 		}
 
@@ -99,7 +104,7 @@ namespace PlayerControls.ObjectSelection
 			_outlines = new List<GameObject>();
 			for (int i = 0; i < players.Count; i++)
 			{
-				_outlines.Add(GameManager.Instance.PoolingManager.GetPooledObject("UI_Selection_Outline").gameObject);
+				_outlines.Add(_poolingManager.GetPooledObject("UI_Selection_Outline").gameObject);
 				BoxCollider collider = players[i].GetComponent<BoxCollider>();
 				_outlines[i].transform.position = new Vector3(collider.transform.position.x, 0.15f, collider.transform.position.z);
 				_outlines[i].transform.rotation = collider.transform.rotation;

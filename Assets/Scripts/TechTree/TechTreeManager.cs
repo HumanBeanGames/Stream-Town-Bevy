@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TechTree.Data;
 using TechTree.ScriptableObjects;
+using TownGoal;
 using TownGoal.Data;
 using Twitch;
 using UnityEngine;
@@ -13,6 +14,8 @@ using UnityEngine.InputSystem;
 using Utils;
 using UserInterface;
 using System.Collections;
+using Reflex.Attributes;
+using SavingAndLoading;
 
 namespace TechTree
 {
@@ -36,9 +39,13 @@ namespace TechTree
 
 		private int _techsUnlocked = 0;
 
-		private PlayerManager _playerManager;
-		private BuildingManager _buildingManager;
-		private TownResourceManager _townResourceManager;
+		[Inject] private PlayerManager _playerManager;
+		[Inject] private BuildingManager _buildingManager;
+		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private GameEventManager _gameEventManager;
+		[Inject] private TownGoalManager _townGoalManager;
+		[Inject] private UIManager _uiManager;
+		[Inject] private MetaData.MetaData _metaData;
 		private UserInterface_TownGoal _townGoalInterface;
 
 		public int MinTimeBetweenVotes => _minTimeBetweenVotes;
@@ -52,14 +59,21 @@ namespace TechTree
 		public Action<BuildingType> OnBuildingCostReduction;
 		public Action<BuildingType> OnBuildingAgedUp;
 
+		public void ManualInject(PlayerManager playerManager, BuildingManager buildingManager, TownResourceManager townResourceManager, GameEventManager gameEventManager, TownGoalManager townGoalManager, UIManager uiManager, MetaData.MetaData metaData)
+		{
+			_playerManager = playerManager;
+			_buildingManager = buildingManager;
+			_townResourceManager = townResourceManager;
+			_gameEventManager = gameEventManager;
+			_townGoalManager = townGoalManager;
+			_uiManager = uiManager;
+			_metaData = metaData;
+		}
+
 		public void InitializeTree()
 		{
-			_techTree = new TechnologyTree(_techTreeSO, this);
+			_techTree = new TechnologyTree(_techTreeSO, this, _metaData);
 			_goalsFollowed = new Dictionary<Goal, Node_SO>();
-
-			_buildingManager = GameManager.Instance.BuildingManager;
-			_playerManager = GameManager.Instance.PlayerManager;
-			_townResourceManager = GameManager.Instance.TownResourceManager;
 			//PrintAvailableNodes();
 
 		}
@@ -82,7 +96,7 @@ namespace TechTree
 					continue;
 
 				bool canAdd = false;
-				if (GameManager.Instance.BuildingManager.BuildingAges[BuildingType.Townhall] != Age.Age2)
+				if (_buildingManager.BuildingAges[BuildingType.Townhall] != Age.Age2)
 					if (_techTree.AvailableNodes[i].Age == Age.Age2)
 						for (int j = 0; j < _techTree.AvailableNodes[i].Unlocks.Count; j++)
 						{
@@ -151,7 +165,7 @@ namespace TechTree
 
 			TechVote voteEvent = new TechVote(delay, 60, nodes);
 			voteEvent.EventEnded += OnTechVoteEnded;
-			GameManager.Instance.GameEventManager.AddEvent(voteEvent);
+			_gameEventManager.AddEvent(voteEvent);
 		}
 
 		private void OnTechVoteEnded(bool success, GameEvent.EventType type, object data)
@@ -178,11 +192,11 @@ namespace TechTree
 		public Goal StartGoalFromNode(Node_SO node)
 		{
 			Goal goal = new Goal(node.Objectives);
-			GameManager.Instance.TownGoalManager.StartNewGoal(goal);
+			_townGoalManager.StartNewGoal(goal);
 			goal.OnGoalCompleted += GoalCompleted;
 			_goalsFollowed.Add(goal, node);
-			 if(_townGoalInterface == null)
-				_townGoalInterface = GameManager.Instance.UIManager.TownGoalInterface;
+			if (_townGoalInterface == null)
+				_townGoalInterface = _uiManager.TownGoalInterface;
 
 			_townGoalInterface.AddGoal(goal, node);
 
@@ -277,9 +291,6 @@ namespace TechTree
 		/// <param name="data"></param>
 		private void UnlockBuilding(NodeUnlockData data)
 		{
-			if (_buildingManager == null)
-				_buildingManager = GameManager.Instance.BuildingManager;
-
 			_buildingManager.UnlockBuilding(data.BuildingType);
 
 			OnBuildingUnlocked?.Invoke(data.BuildingType);
@@ -343,8 +354,8 @@ namespace TechTree
 		public IEnumerator DelayedSetup()
 		{
 			yield return new WaitForSeconds(0.01f);
-			_townGoalInterface = GameManager.Instance.UIManager.TownGoalInterface;
-			if (GameManager.Instance.MetaDatas.LoadType == MetaData.LoadType.Generate)
+			_townGoalInterface = _uiManager.TownGoalInterface;
+			if (_metaData != null && _metaData.LoadType == MetaData.LoadType.Generate)
 				StartNewTechVote(20);
 		}
 	}

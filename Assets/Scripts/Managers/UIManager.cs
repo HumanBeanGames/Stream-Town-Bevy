@@ -7,6 +7,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UserInterface;
 using Utils;
+using Reflex.Attributes;
 
 namespace Managers
 {
@@ -61,40 +62,44 @@ namespace Managers
         public UserInterface_TownVote TownVoteInterface => _townVoteInterface;
         public UserInterface_Event EventInterface => _eventInterface;
 
-		private GameManager _gm;
+		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private BuildingManager _buildingManager;
+		[Inject] private PlayerManager _playerManager;
+		[Inject] private TimeManager _timeManager;
+		[Inject] private SeasonManager _seasonManager;
 
 		private void UpdateResourcesDisplay()
 		{
-			_woodDisplayText.text = FormattedResourceString(_gm.TownResourceManager.CurrentResourceAmount(Resource.Wood), _gm.TownResourceManager.MaxResourceAmount(Resource.Wood));
-			_foodDisplayText.text = FormattedResourceString(_gm.TownResourceManager.CurrentResourceAmount(Resource.Food), _gm.TownResourceManager.MaxResourceAmount(Resource.Food));
-			_oreDisplayText.text = FormattedResourceString(_gm.TownResourceManager.CurrentResourceAmount(Resource.Ore), _gm.TownResourceManager.MaxResourceAmount(Resource.Ore));
-			_goldDisplayText.text = FormattedResourceString(_gm.TownResourceManager.CurrentResourceAmount(Resource.Gold));
+			_woodDisplayText.text = FormattedResourceString(_townResourceManager.CurrentResourceAmount(Resource.Wood), _townResourceManager.MaxResourceAmount(Resource.Wood));
+			_foodDisplayText.text = FormattedResourceString(_townResourceManager.CurrentResourceAmount(Resource.Food), _townResourceManager.MaxResourceAmount(Resource.Food));
+			_oreDisplayText.text = FormattedResourceString(_townResourceManager.CurrentResourceAmount(Resource.Ore), _townResourceManager.MaxResourceAmount(Resource.Ore));
+			_goldDisplayText.text = FormattedResourceString(_townResourceManager.CurrentResourceAmount(Resource.Gold));
 		}
 
 		private void UpdateResourcesRateOfChange()
         {
-			_woodRateOfChangeText.text = FormattedRateOfChangeString(_gm.TownResourceManager.RateOfChangeForResource(Resource.Wood));
-			_foodRateOfChangeText.text = FormattedRateOfChangeString(_gm.TownResourceManager.RateOfChangeForResource(Resource.Food));
-			_oreRateOfChangeText.text = FormattedRateOfChangeString(_gm.TownResourceManager.RateOfChangeForResource(Resource.Ore));
-			_goldRateOfChangeText.text = FormattedRateOfChangeString(rateOfChange: _gm.TownResourceManager.RateOfChangeForResource(Resource.Gold));
+			_woodRateOfChangeText.text = FormattedRateOfChangeString(_townResourceManager.RateOfChangeForResource(Resource.Wood));
+			_foodRateOfChangeText.text = FormattedRateOfChangeString(_townResourceManager.RateOfChangeForResource(Resource.Food));
+			_oreRateOfChangeText.text = FormattedRateOfChangeString(_townResourceManager.RateOfChangeForResource(Resource.Ore));
+			_goldRateOfChangeText.text = FormattedRateOfChangeString(rateOfChange: _townResourceManager.RateOfChangeForResource(Resource.Gold));
         }
 
 		private void UpdateCountTexts()
 		{
-			_buildingCountText.text = _gm.BuildingManager.NumberOfBuildings.ToString();
-			_playerCountText.text = _gm.PlayerManager.PlayerCount().ToString();
+			_buildingCountText.text = _buildingManager.NumberOfBuildings.ToString();
+			_playerCountText.text = _playerManager.PlayerCount().ToString();
 		}
 
 		private void UpdateSeasonSlider()
 		{
-			float newValue = ((_gm.TimeManager.WorldTimePassed + _seaonSliderStartOffset) / (float)_gm.TimeManager.SecondsPerDay / (float)_gm.SeasonManager.DaysPerSeason) / 4f;
+			float newValue = ((_timeManager.WorldTimePassed + _seaonSliderStartOffset) / (float)_timeManager.SecondsPerDay / (float)_seasonManager.DaysPerSeason) / 4f;
 			int roundedDown = (int)Mathf.Floor(newValue);
 			_seasonalSlider.value = newValue - roundedDown;
 		}
 
 		private void UpdateTimeOfDay()
 		{
-			TimeSpan t = TimeSpan.FromSeconds(_gm.TimeManager.WorldTimePassed);
+			TimeSpan t = TimeSpan.FromSeconds(_timeManager.WorldTimePassed);
 			string newString = "";
 			string formatted = string.Format("{0:D1}", t.Days);
 			newString += $"<size=48>{formatted}</size><size=32><color=#958450>D</color></size> ";
@@ -137,13 +142,11 @@ namespace Managers
 
 		private void Start()
 		{
-			_gm = GameManager.Instance;
 			_seaonSliderStartOffset = 0;
             _townGoalInterface = GetComponent<UserInterface_TownGoal>();
             _rulerVoteInterface = GetComponent<UserInterface_RulerVote>();
             _townVoteInterface = GetComponent<UserInterface_TownVote>();
             _eventInterface = GetComponent<UserInterface_Event>();
-            _gm.UIManager = this;
 		}
 
 		private void Update()

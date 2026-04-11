@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Audio 
 {
@@ -23,11 +24,12 @@ namespace Audio
 		private float _volumeChangeRate = 0.2f;
 
 		private AudioSource _audioSource;
+		[Inject] private SeasonManager _seasonManager;
 
 		private void Start()
 		{
 			_audioSource = GetComponent<AudioSource>();
-			GameManager.Instance.SeasonManager.OnSeasonChanging += OnSeasonChange;
+			_seasonManager.OnSeasonChanging += OnSeasonChange;
 		}
 
 		private void OnSeasonChange(Season season)

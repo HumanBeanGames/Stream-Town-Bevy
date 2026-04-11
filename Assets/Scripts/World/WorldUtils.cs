@@ -11,6 +11,12 @@ namespace World
     public static class WorldUtils
     {
         public static LayerMask GroundLayerMask { get; set; }
+        private static TimeManager _timeManager;
+
+        public static void Initialize(TimeManager timeManager)
+        {
+            _timeManager = timeManager;
+        }
 
         /// <summary>
         /// Returns true if the position is on the ground as well as the height of the ground.
@@ -109,6 +115,6 @@ namespace World
 			return eventSystem.IsPointerOverGameObject() || eventSystem.currentSelectedGameObject != null;
 		}
 
-		public static double CurrentTime => GameManager.Instance.TimeManager.WorldTimePassed;
+		public static double CurrentTime => _timeManager.WorldTimePassed;
 	}
 }

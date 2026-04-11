@@ -1,6 +1,7 @@
 using Buildings;
 using GUIDSystem;
 using Managers;
+using Reflex.Attributes;
 using SavingAndLoading.Structs;
 using Target;
 using Utils.Pooling;
@@ -10,6 +11,8 @@ namespace SavingAndLoading.SavableObjects
 	public class SaveableBuilding : SaveableObject
 	{
 		public BuildingBase BuildingBase;
+		[Inject] private GUIDManager _guidManager;
+		[Inject] private BuildingManager _buildingManager;
 
 		public override object SaveData()
 		{
@@ -27,8 +30,8 @@ namespace SavingAndLoading.SavableObjects
 			BuildingBase.BuildingState = buildingData.BuildingState;
 			BuildingBase.SetRemovedFoliage(buildingData.DestroyedFoliage);
 			GUIDComponent.SetGUID(buildingData.GUID);
-			GameManager.Instance.GUIDManager.AddToDictionary(PoolableObject);
-			GameManager.Instance.BuildingManager.AddLoadedBuilding(BuildingBase);
+			_guidManager.AddToDictionary(PoolableObject);
+			_buildingManager.AddLoadedBuilding(BuildingBase);
 
 			if (BuildingBase.BuildingState == Utils.BuildingState.Building)
 				BuildingBase.OnLoadedBuiltBuilding();

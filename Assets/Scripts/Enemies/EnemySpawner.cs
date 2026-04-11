@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using Utils;
 using Utils.Pooling;
+using Reflex.Attributes;
+using Environment;
 
 namespace Enemies
 {
@@ -29,6 +31,11 @@ namespace Enemies
 		[SerializeField]
 		private Transform[] _spawnLocations;
 
+		[Inject] private ObjectPoolingManager _poolingManager;
+		[Inject] private DayAndNightManager _dayNightManager;
+		[Inject] private TimeManager _timeManager;
+		[Inject] private PlayerManager _playerManager;
+
 		private float _spawnTimer = 0;
 
 		private int _maxEnemies = 2;
@@ -48,7 +55,7 @@ namespace Enemies
 
 			Transform spawnTransform = GetRandomSpawnLocation();
 
-			PoolableObject obj = GameManager.Instance.PoolingManager.GetPooledObject(enemyName);
+			PoolableObject obj = _poolingManager.GetPooledObject(enemyName);
 			obj.transform.position = spawnTransform.position;
 			obj.transform.rotation = spawnTransform.rotation;
 			obj.gameObject.SetActive(true);
@@ -77,7 +84,7 @@ namespace Enemies
 					_spawnedEnemies.RemoveAt(i);
 			}
 
-			if (!GameStateManager.ObjectsPooled || !CanSpawnEnemies || GameManager.Instance.DayNightManager.IsDayTime)
+			if (!GameStateManager.ObjectsPooled || !CanSpawnEnemies || _dayNightManager.IsDayTime)
 				return;
 
 			if (_spawnedEnemies.Count < _maxEnemies)
@@ -99,7 +106,7 @@ namespace Enemies
 
 		private void CalculateMaxEnemies()
 		{
-			_maxEnemies = Mathf.Max(Mathf.Min((int)(GameManager.Instance.TimeManager.DayCount + GameManager.Instance.PlayerManager.Players.Count * 0.1f), _maxTotalEnemies), _minTotalEnemies);
+			_maxEnemies = Mathf.Max(Mathf.Min((int)(_timeManager.DayCount + _playerManager.Players.Count * 0.1f), _maxTotalEnemies), _minTotalEnemies);
 		}
 
 		// Unity Functions.
@@ -112,7 +119,7 @@ namespace Enemies
 
 		private void Start()
 		{
-			GameManager.Instance.DayNightManager.OnDayStarted += OnDayStarted;
+			_dayNightManager.OnDayStarted += OnDayStarted;
 		}
 	}
 }

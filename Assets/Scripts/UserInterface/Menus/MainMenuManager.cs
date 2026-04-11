@@ -17,8 +17,7 @@ namespace UserInterface.MainMenu
 		[SerializeField]
 		LoadingManager _loadingManager = null;
 
-		[SerializeField]
-		private MetaData.MetaData _metaData;
+		[Inject] private MetaData.MetaData _metaData;
 
 		[SerializeField]
 		private Button _loadButton;
@@ -119,8 +118,7 @@ namespace UserInterface.MainMenu
 
 		private void Start()
 		{
-			_loadingManager = FindObjectOfType<LoadingManager>();
-			_metaData = FindObjectOfType<MetaData.MetaData>();
+			_loadingManager = FindAnyObjectByType<LoadingManager>();
 
 			if (GameIO.DoesSaveFileExist(GameIO.SaveFileType.GameSave))
 				return;

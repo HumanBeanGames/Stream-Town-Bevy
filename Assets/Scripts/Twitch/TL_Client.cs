@@ -4,6 +4,7 @@ using TwitchLib.Unity;
 using TwitchLib.Client.Events;
 using System.Collections;
 using Character;
+using GameEventSystem;
 using Managers;
 using Pets;
 using Pets.Enumerations;
@@ -11,6 +12,7 @@ using System;
 using UnityEngine.InputSystem;
 using GameEventSystem.Events;
 using Reflex.Attributes;
+using Enemies;
 
 namespace Twitch
 {
@@ -24,6 +26,12 @@ namespace Twitch
 		private string _channelName = "";
 
 		[Inject] SettingsData CurrentSettings;
+		[Inject] private static GameEventManager _gameEventManager;
+		[Inject] private static PlayerManager _playerManager;
+		[Inject] private static ObjectPoolingManager _poolingManager;
+		[Inject] private static EnemySpawner _enemySpawner;
+		[Inject] private static GameManager _gameManager;
+
 		/// <summary>
 		/// Initalizes the Twitch Lib Client and connect the bot to the Twitch Channel.
 		/// </summary>
@@ -63,7 +71,7 @@ namespace Twitch
 			if (int.TryParse(e.RaidNotification.MsgParamViewerCount, out int viewerCount))
 			{
 				string[] enemies = new string[] { "Minotaur" };
-				GameManager.Instance.GameEventManager.AddEvent(new RaidEvent(0, 1200, enemies, boss: "MinotaurBoss", waves: 2, enemiesPerWave: viewerCount));
+				_gameEventManager.AddEvent(new RaidEvent(0, 1200, enemies, _poolingManager, _gameManager.UIManager.EventInterface, _gameEventManager, _enemySpawner, _playerManager, boss: "MinotaurBoss", waves: 2, enemiesPerWave: viewerCount));
 			}
 		}
 
@@ -120,9 +128,9 @@ namespace Twitch
 
 		public static void UserIsSubscribed(string userId)
 		{
-			if (GameManager.Instance.PlayerManager.PlayerExistsByID(userId, out int playerIndex))
+			if (_playerManager.PlayerExistsByID(userId, out int playerIndex))
 			{
-				Player player = GameManager.Instance.PlayerManager.GetPlayer(playerIndex);
+				Player player = _playerManager.GetPlayer(playerIndex);
 				player.PetsUnlocked[PetType.RedPanda] = true;
 
 				if (player.Pet.ActivePet == null)

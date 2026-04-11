@@ -10,6 +10,7 @@ using UnityEngine.UI;
 using Utils;
 using PlayerControls;
 using UnityEngine.Events;
+using Reflex.Attributes;
 
 namespace UserInterface.BottomBarMenu
 {
@@ -33,6 +34,13 @@ namespace UserInterface.BottomBarMenu
 
 		[SerializeField]
 		private List<BuildingContextItem> _buildingContextData;
+
+		[Inject] private static TownResourceManager _townResourceManager;
+		[Inject] private static BuildingManager _buildingManager;
+		[Inject] private static RoleManager _roleManager;
+		[Inject] private static PlayerManager _playerManager;
+		[Inject] private static UIManager _uiManager;
+		[Inject] private static GameManager _gameManager;
 
 		private static Dictionary<BottomBarContext, BottomBarButton> _mainButtons = new Dictionary<BottomBarContext, BottomBarButton>();
 		private static int _maxShownButtonsOnBar = 10;
@@ -105,7 +113,7 @@ namespace UserInterface.BottomBarMenu
 					break;
 				case BottomBarContext.RecruitMenu:
 					ShowRecruitMenu();
-					GameManager.Instance.TownResourceManager.OnAnyResourceChangeEvent.AddListener(OnRecruitAdded);
+					_townResourceManager.OnAnyResourceChangeEvent.AddListener(OnRecruitAdded);
 					break;
 				case BottomBarContext.TechTreeMenu:
 					break;
@@ -123,7 +131,7 @@ namespace UserInterface.BottomBarMenu
 					break;
 				case BottomBarContext.RecruitMenu:
 					HideContextMenu();
-					GameManager.Instance.TownResourceManager.OnAnyResourceChangeEvent.RemoveListener(OnRecruitAdded);
+					_townResourceManager.OnAnyResourceChangeEvent.RemoveListener(OnRecruitAdded);
 					break;
 				case BottomBarContext.TechTreeMenu:
 					break;
@@ -158,7 +166,7 @@ namespace UserInterface.BottomBarMenu
 
 		private static void ShowBuildMenu()
 		{
-			BuildingManager bm = GameManager.Instance.BuildingManager;
+			BuildingManager bm = _buildingManager;
 
 			List<GameObject> availableButtons = new List<GameObject>();
 
@@ -190,7 +198,7 @@ namespace UserInterface.BottomBarMenu
 
 		private static void ShowRecruitMenu()
 		{
-			RoleManager rm = GameManager.Instance.RoleManager;
+			RoleManager rm = _roleManager;
 
 			List<GameObject> availableButtons = new List<GameObject>();
 
@@ -199,7 +207,7 @@ namespace UserInterface.BottomBarMenu
 				if (rm.GetMaxSlots(_roleButtons[i].Item1) > 0 || rm.RoleIsInfinite(_roleButtons[i].Item1))
 					availableButtons.Add(_roleButtons[i].Item2);
 
-				if (rm.SlotsFull(_roleButtons[i].Item1) || GameManager.Instance.TownResourceManager.ResourceFull(Resource.Recruit))
+				if (rm.SlotsFull(_roleButtons[i].Item1) || _townResourceManager.ResourceFull(Resource.Recruit))
 					_roleButtons[i].Item2.GetComponentInChildren<Button>().interactable = false;
 				else
 					_roleButtons[i].Item2.GetComponentInChildren<Button>().interactable = true;
@@ -288,9 +296,9 @@ namespace UserInterface.BottomBarMenu
 		{
 			// Try to create building placer with that building type or update current building placer?
 			// Escape to cancel building
-			Player player = GameManager.Instance.UserPlayer;
+			Player player = _gameManager.UserPlayer;
 
-			BuildingManager bm = GameManager.Instance.BuildingManager;
+			BuildingManager bm = _buildingManager;
 
 			// This is terrible lmao
 			List<Button> buttonList = new List<Button>();
@@ -310,7 +318,7 @@ namespace UserInterface.BottomBarMenu
 			bm.TryCancelBuilding(player);
 			bm.TryStartNewBuildingPlacer(player, buildingType, out string msg);
 
-			GameManager.Instance.LastBuildingType = buildingType;
+			_gameManager.LastBuildingType = buildingType;
 			for (int i = 0; i < _buildButtons.Count; i++)
 			{
 				if (bm.CanAffordToBuild(_buildButtons[i].Item1))
@@ -327,18 +335,18 @@ namespace UserInterface.BottomBarMenu
 				buttonList.Add(_roleButtons[i].Item2.GetComponentInChildren<Button>());
 			}
 
-			if (GameManager.Instance.TownResourceManager.ResourceFull(Resource.Recruit))
+			if (_townResourceManager.ResourceFull(Resource.Recruit))
 				for (int i = 0; i < buttonList.Count; i++)
 					buttonList[i].interactable = false;
 
-			RoleManager rm = GameManager.Instance.RoleManager;
-			if (rm.SlotsFull(role) || GameManager.Instance.TownResourceManager.ResourceFull(Resource.Recruit))
+			RoleManager rm = _roleManager;
+			if (rm.SlotsFull(role) || _townResourceManager.ResourceFull(Resource.Recruit))
 				return;
 
 			Player recruit = new Player(new TwitchUser($"{-UnityEngine.Random.Range(int.MinValue, 0)}", $""), true);
-			GameManager.Instance.PlayerManager.AddNewPlayer(recruit, role);
+			_playerManager.AddNewPlayer(recruit, role);
 
-			if (GameManager.Instance.TownResourceManager.ResourceFull(Resource.Recruit))
+			if (_townResourceManager.ResourceFull(Resource.Recruit))
 			{
 				for (int i = 0; i < buttonList.Count; i++)
 					buttonList[i].interactable = false;
@@ -478,7 +486,7 @@ namespace UserInterface.BottomBarMenu
 
 		private void OnTechTreeKey()
 		{
-			GameManager.Instance.UIManager.TownVoteInterface.ToggleVotingMenu();
+			_uiManager.TownVoteInterface.ToggleVotingMenu();
 		}
 
 		[Serializable]

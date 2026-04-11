@@ -1,3 +1,4 @@
+using GameEventSystem;
 using GameEventSystem.Events.Voting;
 using Managers;
 using System;
@@ -7,6 +8,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.UI;
+using Reflex.Attributes;
 
 namespace UserInterface
 {
@@ -24,6 +26,8 @@ namespace UserInterface
 		private Button _bottomBarButton;
 
 		private List<UI_TechOption> _techOptions;
+		[Inject] private GameEventManager _gameEventManager;
+		[Inject] private GameManager _gameManager;
 
 		private bool _canOpenVoteContainer = false;
 
@@ -48,7 +52,7 @@ namespace UserInterface
 
 		public void BroadcasterVote(int voteId)
 		{
-			((VoteEvent)GameManager.Instance.GameEventManager.CurrentEvent).Action(new PlayerVote(GameManager.Instance.UserPlayer, new VoteOption(voteId.ToString(), null)));
+			((VoteEvent)_gameEventManager.CurrentEvent).Action(new PlayerVote(_gameManager.UserPlayer, new VoteOption(voteId.ToString(), null)));
 			for (int i = 0; i < _techOptions.Count; i ++)
 			{
 				_techOptions[i].TechButton.onClick.RemoveAllListeners();

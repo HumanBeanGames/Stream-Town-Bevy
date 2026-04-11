@@ -1,5 +1,7 @@
 using Character;
+using GameEventSystem;
 using Managers;
+using PlayerControls;
 using System;
 using Twitch.Utils;
 using UnityEngine;
@@ -10,29 +12,23 @@ namespace Twitch.Commands
 	public static class RulerCommands
 	{
 		private static PlayerManager _playerManager;
-		public static PlayerManager PlayerManager
-		{
-			get
-			{
-				if (_playerManager == null)
-					_playerManager = GameManager.Instance.PlayerManager;
+		private static RoleManager _roleManager;
+		private static TownResourceManager _townResourceManager;
+		private static CameraController _cameraController;
+		private static GameEventManager _gameEventManager;
 
-				return _playerManager;
-			}
+		public static void Initialize(PlayerManager playerManager, RoleManager roleManager, TownResourceManager townResourceManager, CameraController cameraController, GameEventManager gameEventManager)
+		{
+			_playerManager = playerManager;
+			_roleManager = roleManager;
+			_townResourceManager = townResourceManager;
+			_cameraController = cameraController;
+			_gameEventManager = gameEventManager;
 		}
 
-		public static RoleManager _roleManager;
+		public static PlayerManager PlayerManager => _playerManager;
+		public static RoleManager RoleManager => _roleManager;
 
-		public static RoleManager RoleManager
-		{
-			get
-			{
-				if (_roleManager == null)
-					_roleManager = GameManager.Instance.RoleManager;
-
-				return _roleManager;
-			}
-		}
 		/// <summary>
 		/// Used for allowing Rulers to sell resources for gold.
 		/// </summary>
@@ -111,12 +107,12 @@ namespace Twitch.Commands
 
 				for (int i = 0; i < amount; i++)
 				{
-					if (RoleManager.SlotsFull(role) || GameManager.Instance.TownResourceManager.ResourceFull(Resource.Recruit))
+					if (_roleManager.SlotsFull(role) || _townResourceManager.ResourceFull(Resource.Recruit))
 						break;
 
 					Player recruit = new Player(new TwitchUser($"{UnityEngine.Random.Range(int.MinValue, 0)}", $""), true);
-					PlayerManager.AddNewPlayer(recruit, role);
-					GameManager.Instance.TownResourceManager.AddResource(Resource.Recruit, 1);
+					_playerManager.AddNewPlayer(recruit, role);
+					_townResourceManager.AddResource(Resource.Recruit, 1);
 				}
 			}
 		}
@@ -126,7 +122,7 @@ namespace Twitch.Commands
 			if (PlayerManager.Ruler != player && !GameMasterCommands.IsGameMaster(player))
 				return;
 
-			GameManager.Instance.CameraController.ResetCamera();
+			_cameraController.ResetCamera();
 		}
 
 		public static void MoveCamera(Player player, string command, params string[] args)
@@ -169,15 +165,15 @@ namespace Twitch.Commands
 						break;
 				}
 			}
-			GameManager.Instance.CameraController.ZoomCamera(zoomFactor);
-			GameManager.Instance.CameraController.MoveCamera(moveVector);
+			_cameraController.ZoomCamera(zoomFactor);
+			_cameraController.MoveCamera(moveVector);
 		}
 
 		public static void RecruitCount(Player player)
 		{
 			if (PlayerManager.Ruler != player && !GameMasterCommands.IsGameMaster(player))
 				return;
-			MessageSender.SendMessage($"{player.TwitchUser.Username} The town has {GameManager.Instance.PlayerManager.RecruitCount()} recruits!");
+			MessageSender.SendMessage($"{player.TwitchUser.Username} The town has {_playerManager.RecruitCount()} recruits!");
 		}
 
 		// show recruit ids
@@ -185,7 +181,7 @@ namespace Twitch.Commands
 		{
 			if (PlayerManager.Ruler != player && !GameMasterCommands.IsGameMaster(player))
 				return;
-			GameManager.Instance.PlayerManager.ShowRecruitIDs();
+			_playerManager.ShowRecruitIDs();
 		}
 
 		// Dismiss recruit
@@ -197,9 +193,9 @@ namespace Twitch.Commands
 				MessageSender.SendMessage($"!rdismiss <id>");
 			if (int.TryParse(args[0], out int id))
 			{
-				Player recruit = GameManager.Instance.PlayerManager.GetRecruitByIndex(id);
+				Player recruit = _playerManager.GetRecruitByIndex(id);
 
-				GameManager.Instance.PlayerManager.DismissRecruit(recruit);
+				_playerManager.DismissRecruit(recruit);
 				MessageSender.SendMessage($"{player.TwitchUser.Username} Successfully Dismissed recruit {id}!");
 			}
 			else
@@ -217,13 +213,13 @@ namespace Twitch.Commands
 			{
 				if (int.TryParse(args[0], out int id))
 				{
-					Player recruit = GameManager.Instance.PlayerManager.GetRecruitByIndex(id);
+					Player recruit = _playerManager.GetRecruitByIndex(id);
 					string r = char.ToUpper(args[1][0]) + args[1].Substring(1);
 					if (Enum.TryParse(r, out PlayerRole role))
 					{
-						if (GameManager.Instance.RoleManager.IsRoleAvailabe(role))
+						if (_roleManager.IsRoleAvailabe(role))
 						{
-							GameManager.Instance.PlayerManager.SwapRecruitRole(recruit, role);
+							_playerManager.SwapRecruitRole(recruit, role);
 							MessageSender.SendMessage($"{player.TwitchUser.Username} Successfully changed recruit {id} to {role}!");
 						}
 						else
@@ -237,7 +233,6 @@ namespace Twitch.Commands
 			}
 		}
 
-
 		// show recruit information (role, level) using ID
 		public static void DisplayRecruitInfo(Player player, string command, params string[] args)
 		{
@@ -249,7 +244,7 @@ namespace Twitch.Commands
 			{
 				if (int.TryParse(args[0], out int id))
 				{
-					Player recruit = GameManager.Instance.PlayerManager.GetRecruitByIndex(id);
+					Player recruit = _playerManager.GetRecruitByIndex(id);
 
 					string info = $"{player.TwitchUser.Username} ----- Recruit {id} | " +
 						$"Current role {recruit.RoleHandler.CurrentRole} | " +
@@ -262,7 +257,6 @@ namespace Twitch.Commands
 				else
 					MessageSender.SendMessage($"{args[0]} is not a valid id");
 			}
-
 		}
 
 		public static void Resign(Player player)
@@ -270,11 +264,10 @@ namespace Twitch.Commands
 			if (PlayerManager.Ruler != player && !GameMasterCommands.IsGameMaster(player))
 				return;
 
-			GameManager.Instance.GameEventManager.StartNewRulerVote();
+			_gameEventManager.StartNewRulerVote();
 			player.RoleHandler.TrySetRole(player.RoleHandler.PreviousRole);
-			GameManager.Instance.PlayerManager.SetRuler(null);
+			_playerManager.SetRuler(null);
 			MessageSender.SendMessage($"{player.TwitchUser.Username} you have been succesfully resigned!");
 		}
-
 	}
 }

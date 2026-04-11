@@ -8,6 +8,7 @@ using SavingAndLoading.SavableObjects;
 using Target;
 using Units;
 using UnityEngine;
+using Reflex.Attributes;
 
 namespace Utils.Pooling
 {
@@ -22,9 +23,10 @@ namespace Utils.Pooling
 		Count
 	}
 
-	public class PoolableObject : MonoBehaviour
+	public class PoolableObject : MonoBehaviour, IPooledObjectReset
 	{
 		private ObjectPoolingManager _poolingManager;
+		[Inject] private GUIDManager _guidManager;
 
 		[SerializeField]
 		private string _poolName;
@@ -49,6 +51,11 @@ namespace Utils.Pooling
 			_poolName = name;
 			_poolingManager = poolingManager;
 			SetupSaveableObject();
+		}
+
+		public void OnReset()
+		{
+			// Default implementation does nothing
 		}
 
 		public void SetupSaveableObject()
@@ -82,14 +89,14 @@ namespace Utils.Pooling
 
 		private void OnEnable()
 		{
-			if (GameManager.Instance != null && GameManager.Instance.GUIDManager != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
-				GameManager.Instance.GUIDManager.CreateGUIDandAddToDictionary(this);
+			if (_guidManager != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
+				_guidManager.CreateGUIDandAddToDictionary(this);
 		}
 
 		private void OnDisable()
 		{
-			if (GameManager.Instance != null && GameManager.Instance.GUIDManager != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
-				GameManager.Instance.GUIDManager.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
+			if (_guidManager != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
+				_guidManager.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
 
 			if (_poolingManager != null)
 				_poolingManager.AddToPool(_poolName, this);

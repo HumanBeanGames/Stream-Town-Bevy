@@ -6,6 +6,7 @@ using System;
 using Units;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Enemies
 {
@@ -22,6 +23,7 @@ namespace Enemies
 		private TargetSensor _targetSensor;
 		private GUIDComponent _gUIDComponent;
 		private StationSensor _stationSensor;
+		[Inject] private PlayerManager _playerManager;
 
 		private ActiveResourceIncrementer _activeResourceIncrementer;
 
@@ -70,7 +72,7 @@ namespace Enemies
 			if (_healthHandler.BaseMaxHealth <= 0)
 				return;
 
-			_healthHandler.SetMaxHealth(_healthHandler.BaseMaxHealth + (int)(_additionalHealthPerPlayer * (GameManager.Instance.PlayerManager.PlayerCount() + GameManager.Instance.PlayerManager.RecruitCount())));
+			_healthHandler.SetMaxHealth(_healthHandler.BaseMaxHealth + (int)(_additionalHealthPerPlayer * (_playerManager.PlayerCount() + _playerManager.RecruitCount())));
 			_healthHandler.SetHealth(_healthHandler.MaxHealth);
 		}
 

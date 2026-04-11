@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
 using Utils;
+using Reflex.Attributes;
 
 namespace Sensors
 {
@@ -24,7 +25,7 @@ namespace Sensors
 		[SerializeField]
 		private UnityEvent _onStationChange;
 
-		private StationManager _stationManager;
+		[Inject] private StationManager _stationManager;
 
 		public Station CurrentStation => _currentStation;
 		public bool HasStation => _currentStation == null ? false : true;
@@ -139,7 +140,6 @@ namespace Sensors
 		// Unity Functions.
 		private void Start()
 		{
-			_stationManager = GameManager.Instance.StationManager;
 			UpdateStation = true;
 		}
 

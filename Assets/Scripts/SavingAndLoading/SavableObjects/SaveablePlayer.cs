@@ -2,6 +2,7 @@ using Character;
 using GUIDSystem;
 using Managers;
 using Pets.Enumerations;
+using Reflex.Attributes;
 using SavingAndLoading.Structs;
 using System.Collections.Generic;
 using Target;
@@ -12,6 +13,7 @@ namespace SavingAndLoading.SavableObjects
 	public class SaveablePlayer : SaveableObject
 	{
 		public RoleHandler RoleHandler;
+		[Inject] private GUIDManager _guidManager;
 
 		public override void LoadData(object data)
 		{
@@ -28,7 +30,7 @@ namespace SavingAndLoading.SavableObjects
 				, RoleHandler.Player.TwitchUser.TwitchUserType
 				, RoleHandler.Player.TwitchUser.GameUserType
 				, RoleHandler.Player.TwitchUser.IsBroadcaster
-				, GameManager.Instance.GUIDManager.CreateGUIDandAddToDictionary(PoolableObject)
+				, _guidManager.CreateGUIDandAddToDictionary(PoolableObject)
 				, RoleHandler.Player.Pet.IsActive
 				, currentPet
 				, unlockedPets

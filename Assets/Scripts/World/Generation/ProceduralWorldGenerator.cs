@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using Utils;
 using Utils.Pooling;
+using Reflex.Attributes;
 
 namespace World.Generation
 {
@@ -18,6 +19,8 @@ namespace World.Generation
 		/// </summary>
 		private const int MAX_CAMP_GENERATION_ATTEMPTS = 500;
 		private Mesh _generatedMesh;
+		[Inject] private ObjectPoolingManager _poolingManager;
+		[Inject] private BuildingManager _buildingManager;
 
 		[SerializeField]
 		private float _xScale = 4;
@@ -58,8 +61,6 @@ namespace World.Generation
 		private bool _regen = false;
 		[SerializeField]
 		private bool _previewTreePlacements = false;
-		[SerializeField]
-		private bool _previewFoliagePlacements = false;
 		[SerializeField]
 		private Mesh _treeMesh;
 		List<Vector3> _previewTreePositions = new List<Vector3>();
@@ -164,18 +165,18 @@ namespace World.Generation
 		/// </summary>
 		private IEnumerator GeneratePooledObjects()
 		{
-			ObjectPoolingManager poolManager = GameManager.Instance.PoolingManager;
+			ObjectPoolingManager poolManager = _poolingManager;
 			int seed = _generationSettings.Seed;
 			DateTime before = DateTime.Now;
 			DateTime after;
 			TimeSpan duration;
 
 			// Create townhall
-			PoolableObject th = GameManager.Instance.PoolingManager.GetPooledObject("Townhall");
+			PoolableObject th = _poolingManager.GetPooledObject("Townhall");
 			GameObject thObj = ((SaveableBuilding)th.SaveableObject).BuildingBase.gameObject;
 			thObj.transform.position = Vector3.zero;
 			thObj.SetActive(true);
-			GameManager.Instance.BuildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
+			_buildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
 
 			// Generate all normal resources (trees, ore, etc).
 			if (_resourceGenerationSettings != null)
@@ -238,7 +239,7 @@ namespace World.Generation
 		/// </summary>
 		private IEnumerator GeneratePooledObjectsExceptTownhall()
 		{
-			ObjectPoolingManager poolManager = GameManager.Instance.PoolingManager;
+			ObjectPoolingManager poolManager = _poolingManager;
 			int seed = _generationSettings.Seed;
 			DateTime before = DateTime.Now;
 			DateTime after;
@@ -395,11 +396,11 @@ namespace World.Generation
 				yield return new WaitForEndOfFrame();
 
 				// Spawn townhall first so it exists for pathfinding check
-				PoolableObject th = GameManager.Instance.PoolingManager.GetPooledObject("Townhall");
+				PoolableObject th = _poolingManager.GetPooledObject("Townhall");
 				GameObject thObj = ((SaveableBuilding)th.SaveableObject).BuildingBase.gameObject;
 				thObj.transform.position = Vector3.zero;
 				thObj.SetActive(true);
-				GameManager.Instance.BuildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
+				_buildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
 
 				int attempts = 0;
 				bool terrainAcceptable = false;

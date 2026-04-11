@@ -4,13 +4,15 @@ using Managers;
 using UnityEngine;
 using UserInterface;
 using Utils;
+using Utils.Pooling;
+using Reflex.Attributes;
 
 namespace Target
 {
 	/// <summary>
 	/// Base class for all Targetable objects in the game
 	/// </summary>
-	public class Targetable : MonoBehaviour
+	public class Targetable : MonoBehaviour, Utils.Pooling.IPooledObjectReset
 	{
 		[SerializeField]
 		protected TargetMask _targetType;
@@ -19,7 +21,8 @@ namespace Target
 		[SerializeField]
 		protected float _partitionUpdateRate = 3f;
 		protected float _partitionUpdateTime = 0;
-		protected CellSpacePartitioning _cellSpacePartition;
+		[Inject] protected CellSpacePartitioning _cellSpacePartition;
+		[Inject] protected TargetManager _targetManager;
 		protected int _cellIndex = -1;
 
 		[SerializeField, Tooltip("If false, use the box colliders bounds. This is used for determining how close a unit should get to the target.")]
@@ -179,29 +182,36 @@ namespace Target
 			_wasPooled = true;
 			AddThisTargetToCell();
 
-			GameManager.Instance.TargetManager.AddTarget(this);
+			if (_targetManager != null)
+				_targetManager.AddTarget(this);
 		}
 
 		protected void OnDisable()
 		{
 			RemoveThisTarget();
 
-			GameManager.Instance.TargetManager.RemoveTarget(this);
+			if (_targetManager != null)
+				_targetManager.RemoveTarget(this);
 		}
 
 		private void Awake()
 		{
 			_gUIDComponent = GetComponent<GUIDComponent>();
 			Init();
-			
+
 			CalculateSizeSquared();
 		}
 
 		protected void Start()
 		{
+			// Start is called during instantiation before injection, so we do nothing here
+			// Use OnReset instead for initialization that depends on injected fields
+		}
+
+		public void OnReset()
+		{
 			_transform = transform;
-			_cellSpacePartition = GameManager.Instance.CellPartitionGrid;
-			_cellIndex = _cellSpacePartition.PositionToIndex(transform.position); ;
+			_cellIndex = _cellSpacePartition.PositionToIndex(transform.position);
 			AddThisTargetToCell();
 		}
 	}

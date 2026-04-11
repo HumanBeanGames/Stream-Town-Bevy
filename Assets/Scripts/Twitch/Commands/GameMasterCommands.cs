@@ -7,6 +7,9 @@ using System;
 using System.Linq;
 using Twitch.Utils;
 using Utils;
+using Reflex.Attributes;
+using TechTree;
+using TownGoal;
 
 namespace Twitch.Commands
 {
@@ -15,13 +18,27 @@ namespace Twitch.Commands
 	/// </summary>
 	public static class GameMasterCommands
 	{
+		private static GameManager _gameManager;
+		[Inject] private static TownResourceManager _townResourceManager;
+		[Inject] private static PlayerManager _playerManager;
+		[Inject] private static GameEventManager _gameEventManager;
+		[Inject] private static TownGoalManager _townGoalManager;
+		[Inject] private static TechTreeManager _techTreeManager;
+		[Inject] private static BuildingManager _buildingManager;
+		[Inject] private static ObjectPoolingManager _poolingManager;
+
+		public static void Initialize(GameManager gameManager)
+		{
+			_gameManager = gameManager;
+		}
+
 		public static void ToggleBuildCosts(Player player)
 		{
 			if (!player.IsGameMaster())
 				return;
 
-			GameManager.Instance.BuildingsCostResources = !GameManager.Instance.BuildingsCostResources;
-			MessageSender.SendMessage($"Buildings Cost Resources: {GameManager.Instance.BuildingsCostResources}");
+			_gameManager.BuildingsCostResources = !_gameManager.BuildingsCostResources;
+			MessageSender.SendMessage($"Buildings Cost Resources: {_gameManager.BuildingsCostResources}");
 		}
 
 		public static void TogglePlayerRoleLimits(Player player)
@@ -29,8 +46,8 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			GameManager.Instance.PlayerRoleLimits = !GameManager.Instance.PlayerRoleLimits;
-			MessageSender.SendMessage($"Player Role Limits: {GameManager.Instance.PlayerRoleLimits}");
+			_gameManager.PlayerRoleLimits = !_gameManager.PlayerRoleLimits;
+			MessageSender.SendMessage($"Player Role Limits: {_gameManager.PlayerRoleLimits}");
 		}
 
 		public static void AddResources(Player player, string command, params string[] args)
@@ -55,7 +72,7 @@ namespace Twitch.Commands
 
 			if (int.TryParse(args[1], out int amount))
 			{
-				GameManager.Instance.TownResourceManager.AddResource(resource, amount);
+				_townResourceManager.AddResource(resource, amount);
 			}
 		}
 
@@ -129,9 +146,9 @@ namespace Twitch.Commands
 				if (amount <= 0)
 					return;
 
-				for (int i = 0; i < GameManager.Instance.PlayerManager.PlayerCount(); i++)
+				for (int i = 0; i < _playerManager.PlayerCount(); i++)
 				{
-					GameManager.Instance.PlayerManager.GetPlayer(i).RoleHandler.PlayerRoleData.IncreaseExperience(amount);
+					_playerManager.GetPlayer(i).RoleHandler.PlayerRoleData.IncreaseExperience(amount);
 				}
 			}
 		}
@@ -141,7 +158,7 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			GameEvent currentEvent = GameManager.Instance.GameEventManager.CurrentEvent;
+			GameEvent currentEvent = _gameEventManager.CurrentEvent;
 
 			if (currentEvent == null)
 				return;
@@ -179,7 +196,7 @@ namespace Twitch.Commands
 				case GameEvent.EventType.None:
 					break;
 				case GameEvent.EventType.FishGod:
-					GameManager.Instance.GameEventManager.AddEvent(new FishGodEvent(0));
+					_gameEventManager.AddEvent(new FishGodEvent(0, gameEventManager: _gameEventManager, townResourceManager: _townResourceManager, playerManager: _playerManager, poolingManager: _poolingManager, eventInterface: _gameManager.UIManager.EventInterface));
 					break;
 				case GameEvent.EventType.NightRaid:
 					break;
@@ -207,7 +224,7 @@ namespace Twitch.Commands
 					break;
 				case GameEvent.EventType.MonsterRaid:
 					string[] enemies = new string[] { "Minotaur" };
-					GameManager.Instance.GameEventManager.AddEvent(new RaidEvent(0, 1200, enemies, boss: "MinotaurBoss"));
+					_gameEventManager.AddEvent(new RaidEvent(0, 1200, enemies, poolingManager: _poolingManager, eventInterface: _gameManager.UIManager.EventInterface, eventManager: _gameEventManager, enemySpawner: _gameManager.EnemySpawner, playerManager: _playerManager, boss: "MinotaurBoss"));
 					break;
 				default:
 					break;
@@ -219,8 +236,8 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			if (GameManager.Instance.TownGoalManager.CurrentGoals.Count > 0)
-				GameManager.Instance.TownGoalManager.CurrentGoals[0].ForceComplete();
+			if (_townGoalManager.CurrentGoals.Count > 0)
+				_townGoalManager.CurrentGoals[0].ForceComplete();
 		}
 
 		public static void StartRandomTech(Player player)
@@ -228,7 +245,7 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			GameManager.Instance.TechTreeManager.StartNewRandomTech();
+			_techTreeManager.StartNewRandomTech();
 		}
 
 		public static void StartVoteTech(Player player)
@@ -236,7 +253,7 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			GameManager.Instance.TechTreeManager.StartNewTechVote();
+			_techTreeManager.StartNewTechVote();
 		}
 
 		public static void ActionEvent(Player player)
@@ -244,7 +261,7 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			var ev = GameManager.Instance.GameEventManager.CurrentEvent;
+			var ev = _gameEventManager.CurrentEvent;
 
 			if (ev == null)
 				return;
@@ -257,7 +274,7 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			GameManager.Instance.TechTreeManager.UnlockAllTech();
+			_techTreeManager.UnlockAllTech();
 		}
 
 		public static void UnlockToAge2(Player player)
@@ -265,7 +282,7 @@ namespace Twitch.Commands
 			if (!player.IsGameMaster())
 				return;
 
-			GameManager.Instance.TechTreeManager.UnlockToAge2Tech();
+			_techTreeManager.UnlockToAge2Tech();
 		}
 
 		public static bool IsGameMaster(this Player player)
@@ -283,7 +300,7 @@ namespace Twitch.Commands
 				if (args[0] == "building" && args[0] != (BuildingType.Townhall).ToString().ToLower())
 				{
 					if (Enum.TryParse(args[1], true, out BuildingType building))
-						GameManager.Instance.BuildingManager.ResetBuilding(building);
+						_buildingManager.ResetBuilding(building);
 				}
 
 				MessageSender.SendMessage($"Reset ID: {args[0]}, {args[1]}");

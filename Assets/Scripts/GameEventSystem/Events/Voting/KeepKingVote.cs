@@ -1,4 +1,5 @@
 using Managers;
+using Reflex.Attributes;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,11 +11,12 @@ namespace GameEventSystem.Events.Voting
 	{
 		private List<UI_RulerOption> _trackedOptions = new List<UI_RulerOption>();
 		private UserInterface_RulerVote _rulerVoteInterface;
+		[Inject] private UIManager _uiManager;
 
 		public KeepKingVote(double delay, double eventDuration, EventType eventType = EventType.KeepKingVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
 		{
 			_alwaysReturnSuccess = true;
-			_rulerVoteInterface = GameManager.Instance.UIManager.RulerVoteInterface;
+			_rulerVoteInterface = _uiManager.RulerVoteInterface;
 
 			_options.Add("yes", new VoteOption("yes", null));
 			_options.Add("no", new VoteOption("no", null));

@@ -10,6 +10,15 @@ namespace Twitch
 	/// </summary>
 	public static class TwitchChatManager
 	{
+		private static PlayerManager _playerManager;
+		private static TimeManager _timeManager;
+
+		public static void Initialize(PlayerManager playerManager, TimeManager timeManager)
+		{
+			_playerManager = playerManager;
+			_timeManager = timeManager;
+		}
+
 		/// <summary>
 		/// Processes any command sent in chat on Twitch and invokes the required action is the command is valid.
 		/// </summary>
@@ -42,12 +51,12 @@ namespace Twitch
 			}
 
 			// Check that player exists
-			if (GameManager.Instance.PlayerManager.PlayerExistsByID(e.Command.ChatMessage.UserId, out int index))
+			if (_playerManager.PlayerExistsByID(e.Command.ChatMessage.UserId, out int index))
 			{
-				Player player = GameManager.Instance.PlayerManager.GetPlayer(index);
+				Player player = _playerManager.GetPlayer(index);
 				if (player == null)
 					return;
-				player.TwitchUser.TimeSinceLastMessage = GameManager.Instance.TimeManager.WorldTimePassed;
+				player.TwitchUser.TimeSinceLastMessage = _timeManager.WorldTimePassed;
 
 				UpdateUserType(player, e);
 
@@ -80,10 +89,10 @@ namespace Twitch
 
 		public static void ProcessMessage(OnMessageReceivedArgs e)
 		{
-			if (GameManager.Instance.PlayerManager.PlayerExistsByID(e.ChatMessage.UserId, out int index))
+			if (_playerManager.PlayerExistsByID(e.ChatMessage.UserId, out int index))
 			{
-				Player player = GameManager.Instance.PlayerManager.GetPlayer(index);
-				player.TwitchUser.TimeSinceLastMessage = GameManager.Instance.TimeManager.WorldTimePassed;
+				Player player = _playerManager.GetPlayer(index);
+				player.TwitchUser.TimeSinceLastMessage = _timeManager.WorldTimePassed;
 			}
 			// Check for event
 			if (EventCommands.EventMessage(e))

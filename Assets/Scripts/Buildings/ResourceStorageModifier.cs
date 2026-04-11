@@ -1,7 +1,9 @@
 using Level;
 using Managers;
+using TechTree;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Buildings
 {
@@ -40,7 +42,8 @@ namespace Buildings
 		private int _totalAmount = 0;
 
 		// Required Components.
-		private TownResourceManager _resourceManager => GameManager.Instance.TownResourceManager;
+		[Inject] private TownResourceManager _resourceManager;
+		[Inject] private TechTreeManager _techTreeManager;
 		private LevelHandler _levelHandler;
 		// Properties.
 		public Resource ResourceType => _resource;
@@ -107,12 +110,12 @@ namespace Buildings
 			if (_resourceManager != null)
 				RemoveTotalStorage();
 
-			GameManager.Instance.TechTreeManager.OnStorageBoostUnlocked -= OnResourceStorageIncreased;
+			_techTreeManager.OnStorageBoostUnlocked -= OnResourceStorageIncreased;
 		}
 
 		private void OnEnable()
 		{
-			GameManager.Instance.TechTreeManager.OnStorageBoostUnlocked += OnResourceStorageIncreased;
+			_techTreeManager.OnStorageBoostUnlocked += OnResourceStorageIncreased;
 		}
 	}
 }

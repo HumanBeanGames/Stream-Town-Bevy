@@ -4,6 +4,7 @@ using UnityEngine;
 using Utils;
 using Scriptables;
 using Managers;
+using Reflex.Attributes;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -32,6 +33,9 @@ namespace Managers
 		private Material _buildingMaterial;
 		[SerializeField]
 		private Material _waterMaterial;
+
+		[Inject] private WeatherManager _weatherManager;
+		[Inject] private TimeManager _timeManager;
 
 		private Season _currentSeason;
 		private bool _seasonChanging = false;
@@ -69,7 +73,7 @@ namespace Managers
 #if UNITY_EDITOR
 			if (DriveSeasonsByTime)
 #endif
-				if ((GameManager.Instance.TimeManager.DayCount) % _daysPerSeason == 0)
+				if ((_timeManager.DayCount) % _daysPerSeason == 0)
 					NextSeason();
 		}
 
@@ -97,7 +101,7 @@ namespace Managers
 		/// <returns></returns>
 		private IEnumerator TransitionSeason(Season nextSeason, float transitionTime, bool triggerEvent = true)
 		{
-			GameManager.Instance.WeatherManager.StopWeather();
+			_weatherManager.StopWeather();
 			yield return new WaitForEndOfFrame();
 			OnSeasonChanging?.Invoke(nextSeason);
 			_seasonChanging = true;
@@ -106,7 +110,7 @@ namespace Managers
 			SeasonScriptable nextSeasonData = _allSeasonsData.GetSeasonData(nextSeason);
 
 			float transition = 0;
-			GameManager.Instance.WeatherManager.StartWeather(nextSeason);
+			_weatherManager.StartWeather(nextSeason);
 			while (transition < 1)
 			{
 				if (transitionTime == 0)
@@ -247,7 +251,7 @@ namespace Managers
 
 		public void SetSeasonByTimePassed()
 		{
-			_currentSeason = (Season)(GameManager.Instance.TimeManager.DayCount % _daysPerSeason);
+			_currentSeason = (Season)(_timeManager.DayCount % _daysPerSeason);
 			SetSeasonMaterial(_currentSeason, 1.0f);
 		}
 
@@ -259,7 +263,7 @@ namespace Managers
 
 		private void Start()
 		{
-			GameManager.Instance.TimeManager.DayPassed += OnDayPassed;
+			_timeManager.DayPassed += OnDayPassed;
 		}
 	}
 }

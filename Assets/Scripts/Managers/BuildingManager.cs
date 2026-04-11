@@ -1,4 +1,5 @@
 using Buildings;
+using Reflex.Attributes;
 using System.Collections.Generic;
 using UnityEngine;
 using Utils;
@@ -32,7 +33,9 @@ namespace Managers
 		[SerializeField]
 		private AllBuildingDataScriptable _allBuildingData;
 
-		private TownResourceManager _townResourceManager = null;
+		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private GameManager _gameManager;
+		[Inject] private ObjectPoolingManager _poolingManager;
 
 		private Dictionary<Player, BuildingPlacer> _placers = new Dictionary<Player, BuildingPlacer>();
 
@@ -51,7 +54,6 @@ namespace Managers
 		public void Initialize()
 		{
 			InitializeBuildingData();
-			_townResourceManager = GameManager.Instance.TownResourceManager;
 		}
 
 		/// <summary>
@@ -85,7 +87,7 @@ namespace Managers
 		/// <returns></returns>
 		public bool CanAffordToBuild(BuildingType type)
 		{
-			if (!GameManager.Instance.BuildingsCostResources)
+			if (!_gameManager.BuildingsCostResources)
 				return true;
 
 			BuildingDataScriptable data = _buildingDataDictionary[type];
@@ -115,7 +117,7 @@ namespace Managers
 		{
 			BuildingDataScriptable data = _buildingDataDictionary[building.BuildingType];
 
-			if (GameManager.Instance.BuildingsCostResources)
+			if (_gameManager.BuildingsCostResources)
 			{
 				int woodCost = data.BuildResourceCost.WoodCost + (int)((float)(data.BuildResourceCost.WoodCost * BuildingCounts[building.BuildingType]) * data.CostIncreasePerBuildingMultiplier);
 				int oreCost = data.BuildResourceCost.OreCost + (int)((float)(data.BuildResourceCost.OreCost * BuildingCounts[building.BuildingType]) * data.CostIncreasePerBuildingMultiplier);
@@ -174,7 +176,7 @@ namespace Managers
 		/// <returns></returns>
 		public bool CanAffordToLevel(BuildingType type, int currentLevel)
 		{
-			if (!GameManager.Instance.BuildingsCostResources)
+			if (!_gameManager.BuildingsCostResources)
 				return true;
 
 			BuildingDataScriptable data = _buildingDataDictionary[type];
@@ -206,7 +208,7 @@ namespace Managers
 		/// <param name="currentLevel"></param>
 		public void OnLevelBuilding(BuildingType type, int currentLevel)
 		{
-			if (!GameManager.Instance.BuildingsCostResources)
+			if (!_gameManager.BuildingsCostResources)
 				return;
 
 			BuildingDataScriptable data = _buildingDataDictionary[type];
@@ -265,7 +267,7 @@ namespace Managers
 				return false;
 			}
 
-			if (!_buildingsUnlocked[type] && !GameManager.Instance.IgnoreTechUnlocks)
+			if (!_buildingsUnlocked[type] && !_gameManager.IgnoreTechUnlocks)
 			{
 				errorMessage = "Building Not Unlocked Yet!";
 				return false;
@@ -273,25 +275,21 @@ namespace Managers
 
 			// Check if the building type is valid.
 			if (!CheckBuildingIsPlaceable(type))
-			{
-				errorMessage = "Invalid Building Type";
-				return false;
-			}
 
-			// Check if the building can be afforded.
-			if (!CanAffordToBuild(type) && GameManager.Instance.BuildingsCostResources)
-			{
-				errorMessage = "Can't Afford to Build";
-				return false;
-			}
+    // Check if the building can be afforded.
+    if (!CanAffordToBuild(type) && _gameManager.BuildingsCostResources)
+    {
+        errorMessage = "Can't Afford to Build";
+        return false;
+    }
 
-			// Get Building Placer from pool and set it's position to the player's last succesful building position;
-			BuildingPlacer obj = GameManager.Instance.PoolingManager.GetPooledObject("BuildingPlacer").GetComponent<BuildingPlacer>();
-			obj.OnPooled(player);
-			obj.transform.position = player.LastBuildingPlacement;
-			obj.RotatePlacer(amount: player.TotalBuildingRotation);
-			// Add players placer to the list.
-			_placers.Add(player, obj);
+    // Get Building Placer from pool and set it's position to the player's last succesful building position;
+    		BuildingPlacer obj = _poolingManager.GetPooledObject("BuildingPlacer").GetComponent<BuildingPlacer>();
+    obj.OnPooled(player);
+    obj.transform.position = player.LastBuildingPlacement;
+    obj.RotatePlacer(amount: player.TotalBuildingRotation);
+    // Add players placer to the list.
+    _placers.Add(player, obj);
 
 			// Set up building placer to use proper building model
 			obj.gameObject.SetActive(true);
@@ -630,17 +628,17 @@ namespace Managers
 		{
 			List<BuildingSaveData> buildings = new List<BuildingSaveData>();
 
-			List<PoolableObject> objs = GameManager.Instance.PoolingManager.GetAllActivePooledObjectsOfType(type.ToString());
+			List<PoolableObject> objs = _poolingManager.GetAllActivePooledObjectsOfType(type.ToString());
 			if (objs != null)
 				for (int o = 0; o < objs.Count; o++)
 					buildings.Add((BuildingSaveData)((SavingAndLoading.SavableObjects.SaveableBuilding)objs[o].SaveableObject).SaveData());
 
 			_buildings[type].Clear();
-			GameManager.Instance.PoolingManager.DisableObjectsInPool(type.ToString());
+			_poolingManager.DisableObjectsInPool(type.ToString());
 
 			for(int i = 0; i < buildings.Count; i++)
 			{
-				var building = GameManager.Instance.PoolingManager.GetPooledObject(buildings[i].BuildingType, false);
+				var building = _poolingManager.GetPooledObject(buildings[i].BuildingType, false);
 				((SaveableBuilding)((building).SaveableObject)).LoadData((object)buildings[i]);
 			}
 		}

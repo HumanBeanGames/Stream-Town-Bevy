@@ -1,4 +1,5 @@
 using Managers;
+using Reflex.Attributes;
 using System;
 using UnityEngine;
 using World;
@@ -66,7 +67,7 @@ namespace GameEventSystem
 		private bool _success;
 		private bool _active;
 
-		private GameEventManager _manager;
+		[Inject] private GameEventManager _gameEventManager;
 
 		public double StartTime => _eventStartTime;
 		public double EventDuration => _eventDuration;
@@ -86,7 +87,6 @@ namespace GameEventSystem
 			_data = data;
 			_overrideCurrentEvent = overrideCurrentEvent;
 			_timeout = timeout;
-			_manager = GameManager.Instance.GameEventManager;
 		}
 
 		/// <summary>

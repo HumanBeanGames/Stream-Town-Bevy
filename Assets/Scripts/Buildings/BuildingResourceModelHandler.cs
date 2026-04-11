@@ -1,6 +1,7 @@
 using Managers;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Buildings
 {
@@ -20,6 +21,7 @@ namespace Buildings
 		private StorageStatus _status = StorageStatus.Full;
 
 		// Required Components.
+		[Inject] private TownResourceManager _townResourceManager;
 		private ResourceStorageModifier _resourceModifier;
 
 		/// <summary>
@@ -102,7 +104,7 @@ namespace Buildings
 		private void Start()
 		{
 			// Subscribe to resource change event based on resource type
-			GameManager.Instance.TownResourceManager.GetResourceChangeEvent(_resourceModifier.ResourceType).AddListener(HandleResourceChange);
+			_townResourceManager.GetResourceChangeEvent(_resourceModifier.ResourceType).AddListener(HandleResourceChange);
 		}
 	}
 }

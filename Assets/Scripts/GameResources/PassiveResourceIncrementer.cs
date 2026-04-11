@@ -1,4 +1,5 @@
 using Managers;
+using Reflex.Attributes;
 using System;
 using UnityEngine;
 using Utils;
@@ -21,7 +22,7 @@ namespace GameResources
 		protected bool _enabled = false;
 		protected float _accumulated = 0;
 
-		protected TownResourceManager _resourceManager;
+		[Inject] protected TownResourceManager _townResourceManager;
 		public event Action<PassiveResourceIncrementer> OnRateChange;
 
 		/// <summary>
@@ -61,12 +62,6 @@ namespace GameResources
 			_totalAmount = _amountPerSecond;
 		}
 
-		// Unity Functions.
-		private void Awake()
-		{
-			_resourceManager = GameManager.Instance.TownResourceManager;
-		}
-
 		private void OnDisable()
 		{
 			Disable();
@@ -84,7 +79,7 @@ namespace GameResources
 				int rounded = Mathf.FloorToInt(_accumulated);
 				_accumulated -= rounded;
 
-				_resourceManager.AddResource(_resource, rounded);
+				_townResourceManager.AddResource(_resource, rounded);
 			}
 		}
 	}

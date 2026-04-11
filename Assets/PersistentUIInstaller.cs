@@ -30,11 +30,11 @@ public class PersistentUIInstaller : MonoBehaviour, IInstaller
                 }
             }
 
-            // Fallback to FindObjectOfType if persistent root isn't available yet
-            var fallback = FindObjectOfType<SettingsManager>();
+            // Fallback to FindAnyObjectByType if persistent root isn't available yet
+            var fallback = FindAnyObjectByType<SettingsManager>();
             if (fallback != null)
             {
-                Debug.Log($"PersistentUIInstaller: Resolved SettingsManager via FindObjectOfType from {fallback.gameObject.name}", this);
+                Debug.Log($"PersistentUIInstaller: Resolved SettingsManager via FindAnyObjectByType from {fallback.gameObject.name}", this);
                 return fallback;
             }
 

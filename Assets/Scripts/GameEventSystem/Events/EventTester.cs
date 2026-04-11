@@ -9,7 +9,6 @@ namespace GameEventSystem.Events
 	public class EventTester : MonoBehaviour
 	{
 		private GameEventManager manager;
-		private bool _voteStarted = false;
 		private void Awake()
 		{
 			manager = GetComponent<GameEventManager>();

@@ -1,4 +1,5 @@
 using Managers;
+using Reflex.Attributes;
 using System;
 using System.Collections.Generic;
 using TechTree.ScriptableObjects;
@@ -11,10 +12,11 @@ namespace GameEventSystem.Events.Voting
 	{
 		private Dictionary<UI_TechOption, VoteOption> _trackedOptions;
 		private UserInterface_TownVote _townVoteInterface;
+		[Inject] private UIManager _uiManager;
 
 		public TechVote(double delay, double eventDuration, Node_SO[] nodes, EventType eventType = EventType.TechVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
 		{
-			_townVoteInterface = GameManager.Instance.UIManager.TownVoteInterface;
+			_townVoteInterface = _uiManager.TownVoteInterface;
 
 			_trackedOptions = new Dictionary<UI_TechOption, VoteOption>();
 			for (int i = 0; i < nodes.Length; i++)

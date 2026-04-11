@@ -1,5 +1,6 @@
 using Combat;
 using Managers;
+using Reflex.Attributes;
 using Sensors;
 using Target;
 using UnityEngine;
@@ -25,6 +26,7 @@ namespace Buildings
 		private float _timeUntilAttack;
 
 		private TargetSensor _targetSensor;
+		[Inject] private ObjectPoolingManager _objectPoolingManager;
 
 		private void Start()
 		{
@@ -49,7 +51,7 @@ namespace Buildings
 					return;
 				}
 
-				Projectile proj = GameManager.Instance.PoolingManager.GetPooledObject(ProjectilePoolName, true).GetComponent<Projectile>();
+				Projectile proj = _objectPoolingManager.GetPooledObject(ProjectilePoolName, true).GetComponent<Projectile>();
 				proj.gameObject.transform.position = transform.position;
 				proj.Damage = _damage;
 				proj.MoveSpeed = _moveSpeed;

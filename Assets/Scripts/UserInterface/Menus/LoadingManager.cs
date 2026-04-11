@@ -5,7 +5,6 @@ using UnityEngine.UI;
 using TMPro;
 using Managers;
 using System;
-using TMPro;
 
 namespace UserInterface.MainMenu
 {
@@ -42,9 +41,12 @@ namespace UserInterface.MainMenu
 
 		IEnumerator LoadAsyncScene(int sceneIndex, bool loadingWorld)
 		{
+			System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
 			RandomizeTooltip();
 			_loadingUI.SetActive(true);
 
+			stopwatch.Restart();
 			AsyncOperation asyncLoad = SceneManager.LoadSceneAsync(sceneIndex);
 			asyncLoad.allowSceneActivation = false;
 
@@ -58,8 +60,12 @@ namespace UserInterface.MainMenu
 				_loadProgress = currentProgress;
 				yield return null;
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Scene async load: {stopwatch.ElapsedMilliseconds}ms");
+
 			Scene scene = new Scene();
 
+			stopwatch.Restart();
 			asyncLoad.allowSceneActivation = true;
 
 			while (scene != SceneManager.GetSceneByBuildIndex(sceneIndex))
@@ -67,6 +73,9 @@ namespace UserInterface.MainMenu
 				scene = SceneManager.GetActiveScene();
 				yield return null;
 			}
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Scene activation: {stopwatch.ElapsedMilliseconds}ms");
+
 			yield return new WaitForSeconds(_waitTime);
 
 			if (loadingWorld)

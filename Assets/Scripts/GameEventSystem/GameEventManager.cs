@@ -10,6 +10,7 @@ using TownGoal.Data;
 using Twitch;
 using UnityEngine;
 using World;
+using Reflex.Attributes;
 
 namespace GameEventSystem
 {
@@ -28,12 +29,12 @@ namespace GameEventSystem
 		[SerializeField]
 		private bool _logEvents = true;
 
+		[Inject] private PlayerManager _playerManager;
+
 		private SortedSet<GameEvent> _eventQueue = new SortedSet<GameEvent>(new SortGameEventStartTime());
 
 		private GameEvent _currentEvent = null;
 		private bool _eventActive = false;
-		private GameManager _gameManager;
-		private PlayerManager _playerManager;
 		
 		private bool _canStartNewRulerVote = false;
 
@@ -304,8 +305,6 @@ namespace GameEventSystem
 
 		private void Start()
 		{
-			_gameManager = GameManager.Instance;
-			_playerManager = _gameManager.PlayerManager;
 			_timeUntilRulerVote = 30;
 		}
 

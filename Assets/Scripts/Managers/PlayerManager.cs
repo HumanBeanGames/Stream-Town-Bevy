@@ -10,6 +10,7 @@ using Pets;
 using GUIDSystem;
 using Utils.Pooling;
 using Target;
+using Reflex.Attributes;
 
 namespace Managers
 {
@@ -20,7 +21,11 @@ namespace Managers
 	{
 		private List<Player> _players = new List<Player>();
 		private List<Player> _recruits = new List<Player>();
-		private ObjectPoolingManager _poolingManager;
+		[Inject] private ObjectPoolingManager _poolingManager;
+		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private RoleManager _roleManager;
+		[Inject] private GameManager _gameManager;
+		[Inject] private TimeManager _timeManager;
 		private Player _ruler;
 
 		private Dictionary<PlayerRole, StatModifiers> _roleStatModifiers;
@@ -55,8 +60,8 @@ namespace Managers
 			if (_recruits.Contains(player))
 			{
 				_recruits.Remove(player);
-				GameManager.Instance.TownResourceManager.RemoveResource(Resource.Recruit, 1);
-				GameManager.Instance.RoleManager.TakeFromRole(player.RoleHandler.CurrentRole);
+				_townResourceManager.RemoveResource(Resource.Recruit, 1);
+				_roleManager.TakeFromRole(player.RoleHandler.CurrentRole);
 				player.Character.SetActive(false);
 			}
 		}
@@ -68,7 +73,6 @@ namespace Managers
 
 		public void Initialize()
 		{
-			_poolingManager = GameManager.Instance.PoolingManager;
 			_globalStatModifier = new StatModifiers();
 			_roleStatModifiers = new Dictionary<PlayerRole, StatModifiers>();
 
@@ -100,7 +104,7 @@ namespace Managers
 			// TODO: Optimize this, store it when objects are pooled.
 			PoolableObject obj = _poolingManager.GetPooledObject("Player");
 			obj.gameObject.SetActive(true);
-			obj.transform.position = GameManager.Instance.PlayerSpawnPosition;
+			obj.transform.position = _gameManager.PlayerSpawnPosition;
 			data.RoleHandler = obj.GetComponent<RoleHandler>();
 			data.RoleHandler.Player = data;
 			data.StationSensor = obj.GetComponent<StationSensor>();
@@ -132,7 +136,7 @@ namespace Managers
 				if (CanAddRecruit)
 				{
 					_recruits.Add(data);
-					GameManager.Instance.TownResourceManager.AddResource(Resource.Recruit, 1);
+					_townResourceManager.AddResource(Resource.Recruit, 1);
 					data.TwitchUser.GameUserType = Twitch.Utils.GameUserType.Normal;
 				}
 
@@ -159,7 +163,7 @@ namespace Managers
 				if (CanAddRecruit)
 				{
 					_recruits.Add(data);
-					GameManager.Instance.TownResourceManager.AddResource(Resource.Recruit, 1);
+					_townResourceManager.AddResource(Resource.Recruit, 1);
 				}
 				else
 					return null;
@@ -293,7 +297,7 @@ namespace Managers
 			{
 				var playerToUpdate = _playerUpdateQueue.Dequeue();
 
-				playerToUpdate.TwitchUser.UpdateActivity();
+				playerToUpdate.TwitchUser.UpdateActivity(_timeManager);
 
 				_playerUpdateQueue.Enqueue(playerToUpdate);
 			}

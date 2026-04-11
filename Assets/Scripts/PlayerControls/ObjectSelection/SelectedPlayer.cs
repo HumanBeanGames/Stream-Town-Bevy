@@ -5,11 +5,15 @@ using Managers;
 using Units;
 using UnityEngine.Events;
 using System.Collections.Generic;
+using Reflex.Attributes;
 
 namespace PlayerControls.ObjectSelection
 {
 	public class SelectedPlayer : SelectedObject
 	{
+		[Inject] private RoleManager _roleManager;
+		[Inject] private PlayerManager _playerManager;
+
 		public override void SetDisplay(object data)
 		{
 			base.SetDisplay(data);
@@ -21,7 +25,7 @@ namespace PlayerControls.ObjectSelection
 		public void RecruitChange(int index)
 		{
 			RoleHandler roleHandler = ((RoleHandler)_selectedObject);
-			roleHandler.TrySetRole(GameManager.Instance.RoleManager.GetAvailableRoleFromIndex(index));
+			roleHandler.TrySetRole(_roleManager.GetAvailableRoleFromIndex(index));
 			UpdateExperience(roleHandler);
 		}
 
@@ -41,8 +45,8 @@ namespace PlayerControls.ObjectSelection
 
 				_selectedObjectTypeUI.SelectionDropdown.ClearOptions();
 
-				_selectedObjectTypeUI.SelectionDropdown.AddOptions(GameManager.Instance.RoleManager.GetAvailableRolesAsString());
-				_selectedObjectTypeUI.SelectionDropdown.SetValueWithoutNotify(GameManager.Instance.RoleManager.GetRoleIndex(roleHandler.CurrentRole));
+				_selectedObjectTypeUI.SelectionDropdown.AddOptions(_roleManager.GetAvailableRolesAsString());
+				_selectedObjectTypeUI.SelectionDropdown.SetValueWithoutNotify(_roleManager.GetRoleIndex(roleHandler.CurrentRole));
 
 				if (string.IsNullOrEmpty(roleHandler.Player.TwitchUser.Username))
 				{
@@ -70,7 +74,7 @@ namespace PlayerControls.ObjectSelection
 		{
 			RoleHandler roleHandler = ((RoleHandler)_selectedObject);
 			OnPlayerDeathOrRemove(true);
-			GameManager.Instance.PlayerManager.DismissRecruit(roleHandler.Player);
+			_playerManager.DismissRecruit(roleHandler.Player);
 		}
 
 		public void OnPlayerDeathOrRemove(bool died)
@@ -146,7 +150,7 @@ namespace PlayerControls.ObjectSelection
 		public void UpdateRole(RoleHandler roleHandler)
 		{
 			_selectedObjectTypeUI.Role.text = "Role: " + roleHandler.CurrentRole.ToString();
-			_selectedObjectTypeUI.RoleImage.sprite = GameManager.Instance.RoleManager.AllRoleData.GetDataByRoleType(roleHandler.CurrentRole).DisplayIcon;
+			_selectedObjectTypeUI.RoleImage.sprite = _roleManager.AllRoleData.GetDataByRoleType(roleHandler.CurrentRole).DisplayIcon;
 		}
 
 		public void UpdateExperience(RoleHandler roleHandler)

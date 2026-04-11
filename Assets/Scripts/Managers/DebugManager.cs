@@ -47,7 +47,8 @@ namespace Managers
 				//	break;
 				//case Selectable.Resource:
 				//	_debugUI.OnBuildingContext((BuildingBase)data);
-				//	break;
+				default:
+					break;
 			}
 		}
 

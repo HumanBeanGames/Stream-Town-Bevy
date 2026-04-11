@@ -37,6 +37,7 @@ namespace Character
 		private AIPath _aiPath;
 		private HealthHandler _healthHandler;
 		private RoleHandler _roleHandler;
+		private PlayerManager _playerManager;
 
 		public PlayerRole Role => _role;
 		public int ActionAmount => _actionAmount;
@@ -57,7 +58,7 @@ namespace Character
 		public HealthHandler HealthHandler => _healthHandler;
 
 		// Constructors.
-		public PlayerRoleData(PlayerRole role, RoleManager roleManager, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler, RoleHandler roleHandler)
+		public PlayerRoleData(PlayerRole role, RoleManager roleManager, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler, RoleHandler roleHandler, PlayerManager playerManager)
 		{
 			_role = role;
 			_roleManager = roleManager;
@@ -69,18 +70,20 @@ namespace Character
 			_aiPath = aiPath;
 			_healthHandler = healthHandler;
 			_roleHandler = roleHandler;
+			_playerManager = playerManager;
 			_actionClips = roleManager.GetRoleData(role).ActionClips;
 			//TODO: Implement ranged check
 			RecalculateStats();
 		}
 
-		public PlayerRoleData(PlayerRole role, int level, int experience, RoleManager roleManager, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler)
+		public PlayerRoleData(PlayerRole role, int level, int experience, RoleManager roleManager, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler, PlayerManager playerManager)
 		{
 			_role = role;
 			_roleManager = roleManager;
 			_level = level;
 			_experience = experience;
 			_requiredExp = _roleManager.GetRequiredExperience(_level);
+			_playerManager = playerManager;
 
 			RecalculateStats();
 		}
@@ -144,7 +147,7 @@ namespace Character
 		public void RecalculateStats()
 		{
 			RoleDataScriptable data = _roleManager.GetRoleData(_role);
-			StatModifiers statMod = GameManager.Instance.PlayerManager.GetStatModifiers(_role);
+			StatModifiers statMod = _playerManager.GetStatModifiers(_role);
 
 			_actionAmount = data.BaseActionAmount + (int)(data.ActionAmountPerLevel * (_level - 1));
 			_actionAmount += AddStatModifiersInt(statMod, StatType.ActionAmount, _actionAmount);

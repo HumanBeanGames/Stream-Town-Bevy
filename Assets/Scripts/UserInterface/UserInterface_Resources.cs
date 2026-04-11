@@ -2,6 +2,7 @@ using UnityEngine;
 using Managers;
 using TMPro;
 using Utils;
+using Reflex.Attributes;
 
 namespace UserInterface
 {
@@ -18,7 +19,7 @@ namespace UserInterface
 		private Color _positiveColor = Color.green;
 		[SerializeField]
 		private Color _negativeColor = Color.red;
-		private TownResourceManager _resourceManager;
+		[Inject] private TownResourceManager _resourceManager;
 
 		/// <summary>
 		/// Called when a resource amount has changed and updates the text accordingly.
@@ -42,8 +43,6 @@ namespace UserInterface
 
 		private void Start()
 		{
-			_resourceManager = GameManager.Instance.TownResourceManager;
-
 			_resourceManager.OnAnyResourceChangeEvent.AddListener(OnResourceChange);
 
 			for (int i = 1; i < (int)Resource.Count-1; i++)

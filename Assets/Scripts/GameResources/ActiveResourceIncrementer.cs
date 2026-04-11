@@ -1,4 +1,5 @@
 using Managers;
+using Reflex.Attributes;
 using UnityEngine;
 using Utils;
 
@@ -14,20 +15,15 @@ namespace GameResources
 		[SerializeField]
 		protected int _amount;
 
-		protected TownResourceManager _resourceManager;
+		[Inject] protected TownResourceManager _townResourceManager;
 
 		/// <summary>
 		/// Increments the town resources of the specified type by the amount set.
 		/// </summary>
 		public void Increment()
 		{
-			_resourceManager.AddResource(_resource, _amount);
+			_townResourceManager.AddResource(_resource, _amount);
 		}
 
-		// Unity Events.
-		private void Awake()
-		{
-			_resourceManager = GameManager.Instance.TownResourceManager;
-		}
 	}
 }

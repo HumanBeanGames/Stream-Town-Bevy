@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UserInterface;
 using System.Linq;
 using System;
+using Reflex.Attributes;
 
 namespace GameEventSystem.Events.Voting
 {
@@ -10,12 +11,14 @@ namespace GameEventSystem.Events.Voting
 	{
 		private const int MAX_TRACKED_OPTIONS = 5;
 		private List<UI_RulerOption> _trackedOptions = new List<UI_RulerOption>();
+		[Inject] private UIManager _uiManager;
+		[Inject] private PlayerManager _playerManager;
 		private UserInterface_RulerVote _rulerVoteInterface;
 
 		public NewKingVote(double delay, double eventDuration, EventType eventType = EventType.NewKingVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
 		{
 			_alwaysReturnSuccess = true;
-			_rulerVoteInterface = GameManager.Instance.UIManager.RulerVoteInterface;
+			_rulerVoteInterface = _uiManager.RulerVoteInterface;
 		}
 
 		protected override bool CheckOptionIsValid(PlayerVote vote)
@@ -24,7 +27,7 @@ namespace GameEventSystem.Events.Voting
 
 			if (!_options.ContainsKey(vote.VoteOption.OptionName))
 			{
-				if (GameManager.Instance.PlayerManager.PlayerExistsByNameToLower(optionName, out int index))
+				if (_playerManager.PlayerExistsByNameToLower(optionName, out int index))
 				{
 					vote.VoteOption.Votes = 0;
 					_options.Add(optionName, vote.VoteOption);
@@ -88,7 +91,7 @@ namespace GameEventSystem.Events.Voting
 			}
 
 			optionsSorted = optionsSorted.OrderByDescending(x => x.Votes).ToList();
-			UserInterface_RulerVote uiManager = GameManager.Instance.UIManager.RulerVoteInterface;
+			UserInterface_RulerVote uiManager = _uiManager.RulerVoteInterface;
 
 			List<UI_RulerOption> rulerOptions = new List<UI_RulerOption>();
 

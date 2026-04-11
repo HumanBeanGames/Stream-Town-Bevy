@@ -1,5 +1,6 @@
 using Buildings;
 using Managers;
+using Reflex.Attributes;
 using System;
 
 namespace Level
@@ -9,7 +10,7 @@ namespace Level
 	/// </summary>
 	public class BuildingLevelHandler : LevelHandler
 	{
-		protected BuildingManager _buildingManager;
+		[Inject] protected BuildingManager _buildingManager;
 		protected BuildingBase _buildingBase;
 
 		public event Action<LevelHandler> OnLeveledUp;
@@ -50,7 +51,6 @@ namespace Level
 		{
 			base.Init();
 
-			_buildingManager = GameManager.Instance.BuildingManager;
 			_buildingBase = GetComponent<BuildingBase>();
 		}
 	}

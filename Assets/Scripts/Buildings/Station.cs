@@ -8,13 +8,15 @@ using UnityEngine.Profiling;
 using Pathfinding;
 using UserInterface;
 using GUIDSystem;
+using Reflex.Attributes;
+using GridSystem.Partitioning;
 
 namespace Buildings
 {
 	/// <summary>
 	/// Used for Units to station at and recieve targets from.
 	/// </summary>
-	public class Station : MonoBehaviour
+	public class Station : MonoBehaviour, Utils.Pooling.IPooledObjectReset
 	{
 		/// <summary>
 		/// How often the Update Target Queue should be processed.
@@ -71,8 +73,9 @@ namespace Buildings
 
 		// Required Components.
 		private Transform _transform;
-		private StationManager _manager;
-		private TargetManager _targetManager;
+		[Inject] private StationManager _manager;
+		[Inject] private TargetManager _targetManager;
+		[Inject] private CellSpacePartitioning _cellPartitionGrid;
 		private Targetable _targetable;
 		private GUIDComponent _gUIDComponent;
 		//private UnitTextDisplay _displayText;
@@ -122,7 +125,7 @@ namespace Buildings
 
 			//Clear the list of cached targets and get a new list of targets.
 			_cachedTargetsList.Clear();
-			GameManager.Instance.CellPartitionGrid.GetTargetablesInRange(_targetMask, _transform.position, _targetSearchRange, ref _cachedTargetsList);
+			_cellPartitionGrid.GetTargetablesInRange(_targetMask, _transform.position, _targetSearchRange, ref _cachedTargetsList);
 
 			// Set up for use in the sort.
 			float closestDistSqr = float.MaxValue;
@@ -362,7 +365,6 @@ namespace Buildings
 			}
 
 			return validTargets;
-
 		}
 
 		/// <summary>
@@ -426,14 +428,16 @@ namespace Buildings
 
 		private void Start()
 		{
-			_manager = GameManager.Instance.StationManager;
-			_targetManager = GameManager.Instance.TargetManager;
-
 			// Add this station to the Station Manager.
-			_manager.AddStation(this);
-			PopulateDictionary();
+			if (_manager != null)
+				_manager.AddStation(this);
 
 			_updateTimer = UnityEngine.Random.Range(0, _updateRate);
+		}
+
+		public void OnReset()
+		{
+			PopulateDictionary();
 		}
 
 		private void Update()
@@ -444,11 +448,11 @@ namespace Buildings
 			if (_updateTimer >= _updateRate)
 			{
 				_updateTimer -= _updateRate;
-				_manager.UpdateStation(this);
+				if (_manager != null)
+					_manager.UpdateStation(this);
 			}
 
 			UpdateQueueTarget();
-
 		}
 
 		private void OnEnable()
@@ -479,6 +483,5 @@ namespace Buildings
 				}
 			}
 		}
-
 	}
 }

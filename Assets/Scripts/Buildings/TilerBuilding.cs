@@ -1,7 +1,9 @@
 using Managers;
 using System;
+using TechTree;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Buildings
 {
@@ -11,6 +13,7 @@ namespace Buildings
 	public class TilerBuilding : Tiler
 	{
 		private BuildingBase _buildingBase;
+		[Inject] private TechTreeManager _techTreeManager;
 
 		/// <summary>
 		/// Initializes components.
@@ -20,7 +23,7 @@ namespace Buildings
 			_buildingBase = GetComponent<BuildingBase>();
 			base.Init();
 
-			GameManager.Instance.TechTreeManager.OnBuildingAgedUp += OnBuildingAged;
+			_techTreeManager.OnBuildingAgedUp += OnBuildingAged;
 		}
 
 		private void OnBuildingAged(BuildingType type)

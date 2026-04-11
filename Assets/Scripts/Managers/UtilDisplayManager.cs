@@ -1,4 +1,5 @@
 using Character;
+using Reflex.Attributes;
 using System.Collections.Generic;
 using Target;
 using UnityEngine;
@@ -15,6 +16,8 @@ namespace Managers
 	{
 		private static Dictionary<Targetable, UnitTextDisplay> _activeTextDisplays = new Dictionary<Targetable, UnitTextDisplay>();
 		private static Dictionary<Player, GameObject> _pingObjects = new Dictionary<Player, GameObject>();
+
+		[Inject] private static ObjectPoolingManager _objectPoolingManager = null;
 		/// <summary>
 		/// Adds a target and it's display to the dictionary.
 		/// </summary>
@@ -27,7 +30,7 @@ namespace Managers
 
 			if (!_activeTextDisplays.ContainsKey(target))
 			{
-				var textDisplay = GameManager.Instance.PoolingManager.GetPooledObject("TextDisplay");
+				var textDisplay = _objectPoolingManager.GetPooledObject("TextDisplay");
 				textDisplay.gameObject.SetActive(true);
 				var rectTransform = textDisplay.GetComponent<RectTransform>();
 				rectTransform.SetParent(target.TextDisplayTransform, false);
@@ -63,7 +66,7 @@ namespace Managers
 			if (_pingObjects.ContainsKey(player))
 				return;
 
-			VFXArrowPointer pingObject = GameManager.Instance.PoolingManager.GetPooledObject("VFXPing").GetComponent<VFXArrowPointer>();
+			VFXArrowPointer pingObject = _objectPoolingManager.GetPooledObject("VFXPing").GetComponent<VFXArrowPointer>();
 
 			pingObject.transform.parent = player.Character.transform;
 			pingObject.transform.localPosition = Vector3.zero;
