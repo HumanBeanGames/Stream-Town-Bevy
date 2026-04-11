@@ -1,1 +1,3 @@
-public class ConnectionTab : GameObjectAccessor { }
+using Reflex.Core;
+
+public class ConnectionTab : UIGameObjectAccessor {}

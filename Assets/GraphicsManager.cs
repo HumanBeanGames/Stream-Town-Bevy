@@ -8,14 +8,16 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.Rendering;
 using Reflex.Core;
 
-public class GraphicsManager : MonoBehaviour, IInstaller
+public class GraphicsManager : UIGameObjectAccessor, IInstaller
 {
-    public void InstallBindings(ContainerBuilder containerBuilder)
+    public new void InstallBindings(ContainerBuilder containerBuilder)
     {
+        base.InstallBindings(containerBuilder);
         containerBuilder.AddSingleton(this);
     }
 
-    private void Awake()
+    [Inject]
+    private void Initialize()
     {
         if (!Directory.Exists(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + GameIO.SAVE_FILEPATH))
         {
@@ -23,8 +25,6 @@ public class GraphicsManager : MonoBehaviour, IInstaller
         }
         SetUpPipelineAndPostProcessing();
         SetUpResolution();
-
-        DontDestroyOnLoad(gameObject);
     }
 
     //prviate variables

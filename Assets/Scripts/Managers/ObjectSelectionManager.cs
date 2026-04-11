@@ -7,6 +7,7 @@ using Character;
 using Buildings;
 using Enemies;
 using GameResources;
+using System.Collections;
 using System.Collections.Generic;
 using Utils.Pooling;
 using World;
@@ -83,6 +84,14 @@ namespace Managers
 			if (RayTraceFromCamera(Camera.main, PlayerInputManager.MousePosition, out Vector3 hitPos))
 				_startedSelectionPosition = hitPos;
 
+			StartCoroutine(SelectCoroutine());
+		}
+
+		private IEnumerator SelectCoroutine()
+		{
+			// Wait for end of frame to avoid calling IsPointerOverGameObject during event processing
+			yield return new WaitForEndOfFrame();
+
 			if (Physics.Raycast(Camera.main.ScreenPointToRay(PlayerInputManager.MousePosition), out RaycastHit hitInfo, float.MaxValue) && !WorldUtils.IsPointerOverUI(EventSystem.current))
 			{
 				SelectableObject obj = hitInfo.transform.GetComponentInChildren<SelectableObject>();
@@ -91,7 +100,7 @@ namespace Managers
 					if (_selectedObject.Item1 == obj)
 					{
 						HideUI();
-						return;
+						yield break;
 					}
 					OnObjectSelected.Invoke(obj, obj.Data);
 				}
@@ -100,7 +109,6 @@ namespace Managers
 
 				_selectionUI.DisableCheckUI();
 			}
-			//Debug.Log("Started Object Selection");
 		}
 
 		private void StartGroupSelect(PlayerInputManager.Button button)
@@ -220,6 +228,13 @@ namespace Managers
 
 		public void OnRightClick(PlayerInputManager.Button button)
 		{
+			StartCoroutine(OnRightClickCoroutine());
+		}
+
+		private IEnumerator OnRightClickCoroutine()
+		{
+			// Wait for end of frame to avoid calling IsPointerOverGameObject during event processing
+			yield return new WaitForEndOfFrame();
 
 			if (_groupSelected)
 			{

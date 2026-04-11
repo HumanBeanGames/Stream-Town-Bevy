@@ -2,7 +2,7 @@ using Units;
 using UnityEngine;
 using UnityEngine.UI;
 using Scriptables;
-using Reflex.Attributes;
+
 namespace UserInterface
 {
 	public class UserInterface_BuildingHealthBar : MonoBehaviour
@@ -17,15 +17,19 @@ namespace UserInterface
 
 		private BuildingHealthDisplayOption _displayOption;
 
-		[Inject] SettingsData CurrentSettings;
-		[SerializeField]
+		private static SettingsData CurrentSettings;
+
+		private void Start()
+		{
+			CurrentSettings = SettingsIO.LoadOrCreate();
+		}
 
 		/// <summary>
 		/// Checks and changes the display option
 		/// </summary>
 		private void CheckWhatDisplayOption()
 		{
-			if (!_initialized)
+			if (!_initialized || CurrentSettings == null)
 				return;
 
 			switch (CurrentSettings.displayBuildingDamage)

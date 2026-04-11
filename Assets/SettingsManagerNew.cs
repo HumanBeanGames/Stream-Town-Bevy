@@ -6,6 +6,6 @@ using System.IO;
 using UnityEngine;
 using Reflex.Attributes;
 
-public class SettingsManagerNew : GameObjectAccessor
+public class SettingsManagerNew : UIGameObjectAccessor
 {
 }

@@ -121,14 +121,12 @@ namespace UserInterface.MainMenu
 		{
 			_loadingManager = FindObjectOfType<LoadingManager>();
 			_metaData = FindObjectOfType<MetaData.MetaData>();
-			_settingsManager.LoadedSettingsToUI();
 
 			if (GameIO.DoesSaveFileExist(GameIO.SaveFileType.GameSave))
 				return;
 
 			_loadButton.interactable = false;
 			_loadButton.image.color = new Color(191, 191, 191, 255);
-			
 		}
 
 		private void Update()

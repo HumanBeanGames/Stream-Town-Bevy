@@ -1,1 +1,1 @@
-public class SettingsPanel : GameObjectAccessor { }
+public class SettingsPanel : UIGameObjectAccessor { }

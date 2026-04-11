@@ -15,6 +15,9 @@ namespace Managers
 		[SerializeField]
 		private List<PooledObjectData> _objectsToPool;
 
+		[SerializeField]
+		private bool _debugPooling = false;
+
 		public void AddToPool(string poolName, PoolableObject go)
 		{
 			_pooledObjects[poolName].Enqueue(go);
@@ -196,7 +199,8 @@ namespace Managers
 				}
 				DateTime after = DateTime.Now;
 				TimeSpan duration = after.Subtract(before);
-				Debug.Log($"Pooling {objName} took {duration.TotalMilliseconds}ms");
+				if (_debugPooling)
+					Debug.Log($"Pooling {objName} took {duration.TotalMilliseconds}ms");
 				yield return new WaitForEndOfFrame();
 			}
 		}

@@ -1,1 +1,1 @@
-public class ConfirmSettingsPanel : GameObjectAccessor { }
+public class ConfirmSettingsPanel : UIGameObjectAccessor { }

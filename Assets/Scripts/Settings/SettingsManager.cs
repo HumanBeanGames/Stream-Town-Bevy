@@ -35,7 +35,7 @@ namespace Settings
         // Tracks which preset button is currently highlighted/selected.
         private Preset _preset = Preset.Low;
 
-        // Cache of the URP SSAO renderer feature so we don’t index into rendererFeatures by position.
+        // Cache of the URP SSAO renderer feature so we donï¿½t index into rendererFeatures by position.
         private ScriptableRendererFeature _ssaoFeatureCached;
 
         // Snapshot of settings used to detect "dirty" state (unsaved changes) while panel is open.
@@ -44,8 +44,27 @@ namespace Settings
         // On scene start, push model -> UI, then apply to the engine to ensure runtime matches.
         public void Start()
         {
+            TryInitialize();
+        }
+
+        private bool _initialized = false;
+
+        private void TryInitialize()
+        {
+            if (_initialized)
+                return;
+
+            if (_displayModeDropdown == null || _renderPipeline == null)
+                return;
+
             LoadedSettingsToUI();
             ApplySettingsToEngine();
+            _initialized = true;
+        }
+
+        private void Update()
+        {
+            TryInitialize();
         }
 
         // Reference wrappers injected for camera and preset buttons.
@@ -61,7 +80,7 @@ namespace Settings
         [Inject] Access_PanningSensitivityText _panningSensitivityText;
         public void PanSensitivityOnChange()
         {
-            // Show slider value as 0.0 – 10.0 (slider val / 10) with one decimal.
+            // Show slider value as 0.0 ï¿½ 10.0 (slider val / 10) with one decimal.
             _panningSensitivityText.val = (_panningSensitivitySlider.val / 10).ToString("F1");
         }
 
@@ -98,7 +117,7 @@ namespace Settings
         [Inject] Access_MouseControlsToggle _mouseControlsToggle;
         public void MouseMovementToggle()
         {
-            // If mouse movement is off, disable the pan sensitivity slider so it’s visually clear.
+            // If mouse movement is off, disable the pan sensitivity slider so itï¿½s visually clear.
             _panningSensitivitySlider.interactable = _mouseControlsToggle.isOn;
         }
 
@@ -232,7 +251,7 @@ namespace Settings
                 // Attempting to close
                 if (HasUnsavedUIChanges())
                 {
-                    _confirmSettingsPanel.Enabled = true; // “You have unsaved changes”
+                    _confirmSettingsPanel.Enabled = true; // ï¿½You have unsaved changesï¿½
                     return;
                 }
 
