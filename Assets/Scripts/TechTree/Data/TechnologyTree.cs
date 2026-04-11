@@ -20,6 +20,8 @@ namespace TechTree.Data
 
 		public Dictionary<Node_SO, bool> _unlockedNodes;
 
+		private static bool _debugUnlocks = false;
+
 		public TechnologyTree(TechTree_SO tree, TechTreeManager manager)
 		{
 			Profiler.BeginSample("Initialize Tech Tree");
@@ -49,7 +51,8 @@ namespace TechTree.Data
 			if (AvailableNodes.Contains(node))
 				AvailableNodes.Remove(node);
 
-			Debug.Log($"{node} unlocked.");
+			if (_debugUnlocks)
+				Debug.Log($"{node} unlocked.");
 			_unlockedNodes[node] = true;
 
 			RecursivelyAddAvailableNodes(node);

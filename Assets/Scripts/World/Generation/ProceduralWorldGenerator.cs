@@ -45,6 +45,9 @@ namespace World.Generation
 		private const int MAX_GENERATION_ATTEMPTS = 10;
 
 		[SerializeField]
+		private bool _debugGenerationTiming = false;
+
+		[SerializeField]
 		private LayerMask _collisionMask;
 		[SerializeField]
 		private LayerMask _terrainMask;
@@ -183,7 +186,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 
@@ -197,7 +201,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnShoreLineCheckHeight);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 
@@ -209,7 +214,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 
@@ -221,7 +227,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.UnderWaterCheckHeight, false);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 		}
@@ -246,7 +253,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 
@@ -260,7 +268,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnShoreLineCheckHeight);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 
@@ -272,7 +281,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 
@@ -284,7 +294,8 @@ namespace World.Generation
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.UnderWaterCheckHeight, false);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
-					Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
+					if (_debugGenerationTiming)
+						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
 					yield return new WaitForEndOfFrame();
 				}
 		}
