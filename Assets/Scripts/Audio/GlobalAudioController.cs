@@ -28,6 +28,8 @@ namespace Audio
 		[SerializeField]
 		private float _maxTimeBetweenMusic = 900;
 		[SerializeField]
+		private float _missingClipRetryDelay = 30;
+		[SerializeField]
 		private float _fadeOutTime = 10;
 		[SerializeField]
 		private bool _playAmbienceDuringMusic = true;
@@ -106,6 +108,7 @@ namespace Audio
 			if (musicClip == null)
 			{
 				Debug.LogWarning($"GlobalAudioController: No music clip available for {season}, day={day}", this);
+				_timeUntilMusicPlays = Mathf.Max(5f, _missingClipRetryDelay);
 				yield break;
 			}
 
@@ -238,7 +241,7 @@ namespace Audio
 			_seasonManager.OnSeasonChanging += OnSeasonChange;
 			_dayNightManager.OnNightStarting += OnNightStarted;
 			_dayNightManager.OnDayStarting += OnDayStarted;
-			StartMusic(_seasonManager.CurrentSeason, true);
+			StartNextTrack(_seasonManager.CurrentSeason, true);
 			_ambienceSource.volume = _maxAmbienceVolume;
 		}
 

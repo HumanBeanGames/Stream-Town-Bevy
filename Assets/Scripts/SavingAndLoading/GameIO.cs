@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.IO;
 using System.Runtime.Serialization.Formatters.Binary;
+using System.Threading.Tasks;
 using SavingAndLoading.Structs;
 
 namespace SavingAndLoading
@@ -21,6 +22,11 @@ namespace SavingAndLoading
 			return data;
 		}
 
+		public static Task<SaveGameData> LoadGameDataAsync()
+		{
+			return Task.Run(LoadGameData);
+		}
+
 		public static void SaveGameData(SaveGameData data)
 		{
 			BinaryFormatter formatter = new BinaryFormatter();
@@ -38,6 +44,11 @@ namespace SavingAndLoading
 			fStream.Close();
 			Debug.Log("GameIO: Loading from -> " + System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + SAVE_FILEPATH + PLAYER_SAVE_FILEPATH);
 			return data;
+		}
+
+		public static Task<SavePlayersData> LoadPlayersDataAsync()
+		{
+			return Task.Run(LoadPlayersData);
 		}
 
 		public static void SavePlayersData(SavePlayersData data)

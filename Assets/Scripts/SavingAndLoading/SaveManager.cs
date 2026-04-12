@@ -26,6 +26,7 @@ using Utils.Pooling;
 using SavingAndLoading.SavableObjects;
 using Target;
 using Reflex.Attributes;
+using System.Threading.Tasks;
 
 namespace SavingAndLoading
 {
@@ -49,6 +50,7 @@ namespace SavingAndLoading
 		private bool _autosave = false;
 		private float _autosaveTime = 0.0f;
 		private float _timeElapsed = 0.0f;
+		private const float _frameBudgetSeconds = 0.0035f;
 
 		private int _loadPercent = 0;
 		public int LoadPercent => _loadPercent;
@@ -319,22 +321,43 @@ namespace SavingAndLoading
 			StartCoroutine(DelayedLoadGame());
 		}
 
+		public IEnumerator LoadGameCoroutine(Action<float, string> progressReporter = null)
+		{
+			yield return StartCoroutine(DelayedLoadGame(progressReporter));
+		}
+
 		// TODO: Seperate this into multiple functions
 		/// <summary>
 		/// Loads the game from file.
 		/// </summary>
 		/// <returns></returns>
-		private IEnumerator DelayedLoadGame()
+		private IEnumerator DelayedLoadGame(Action<float, string> progressReporter = null)
 		{
 			System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
+			progressReporter?.Invoke(0.02f, "Reading save files...");
 
 			yield return null;
 
 			stopwatch.Restart();
-			SaveGameData gameData = GameIO.LoadGameData();
-			SavePlayersData playersData = GameIO.LoadPlayersData();
+			Task<SaveGameData> gameDataTask = GameIO.LoadGameDataAsync();
+			Task<SavePlayersData> playersDataTask = GameIO.LoadPlayersDataAsync();
+
+			while (!gameDataTask.IsCompleted || !playersDataTask.IsCompleted)
+			{
+				yield return null;
+			}
+
+			if (gameDataTask.IsFaulted)
+				throw gameDataTask.Exception;
+
+			if (playersDataTask.IsFaulted)
+				throw playersDataTask.Exception;
+
+			SaveGameData gameData = gameDataTask.Result;
+			SavePlayersData playersData = playersDataTask.Result;
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] File I/O and JSON deserialization: {stopwatch.ElapsedMilliseconds}ms");
+			progressReporter?.Invoke(0.08f, "Applying terrain mesh...");
 
 			WorldGenSaveData genData = gameData.WorldGenData;
 			List<BuildingSaveData> buildings = gameData.BuildingSaveData;
@@ -342,6 +365,8 @@ namespace SavingAndLoading
 			List<EnemySaveData> enemies = gameData.EnemySaveData;
 
 			List<PlayerSaveData> playerSaveDatas = playersData.PlayerSaveDatas;
+
+			float frameStartTime = Time.realtimeSinceStartup;
 
 			// World generation mesh
 			stopwatch.Restart();
@@ -355,89 +380,136 @@ namespace SavingAndLoading
 			for (int i = 0; i < genData.Resources.Count; i++)
 			{
 				((SaveableResource)((_poolingManager.GetPooledObject(genData.Resources[i].ResourceType, false)).SaveableObject)).LoadData((object)genData.Resources[i]);
+
+				if ((i + 1) % 150 == 0)
+				{
+					float stepProgress = genData.Resources.Count > 0 ? (i + 1f) / genData.Resources.Count : 1f;
+					progressReporter?.Invoke(0.16f + (stepProgress * 0.12f), $"Spawning resources ({i + 1}/{genData.Resources.Count})...");
+				}
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
+			}
+
+			if (genData.Resources.Count > 0)
+			{
+				progressReporter?.Invoke(0.28f, $"Spawning resources ({genData.Resources.Count}/{genData.Resources.Count})...");
+				yield return null;
 			}
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Resource spawning ({genData.Resources.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Foliage
+			progressReporter?.Invoke(0.3f, "Spawning foliage...");
 			stopwatch.Restart();
 			for (int i = 0; i < genData.Foliage.Count; i++)
 			{
 				((SaveablFoliage)((_poolingManager.GetPooledObject(genData.Foliage[i].FoliageType, false)).SaveableObject)).LoadData((object)genData.Foliage[i]);
+
+				if ((i + 1) % 200 == 0)
+				{
+					float stepProgress = genData.Foliage.Count > 0 ? (i + 1f) / genData.Foliage.Count : 1f;
+					progressReporter?.Invoke(0.3f + (stepProgress * 0.12f), $"Spawning foliage ({i + 1}/{genData.Foliage.Count})...");
+				}
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
+			}
+
+			if (genData.Foliage.Count > 0)
+			{
+				progressReporter?.Invoke(0.42f, $"Spawning foliage ({genData.Foliage.Count}/{genData.Foliage.Count})...");
+				yield return null;
 			}
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Foliage spawning ({genData.Foliage.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Enemy camps
+			progressReporter?.Invoke(0.42f, "Spawning enemy camps...");
 			stopwatch.Restart();
 			for (int i = 0; i < genData.EnemyCamps.Count; i++)
 			{
 				((SaveableEnemyCamp)((_poolingManager.GetPooledObject("EnemyCamp_Goblin", false)).SaveableObject)).LoadData((object)genData.EnemyCamps[i]);
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
 			}
+
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Enemy camp spawning ({genData.EnemyCamps.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			//  Buildings
 			stopwatch.Restart();
+			progressReporter?.Invoke(0.48f, "Spawning buildings...");
 			List<UpdateGraphBounds> buildingsToUpdate = new List<UpdateGraphBounds>();
 			for (int i = 0; i < buildings.Count; i++)
 			{
 				var building = _poolingManager.GetPooledObject(buildings[i].BuildingType, false);
-				 ((SaveableBuilding)((building).SaveableObject)).LoadData((object)buildings[i]);
+				((SaveableBuilding)((building).SaveableObject)).LoadData((object)buildings[i]);
 
 				UpdateGraphBounds ugb = building.GetComponent<UpdateGraphBounds>();
 				if (ugb)
 					buildingsToUpdate.Add(ugb);
+
+				if ((i + 1) % 50 == 0)
+				{
+					float stepProgress = buildings.Count > 0 ? (i + 1f) / buildings.Count : 1f;
+					progressReporter?.Invoke(0.48f + (stepProgress * 0.16f), $"Spawning buildings ({i + 1}/{buildings.Count})...");
+				}
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
 			}
+
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Building spawning ({buildings.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Creates enemies
 			stopwatch.Restart();
+			progressReporter?.Invoke(0.64f, "Spawning enemies...");
 			List<PoolableObject> enemyObjs = new List<PoolableObject>();// fill list with enemy objs
 			for (int i = 0; i < enemies.Count; i++)
 			{
 				PoolableObject temp = _poolingManager.GetPooledObject((enemies[i].EnemyType.ToString()), false);
 				((SaveableEnemy)temp.SaveableObject).LoadData((object)enemies[i]);
 				enemyObjs.Add(temp);
+
+				if ((i + 1) % 30 == 0)
+				{
+					float stepProgress = enemies.Count > 0 ? (i + 1f) / enemies.Count : 1f;
+					progressReporter?.Invoke(0.64f + (stepProgress * 0.08f), $"Spawning enemies ({i + 1}/{enemies.Count})...");
+				}
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
 			}
+
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Enemy spawning ({enemies.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Creates players
 			stopwatch.Restart();
+			progressReporter?.Invoke(0.72f, "Spawning players...");
 			List<PoolableObject> playerObjs = new List<PoolableObject>(); // fill list with player objs
-																		  // Create players
+			// Create players
 			for (int i = 0; i < playerSaveDatas.Count; i++)
 			{
 				playerObjs.Add(_playerManager.AddExistingPlayer(playerSaveDatas[i].ToPlayer(playerSaveDatas[i].GUID, playerSaveDatas[i].TargetGUID, playerSaveDatas[i].StationGUID, _gameManager, _poolingManager), playerSaveDatas[i].CurrentRole).PoolableObject);
 				//GameManager.Instance.GUIDManager.AddToDictionary(playerObjs[playerObjs.Count - 1]);
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
 			}
+
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Player spawning ({playerSaveDatas.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// TODO: Test this, problem where players/enemies automaticly go to the closest target/station
 
-			// Setting player connections
-			//for (int i = 0; i < playerObjs.Count; i++)
-			//{
-			//	if (playerSaveDatas[i].TargetGUID != 0)
-			//		((SaveablePlayer)playerObjs[i].SaveableObject).RoleHandler.Player.TargetSensor.TrySetTarget(((SaveableObject)GameManager.Instance.GUIDManager.GetComponentFromID(playerSaveDatas[i].TargetGUID).SaveableObject).Target);
-			//	if (playerSaveDatas[i].StationGUID != 0)
-			//		((SaveablePlayer)playerObjs[i].SaveableObject).RoleHandler.Player.StationSensor.TrySetStation(((SaveablePlayer)GameManager.Instance.GUIDManager.GetComponentFromID(playerSaveDatas[i].StationGUID).SaveableObject).RoleHandler.Player.StationSensor.CurrentStation);
-			//}
-
-			//// Setting enemy connections
-			//for (int i = 0; i < enemyObjs.Count; i++)
-			//{
-			//	if (enemies[i].TargetGUID != 0)
-			//		((SaveableEnemy)enemyObjs[i].SaveableObject).Enemy.TargetSensor.TrySetTarget(((SaveableObject)_guidManager.GetComponentFromID(enemies[i].TargetGUID).SaveableObject).Target);
-			//	if (enemies[i].CampGUID != 0)
-			//		((SaveableEnemy)enemyObjs[i].SaveableObject).Enemy.StationSensor.TrySetStation(((SaveableEnemy)_guidManager.GetComponentFromID(enemies[i].CampGUID).SaveableObject).Enemy.StationSensor.CurrentStation);
-			//}
-
 			//Load worldSaveData
+			progressReporter?.Invoke(0.82f, "Applying world state...");
 			stopwatch.Restart();
+
 			_townResourceManager.SetResourceAmount(Resource.Wood, worldData.WoodResourceAmount);
 			_townResourceManager.SetResourceAmount(Resource.Ore, worldData.OreResourceAmount);
 			_townResourceManager.SetResourceAmount(Resource.Food, worldData.FoodResourceAmount);
@@ -465,16 +537,37 @@ namespace SavingAndLoading
 			Debug.Log($"[LOAD TIME] World data application: {stopwatch.ElapsedMilliseconds}ms");
 
 			// Force all buildings to update their graph bounds.
+			progressReporter?.Invoke(0.92f, "Finalizing world graph...");
 			stopwatch.Restart();
-			_generationObject.ScanWorld();
-			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] A* graph scan: {stopwatch.ElapsedMilliseconds}ms");
-
-			yield return new WaitForSeconds(25);
-			for(int i = 0; i < buildingsToUpdate.Count;i++)
+			for (int i = 0; i < buildingsToUpdate.Count; i++)
 			{
 				buildingsToUpdate[i].SetGraphBounds();
+
+				if ((i + 1) % 25 == 0)
+				{
+					float stepProgress = buildingsToUpdate.Count > 0 ? (i + 1f) / buildingsToUpdate.Count : 1f;
+					progressReporter?.Invoke(0.92f + (stepProgress * 0.08f), $"Finalizing world graph ({i + 1}/{buildingsToUpdate.Count})...");
+				}
+
+				if (ShouldYieldFrame(ref frameStartTime))
+					yield return null;
 			}
+
+			stopwatch.Stop();
+			Debug.Log($"[LOAD TIME] Graph bounds update ({buildingsToUpdate.Count} buildings): {stopwatch.ElapsedMilliseconds}ms");
+
+			progressReporter?.Invoke(1f, "Save load complete");
+		}
+
+		private bool ShouldYieldFrame(ref float frameStartTime)
+		{
+			if (Time.realtimeSinceStartup - frameStartTime >= _frameBudgetSeconds)
+			{
+				frameStartTime = Time.realtimeSinceStartup;
+				return true;
+			}
+
+			return false;
 		}
 
 		private void OnEnable()

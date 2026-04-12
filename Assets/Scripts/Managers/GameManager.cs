@@ -18,7 +18,9 @@ using UnityEngine.EventSystems;
 using UserInterface.MainMenu;
 using Reflex.Attributes;
 using Reflex.Core;
+using System;
 using System.Collections;
+using System.Reflection;
 using Environment;
 using Scriptables;
 using Utils.Pooling;
@@ -151,7 +153,17 @@ namespace Managers
 			System.Diagnostics.Stopwatch totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
 			System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
+			void ReportStartupProgress(float normalizedProgress, string status)
+			{
+				LoadingProgressReporter.Report(0.5f + Mathf.Clamp01(normalizedProgress) * 0.5f, status);
+			}
+
+			ReportStartupProgress(0f, "Bootstrapping game systems...");
+			yield return null;
+
 			Debug.Log("[STARTUP] Initializing Twitch managers");
+			ReportStartupProgress(0.05f, "Initializing Twitch systems...");
+			yield return null;
 			TwitchChatManager.Initialize(_playerManager, _timeManager);
 			Twitch.Commands.ModeratorCommands.Initialize(_playerManager, _gameEventManager);
 			Twitch.Commands.PlayerCommands.Initialize(_playerManager, _gameEventManager);
@@ -164,26 +176,41 @@ namespace Managers
 			Twitch.Commands.BroadcasterCommands.Initialize(this);
 			Twitch.Commands.GameMasterCommands.Initialize(this);
 			Debug.Log("[STARTUP] Twitch managers initialized");
+			ReportStartupProgress(0.12f, "Preparing player connection...");
 
-			_code = Random.Range(100000, 999999).ToString();
+			_code = UnityEngine.Random.Range(100000, 999999).ToString();
 			_connectPanel.SetActive(true);
 			CodeDisplay.text = $"!CONNECT {_code}";
 
 			Debug.Log("[STARTUP] Starting TechTree and GUID initialization");
+			ReportStartupProgress(0.16f, "Initializing tech tree and GUID systems...");
+			yield return null;
 			stopwatch.Restart();
 			_techTreeManager.ManualInject(_playerManager, _buildingManager, _townResourceManager, _gameEventManager, _townGoalManager, UIManager, _metaData);
 			_techTreeManager.InitializeTree();
 			_guidManager.Initialize();   // Must happen before pooling manager
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] TechTree and GUID initialization: {stopwatch.ElapsedMilliseconds}ms");
+			ReportStartupProgress(0.25f, "Tech tree and GUID systems ready");
 
 			Debug.Log("[STARTUP] Starting pooling initialization");
-			yield return StartCoroutine(_poolingManager.InitializePooling());
+			ReportStartupProgress(0.28f, "Initializing object pools...");
+			yield return StartCoroutine(_poolingManager.InitializePooling((progress, status) =>
+			{
+				float normalizedProgress = 0.28f + (progress * 0.32f);
+				ReportStartupProgress(normalizedProgress, status);
+			}));
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Pooling initialization: {stopwatch.ElapsedMilliseconds}ms");
 
 			Debug.Log("[STARTUP] Injecting all pooled objects with SceneScope dependencies");
-			_poolingManager.InjectAllPooledObjects(_sceneContainer);
+			ReportStartupProgress(0.62f, "Injecting SceneScope dependencies into pooled objects...");
+			yield return null;
+			yield return StartCoroutine(_poolingManager.InjectAllPooledObjectsCoroutine(_sceneContainer, (progress, status) =>
+			{
+				float normalizedProgress = 0.62f + (progress * 0.04f);
+				ReportStartupProgress(normalizedProgress, status);
+			}));
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] Pooled object injection: {stopwatch.ElapsedMilliseconds}ms");
 
@@ -192,8 +219,13 @@ namespace Managers
 				if (_metaData.LoadType == MetaData.LoadType.Generate)
 				{
 					Debug.Log("Generating new world!");
+					ReportStartupProgress(0.66f, "Generating world terrain and resources...");
 					stopwatch.Restart();
-					yield return StartCoroutine(_proceduralWorldGen.TryGenerateWorld());
+					yield return StartCoroutine(_proceduralWorldGen.TryGenerateWorld((progress, status) =>
+					{
+						float normalizedProgress = 0.66f + (progress * 0.22f);
+						ReportStartupProgress(normalizedProgress, status);
+					}));
 					stopwatch.Stop();
 					Debug.Log($"[LOAD TIME] World generation: {stopwatch.ElapsedMilliseconds}ms");
 				}
@@ -201,29 +233,65 @@ namespace Managers
 				else if (_metaData.LoadType == MetaData.LoadType.Load)
 				{
 					Debug.Log("Loading World!");
+					ReportStartupProgress(0.66f, "Loading saved world data...");
 					stopwatch.Restart();
-					_saveManager.LoadGame();
+					yield return StartCoroutine(_saveManager.LoadGameCoroutine((progress, status) =>
+					{
+						float normalizedProgress = 0.66f + (progress * 0.22f);
+						ReportStartupProgress(normalizedProgress, status);
+					}));
 					stopwatch.Stop();
 					Debug.Log($"[LOAD TIME] Game loading: {stopwatch.ElapsedMilliseconds}ms");
+					ReportStartupProgress(0.88f, "Save data loaded");
 				}
 			}
 			else
 			{
+				ReportStartupProgress(0.66f, "Generating fallback world...");
 				stopwatch.Restart();
-				yield return StartCoroutine(_proceduralWorldGen.TryGenerateWorld());
+				yield return StartCoroutine(_proceduralWorldGen.TryGenerateWorld((progress, status) =>
+				{
+					float normalizedProgress = 0.66f + (progress * 0.22f);
+					ReportStartupProgress(normalizedProgress, status);
+				}));
 				stopwatch.Stop();
 				Debug.Log($"[LOAD TIME] World generation (fallback): {stopwatch.ElapsedMilliseconds}ms");
 			}
 
+			ReportStartupProgress(0.9f, "Scanning pathfinding graph...");
+			yield return null;
 			stopwatch.Restart();
-			AstarPath.active.Scan();
+			yield return StartCoroutine(ScanPathfindingCoroutine());
 			stopwatch.Stop();
 			Debug.Log($"[LOAD TIME] A* pathfinding scan: {stopwatch.ElapsedMilliseconds}ms");
 
 			totalStopwatch.Stop();
 			Debug.Log($"[LOAD TIME] TOTAL StartupSequence: {totalStopwatch.ElapsedMilliseconds}ms");
 
+			ReportStartupProgress(1f, "World ready");
+			LoadingProgressReporter.End("Ready");
 			GameStateManager.NotifyPlayerReady();
+		}
+
+		private IEnumerator ScanPathfindingCoroutine()
+		{
+			if (AstarPath.active == null)
+				yield break;
+
+			MethodInfo scanAsyncMethod = typeof(AstarPath).GetMethod("ScanAsync", BindingFlags.Instance | BindingFlags.Public, null, Type.EmptyTypes, null);
+			if (scanAsyncMethod != null)
+			{
+				IEnumerable asyncEnumerable = scanAsyncMethod.Invoke(AstarPath.active, null) as IEnumerable;
+				if (asyncEnumerable != null)
+				{
+					foreach (object _ in asyncEnumerable)
+						yield return null;
+
+					yield break;
+				}
+			}
+
+			AstarPath.active.Scan();
 		}
 
 		private void InitializeNonInjectedComponents()

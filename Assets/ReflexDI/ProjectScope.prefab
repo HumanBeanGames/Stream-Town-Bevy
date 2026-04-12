@@ -213,7 +213,7 @@ MonoBehaviour:
     Prefab: {fileID: 1646107014754319142, guid: 6393d2188cb864949a4aca442be0b1c5, type: 3}
   - Name: Stonemason
     PoolAmount: 100
-    Prefab: {fileID: 0}
+    Prefab: {fileID: 1646107014754319142, guid: d0ae85a4ef0e7444582db23cc07f8456, type: 3}
   - Name: Foodstorage
     PoolAmount: 100
     Prefab: {fileID: 1646107014754319142, guid: f4f552c4ab236d1449adf300d0b4b58e, type: 3}

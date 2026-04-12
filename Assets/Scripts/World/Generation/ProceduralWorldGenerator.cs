@@ -49,6 +49,7 @@ namespace World.Generation
 
 		[SerializeField]
 		private bool _debugGenerationTiming = false;
+		private const float _frameBudgetSeconds = 0.01f;
 
 		[SerializeField]
 		private LayerMask _collisionMask;
@@ -163,100 +164,67 @@ namespace World.Generation
 		/// <summary>
 		/// Generates all pooled objects required for World Generation.
 		/// </summary>
-		private IEnumerator GeneratePooledObjects()
+		private IEnumerator GeneratePooledObjects(Action<float, string> progressReporter = null)
 		{
-			ObjectPoolingManager poolManager = _poolingManager;
-			int seed = _generationSettings.Seed;
-			DateTime before = DateTime.Now;
-			DateTime after;
-			TimeSpan duration;
-
-			// Create townhall
 			PoolableObject th = _poolingManager.GetPooledObject("Townhall");
 			GameObject thObj = ((SaveableBuilding)th.SaveableObject).BuildingBase.gameObject;
 			thObj.transform.position = Vector3.zero;
 			thObj.SetActive(true);
 			_buildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
 
-			// Generate all normal resources (trees, ore, etc).
-			if (_resourceGenerationSettings != null)
-			{
-				foreach (ResourceGenerationSettings settings in _resourceGenerationSettings)
-				{
-					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
-					after = DateTime.Now;
-					duration = after.Subtract(before);
-					if (_debugGenerationTiming)
-						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
-				}
-
-			}
-
-			// Generate all resources for water on the shore line (fish).
-			if (_waterResourceGenerationSettings != null)
-				foreach (ResourceGenerationSettings settings in _waterResourceGenerationSettings)
-				{
-					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnShoreLineCheckHeight);
-					after = DateTime.Now;
-					duration = after.Subtract(before);
-					if (_debugGenerationTiming)
-						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
-				}
-
-			// Generate the ground foliage (flowers, grass, etc).
-			if (_foliageGenerationSettings != null)
-				foreach (FoliageGenerationSettings settings in _foliageGenerationSettings)
-				{
-					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
-					after = DateTime.Now;
-					duration = after.Subtract(before);
-					if (_debugGenerationTiming)
-						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
-				}
-
-			// Generate the underwater foliage (seaweed, corals, etc.).
-			if (_waterFoliageGenerationSettings != null)
-				foreach (FoliageGenerationSettings settings in _waterFoliageGenerationSettings)
-				{
-					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.UnderWaterCheckHeight, false);
-					after = DateTime.Now;
-					duration = after.Subtract(before);
-					if (_debugGenerationTiming)
-						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
-				}
+			yield return StartCoroutine(GeneratePooledObjectsExceptTownhall(progressReporter));
 		}
 
 		/// <summary>
 		/// Generates all pooled objects except the townhall (townhall is spawned separately before terrain generation).
 		/// </summary>
-		private IEnumerator GeneratePooledObjectsExceptTownhall()
+		private IEnumerator GeneratePooledObjectsExceptTownhall(Action<float, string> progressReporter = null)
 		{
 			ObjectPoolingManager poolManager = _poolingManager;
 			int seed = _generationSettings.Seed;
 			DateTime before = DateTime.Now;
 			DateTime after;
 			TimeSpan duration;
+			int totalSettings = 0;
+			if (_resourceGenerationSettings != null)
+				totalSettings += _resourceGenerationSettings.Count;
+			if (_waterResourceGenerationSettings != null)
+				totalSettings += _waterResourceGenerationSettings.Count;
+			if (_foliageGenerationSettings != null)
+				totalSettings += _foliageGenerationSettings.Count;
+			if (_waterFoliageGenerationSettings != null)
+				totalSettings += _waterFoliageGenerationSettings.Count;
+
+			int completedSettings = 0;
+			void ReportSpawnProgress(float settingProgress, string status)
+			{
+				if (totalSettings <= 0)
+				{
+					progressReporter?.Invoke(1f, status);
+					return;
+				}
+
+				float overallProgress = (completedSettings + Mathf.Clamp01(settingProgress)) / totalSettings;
+				progressReporter?.Invoke(Mathf.Clamp01(overallProgress), status);
+			}
 
 			// Generate all normal resources (trees, ore, etc).
 			if (_resourceGenerationSettings != null)
 			{
 				foreach (ResourceGenerationSettings settings in _resourceGenerationSettings)
 				{
+					string label = settings.PoolName;
 					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
+					seed++;
+					yield return StartCoroutine(GenerateFromSettingsCoroutine(settings, seed, poolManager, WorldUtils.OnGroundCheckHeight, true, p =>
+						ReportSpawnProgress(p, $"Spawning resources: {label} ({completedSettings + 1}/{totalSettings})...")));
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugGenerationTiming)
 						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
+					completedSettings++;
+					ReportSpawnProgress(0f, $"Completed resources: {label} ({completedSettings}/{totalSettings})");
+					yield return null;
 				}
 
 			}
@@ -265,40 +233,57 @@ namespace World.Generation
 			if (_waterResourceGenerationSettings != null)
 				foreach (ResourceGenerationSettings settings in _waterResourceGenerationSettings)
 				{
+					string label = settings.PoolName;
 					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnShoreLineCheckHeight);
+					seed++;
+					yield return StartCoroutine(GenerateFromSettingsCoroutine(settings, seed, poolManager, WorldUtils.OnShoreLineCheckHeight, true, p =>
+						ReportSpawnProgress(p, $"Spawning shoreline resources: {label} ({completedSettings + 1}/{totalSettings})...")));
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugGenerationTiming)
 						Debug.Log($"Generating {settings.PoolName} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
+					completedSettings++;
+					ReportSpawnProgress(0f, $"Completed shoreline resources: {label} ({completedSettings}/{totalSettings})");
+					yield return null;
 				}
 
 			// Generate the ground foliage (flowers, grass, etc).
 			if (_foliageGenerationSettings != null)
 				foreach (FoliageGenerationSettings settings in _foliageGenerationSettings)
 				{
+					string label = settings.PoolNames != null && settings.PoolNames.Length > 0 ? settings.PoolNames[0] : "Foliage";
 					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
+					seed++;
+					yield return StartCoroutine(GenerateFromSettingsCoroutine(settings, seed, poolManager, WorldUtils.OnGroundCheckHeight, true, p =>
+						ReportSpawnProgress(p, $"Spawning foliage: {label} ({completedSettings + 1}/{totalSettings})...")));
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugGenerationTiming)
 						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
+					completedSettings++;
+					ReportSpawnProgress(0f, $"Completed foliage: {label} ({completedSettings}/{totalSettings})");
+					yield return null;
 				}
 
 			// Generate the underwater foliage (seaweed, corals, etc.).
 			if (_waterFoliageGenerationSettings != null)
 				foreach (FoliageGenerationSettings settings in _waterFoliageGenerationSettings)
 				{
+					string label = settings.PoolNames != null && settings.PoolNames.Length > 0 ? settings.PoolNames[0] : "Water Foliage";
 					before = DateTime.Now;
-					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.UnderWaterCheckHeight, false);
+					seed++;
+					yield return StartCoroutine(GenerateFromSettingsCoroutine(settings, seed, poolManager, WorldUtils.UnderWaterCheckHeight, false, p =>
+						ReportSpawnProgress(p, $"Spawning underwater foliage: {label} ({completedSettings + 1}/{totalSettings})...")));
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugGenerationTiming)
 						Debug.Log($"Generating {settings.PoolNames[0]} took {duration.TotalMilliseconds}ms");
-					yield return new WaitForEndOfFrame();
+					completedSettings++;
+					ReportSpawnProgress(0f, $"Completed underwater foliage: {label} ({completedSettings}/{totalSettings})");
+					yield return null;
 				}
+
+			progressReporter?.Invoke(1f, "World resource spawning complete");
 		}
 
 		public void MainMenuGenerateWorld()
@@ -308,7 +293,6 @@ namespace World.Generation
 			poolManager.SimplePoolObjects();
 			int seed = _generationSettings.Seed;
 
-			// Generate all normal resources (trees, ore, etc).
 			if (_resourceGenerationSettings != null)
 			{
 				foreach (ResourceGenerationSettings settings in _resourceGenerationSettings)
@@ -317,14 +301,12 @@ namespace World.Generation
 				}
 			}
 
-			// Generate the ground foliage (flowers, grass, etc).
 			if (_foliageGenerationSettings != null)
 				foreach (FoliageGenerationSettings settings in _foliageGenerationSettings)
 				{
 					GenerateFromSettings(settings, ref seed, poolManager, WorldUtils.OnGroundCheckHeight);
 				}
 
-			// Generate the underwater foliage (seaweed, corals, etc.).
 			if (_waterFoliageGenerationSettings != null)
 				foreach (FoliageGenerationSettings settings in _waterFoliageGenerationSettings)
 				{
@@ -332,23 +314,14 @@ namespace World.Generation
 				}
 		}
 
-		/// <summary>
-		/// Uses settings to generate resources or objects in the world, accounting for collision to avoid overlap.
-		/// </summary>
-		/// <param name="settings"></param>
-		/// <param name="seed"></param>
-		/// <param name="poolManager"></param>
-		/// <param name="comparisonLambda"></param>
 		private void GenerateFromSettings(GenerationSettings settings, ref int seed, ObjectPoolingManager poolManager, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision = true)
 		{
 			settings.Size = (_generationSettings.Size * (int)_xScale);
 			settings.Seed = ++seed;
-			//Generate resource map (stored in Height Map)
 			Vector3 colSize = Vector3.one * settings.Spacing * 0.45f;
 			settings.HeightMap = Noise.GenerateNoiseMap(settings);
 
-			//Set pooled objects to the position
-			int halfSize = (settings.Size) / 2;
+			int halfSize = settings.Size / 2;
 
 			if (settings.Spacing == 0)
 				settings.Spacing = 1;
@@ -361,6 +334,57 @@ namespace World.Generation
 					position = new Vector3(y + settings.Offset.y, 0, x + settings.Offset.x);
 					if (Mathf.FloorToInt(settings.HeightMap[x + halfSize, y + halfSize]) == 1)
 					{
+						(bool, float) lambaResult = comparisonLambda(position);
+
+						if (lambaResult.Item1)
+						{
+							position.y = lambaResult.Item2;
+
+							if (useCollision)
+								if (Physics.BoxCast(position + Vector3.up * 5, colSize, Vector3.down, Quaternion.identity, 10, _collisionMask))
+									continue;
+
+							PoolableObject obj = poolManager.GetPooledObject(settings.GetPoolName(), false);
+							obj.transform.position = position;
+							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
+							obj.transform.Rotate(Vector3.up, randomRotation);
+							obj.gameObject.SetActive(true);
+						}
+					}
+				}
+			}
+		}
+
+		private IEnumerator GenerateFromSettingsCoroutine(GenerationSettings settings, int seed, ObjectPoolingManager poolManager, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision, Action<float> progressReporter)
+		{
+			settings.Size = (_generationSettings.Size * (int)_xScale);
+			settings.Seed = seed;
+
+			if (settings.Spacing == 0)
+				settings.Spacing = 1;
+
+			Vector3 colSize = Vector3.one * settings.Spacing * 0.45f;
+			float[,] generatedNoiseMap = null;
+			yield return StartCoroutine(Noise.GenerateNoiseMapCoroutine(settings, _frameBudgetSeconds, result => generatedNoiseMap = result));
+			settings.HeightMap = generatedNoiseMap;
+
+			int halfSize = settings.Size / 2;
+			int start = -halfSize + 2;
+			int end = halfSize - 2;
+			int checksPerAxis = Mathf.Max(1, Mathf.CeilToInt((end - start) / (float)settings.Spacing));
+			int totalChecks = checksPerAxis * checksPerAxis;
+			int checksProcessed = 0;
+			float frameStartTime = Time.realtimeSinceStartup;
+
+			for (int y = start; y < end; y += settings.Spacing)
+			{
+				for (int x = start; x < end; x += settings.Spacing)
+				{
+					checksProcessed++;
+					if (Mathf.FloorToInt(settings.HeightMap[x + halfSize, y + halfSize]) == 1)
+					{
+						Vector3 position = new Vector3(y + settings.Offset.y, 0, x + settings.Offset.x);
+
 						(bool, float) lambaResult = comparisonLambda(position);
 
 						if (lambaResult.Item1)
@@ -379,26 +403,42 @@ namespace World.Generation
 							obj.transform.Rotate(Vector3.up, randomRotation);
 							obj.gameObject.SetActive(true);
 						}
+
+					}
+
+					if (checksProcessed % 30 == 0)
+					{
+						progressReporter?.Invoke(checksProcessed / (float)totalChecks);
+						if (Time.realtimeSinceStartup - frameStartTime >= _frameBudgetSeconds)
+						{
+							frameStartTime = Time.realtimeSinceStartup;
+							yield return null;
+						}
 					}
 				}
 			}
+
+			progressReporter?.Invoke(1f);
 		}
 
 		/// <summary>
 		/// Attempts to generate a new world with the given settings.
 		/// </summary>
-		public IEnumerator TryGenerateWorld()
+		public IEnumerator TryGenerateWorld(Action<float, string> progressReporter = null)
 		{
 			if (_generateOnStart)
 			{
+				progressReporter?.Invoke(0.0f, "Preparing terrain generation...");
 				WorldUtils.GroundLayerMask = LayerMask.GetMask("Ground");
-				DateTime before = DateTime.Now;
 				yield return new WaitForEndOfFrame();
 
 				// Spawn townhall first so it exists for pathfinding check
+				progressReporter?.Invoke(0.08f, "Spawning townhall...");
+				yield return null;
 				PoolableObject th = _poolingManager.GetPooledObject("Townhall");
 				GameObject thObj = ((SaveableBuilding)th.SaveableObject).BuildingBase.gameObject;
 				thObj.transform.position = Vector3.zero;
+
 				thObj.SetActive(true);
 				_buildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
 
@@ -407,6 +447,8 @@ namespace World.Generation
 				while (!terrainAcceptable && attempts < MAX_GENERATION_ATTEMPTS)
 				{
 					attempts++;
+					float attemptProgress = Mathf.Clamp01(attempts / (float)MAX_GENERATION_ATTEMPTS);
+					progressReporter?.Invoke(0.1f + (attemptProgress * 0.45f), $"Generating terrain (attempt {attempts}/{MAX_GENERATION_ATTEMPTS})...");
 					yield return new WaitForEndOfFrame();
 					if (_randomizeSeed)
 						_generationSettings.Seed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
@@ -424,9 +466,14 @@ namespace World.Generation
 					Debug.LogError($"ProceduralWorldGenerator: Failed to generate acceptable terrain after {MAX_GENERATION_ATTEMPTS} attempts. Proceeding with current terrain.", this);
 				}
 
-				yield return StartCoroutine(GeneratePooledObjectsExceptTownhall());
+				progressReporter?.Invoke(0.7f, "Spawning world resources...");
+				yield return StartCoroutine(GeneratePooledObjectsExceptTownhall((progress, status) =>
+				{
+					progressReporter?.Invoke(0.7f + (Mathf.Clamp01(progress) * 0.28f), status);
+				}));
 				//Check that townhall is on ground, not above water.
 
+				progressReporter?.Invoke(1f, "World generation complete");
 
 				GameStateManager.NotifyWorldLoaded();
 			}

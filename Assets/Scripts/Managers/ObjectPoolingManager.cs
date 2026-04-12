@@ -35,6 +35,7 @@ namespace Managers
 		private Dictionary<string, List<PoolableObject>> _allObjects;
 		private Dictionary<string, GameObject> _poolParents;
 		private TimeSpan _poolingDuration;
+		private const float _frameBudgetSeconds = 0.01f;
 
 		public TimeSpan PoolingDuration => _poolingDuration;
 
@@ -42,11 +43,11 @@ namespace Managers
 		/// Starts the pooling process.
 		/// Call this after SceneScope is built to ensure dependencies are available.
 		/// </summary>
-		public IEnumerator InitializePooling()
+		public IEnumerator InitializePooling(Action<float, string> progressReporter = null)
 		{
 			Debug.Log($"[ObjectPoolingManager] InitializePooling called, activeSelf: {gameObject.activeSelf}, activeInHierarchy: {gameObject.activeInHierarchy}, has parent: {transform.parent != null}");
 			DateTime before = DateTime.Now;
-			yield return StartCoroutine(PoolObjectsCoroutine());
+			yield return StartCoroutine(PoolObjectsCoroutine(progressReporter));
 
 			//PoolObjects();
 			DateTime after = DateTime.Now;
@@ -185,18 +186,27 @@ namespace Managers
 			return null;
 		}
 
-		private IEnumerator PoolObjectsCoroutine()
+		private IEnumerator PoolObjectsCoroutine(Action<float, string> progressReporter = null)
 		{
 			_pooledObjects = new Dictionary<string, Queue<PoolableObject>>();
 			_poolParents = new Dictionary<string, GameObject>();
 			_allObjects = new Dictionary<string, List<PoolableObject>>();
+			float frameStartTime = Time.realtimeSinceStartup;
 
 			GameObject poolParent = new GameObject("Pooled Objects");
+			int objectTypeCount = _objectsToPool.Count;
+
+			if (objectTypeCount == 0)
+			{
+				progressReporter?.Invoke(1f, "Pooling complete");
+				yield break;
+			}
 
 			for (int i = 0; i < _objectsToPool.Count; i++)
 			{
 				DateTime before = DateTime.Now;
 				string objName = _objectsToPool[i].Name;
+				int poolAmount = _objectsToPool[i].PoolAmount;
 				GameObject parentObject = new GameObject(objName + " Pool");
 
 				parentObject.transform.parent = poolParent.transform;
@@ -207,7 +217,9 @@ namespace Managers
 				for (int j = 0; j < _objectsToPool[i].PoolAmount; j++)
 				{
 					GameObject obj = Instantiate(_objectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
+
 					obj.SetActive(false); // Disable immediately to prevent OnEnable from firing
+
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
 					if (poolObj == null)
 						poolObj = obj.AddComponent<PoolableObject>();
@@ -215,13 +227,34 @@ namespace Managers
 					//_pooledObjects[objName].Enqueue(poolObj);
 					_allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName, this);
+
+					float typeProgress = poolAmount > 0 ? (j + 1f) / poolAmount : 1f;
+					float overallProgress = (i + typeProgress) / objectTypeCount;
+					progressReporter?.Invoke(overallProgress, $"Pooling {objName} ({j + 1}/{poolAmount})");
+
+					// Only check time budget every 30 objects to reduce polling overhead
+					if ((j + 1) % 30 == 0 && Time.realtimeSinceStartup - frameStartTime >= _frameBudgetSeconds)
+					{
+						frameStartTime = Time.realtimeSinceStartup;
+						yield return null;
+					}
 				}
+
+				if (poolAmount == 0)
+				{
+					float overallProgress = (i + 1f) / objectTypeCount;
+					progressReporter?.Invoke(overallProgress, $"Pooling {objName}");
+				}
+
 				DateTime after = DateTime.Now;
 				TimeSpan duration = after.Subtract(before);
 				if (_debugPooling)
 					Debug.Log($"Pooling {objName} took {duration.TotalMilliseconds}ms");
+				frameStartTime = Time.realtimeSinceStartup;
 				yield return new WaitForEndOfFrame();
 			}
+
+			progressReporter?.Invoke(1f, "Pooling complete");
 		}
 
 		public void SimplePoolObjects()
@@ -287,6 +320,56 @@ namespace Managers
 				}
 			}
 
+			Debug.Log($"[ObjectPoolingManager] Injected all pooled objects using SceneScope container");
+		}
+
+		public IEnumerator InjectAllPooledObjectsCoroutine(Container sceneContainer, Action<float, string> progressReporter = null)
+		{
+			if (_allObjects == null)
+			{
+				Debug.LogWarning($"[ObjectPoolingManager] InjectAllPooledObjects called before pooling initialization. Skipping injection.");
+				progressReporter?.Invoke(1f, "No pooled objects to inject");
+				yield break;
+			}
+
+			int totalObjects = 0;
+			foreach (var kvp in _allObjects)
+				totalObjects += kvp.Value.Count;
+
+			if (totalObjects == 0)
+			{
+				progressReporter?.Invoke(1f, "No pooled objects to inject");
+				yield break;
+			}
+
+			int injectedObjects = 0;
+			float frameStartTime = Time.realtimeSinceStartup;
+
+			foreach (var kvp in _allObjects)
+			{
+				string poolName = kvp.Key;
+				List<PoolableObject> objects = kvp.Value;
+
+				for (int i = 0; i < objects.Count; i++)
+				{
+					GameObjectInjector.InjectRecursive(objects[i].gameObject, sceneContainer);
+					injectedObjects++;
+
+					float progress = totalObjects > 0 ? (float)injectedObjects / totalObjects : 1f;
+					progressReporter?.Invoke(progress, $"Injecting {poolName} ({i + 1}/{objects.Count})");
+
+					if (Time.realtimeSinceStartup - frameStartTime >= _frameBudgetSeconds)
+					{
+						frameStartTime = Time.realtimeSinceStartup;
+						yield return null;
+					}
+				}
+
+				frameStartTime = Time.realtimeSinceStartup;
+				yield return null;
+			}
+
+			progressReporter?.Invoke(1f, "Pooled object injection complete");
 			Debug.Log($"[ObjectPoolingManager] Injected all pooled objects using SceneScope container");
 		}
 	}

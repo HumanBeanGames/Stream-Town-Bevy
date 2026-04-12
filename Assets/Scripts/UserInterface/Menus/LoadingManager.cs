@@ -22,6 +22,15 @@ namespace UserInterface.MainMenu
 		[SerializeField]
 		private TextMeshProUGUI _tooltipText;
 
+		[SerializeField]
+		private Image _progressFillImage;
+
+		[SerializeField]
+		private TextMeshProUGUI _progressPercentText;
+
+		[SerializeField]
+		private TextMeshProUGUI _statusText;
+
 		[SerializeField, TextArea]
 		private string[] _toolTips;
 
@@ -30,6 +39,7 @@ namespace UserInterface.MainMenu
 		private void DisableUI()
 		{
 			_loadingUI.SetActive(false);
+			LoadingProgressReporter.End("Ready");
 			GameStateManager.ReadiedPlayer -= DisableUI;
 		}
 
@@ -45,6 +55,8 @@ namespace UserInterface.MainMenu
 
 			RandomizeTooltip();
 			_loadingUI.SetActive(true);
+			_loadProgress = 0f;
+			LoadingProgressReporter.Begin("Preparing loading screen...");
 
 			stopwatch.Restart();
 			AsyncOperation asyncLoad = SceneManager.LoadSceneAsync(sceneIndex);
@@ -58,6 +70,9 @@ namespace UserInterface.MainMenu
 				targetProgress = asyncLoad.progress / 0.9f;
 				currentProgress = Mathf.MoveTowards(_loadProgress, targetProgress, _loadingSpeed * Time.deltaTime);
 				_loadProgress = currentProgress;
+
+				float sceneLoadProgress = loadingWorld ? _loadProgress * 0.4f : _loadProgress;
+				LoadingProgressReporter.Report(sceneLoadProgress, $"Loading scene {sceneIndex}...");
 				yield return null;
 			}
 			stopwatch.Stop();
@@ -71,6 +86,8 @@ namespace UserInterface.MainMenu
 			while (scene != SceneManager.GetSceneByBuildIndex(sceneIndex))
 			{
 				scene = SceneManager.GetActiveScene();
+				float activationProgress = loadingWorld ? 0.45f : 0.95f;
+				LoadingProgressReporter.Report(activationProgress, "Activating scene...");
 				yield return null;
 			}
 			stopwatch.Stop();
@@ -79,10 +96,15 @@ namespace UserInterface.MainMenu
 			yield return new WaitForSeconds(_waitTime);
 
 			if (loadingWorld)
-
+			{
+				LoadingProgressReporter.Report(0.5f, "Initializing world systems...");
 				GameStateManager.ReadiedPlayer += DisableUI;
+			}
 			else
+			{
+				LoadingProgressReporter.End("Scene ready");
 				_loadingUI.SetActive(false);
+			}
 		}
 
 		public void LoadWorldScene(int sceneIndex)
@@ -95,9 +117,32 @@ namespace UserInterface.MainMenu
 			_tooltipText.text = _toolTips[UnityEngine.Random.Range(0,_toolTips.Length)];
 		}
 
+		private void HandleProgressUpdated(float progress01, string status)
+		{
+			if (_progressFillImage != null)
+				_progressFillImage.fillAmount = progress01;
+
+			if (_progressPercentText != null)
+				_progressPercentText.text = $"{Mathf.RoundToInt(progress01 * 100f)}%";
+
+			if (_statusText != null)
+				_statusText.text = status;
+		}
+
 		private void Awake()
 		{
 			DontDestroyOnLoad(gameObject);
+			LoadingProgressReporter.Reset();
+		}
+
+		private void OnEnable()
+		{
+			LoadingProgressReporter.OnProgressUpdated += HandleProgressUpdated;
+		}
+
+		private void OnDisable()
+		{
+			LoadingProgressReporter.OnProgressUpdated -= HandleProgressUpdated;
 		}
 	}
 }
