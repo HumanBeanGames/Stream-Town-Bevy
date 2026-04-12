@@ -19,13 +19,13 @@ namespace World.Generation
 		public float Lacunarity;
 		public int Seed;
 		public Vector2 Offset;
-		public float MeshHeightMultiplier;
-		public AnimationCurve MeshHeightCurve;
+		[Range(0, 1)]
+		public float SpawnThreshold = 0.5f;
 		public float[,] HeightMap;
 		public int Spacing;
 
 		// Constructor.
-		public GenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float meshHeightMultiplier, AnimationCurve meshHeightCurve)
+		public GenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f)
 		{
 			Size = size;
 			LevelOfDetail = levelOfDetail;
@@ -35,8 +35,7 @@ namespace World.Generation
 			Lacunarity = lacunarity;
 			Seed = seed;
 			Offset = offset;
-			MeshHeightMultiplier = meshHeightMultiplier;
-			MeshHeightCurve = meshHeightCurve;
+			SpawnThreshold = spawnThreshold;
 			HeightMap = new float[size, size];
 			Spacing = 0;
 		}

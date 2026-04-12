@@ -175,12 +175,6 @@ MonoBehaviour:
   - Name: GoblinBoss
     PoolAmount: 10
     Prefab: {fileID: 6302278620436083057, guid: 0fdd8eef430847043be381ebd7cde251, type: 3}
-  - Name: Tree
-    PoolAmount: 2000
-    Prefab: {fileID: 5335933013444573462, guid: f3edecc4dd1cc6343a639fc6171db1c1, type: 3}
-  - Name: Ore
-    PoolAmount: 2000
-    Prefab: {fileID: 5335933013444573462, guid: 6c872bdb83272ea4298459dc33e0c586, type: 3}
   - Name: Barracks
     PoolAmount: 100
     Prefab: {fileID: 1646107014754319142, guid: d328965b41e5e034790ca7b07c78d3bf, type: 3}
@@ -265,75 +259,12 @@ MonoBehaviour:
   - Name: Skeleton
     PoolAmount: 25
     Prefab: {fileID: 6302278620436083057, guid: 7254c88085621fe4e9eb640ea7b86ebb, type: 3}
-  - Name: GrassLong1
-    PoolAmount: 20000
-    Prefab: {fileID: 6287124599600722666, guid: 7032750c36cd54845b51b7c07ac08559, type: 3}
-  - Name: GrassLong2
-    PoolAmount: 20000
-    Prefab: {fileID: 2373752666909461642, guid: f7452860a51eb2c4bb4f506d097fbc6f, type: 3}
-  - Name: GrassLong3
-    PoolAmount: 1000
-    Prefab: {fileID: 799186213337121970, guid: c2353dd0124c8ea408e3d7d8e5e66d88, type: 3}
-  - Name: GrassShort1
-    PoolAmount: 1000
-    Prefab: {fileID: 8657957162969850146, guid: 76e8cb4141c7a1d4bbde5cc25be9eb97, type: 3}
-  - Name: GrassShort2
-    PoolAmount: 1000
-    Prefab: {fileID: 6584601004886922013, guid: cd2b0641e0a4a40478529980b4f28bdb, type: 3}
-  - Name: GrassShort3
-    PoolAmount: 1000
-    Prefab: {fileID: 3798791200673257597, guid: fe61db58ddd2be740ad392ba57cefdf4, type: 3}
-  - Name: Flower1
-    PoolAmount: 100
-    Prefab: {fileID: 2906421926074206128, guid: d4f2e7a5596f2224ba13f68f01b4b527, type: 3}
-  - Name: Flower2
-    PoolAmount: 100
-    Prefab: {fileID: 8766681008813830436, guid: 454dfb5e4ce93834e873eb46433964dd, type: 3}
-  - Name: Flower3
-    PoolAmount: 100
-    Prefab: {fileID: 852767920749898040, guid: 22797cb380bdcdf46b8c235d8e9e779e, type: 3}
-  - Name: Flower4
-    PoolAmount: 100
-    Prefab: {fileID: 384416365852251036, guid: d7c66daf25747e54dbe50b9126367bc5, type: 3}
-  - Name: Flower5
-    PoolAmount: 100
-    Prefab: {fileID: 6404719194734222344, guid: bc6693f03c5705340b4d7162260bf0c3, type: 3}
-  - Name: Flower6
-    PoolAmount: 100
-    Prefab: {fileID: 8658129952497061034, guid: 26d395687c1485b4cabced56727b8927, type: 3}
   - Name: EnemyCamp_Goblin
     PoolAmount: 5
     Prefab: {fileID: 929999387371180219, guid: 748f932d9c2961a4ebef254f29adb0d5, type: 3}
   - Name: Fish
     PoolAmount: 50
     Prefab: {fileID: 5335933013444573462, guid: 87408126c7d21c046ae7350088432fa1, type: 3}
-  - Name: CoralBrown1
-    PoolAmount: 25
-    Prefab: {fileID: 4006496437794705222, guid: ed0c95f4845fb8748bcdd38718605d4c, type: 3}
-  - Name: CoralBrown2
-    PoolAmount: 25
-    Prefab: {fileID: 5880107048012579566, guid: 8741005252e933546860b95793958723, type: 3}
-  - Name: CoralOrange1
-    PoolAmount: 25
-    Prefab: {fileID: 2972117571993122290, guid: c84bb57b801712946b5699e542e798c9, type: 3}
-  - Name: CoralOrange2
-    PoolAmount: 25
-    Prefab: {fileID: 6882355186239485227, guid: dba876f8a1f4c3346bb51ae4f1d2a7dc, type: 3}
-  - Name: CoralPurple1
-    PoolAmount: 25
-    Prefab: {fileID: 69580363242198755, guid: e4c8ff4ec743b0b4088a58b32b957b79, type: 3}
-  - Name: CoralPurple2
-    PoolAmount: 25
-    Prefab: {fileID: 3614472841403759440, guid: 6002528f36b116441ad8c1aef1f4f700, type: 3}
-  - Name: Seaweed1
-    PoolAmount: 50
-    Prefab: {fileID: 817191092120996715, guid: 72d080ab75edadd42a366c71febef19a, type: 3}
-  - Name: Seaweed2
-    PoolAmount: 50
-    Prefab: {fileID: 1343035355955277474, guid: 9f54f7e1389d50f45b3ea8cddaf53447, type: 3}
-  - Name: Seaweed3
-    PoolAmount: 50
-    Prefab: {fileID: 1128975199074787510, guid: a3bfb495464957541bc1aff3bebf3392, type: 3}
   - Name: BuildingPlacer
     PoolAmount: 15
     Prefab: {fileID: 4398971005381191997, guid: 440d7b6b8564c284988225d587495f15, type: 3}

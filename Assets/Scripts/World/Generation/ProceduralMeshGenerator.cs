@@ -14,8 +14,13 @@ namespace World.Generation
 		/// Generates Mesh Data from a GenerationSettings profile.
 		/// </summary>
 		/// <param name="settings"></param>
+		/// <param name="meshHeightMultiplier"></param>
+		/// <param name="meshHeightCurve"></param>
+		/// <param name="enableIslandBias"></param>
+		/// <param name="islandBiasCurve"></param>
+		/// <param name="islandSize"></param>
 		/// <returns></returns>
-		public static MeshData GenerateTerrainMeshData(GenerationSettings settings)
+		public static MeshData GenerateTerrainMeshData(GenerationSettings settings, float meshHeightMultiplier, AnimationCurve meshHeightCurve, bool enableIslandBias = false, AnimationCurve islandBiasCurve = null, float islandSize = 150f)
 		{
 			float[,] noiseMap = Noise.GenerateNoiseMap(settings);
 
@@ -46,8 +51,23 @@ namespace World.Generation
 			{
 				for (int x = 0; x < settings.Size; x += meshSimplificationIncrement)
 				{
-					settings.HeightMap[x, y] = settings.MeshHeightCurve.Evaluate(noiseMap[x, y]);
-					meshData.Vertices[vertexIndex] = new Vector3(topLeftX + x, settings.HeightMap[x, y] * settings.MeshHeightMultiplier, topLeftZ - y);
+					float height = meshHeightCurve.Evaluate(noiseMap[x, y]);
+
+					// Apply island bias if enabled
+					if (enableIslandBias && islandBiasCurve != null)
+					{
+						Vector3 vertexPosition = new Vector3(topLeftX + x, 0, topLeftZ - y);
+						float distanceFromOrigin = vertexPosition.magnitude;
+						float normalizedDistance = Mathf.Clamp01(distanceFromOrigin / islandSize);
+						float bias = islandBiasCurve.Evaluate(normalizedDistance);
+						height *= bias;
+					}
+
+					// Quantize height to nearest integer unit
+					height = Mathf.Round(height * 10) / 10;
+
+					settings.HeightMap[x, y] = height;
+					meshData.Vertices[vertexIndex] = new Vector3(topLeftX + x, height * meshHeightMultiplier, topLeftZ - y);
 					meshData.UVs[vertexIndex] = new Vector2(x / (float)settings.Size, y / (float)settings.Size);
 					if (x < settings.Size - 1 && y < settings.Size - 1)
 					{
@@ -61,7 +81,7 @@ namespace World.Generation
 			return meshData;
 		}
 
-		public static IEnumerator GenerateTerrainMeshDataCoroutine(GenerationSettings settings, float frameBudgetSeconds, Action<MeshData> onComplete)
+		public static IEnumerator GenerateTerrainMeshDataCoroutine(GenerationSettings settings, float meshHeightMultiplier, AnimationCurve meshHeightCurve, float frameBudgetSeconds, Action<MeshData> onComplete, bool enableIslandBias = false, AnimationCurve islandBiasCurve = null, float islandSize = 150f)
 		{
 			float[,] noiseMap = null;
 			yield return Noise.GenerateNoiseMapCoroutine(settings, frameBudgetSeconds, result => noiseMap = result);
@@ -100,8 +120,23 @@ namespace World.Generation
 			{
 				for (int x = 0; x < settings.Size; x += meshSimplificationIncrement)
 				{
-					settings.HeightMap[x, y] = settings.MeshHeightCurve.Evaluate(noiseMap[x, y]);
-					meshData.Vertices[vertexIndex] = new Vector3(topLeftX + x, settings.HeightMap[x, y] * settings.MeshHeightMultiplier, topLeftZ - y);
+					float height = meshHeightCurve.Evaluate(noiseMap[x, y]);
+
+					// Apply island bias if enabled
+					if (enableIslandBias && islandBiasCurve != null)
+					{
+						Vector3 vertexPosition = new Vector3(topLeftX + x, 0, topLeftZ - y);
+						float distanceFromOrigin = vertexPosition.magnitude;
+						float normalizedDistance = Mathf.Clamp01(distanceFromOrigin / islandSize);
+						float bias = islandBiasCurve.Evaluate(normalizedDistance);
+						height *= bias;
+					}
+
+					// Quantize height to nearest integer unit
+					height = Mathf.Round(height * 10) / 10;
+
+					settings.HeightMap[x, y] = height;
+					meshData.Vertices[vertexIndex] = new Vector3(topLeftX + x, height * meshHeightMultiplier, topLeftZ - y);
 					meshData.UVs[vertexIndex] = new Vector2(x / (float)settings.Size, y / (float)settings.Size);
 
 					if (x < settings.Size - 1 && y < settings.Size - 1)

@@ -17,7 +17,7 @@ namespace World.Generation
 		public int CampSize = 10;
 
 		// Constructor.
-		public CampGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float meshHeightMultiplier, AnimationCurve meshHeightCurve) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, meshHeightMultiplier, meshHeightCurve)
+		public CampGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, spawnThreshold)
 		{
 			Size = size;
 			LevelOfDetail = levelOfDetail;
@@ -27,8 +27,7 @@ namespace World.Generation
 			Lacunarity = lacunarity;
 			Seed = seed;
 			Offset = offset;
-			MeshHeightMultiplier = meshHeightMultiplier;
-			MeshHeightCurve = meshHeightCurve;
+			SpawnThreshold = spawnThreshold;
 			HeightMap = new float[size, size];
 		}
 

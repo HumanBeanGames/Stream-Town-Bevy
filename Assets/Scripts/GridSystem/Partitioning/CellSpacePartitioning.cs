@@ -175,6 +175,193 @@ namespace GridSystem.Partitioning
 		/// <returns></returns>
 		public BSPCell[] GetCells() { return _cells.ToArray(); }
 
+		/// <summary>
+		/// Populates cell indices from ResourceManager resource arrays.
+		/// Call this after world generation to enable efficient resource lookups.
+		/// </summary>
+		public void PopulateResourceIndices(GameResources.ResourceManager resourceManager)
+		{
+			if (resourceManager == null)
+				return;
+
+			// Clear existing resource indices
+			for (int i = 0; i < _cells.Count; i++)
+			{
+				_cells[i].WoodResourceIndices = new List<int>();
+				_cells[i].OreResourceIndices = new List<int>();
+				_cells[i].FoodResourceIndices = new List<int>();
+				_cells[i].GoldResourceIndices = new List<int>();
+				_cells[i].RecruitResourceIndices = new List<int>();
+			}
+
+			// Populate wood resource indices
+			var woodResourcesDict = resourceManager.GetWoodResources();
+			List<GameResources.ResourceData> woodResources = new List<GameResources.ResourceData>();
+			foreach (var kvp in woodResourcesDict)
+			{
+				woodResources.AddRange(kvp.Value);
+			}
+			for (int i = 0; i < woodResources.Count; i++)
+			{
+				int cellIndex = PositionToIndex(woodResources[i].Position);
+				if (cellIndex >= 0 && cellIndex < _cells.Count)
+				{
+					_cells[cellIndex].WoodResourceIndices.Add(i);
+				}
+			}
+
+			// Populate ore resource indices
+			var oreResourcesDict = resourceManager.GetOreResources();
+			List<GameResources.ResourceData> oreResources = new List<GameResources.ResourceData>();
+			foreach (var kvp in oreResourcesDict)
+			{
+				oreResources.AddRange(kvp.Value);
+			}
+			for (int i = 0; i < oreResources.Count; i++)
+			{
+				int cellIndex = PositionToIndex(oreResources[i].Position);
+				if (cellIndex >= 0 && cellIndex < _cells.Count)
+				{
+					_cells[cellIndex].OreResourceIndices.Add(i);
+				}
+			}
+
+			// Populate food resource indices
+			var foodResourcesDict = resourceManager.GetFoodResources();
+			List<GameResources.ResourceData> foodResources = new List<GameResources.ResourceData>();
+			foreach (var kvp in foodResourcesDict)
+			{
+				foodResources.AddRange(kvp.Value);
+			}
+			for (int i = 0; i < foodResources.Count; i++)
+			{
+				int cellIndex = PositionToIndex(foodResources[i].Position);
+				if (cellIndex >= 0 && cellIndex < _cells.Count)
+				{
+					_cells[cellIndex].FoodResourceIndices.Add(i);
+				}
+			}
+
+			// Populate gold resource indices
+			var goldResourcesDict = resourceManager.GetGoldResources();
+			List<GameResources.ResourceData> goldResources = new List<GameResources.ResourceData>();
+			foreach (var kvp in goldResourcesDict)
+			{
+				goldResources.AddRange(kvp.Value);
+			}
+			for (int i = 0; i < goldResources.Count; i++)
+			{
+				int cellIndex = PositionToIndex(goldResources[i].Position);
+				if (cellIndex >= 0 && cellIndex < _cells.Count)
+				{
+					_cells[cellIndex].GoldResourceIndices.Add(i);
+				}
+			}
+
+			// Populate recruit resource indices
+			var recruitResourcesDict = resourceManager.GetRecruitResources();
+			List<GameResources.ResourceData> recruitResources = new List<GameResources.ResourceData>();
+			foreach (var kvp in recruitResourcesDict)
+			{
+				recruitResources.AddRange(kvp.Value);
+			}
+			for (int i = 0; i < recruitResources.Count; i++)
+			{
+				int cellIndex = PositionToIndex(recruitResources[i].Position);
+				if (cellIndex >= 0 && cellIndex < _cells.Count)
+				{
+					_cells[cellIndex].RecruitResourceIndices.Add(i);
+				}
+			}
+		}
+
+		/// <summary>
+		/// Gets all resources of a specific type within a radius of a position.
+		/// Returns the actual ResourceData objects, not just indices.
+		/// </summary>
+		public void GetResourcesInRange(global::Utils.Resource resourceType, Vector3 position, float radius, GameResources.ResourceManager resourceManager, ref List<GameResources.ResourceData> resources)
+		{
+			if (resourceManager == null)
+				return;
+
+			List<BSPCell> cells = new List<BSPCell>();
+			GetCellsInRange(position, radius, ref cells);
+
+			List<GameResources.ResourceData> resourceList = new List<GameResources.ResourceData>();
+			Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> resourceDict = null;
+
+			switch (resourceType)
+			{
+				case global::Utils.Resource.Wood:
+					resourceDict = resourceManager.GetWoodResources();
+					break;
+				case global::Utils.Resource.Ore:
+					resourceDict = resourceManager.GetOreResources();
+					break;
+				case global::Utils.Resource.Food:
+					resourceDict = resourceManager.GetFoodResources();
+					break;
+				case global::Utils.Resource.Gold:
+					resourceDict = resourceManager.GetGoldResources();
+					break;
+				case global::Utils.Resource.Recruit:
+					resourceDict = resourceManager.GetRecruitResources();
+					break;
+				default:
+					return;
+			}
+
+			foreach (var kvp in resourceDict)
+			{
+				resourceList.AddRange(kvp.Value);
+			}
+
+			GameResources.ResourceData[] resourceArray = resourceList.ToArray();
+
+			for (int i = 0; i < cells.Count; i++)
+			{
+				List<int> indices = GetResourceIndicesForCell(cells[i], resourceType);
+				if (indices != null && resourceArray != null)
+				{
+					for (int j = 0; j < indices.Count; j++)
+					{
+						int index = indices[j];
+						if (index >= 0 && index < resourceArray.Length)
+						{
+							GameResources.ResourceData resource = resourceArray[index];
+							float distance = Vector3.Distance(position, resource.Position);
+							if (distance <= radius)
+							{
+								resources.Add(resource);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		/// <summary>
+		/// Gets the resource indices for a specific resource type from a cell.
+		/// </summary>
+		private List<int> GetResourceIndicesForCell(BSPCell cell, global::Utils.Resource resourceType)
+		{
+			switch (resourceType)
+			{
+				case global::Utils.Resource.Wood:
+					return cell.WoodResourceIndices;
+				case global::Utils.Resource.Ore:
+					return cell.OreResourceIndices;
+				case global::Utils.Resource.Food:
+					return cell.FoodResourceIndices;
+				case global::Utils.Resource.Gold:
+					return cell.GoldResourceIndices;
+				case global::Utils.Resource.Recruit:
+					return cell.RecruitResourceIndices;
+				default:
+					return null;
+			}
+		}
+
 		// Unity Functions.
 		private void Awake()
 		{

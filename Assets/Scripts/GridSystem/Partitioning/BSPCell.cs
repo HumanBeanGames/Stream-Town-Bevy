@@ -13,6 +13,13 @@ namespace GridSystem.Partitioning
 	{
 		public List<Targetable>[] _targetArray;
 
+		// Resource index storage for data-driven resource system
+		public List<int> WoodResourceIndices;
+		public List<int> OreResourceIndices;
+		public List<int> FoodResourceIndices;
+		public List<int> GoldResourceIndices;
+		public List<int> RecruitResourceIndices;
+
 		public Vector2 TopLeft;
 		public Vector2 BottomRight;
 		public Vector2 Center;

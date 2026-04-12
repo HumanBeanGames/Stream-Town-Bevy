@@ -17,12 +17,12 @@ namespace Utils
         /// <returns></returns>
         public static float[,] GenerateNoiseMap(GenerationSettings generationSettings)
         {
-            return GenerateNoiseMap(generationSettings.Size, generationSettings.Size, generationSettings.Seed, generationSettings.NoiseScale, generationSettings.Octaves, generationSettings.Persistance, generationSettings.Lacunarity, generationSettings.Offset, generationSettings.MeshHeightMultiplier);
+            return GenerateNoiseMap(generationSettings.Size, generationSettings.Size, generationSettings.Seed, generationSettings.NoiseScale, generationSettings.Octaves, generationSettings.Persistance, generationSettings.Lacunarity, generationSettings.Offset);
         }
 
         public static IEnumerator GenerateNoiseMapCoroutine(GenerationSettings generationSettings, float frameBudgetSeconds, Action<float[,]> onComplete)
         {
-            yield return GenerateNoiseMapCoroutine(generationSettings.Size, generationSettings.Size, generationSettings.Seed, generationSettings.NoiseScale, generationSettings.Octaves, generationSettings.Persistance, generationSettings.Lacunarity, generationSettings.Offset, frameBudgetSeconds, onComplete, generationSettings.MeshHeightMultiplier);
+            yield return GenerateNoiseMapCoroutine(generationSettings.Size, generationSettings.Size, generationSettings.Seed, generationSettings.NoiseScale, generationSettings.Octaves, generationSettings.Persistance, generationSettings.Lacunarity, generationSettings.Offset, frameBudgetSeconds, onComplete);
         }
 
         /// <summary>

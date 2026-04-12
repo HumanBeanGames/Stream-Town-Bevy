@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using Utils;
 
@@ -10,10 +11,19 @@ namespace World.Generation
 	public class ResourceGenerationSettings : GenerationSettings
 	{
 		public TargetMask TargetType;
-		public string PoolName;
 
-		public ResourceGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float meshHeightMultiplier, AnimationCurve meshHeightCurve)
-			: base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, meshHeightMultiplier, meshHeightCurve)
+		public List<Mesh> Meshes;
+		public List<Material> Materials;
+
+		[Header("Distance-Based Amount Settings")]
+		public bool SetByDistance = false;
+		public AnimationCurve AmountCurve;
+		public int MinAmount = 50;
+		public int MaxAmount = 100;
+		public int MaxDistance = 150;
+
+		public ResourceGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f, List<Mesh> meshes = null, List<Material> materials = null)
+			: base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, spawnThreshold)
 		{
 			Size = size;
 			LevelOfDetail = levelOfDetail;
@@ -23,18 +33,10 @@ namespace World.Generation
 			Lacunarity = lacunarity;
 			Seed = seed;
 			Offset = offset;
-			MeshHeightMultiplier = meshHeightMultiplier;
-			MeshHeightCurve = meshHeightCurve;
+			SpawnThreshold = spawnThreshold;
+			Meshes = meshes ?? new List<Mesh>();
+			Materials = materials ?? new List<Material>();
 			HeightMap = new float[size, size];
-		}
-
-		/// <summary>
-		/// Returns the name of the Pooled Object from the Generation Settings
-		/// </summary>
-		/// <returns></returns>
-		public override string GetPoolName()
-		{
-			return PoolName;
 		}
 	}
 }

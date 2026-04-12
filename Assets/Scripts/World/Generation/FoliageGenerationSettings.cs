@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace World.Generation
@@ -8,10 +9,11 @@ namespace World.Generation
 	[System.Serializable]
 	public class FoliageGenerationSettings : GenerationSettings
 	{
-		public string[] PoolNames;
+		public List<Mesh> Meshes;
+		public Material Material;
 
 		// Constructor.
-		public FoliageGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float meshHeightMultiplier, AnimationCurve meshHeightCurve) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, meshHeightMultiplier, meshHeightCurve)
+		public FoliageGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f, List<Mesh> meshes = null, Material material = null) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, spawnThreshold)
 		{
 			Size = size;
 			LevelOfDetail = levelOfDetail;
@@ -21,19 +23,10 @@ namespace World.Generation
 			Lacunarity = lacunarity;
 			Seed = seed;
 			Offset = offset;
-			MeshHeightMultiplier = meshHeightMultiplier;
-			MeshHeightCurve = meshHeightCurve;
+			SpawnThreshold = spawnThreshold;
+			Meshes = meshes ?? new List<Mesh>();
+			Material = material;
 			HeightMap = new float[size, size];
-		}
-
-		/// <summary>
-		/// Returns a random pooled name.
-		/// </summary>
-		/// <returns></returns>
-		public override string GetPoolName()
-		{
-			// TODO: This might need to change.
-			return PoolNames[Random.Range(0, PoolNames.Length)];
 		}
 	}
 }
