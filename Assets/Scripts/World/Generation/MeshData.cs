@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace World.Generation
 {
@@ -8,17 +10,35 @@ namespace World.Generation
 	[System.Serializable]
 	public class MeshData
 	{
-		public Vector3[] Vertices;
-		public int[] Triangles;
-		public Vector2[] UVs;
-		int TriangleIndex;
+		public List<Vector3> Vertices;
+		public List<int> Triangles;
+		public List<Vector2> UVs;
 
-		// Constructor.
+		// Constructor for dynamic allocation (voxel terrain).
+		public MeshData()
+		{
+			Vertices = new List<Vector3>();
+			Triangles = new List<int>();
+			UVs = new List<Vector2>();
+		}
+
+		// Constructor for fixed allocation (legacy terrain).
 		public MeshData(int width, int height)
 		{
-			Vertices = new Vector3[width * height];
-			UVs = new Vector2[width * height];
-			Triangles = new int[(height - 1) * (height - 1) * 6];
+			Vertices = new List<Vector3>(width * height);
+			UVs = new List<Vector2>(width * height);
+			Triangles = new List<int>((height - 1) * (height - 1) * 6);
+		}
+
+		/// <summary>
+		/// Adds a vertex to the mesh and returns its index.
+		/// </summary>
+		public int AddVertex(Vector3 vertex, Vector2 uv)
+		{
+			int index = Vertices.Count;
+			Vertices.Add(vertex);
+			UVs.Add(uv);
+			return index;
 		}
 
 		/// <summary>
@@ -29,10 +49,9 @@ namespace World.Generation
 		/// <param name="c"></param>
 		public void AddTriangle(int a, int b, int c)
 		{
-			Triangles[TriangleIndex] = a;
-			Triangles[TriangleIndex + 1] = b;
-			Triangles[TriangleIndex + 2] = c;
-			TriangleIndex += 3;
+			Triangles.Add(a);
+			Triangles.Add(b);
+			Triangles.Add(c);
 		}
 
 		/// <summary>
@@ -42,9 +61,11 @@ namespace World.Generation
 		public Mesh CreateMesh()
 		{
 			Mesh mesh = new Mesh();
-			mesh.vertices = Vertices;
-			mesh.triangles = Triangles;
-			mesh.uv = UVs;
+			if (Vertices.Count > 65535)
+				mesh.indexFormat = IndexFormat.UInt32;
+			mesh.vertices = Vertices.ToArray();
+			mesh.triangles = Triangles.ToArray();
+			mesh.uv = UVs.ToArray();
 			mesh.RecalculateNormals();
 			return mesh;
 		}

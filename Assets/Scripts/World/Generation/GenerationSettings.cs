@@ -21,6 +21,12 @@ namespace World.Generation
 		public Vector2 Offset;
 		[Range(0, 1)]
 		public float SpawnThreshold = 0.5f;
+		[Header("Spawn Bias")]
+		public bool EnableSpawnBias = false;
+		public AnimationCurve SpawnBiasCurve = AnimationCurve.Linear(0f, 1f, 1f, 0f);
+		public float SpawnBiasMultiplier = 1f;
+		public float SpawnBiasAddition = 0f;
+		public float SpawnBiasMaxDistance = 150f;
 		public float[,] HeightMap;
 		public int Spacing;
 

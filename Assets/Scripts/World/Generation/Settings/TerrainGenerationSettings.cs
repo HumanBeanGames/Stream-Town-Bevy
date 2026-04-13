@@ -22,6 +22,19 @@ namespace World.Generation.Settings
 		private AnimationCurve _islandBiasCurve = new AnimationCurve(new Keyframe(0, 1), new Keyframe(1, 0));
 		[SerializeField]
 		private float _islandSize = 150f;
+		[SerializeField]
+		private float _islandMultiplier = 1f;
+		[SerializeField]
+		private float _islandAddition = 0f;
+
+		[Header("Height Quantization")]
+		[SerializeField]
+		private float _quantizationFactor = 0.1f;
+
+		[Header("Mesh Settings")]
+		[SerializeField]
+		[Range(0, 1)]
+		private float _topFaceProportion = 1f;
 
 		public GenerationSettings GenerationSettings => _generationSettings;
 		public float MeshHeightMultiplier => _meshHeightMultiplier;
@@ -29,5 +42,9 @@ namespace World.Generation.Settings
 		public bool EnableIslandBias => _enableIslandBias;
 		public AnimationCurve IslandBiasCurve => _islandBiasCurve;
 		public float IslandSize => _islandSize;
+		public float IslandMultiplier => _islandMultiplier;
+		public float IslandAddition => _islandAddition;
+		public float QuantizationFactor => _quantizationFactor;
+		public float TopFaceProportion => _topFaceProportion;
 	}
 }

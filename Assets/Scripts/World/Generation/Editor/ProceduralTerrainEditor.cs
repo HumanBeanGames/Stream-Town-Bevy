@@ -39,6 +39,23 @@ namespace World.Generation
 				GUILayout.FlexibleSpace();
 			}
 			GUILayout.EndHorizontal();
+
+			GUILayout.Space(10);
+			EditorGUILayout.LabelField("Runtime Regeneration", EditorStyles.boldLabel);
+			EditorGUILayout.HelpBox("These buttons are intended for Play Mode testing.", MessageType.Info);
+
+			using (new EditorGUI.DisabledScope(!Application.isPlaying))
+			{
+				if (GUILayout.Button("Regenerate Terrain + World (Runtime)"))
+				{
+					_t.RegenerateTerrainAndWorldRuntime();
+				}
+
+				if (GUILayout.Button("Regenerate Resources + Foliage (Runtime)"))
+				{
+					_t.RegenerateResourcesAndFoliageRuntime();
+				}
+			}
 		}
 	}
 }

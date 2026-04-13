@@ -15,14 +15,19 @@ MonoBehaviour:
   version: 4
 --- !u!21 &2100000
 Material:
-  serializedVersion: 6
+  serializedVersion: 8
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: Env_Water
   m_Shader: {fileID: 4800000, guid: 79273c581d7f57a4aa81caced760bfbd, type: 3}
-  m_ShaderKeywords: _ALPHAPREMULTIPLY_ON _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A
+  m_InvalidKeywords:
+  - _ALPHAPREMULTIPLY_ON
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
@@ -30,6 +35,7 @@ Material:
   stringTagMap: {}
   disabledShaderPasses:
   - SHADOWCASTER
+  m_LockedProperties: 
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
@@ -121,6 +127,7 @@ Material:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
+    m_Ints: []
     m_Floats:
     - _Alpha: 0.5
     - _AlphaClip: 0
@@ -137,7 +144,7 @@ Material:
     - _Distortion: 0.2
     - _DstBlend: 10
     - _EdgeFoamScale: 3.71
-    - _EdgePower: 0.92
+    - _EdgePower: 0.8
     - _EnvironmentReflections: 1
     - _Float1: 0.82
     - _FoamAlpha: 0.4
@@ -192,7 +199,7 @@ Material:
     - _DeepColour: {r: 0.036845837, g: 0.5289748, b: 0.8679245, a: 0.6117647}
     - _DepthSmoothStep: {r: -0.08, g: 2, b: 0, a: 0}
     - _Direction: {r: 1, g: 0, b: 0, a: 0}
-    - _EdgeFoamColor: {r: 0, g: 0.5510723, b: 0.6981132, a: 1}
+    - _EdgeFoamColor: {r: 0.764151, g: 0.764151, b: 0.764151, a: 1}
     - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
     - _FoamColor: {r: 1, g: 1, b: 1, a: 1}
     - _IceColor: {r: 0.79716986, g: 0.9271079, b: 1, a: 1}
@@ -210,3 +217,4 @@ Material:
     - _WindDirection: {r: 1, g: 0, b: 0, a: 0}
     - _windDirection: {r: 1, g: 0, b: 0, a: 0}
   m_BuildTextureStacks: []
+  m_AllowLocking: 1

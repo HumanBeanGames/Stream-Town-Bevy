@@ -100,6 +100,16 @@ MonoBehaviour:
     Seed: 3
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0.9
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
     TargetType: 32
     Meshes: []
@@ -168,6 +178,16 @@ MonoBehaviour:
     Seed: 41
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0.5
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
     Meshes:
     - {fileID: 8058893416945980758, guid: 282869ff8138a3543b4d70b92c7af851, type: 3}
@@ -192,6 +212,16 @@ MonoBehaviour:
     Seed: 0
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0.8
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
     Meshes:
     - {fileID: -8395620281344906741, guid: 081ad282345aaf74e9922498c2c37498, type: 3}
@@ -255,6 +285,16 @@ MonoBehaviour:
     Seed: 0
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 0
     PoolName: EnemyCamp_Goblin
     MaxBounds: {x: 120, y: 120}
@@ -406,10 +446,56 @@ MonoBehaviour:
     Octaves: 2
     Persistance: 0.856
     Lacunarity: 4.5
-    Seed: 146
-    Offset: {x: 0, y: 0}
-    SpawnThreshold: 0.3
-    Spacing: 3
+    Seed: -1647153886
+    Offset: {x: 217.08092, y: 143.10258}
+    SpawnThreshold: 0.8
+    EnableSpawnBias: 1
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0.011569573
+        outSlope: 0.011569573
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0.28907564
+      - serializedVersion: 3
+        time: 0.0854907
+        value: 0.3010296
+        inSlope: 0.76918644
+        outSlope: 0.76918644
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0.0858768
+        outWeight: 0.06081456
+      - serializedVersion: 3
+        time: 0.93889797
+        value: 0.30288112
+        inSlope: -0.799271
+        outSlope: -0.799271
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0.33333334
+        outWeight: 0.41920722
+      - serializedVersion: 3
+        time: 0.9999717
+        value: 0
+        inSlope: -1.60963
+        outSlope: 0
+        tangentMode: 1
+        weightedMode: 0
+        inWeight: 0.033442862
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0.5
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 120
+    Spacing: 2
     TargetType: 2
     Meshes:
     - {fileID: 2066449906497955686, guid: 21f5f8034410ae749be79a132937c8d4, type: 3}
@@ -450,10 +536,38 @@ MonoBehaviour:
     Octaves: 4
     Persistance: 1
     Lacunarity: 0
-    Seed: 16
-    Offset: {x: 0.5, y: 0.5}
-    SpawnThreshold: 0.8
-    Spacing: 2
+    Seed: -1647153885
+    Offset: {x: 484.52274, y: 538.78815}
+    SpawnThreshold: 1
+    EnableSpawnBias: 1
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 1
+    SpawnBiasAddition: -0.05
+    SpawnBiasMaxDistance: 50
+    Spacing: 1
     TargetType: 4
     Meshes:
     - {fileID: -7247785234928089179, guid: ca366f4b4544b8e4a90b5638c2a1a3bd, type: 3}
@@ -494,10 +608,182 @@ MonoBehaviour:
     Octaves: 4
     Persistance: 0.073
     Lacunarity: 1.88
-    Seed: 35
-    Offset: {x: 0.5, y: 0.5}
-    SpawnThreshold: 0.8
-    Spacing: 2
+    Seed: -1647153884
+    Offset: {x: 191.96455, y: 374.47375}
+    SpawnThreshold: 1
+    EnableSpawnBias: 1
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 1
+    SpawnBiasAddition: -0.05
+    SpawnBiasMaxDistance: 50
+    Spacing: 1
+    TargetType: 8
+    Meshes:
+    - {fileID: 6705514447628551469, guid: d5b51764072195245805ad1dc57736b6, type: 3}
+    - {fileID: 4087504312592355825, guid: d5b51764072195245805ad1dc57736b6, type: 3}
+    Materials:
+    - {fileID: 2100000, guid: 8e992643a4ebffc45b6fbd0fbd83d88c, type: 2}
+    SetByDistance: 0
+    AmountCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    MinAmount: 0
+    MaxAmount: 0
+    MaxDistance: 0
+  - Size: 280
+    LevelOfDetail: 0
+    NoiseScale: 8
+    Octaves: 4
+    Persistance: 1
+    Lacunarity: 0
+    Seed: -1647153883
+    Offset: {x: 459.40637, y: 210.1593}
+    SpawnThreshold: 1
+    EnableSpawnBias: 1
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0.037215535
+        outSlope: 0.037215535
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0.5661767
+      - serializedVersion: 3
+        time: 1
+        value: 0
+        inSlope: -1.3764458
+        outSlope: -1.3764458
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0.03706503
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 1
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 100
+    Spacing: 1
+    TargetType: 4
+    Meshes:
+    - {fileID: -7247785234928089179, guid: ca366f4b4544b8e4a90b5638c2a1a3bd, type: 3}
+    - {fileID: -3392365661791858705, guid: ca366f4b4544b8e4a90b5638c2a1a3bd, type: 3}
+    Materials:
+    - {fileID: 2100000, guid: fdfb0b9e62e356e46ae2218394e8fabc, type: 2}
+    SetByDistance: 0
+    AmountCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    MinAmount: 0
+    MaxAmount: 0
+    MaxDistance: 0
+  - Size: 280
+    LevelOfDetail: 0
+    NoiseScale: 6
+    Octaves: 4
+    Persistance: 0.073
+    Lacunarity: 1.88
+    Seed: -1647153882
+    Offset: {x: 166.8482, y: 605.84485}
+    SpawnThreshold: 1
+    EnableSpawnBias: 1
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0.037215535
+        outSlope: 0.037215535
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0.5661767
+      - serializedVersion: 3
+        time: 1
+        value: 0
+        inSlope: -1.3764458
+        outSlope: -1.3764458
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0.03706503
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 1
+    SpawnBiasAddition: 0.1
+    SpawnBiasMaxDistance: 100
+    Spacing: 1
     TargetType: 8
     Meshes:
     - {fileID: 6705514447628551469, guid: d5b51764072195245805ad1dc57736b6, type: 3}
@@ -580,14 +866,24 @@ MonoBehaviour:
     Size: 70
     LevelOfDetail: 0
     NoiseScale: 15
-    Octaves: 6
-    Persistance: 0.5
-    Lacunarity: 16.62
+    Octaves: 3
+    Persistance: 0.2
+    Lacunarity: 8
     Seed: -1747536282
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 0
-  _meshHeightMultiplier: 3
+  _meshHeightMultiplier: 4.5
   _meshHeightCurve:
     serializedVersion: 2
     m_Curve:
@@ -637,7 +933,11 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  _islandSize: 100
+  _islandSize: 40
+  _islandMultiplier: 0.6
+  _islandAddition: 0.3
+  _quantizationFactor: 0.25
+  _topFaceProportion: 0.7
 --- !u!1 &8319848312021957270
 GameObject:
   m_ObjectHideFlags: 0
@@ -756,6 +1056,16 @@ MonoBehaviour:
     Seed: 0
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0.9
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
     Meshes:
     - {fileID: 5491547353373078794, guid: c49b963036ccbf84885792f7a7a332bd, type: 3}

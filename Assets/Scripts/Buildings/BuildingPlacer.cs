@@ -23,6 +23,9 @@ namespace Buildings
         [SerializeField]
         private LayerMask _collisionMask;
 
+        [SerializeField]
+        private LayerMask _terrainMask;
+
         /// <summary>
         /// Holds all build data for each buildable building type.
         /// </summary>
@@ -214,10 +217,21 @@ namespace Buildings
             //    return false;
             //}
 
+            int terrainMask = _terrainMask.value == 0 ? LayerMask.GetMask("Ground") : _terrainMask;
+
+            Vector3 alignedPosition = transform.position;
+            if (Physics.Raycast(new Vector3(alignedPosition.x, 100, alignedPosition.z), Vector3.down, out RaycastHit terrainHit, 200, terrainMask))
+                alignedPosition.y = terrainHit.point.y;
+            else
+            {
+                errorMessage = "No terrain found!";
+                return false;
+            }
+
             // Get building from pooling manager and set it's position and rotation.
             PoolableObject obj = _poolingManager.GetPooledObject(_currentBuilding.BuildingType.ToString());
 
-            obj.transform.position = transform.position;
+            obj.transform.position = alignedPosition;
             obj.transform.rotation = transform.rotation;
             obj.gameObject.SetActive(true);
 
@@ -260,6 +274,15 @@ namespace Buildings
 
             if (_currentBuilding == null)
                 return;
+
+            int terrainMask = _terrainMask.value == 0 ? LayerMask.GetMask("Ground") : _terrainMask;
+
+            Vector3 alignedPosition = transform.position;
+            if (Physics.Raycast(new Vector3(alignedPosition.x, 100, alignedPosition.z), Vector3.down, out RaycastHit terrainHit, 200, terrainMask))
+            {
+                alignedPosition.y = terrainHit.point.y;
+                transform.position = alignedPosition;
+            }
 
             // Get the half extents of the building
             Vector3 halfExtents = Vector3.zero;

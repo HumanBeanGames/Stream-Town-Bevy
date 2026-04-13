@@ -40,6 +40,8 @@ namespace World.Generation
 
 		private bool _terrainCheckPassed;
 		private const int MAX_GENERATION_ATTEMPTS = 10;
+		private const int MAX_TOWNHALL_SPIRAL_RINGS = 24;
+		private bool _isEditorRegenerating;
 
 		[Inject] private WorldGeneratorDebugSettings _debugSettings;
 
@@ -79,12 +81,312 @@ namespace World.Generation
 		}
 		public void GenerateTerrain()
 		{
-			_generatedMesh = ProceduralMeshGenerator.CreateMesh(ProceduralMeshGenerator.GenerateTerrainMeshData(_terrainGenerationSettings.GenerationSettings, _terrainGenerationSettings.MeshHeightMultiplier, _terrainGenerationSettings.MeshHeightCurve, _terrainGenerationSettings.EnableIslandBias, _terrainGenerationSettings.IslandBiasCurve, _terrainGenerationSettings.IslandSize), gameObject);
+			GenerationSettings sourceSettings = _terrainGenerationSettings.GenerationSettings;
+			int scaledTerrainSize = GetScaledTerrainSize();
+
+			GenerationSettings meshSettings = new GenerationSettings(
+				scaledTerrainSize,
+				sourceSettings.LevelOfDetail,
+				sourceSettings.NoiseScale,
+				sourceSettings.Octaves,
+				sourceSettings.Persistance,
+				sourceSettings.Lacunarity,
+				sourceSettings.Seed,
+				sourceSettings.Offset,
+				sourceSettings.SpawnThreshold
+			);
+
+			meshSettings.Spacing = sourceSettings.Spacing;
+
+			_generatedMesh = ProceduralMeshGenerator.CreateMesh(ProceduralMeshGenerator.GenerateTerrainMeshData(meshSettings, _terrainGenerationSettings.MeshHeightMultiplier, _terrainGenerationSettings.MeshHeightCurve, _terrainGenerationSettings.EnableIslandBias, _terrainGenerationSettings.IslandBiasCurve, _terrainGenerationSettings.IslandSize, _terrainGenerationSettings.IslandMultiplier, _terrainGenerationSettings.IslandAddition, _terrainGenerationSettings.QuantizationFactor, _terrainGenerationSettings.TopFaceProportion), gameObject);
+		}
+
+		private int GetScaledTerrainSize()
+		{
+			float dominantScale = Mathf.Max(_scaleSettings.XScale, _scaleSettings.YScale);
+			return Mathf.Max(1, Mathf.RoundToInt(_terrainGenerationSettings.GenerationSettings.Size * dominantScale));
 		}
 
 		public void SetMesh(Mesh mesh)
 		{
 			_generatedMesh = ProceduralMeshGenerator.CreateMesh(mesh, gameObject);
+		}
+
+		private int GetTerrainMask()
+		{
+			return _layerSettings.TerrainMask.value == 0 ? LayerMask.GetMask("Ground") : _layerSettings.TerrainMask;
+		}
+
+		private bool TryGetTerrainHeight(Vector3 worldPosition, out float height)
+		{
+			height = 0;
+			int terrainMask = GetTerrainMask();
+			if (!Physics.Raycast(new Vector3(worldPosition.x, 100, worldPosition.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
+				return false;
+
+			height = hit.point.y;
+			return true;
+		}
+
+		private Vector3 GetSpawnBiasOrigin()
+		{
+			GameObject townhallObject = GetActiveTownhallObject();
+			return townhallObject == null ? Vector3.zero : townhallObject.transform.position;
+		}
+
+		private float GetSpawnNoiseValue(GenerationSettings settings, int mapX, int mapY, Vector3 position, Vector3 spawnBiasOrigin)
+		{
+			float noiseValue = settings.HeightMap[mapX, mapY];
+			if (!settings.EnableSpawnBias)
+				return noiseValue;
+
+			float maxDistance = Mathf.Max(0.001f, settings.SpawnBiasMaxDistance);
+			float distance = Vector2.Distance(new Vector2(position.x, position.z), new Vector2(spawnBiasOrigin.x, spawnBiasOrigin.z));
+			float normalizedDistance = Mathf.Clamp01(distance / maxDistance);
+			float bias = settings.SpawnBiasCurve.Evaluate(normalizedDistance) * settings.SpawnBiasMultiplier + settings.SpawnBiasAddition;
+			return noiseValue + bias;
+		}
+
+		private bool IsPositionOverlappingBuilding(Vector3 position, float horizontalHalfExtent)
+		{
+			if (_buildingManager == null)
+				return false;
+
+			Dictionary<BuildingType, List<Buildings.BuildingBase>> buildingsByType = _buildingManager.GetAllBuildingsDictionary();
+			if (buildingsByType == null)
+				return false;
+
+			Bounds spawnBounds = new Bounds(position, new Vector3(horizontalHalfExtent * 2f, 8f, horizontalHalfExtent * 2f));
+
+			foreach (var kvp in buildingsByType)
+			{
+				List<Buildings.BuildingBase> buildingList = kvp.Value;
+				if (buildingList == null)
+					continue;
+
+				for (int i = 0; i < buildingList.Count; i++)
+				{
+					Buildings.BuildingBase building = buildingList[i];
+					if (building == null || !building.gameObject.activeInHierarchy)
+						continue;
+
+					if (building.TryGetComponent(out BoxCollider buildingCollider))
+					{
+						if (buildingCollider.bounds.Intersects(spawnBounds))
+							return true;
+					}
+					else
+					{
+						float checkDistance = horizontalHalfExtent + 1f;
+						if (Mathf.Abs(building.transform.position.x - position.x) <= checkDistance && Mathf.Abs(building.transform.position.z - position.z) <= checkDistance)
+							return true;
+					}
+				}
+			}
+
+			return false;
+		}
+
+		private bool TryGetTownhallFootprintAABB(Vector3 townhallPosition, BoxCollider collider, out float minX, out float maxX, out float minZ, out float maxZ)
+		{
+			minX = maxX = minZ = maxZ = 0;
+			if (collider == null)
+				return false;
+
+			Vector3 colliderCenter = townhallPosition + new Vector3(collider.center.x, 0, collider.center.z);
+			Vector3 scaledSize = Vector3.Scale(collider.size, collider.transform.lossyScale);
+
+			float halfX = scaledSize.x * 0.5f;
+			float halfZ = scaledSize.z * 0.5f;
+
+			minX = colliderCenter.x - halfX;
+			maxX = colliderCenter.x + halfX;
+			minZ = colliderCenter.z - halfZ;
+			maxZ = colliderCenter.z + halfZ;
+			return true;
+		}
+
+		private bool TryGetFlatTownhallFootprintHeight(Vector3 townhallPosition, BoxCollider collider, out float flatHeight)
+		{
+			flatHeight = 0;
+			if (!TryGetTownhallFootprintAABB(townhallPosition, collider, out float minX, out float maxX, out float minZ, out float maxZ))
+				return false;
+
+			float spacing = Mathf.Max(1f, _terrainGenerationSettings.GenerationSettings.Spacing);
+			int sampleCountX = Mathf.Max(1, Mathf.CeilToInt((maxX - minX) / spacing));
+			int sampleCountZ = Mathf.Max(1, Mathf.CeilToInt((maxZ - minZ) / spacing));
+
+			bool hasHeight = false;
+			float firstHeight = 0;
+
+			for (int x = 0; x < sampleCountX; x++)
+			{
+				for (int z = 0; z < sampleCountZ; z++)
+				{
+					float sampleX = Mathf.Lerp(minX, maxX, (x + 0.5f) / sampleCountX);
+					float sampleZ = Mathf.Lerp(minZ, maxZ, (z + 0.5f) / sampleCountZ);
+					Vector3 samplePoint = new Vector3(sampleX, 0, sampleZ);
+
+					if (!IsPointWithinBounds(samplePoint))
+						return false;
+
+					if (!TryGetTerrainHeight(samplePoint, out float sampleHeight))
+						return false;
+
+					if (!hasHeight)
+					{
+						firstHeight = sampleHeight;
+						hasHeight = true;
+						continue;
+					}
+
+					if (sampleHeight != firstHeight)
+						return false;
+				}
+			}
+
+			flatHeight = firstHeight;
+			return true;
+		}
+
+		private IEnumerable<Vector2Int> GetSpiralOffsets(int maxRings)
+		{
+			yield return Vector2Int.zero;
+
+			for (int ring = 1; ring <= maxRings; ring++)
+			{
+				int x = ring;
+				int z = -ring + 1;
+
+				for (; z <= ring; z++)
+					yield return new Vector2Int(x, z);
+
+				x = ring - 1;
+				z = ring;
+				for (; x >= -ring; x--)
+					yield return new Vector2Int(x, z);
+
+				x = -ring;
+				z = ring - 1;
+				for (; z >= -ring; z--)
+					yield return new Vector2Int(x, z);
+
+				x = -ring + 1;
+				z = -ring;
+				for (; x <= ring; x++)
+					yield return new Vector2Int(x, z);
+			}
+		}
+
+		private bool TryFindTownhallPlacement(GameObject townhallObject, Vector3 origin, out Vector3 placement)
+		{
+			placement = origin;
+			if (townhallObject == null)
+				return false;
+
+			BoxCollider collider = townhallObject.GetComponent<BoxCollider>();
+			if (collider == null)
+			{
+				if (!TryGetTerrainHeight(origin, out float fallbackHeight))
+					return false;
+
+				placement = new Vector3(origin.x, fallbackHeight, origin.z);
+				return true;
+			}
+
+			float spacing = Mathf.Max(1f, _terrainGenerationSettings.GenerationSettings.Spacing);
+			foreach (Vector2Int offset in GetSpiralOffsets(MAX_TOWNHALL_SPIRAL_RINGS))
+			{
+				Vector3 candidate = origin + new Vector3(offset.x * spacing, 0, offset.y * spacing);
+				if (!TryGetFlatTownhallFootprintHeight(candidate, collider, out float flatHeight))
+					continue;
+
+				placement = new Vector3(candidate.x, flatHeight, candidate.z);
+				return true;
+			}
+
+			return false;
+		}
+
+		private GameObject GetActiveTownhallObject()
+		{
+			List<PoolableObject> activeTownhalls = _poolingManager.GetAllActivePooledObjectsOfType("Townhall");
+			if (activeTownhalls == null || activeTownhalls.Count == 0)
+				return null;
+
+			for (int i = 0; i < activeTownhalls.Count; i++)
+			{
+				SaveableBuilding saveable = activeTownhalls[i].SaveableObject as SaveableBuilding;
+				if (saveable != null && saveable.BuildingBase != null)
+					return saveable.BuildingBase.gameObject;
+			}
+
+			return null;
+		}
+
+		private void EnsureTownhallRegistered(Buildings.BuildingBase townhallBuilding)
+		{
+			if (townhallBuilding == null || _buildingManager == null)
+				return;
+
+			Dictionary<BuildingType, List<Buildings.BuildingBase>> buildingsByType = _buildingManager.GetAllBuildingsDictionary();
+			if (buildingsByType != null && buildingsByType.TryGetValue(townhallBuilding.BuildingType, out List<Buildings.BuildingBase> existingBuildings) && existingBuildings != null && existingBuildings.Contains(townhallBuilding))
+				return;
+
+			_buildingManager.AddLoadedBuilding(townhallBuilding);
+		}
+
+		private bool TryEnsureActiveTownhall(out GameObject townhallObject)
+		{
+			townhallObject = GetActiveTownhallObject();
+			if (townhallObject != null)
+				return true;
+
+			PoolableObject townhallPoolObject = _poolingManager.GetPooledObject("Townhall");
+			if (townhallPoolObject == null)
+				return false;
+
+			SaveableBuilding saveableTownhall = townhallPoolObject.SaveableObject as SaveableBuilding;
+			if (saveableTownhall == null || saveableTownhall.BuildingBase == null)
+				return false;
+
+			townhallObject = saveableTownhall.BuildingBase.gameObject;
+			if (TryFindTownhallPlacement(townhallObject, Vector3.zero, out Vector3 placement))
+				townhallObject.transform.position = placement;
+			else if (TryGetTerrainHeight(Vector3.zero, out float fallbackHeight))
+				townhallObject.transform.position = new Vector3(0, fallbackHeight, 0);
+
+			townhallObject.SetActive(true);
+			EnsureTownhallRegistered(saveableTownhall.BuildingBase);
+			return true;
+		}
+
+		private void RemoveTownhallOverlapsFromGeneratedData(List<GameResources.ResourceData> woodResources, List<GameResources.ResourceData> oreResources, List<GameResources.ResourceData> foodResources, List<GameResources.ResourceData> goldResources, List<GameResources.ResourceData> recruitResources, List<GameResources.FoliageData> onLandFoliage, List<GameResources.FoliageData> underWaterFoliage)
+		{
+			GameObject townhallObject = GetActiveTownhallObject();
+			if (townhallObject == null)
+				return;
+
+			BoxCollider collider = townhallObject.GetComponent<BoxCollider>();
+			if (collider == null)
+				return;
+
+			if (!TryGetTownhallFootprintAABB(townhallObject.transform.position, collider, out float minX, out float maxX, out float minZ, out float maxZ))
+				return;
+
+			bool IsInFootprint(Vector3 position)
+			{
+				return position.x >= minX && position.x <= maxX && position.z >= minZ && position.z <= maxZ;
+			}
+
+			woodResources?.RemoveAll(resource => IsInFootprint(resource.Position));
+			oreResources?.RemoveAll(resource => IsInFootprint(resource.Position));
+			foodResources?.RemoveAll(resource => IsInFootprint(resource.Position));
+			goldResources?.RemoveAll(resource => IsInFootprint(resource.Position));
+			recruitResources?.RemoveAll(resource => IsInFootprint(resource.Position));
+
+			onLandFoliage?.RemoveAll(foliage => IsInFootprint(foliage.Position));
+			underWaterFoliage?.RemoveAll(foliage => IsInFootprint(foliage.Position));
 		}
 
 		/// <summary>
@@ -173,10 +475,17 @@ namespace World.Generation
 		private IEnumerator GeneratePooledObjects(Action<float, string> progressReporter = null)
 		{
 			PoolableObject th = _poolingManager.GetPooledObject("Townhall");
-			GameObject thObj = ((SaveableBuilding)th.SaveableObject).BuildingBase.gameObject;
+			SaveableBuilding saveableTownhall = (SaveableBuilding)th.SaveableObject;
+			GameObject thObj = saveableTownhall.BuildingBase.gameObject;
 			thObj.transform.position = Vector3.zero;
+
+			if (TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 townhallPlacement))
+				thObj.transform.position = townhallPlacement;
+			else
+				Debug.LogWarning("ProceduralWorldGenerator: No valid flat townhall position found during ScanWorld; using origin fallback.", this);
+
 			thObj.SetActive(true);
-			_buildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
+			EnsureTownhallRegistered(saveableTownhall.BuildingBase);
 
 			yield return StartCoroutine(GeneratePooledObjectsExceptTownhall(progressReporter));
 		}
@@ -296,6 +605,8 @@ namespace World.Generation
 					yield return null;
 				}
 
+			RemoveTownhallOverlapsFromGeneratedData(woodResources, oreResources, foodResources, goldResources, recruitResources, onLandFoliage, underWaterFoliage);
+
 			if (_resourceManager != null)
 			{
 				// Collect mesh and material lists from resource generation settings by type
@@ -379,9 +690,9 @@ namespace World.Generation
 
 		private void GenerateFromSettings(GenerationSettings settings, ref int seed, ObjectPoolingManager poolManager, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision = true)
 		{
-			settings.Size = (_terrainGenerationSettings.GenerationSettings.Size * (int)_scaleSettings.XScale);
+			settings.Size = GetScaledTerrainSize();
 			settings.Seed = ++seed;
-			Vector3 colSize = Vector3.one * settings.Spacing * 0.45f;
+			settings.Offset = GetPositiveNoiseOffset(settings.Seed, settings.Size);
 			settings.HeightMap = Noise.GenerateNoiseMap(settings);
 
 			int halfSize = settings.Size / 2;
@@ -389,13 +700,20 @@ namespace World.Generation
 			if (settings.Spacing == 0)
 				settings.Spacing = 1;
 
+			Vector3 colSize = Vector3.one * settings.Spacing * 0.45f;
+			float centeredOffset = settings.Spacing * 0.5f;
+			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
+
 			Vector3 position;
 			for (int y = -halfSize + 2; y < halfSize - 2; y += settings.Spacing)
 			{
 				for (int x = -halfSize + 2; x < halfSize - 2; x += settings.Spacing)
 				{
-					position = new Vector3(y + settings.Offset.y, 0, x + settings.Offset.x);
-					if (settings.HeightMap[x + halfSize, y + halfSize] >= settings.SpawnThreshold)
+					position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
+					if (!IsPointWithinBounds(position))
+						continue;
+
+					if (GetSpawnNoiseValue(settings, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
 					{
 						(bool, float) lambaResult = comparisonLambda(position);
 
@@ -419,14 +737,13 @@ namespace World.Generation
 							}
 
 							// Get terrain height at spawn position using raycast
-							if (Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, _layerSettings.TerrainMask))
-							{
-								position.y = hit.point.y;
-							}
-							else
-							{
-								position.y = lambaResult.Item2;
-							}
+							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, _layerSettings.TerrainMask))
+								continue;
+
+							position.y = hit.point.y;
+
+							if (IsPositionOverlappingBuilding(position, settings.Spacing * 0.45f))
+								continue;
 
 							if (useCollision)
 								if (Physics.BoxCast(position + Vector3.up * 5, colSize, Vector3.down, Quaternion.identity, 10, _layerSettings.CollisionMask))
@@ -445,13 +762,15 @@ namespace World.Generation
 
 		private IEnumerator GenerateFromSettingsCoroutine(GenerationSettings settings, int seed, ObjectPoolingManager poolManager, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision, Action<float> progressReporter, List<GameResources.ResourceData> woodResources = null, List<GameResources.ResourceData> oreResources = null, List<GameResources.ResourceData> foodResources = null, List<GameResources.ResourceData> goldResources = null, List<GameResources.ResourceData> recruitResources = null, HashSet<(int, int)> occupiedCells = null, List<GameResources.FoliageData> onLandFoliage = null, List<GameResources.FoliageData> underWaterFoliage = null)
 		{
-			settings.Size = (_terrainGenerationSettings.GenerationSettings.Size * (int)_scaleSettings.XScale);
+			settings.Size = GetScaledTerrainSize();
 			settings.Seed = seed;
+			settings.Offset = GetPositiveNoiseOffset(settings.Seed, settings.Size);
 
 			if (settings.Spacing == 0)
 				settings.Spacing = 1;
 
 			Vector3 colSize = Vector3.one * settings.Spacing * 0.45f;
+			float centeredOffset = settings.Spacing * 0.5f;
 			float[,] generatedNoiseMap = null;
 			yield return StartCoroutine(Noise.GenerateNoiseMapCoroutine(settings, _debugSettings.FrameBudgetSeconds, result => generatedNoiseMap = result));
 			settings.HeightMap = generatedNoiseMap;
@@ -463,6 +782,7 @@ namespace World.Generation
 			int totalChecks = checksPerAxis * checksPerAxis;
 			int checksProcessed = 0;
 			float frameStartTime = Time.realtimeSinceStartup;
+			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
 
 			global::Utils.Resource resourceType = global::Utils.Resource.None;
 			if (settings is ResourceGenerationSettings resourceSettings)
@@ -475,10 +795,12 @@ namespace World.Generation
 				for (int x = start; x < end; x += settings.Spacing)
 				{
 					checksProcessed++;
-					if (settings.HeightMap[x + halfSize, y + halfSize] >= settings.SpawnThreshold)
-					{
-						Vector3 position = new Vector3(y + settings.Offset.y, 0, x + settings.Offset.x);
+					Vector3 position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
+					if (!IsPointWithinBounds(position))
+						continue;
 
+					if (GetSpawnNoiseValue(settings, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
+					{
 						(bool, float) lambaResult = comparisonLambda(position);
 
 						if (lambaResult.Item1)
@@ -545,11 +867,14 @@ namespace World.Generation
 								}
 							}
 
-							// Get terrain height at spawn position using raycast
-							if (Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, _layerSettings.TerrainMask))
-							{
-								position.y = hit.point.y;
-							}
+							// Require terrain hit at spawn position
+							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, _layerSettings.TerrainMask))
+								continue;
+
+							position.y = hit.point.y;
+
+							if (IsPositionOverlappingBuilding(position, settings.Spacing * 0.45f))
+								continue;
 
 							// Collect ResourceData if resource lists are provided
 							if (resourceType != global::Utils.Resource.None && woodResources != null && oreResources != null && foodResources != null && goldResources != null && recruitResources != null)
@@ -561,7 +886,8 @@ namespace World.Generation
 								int amount = 100;
 								if (settings is ResourceGenerationSettings resSettings && resSettings.SetByDistance)
 								{
-									float eval = resSettings.AmountCurve.Evaluate(position.magnitude / (float)resSettings.MaxDistance);
+									float normalizedDistance = Vector2.Distance(new Vector2(position.x, position.z), new Vector2(spawnBiasOrigin.x, spawnBiasOrigin.z)) / Mathf.Max(1f, resSettings.MaxDistance);
+									float eval = resSettings.AmountCurve.Evaluate(Mathf.Clamp01(normalizedDistance));
 									amount = (int)MathExtended.RemapValue(eval, 0, 1, resSettings.MinAmount, resSettings.MaxAmount);
 								}
 
@@ -652,21 +978,24 @@ namespace World.Generation
 		/// </summary>
 		public IEnumerator TryGenerateWorld(Action<float, string> progressReporter = null)
 		{
-			if (_behaviorSettings.GenerateOnStart)
+			yield return StartCoroutine(TryGenerateWorldInternal(false, progressReporter));
+		}
+
+		private IEnumerator TryGenerateWorldInternal(bool forceGenerate, Action<float, string> progressReporter = null)
+		{
+			if (forceGenerate || _behaviorSettings.GenerateOnStart)
 			{
 				progressReporter?.Invoke(0.0f, "Preparing terrain generation...");
 				WorldUtils.GroundLayerMask = LayerMask.GetMask("Ground");
 				yield return new WaitForEndOfFrame();
 
-				// Spawn townhall first so it exists for pathfinding check
-				progressReporter?.Invoke(0.08f, "Spawning townhall...");
+				progressReporter?.Invoke(0.08f, "Preparing townhall...");
 				yield return null;
 				PoolableObject th = _poolingManager.GetPooledObject("Townhall");
-				GameObject thObj = ((SaveableBuilding)th.SaveableObject).BuildingBase.gameObject;
+				SaveableBuilding saveableTownhall = (SaveableBuilding)th.SaveableObject;
+				GameObject thObj = saveableTownhall.BuildingBase.gameObject;
 				thObj.transform.position = Vector3.zero;
-
-				thObj.SetActive(true);
-				_buildingManager.AddLoadedBuilding(((SaveableBuilding)th.SaveableObject).BuildingBase);
+				thObj.SetActive(false);
 
 				int attempts = 0;
 				bool terrainAcceptable = false;
@@ -682,15 +1011,38 @@ namespace World.Generation
 					GenerateTerrain();
 					yield return new WaitForEndOfFrame();
 
+					if (!TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 townhallPlacement))
+					{
+						Debug.Log("ProceduralWorldGenerator: Could not find a valid flat townhall footprint, regenerating terrain.", this);
+						continue;
+					}
+
+					thObj.transform.position = townhallPlacement;
+					thObj.SetActive(true);
+
 					_terrainCheckPassed = false;
 					yield return StartCoroutine(AcceptableTerrainCheckCoroutine());
 					terrainAcceptable = _terrainCheckPassed;
+
+					if (!terrainAcceptable)
+						thObj.SetActive(false);
 				}
 
 				if (!terrainAcceptable)
 				{
 					Debug.LogError($"ProceduralWorldGenerator: Failed to generate acceptable terrain after {MAX_GENERATION_ATTEMPTS} attempts. Proceeding with current terrain.", this);
+					if (!TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 fallbackPlacement))
+					{
+						fallbackPlacement = Vector3.zero;
+						if (TryGetTerrainHeight(fallbackPlacement, out float fallbackHeight))
+							fallbackPlacement.y = fallbackHeight;
+					}
+
+					thObj.transform.position = fallbackPlacement;
+					thObj.SetActive(true);
 				}
+
+				EnsureTownhallRegistered(saveableTownhall.BuildingBase);
 
 				progressReporter?.Invoke(0.7f, "Spawning world resources...");
 				yield return StartCoroutine(GeneratePooledObjectsExceptTownhall((progress, status) =>
@@ -701,8 +1053,76 @@ namespace World.Generation
 
 				progressReporter?.Invoke(1f, "World generation complete");
 
+				// Center camera on town hall
+				GameObject townhallObject = GetActiveTownhallObject();
+				if (townhallObject != null && Camera.main != null)
+				{
+					Vector3 townhallPosition = townhallObject.transform.position;
+					Camera.main.transform.position = new Vector3(townhallPosition.x, townhallPosition.y + 10f, townhallPosition.z - 15f);
+					Camera.main.transform.LookAt(townhallPosition);
+				}
+
 				GameStateManager.NotifyWorldLoaded();
 			}
+		}
+
+		public void RegenerateTerrainAndWorldRuntime()
+		{
+			if (!Application.isPlaying)
+			{
+				Debug.LogWarning("RegenerateTerrainAndWorldRuntime can only be called in play mode.", this);
+				return;
+			}
+
+			if (_isEditorRegenerating)
+				return;
+
+			StartCoroutine(RegenerateTerrainAndWorldRuntimeCoroutine());
+		}
+
+		private IEnumerator RegenerateTerrainAndWorldRuntimeCoroutine()
+		{
+			_isEditorRegenerating = true;
+			yield return StartCoroutine(TryGenerateWorldInternal(true));
+			_isEditorRegenerating = false;
+
+			// Center camera on town hall after runtime regeneration
+			GameObject townhallObject = GetActiveTownhallObject();
+			if (townhallObject != null && Camera.main != null)
+			{
+				Vector3 townhallPosition = townhallObject.transform.position;
+				Camera.main.transform.position = new Vector3(townhallPosition.x, townhallPosition.y + 10f, townhallPosition.z - 15f);
+				Camera.main.transform.LookAt(townhallPosition);
+			}
+		}
+
+		public void RegenerateResourcesAndFoliageRuntime()
+		{
+			if (!Application.isPlaying)
+			{
+				Debug.LogWarning("RegenerateResourcesAndFoliageRuntime can only be called in play mode.", this);
+				return;
+			}
+
+			if (_isEditorRegenerating)
+				return;
+
+			StartCoroutine(RegenerateResourcesAndFoliageRuntimeCoroutine());
+		}
+
+		private IEnumerator RegenerateResourcesAndFoliageRuntimeCoroutine()
+		{
+			_isEditorRegenerating = true;
+
+			if (!TryEnsureActiveTownhall(out _))
+			{
+				Debug.LogWarning("ProceduralWorldGenerator: Could not ensure active townhall before regenerating resources and foliage.", this);
+				_isEditorRegenerating = false;
+				yield break;
+			}
+
+			yield return StartCoroutine(GeneratePooledObjectsExceptTownhall());
+			_isEditorRegenerating = false;
 		}
 
 		private IEnumerator AcceptableTerrainCheckCoroutine()
@@ -722,12 +1142,15 @@ namespace World.Generation
 		private bool TownHallAboveGround()
 		{
 			int townHallCheckSize = 5;
+			GameObject townhallObject = GetActiveTownhallObject();
+			Vector3 center = townhallObject == null ? Vector3.zero : townhallObject.transform.position;
+			int terrainMask = GetTerrainMask();
 
 			for (int i = -(townHallCheckSize) / 2; i < townHallCheckSize / 2; i++)
 			{
 				for (int j = -(townHallCheckSize / 2); j < townHallCheckSize / 2; j++)
 				{
-					if (Physics.Raycast(new Vector3(i, 5, j), Vector3.down, out RaycastHit info, 10, _layerSettings.TerrainMask))
+					if (Physics.Raycast(new Vector3(center.x + i, center.y + 5, center.z + j), Vector3.down, out RaycastHit info, 10, terrainMask))
 					{
 						if (!WorldUtils.OnGroundCheck(info.point))
 						{
@@ -753,8 +1176,9 @@ namespace World.Generation
 		{
 			List<Vector3> listOfPositions = new List<Vector3>();
 
-			settings.Size = (_terrainGenerationSettings.GenerationSettings.Size * (int)_scaleSettings.XScale);
+			settings.Size = GetScaledTerrainSize();
 			settings.Seed = ++seed;
+			settings.Offset = GetPositiveNoiseOffset(settings.Seed, settings.Size);
 			//Generate resource map (stored in Height Map)
 			Vector3 colSize = Vector3.one * settings.Spacing * 0.45f;
 			settings.HeightMap = Noise.GenerateNoiseMap(settings);
@@ -764,6 +1188,8 @@ namespace World.Generation
 			if (settings.Spacing == 0)
 				settings.Spacing = 1;
 
+			float centeredOffset = settings.Spacing * 0.5f;
+
 			int halfSize = settings.Size / 2;
 
 			for (int y = -halfSize; y < halfSize; y += settings.Spacing)
@@ -772,7 +1198,10 @@ namespace World.Generation
 				{
 					if (settings.HeightMap[x + halfSize, y + halfSize] >= settings.SpawnThreshold)
 					{
-						Vector3 position = new Vector3(y + settings.Offset.y, 0, x + settings.Offset.x);
+						Vector3 position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
+						if (!IsPointWithinBounds(position))
+							continue;
+
 						(bool, float) lambaResult = comparisonLambda(position);
 
 						if (lambaResult.Item1)
@@ -785,6 +1214,18 @@ namespace World.Generation
 			}
 
 			return listOfPositions;
+		}
+
+		private static Vector2 GetPositiveNoiseOffset(int seed, int size)
+		{
+			System.Random seededRandom = new System.Random(seed);
+			float minOffset = size * 0.5f;
+			float maxAdditionalOffset = size * 2f;
+
+			float offsetX = minOffset + ((float)seededRandom.NextDouble() * maxAdditionalOffset);
+			float offsetY = minOffset + ((float)seededRandom.NextDouble() * maxAdditionalOffset);
+
+			return new Vector2(offsetX, offsetY);
 		}
 
 		private void OnDrawGizmosSelected()

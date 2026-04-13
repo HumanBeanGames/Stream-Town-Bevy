@@ -14,6 +14,9 @@ namespace Utils
 
 		[SerializeField]
 		private LayerMask _collisionMask;
+
+		[SerializeField]
+		private LayerMask _terrainMask;
 		
 		private Camera _mainCamera;
 
@@ -26,7 +29,14 @@ namespace Utils
 
 			if (Physics.Raycast(ray, out hit, Mathf.Infinity, _collisionMask))
 			{
-				transform.position = MathExtended.SnapPosition(hit.point, _cellSize);
+				Vector3 snappedPosition = MathExtended.SnapPosition(hit.point, _cellSize);
+
+				if (Physics.Raycast(new Vector3(snappedPosition.x, 100, snappedPosition.z), Vector3.down, out RaycastHit terrainHit, 200, _terrainMask))
+					snappedPosition.y = terrainHit.point.y;
+				else
+					snappedPosition.y = hit.point.y;
+
+				transform.position = snappedPosition;
 
 				if (_lastSnappedPosition != transform.position)
 					OnPositionChanged?.Invoke();

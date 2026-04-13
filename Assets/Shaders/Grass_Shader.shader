@@ -985,11 +985,135 @@ Shader "Grass_Shader"
 			}
 			ENDHLSL
 		}
-		
-		
+
 		Pass
 		{
-			
+			Name "ShadowCaster"
+			Tags { "LightMode"="ShadowCaster" }
+
+			ZWrite On
+			ZTest LEqual
+			ColorMask 0
+			Cull Back
+
+			HLSLPROGRAM
+
+			#define _NORMAL_DROPOFF_TS 1
+			#pragma multi_compile _ LOD_FADE_CROSSFADE
+			#pragma multi_compile_fog
+			#define ASE_FOG 1
+			#define ASE_SRP_VERSION 100400
+
+			#pragma vertex vert
+			#pragma fragment frag
+
+			#define SHADERPASS_SHADOWCASTER
+
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+			#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/ShaderGraphFunctions.hlsl"
+			#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
+
+			#pragma multi_compile_instancing
+
+			struct VertexInput
+			{
+				float4 vertex : POSITION;
+				float3 ase_normal : NORMAL;
+				float4 ase_color : COLOR;
+				float4 ase_texcoord : TEXCOORD0;
+				UNITY_VERTEX_INPUT_INSTANCE_ID
+			};
+
+			struct VertexOutput
+			{
+				float4 clipPos : SV_POSITION;
+				UNITY_VERTEX_INPUT_INSTANCE_ID
+				UNITY_VERTEX_OUTPUT_STEREO
+			};
+
+			CBUFFER_START(UnityPerMaterial)
+			float4 _GridColor1;
+			float4 _GridColor2;
+			float4 _WindColor;
+			float _VertexSmoothStepMax;
+			float _textureSize;
+			float _WindScale;
+			float _ColourBlend;
+			float _Spring;
+			float _Tint;
+			CBUFFER_END
+			sampler2D _MainTexture;
+			sampler2D _NoiseTexture;
+			UNITY_INSTANCING_BUFFER_START(Grass_Shader)
+				UNITY_DEFINE_INSTANCED_PROP(float2, _WindTextureSmoothStep)
+				UNITY_DEFINE_INSTANCED_PROP(float2, _windDirection)
+				UNITY_DEFINE_INSTANCED_PROP(float, _CloudCrawlSpeed)
+				UNITY_DEFINE_INSTANCED_PROP(float, _WindStrength)
+			UNITY_INSTANCING_BUFFER_END(Grass_Shader)
+
+			VertexOutput VertexFunction(VertexInput v)
+			{
+				VertexOutput o = (VertexOutput)0;
+				UNITY_SETUP_INSTANCE_ID(v);
+				UNITY_TRANSFER_INSTANCE_ID(v, o);
+				UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+
+				float4 _vertexColour112 = v.ase_color;
+				float smoothstepResult132 = smoothstep(0.0, _VertexSmoothStepMax, (1.0 - _vertexColour112.b));
+				float2 _WindTextureSmoothStep_Instance = UNITY_ACCESS_INSTANCED_PROP(Grass_Shader, _WindTextureSmoothStep);
+				float _CloudCrawlSpeed_Instance = UNITY_ACCESS_INSTANCED_PROP(Grass_Shader, _CloudCrawlSpeed);
+				float2 _windDirection_Instance = UNITY_ACCESS_INSTANCED_PROP(Grass_Shader, _windDirection);
+				float2 temp_output_156_0 = (_CloudCrawlSpeed_Instance * _windDirection_Instance);
+				float3 ase_worldPos = mul(GetObjectToWorldMatrix(), v.vertex).xyz;
+				float2 temp_output_29_0 = ((ase_worldPos / _textureSize)).xz;
+				float2 panner34 = (1.0 * _Time.y * temp_output_156_0 + temp_output_29_0);
+				float smoothstepResult50 = smoothstep(_WindTextureSmoothStep_Instance.x, _WindTextureSmoothStep_Instance.y, tex2Dlod(_MainTexture, float4(panner34, 0, 0.0)).a);
+				float _windTexture87 = smoothstepResult50;
+				float2 temp_cast_0 = (_WindScale).xx;
+				float2 panner46 = (1.0 * _Time.y * temp_output_156_0 + temp_output_29_0);
+				float2 texCoord54 = v.ase_texcoord.xy * temp_cast_0 + panner46;
+				float3 temp_output_66_0 = (tex2Dlod(_NoiseTexture, float4(texCoord54, 0, 0.0)).a * float3(2, 0, 2));
+				float3 lerpResult75 = lerp((_windTexture87 * temp_output_66_0), temp_output_66_0, _windTexture87);
+				float _WindStrength_Instance = UNITY_ACCESS_INSTANCED_PROP(Grass_Shader, _WindStrength);
+				float3 _vertexDisplacement136 = ((smoothstepResult132 * lerpResult75) * (_WindStrength_Instance * 0.05));
+
+				#ifdef ASE_ABSOLUTE_VERTEX_POS
+					float3 defaultVertexValue = v.vertex.xyz;
+				#else
+					float3 defaultVertexValue = float3(0, 0, 0);
+				#endif
+				float3 vertexValue = _vertexDisplacement136;
+				#ifdef ASE_ABSOLUTE_VERTEX_POS
+					v.vertex.xyz = vertexValue;
+				#else
+					v.vertex.xyz += vertexValue;
+				#endif
+
+				v.ase_normal = v.ase_normal;
+
+				float3 positionWS = TransformObjectToWorld(v.vertex.xyz);
+				float3 normalWS = TransformObjectToWorldNormal(v.ase_normal);
+
+				o.clipPos = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, _ShadowBias));
+				return o;
+			}
+
+			VertexOutput vert(VertexInput v)
+			{
+				return VertexFunction(v);
+			}
+
+			half4 frag(VertexOutput IN) : SV_TARGET
+			{
+				return 0;
+			}
+
+			ENDHLSL
+		}
+
+		Pass
+		{
 			Name "Meta"
 			Tags { "LightMode"="Meta" }
 
