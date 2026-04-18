@@ -1,5 +1,5 @@
 using Character;
-using Managers;
+using Processors;
 using UnityEngine;
 using UnityEngine.Events;
 using Reflex.Attributes;
@@ -14,7 +14,7 @@ namespace Utils
 		private float _timer = 0;
 
 		private Player _player;
-		[Inject] private BuildingManager _buildingManager;
+		[Inject] private BuildingProcessor _buildingProcessor;
 
 		public void SetPlayer(Player player)
 		{
@@ -33,7 +33,7 @@ namespace Utils
 
 			if (_timer <= 0)
 			{
-				_buildingManager.TryCancelBuilding(_player);
+				_buildingProcessor.TryCancelBuilding(_player);
 				ResetTimer();
 			}
 		}

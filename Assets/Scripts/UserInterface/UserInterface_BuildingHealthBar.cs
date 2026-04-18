@@ -1,7 +1,6 @@
 using Units;
 using UnityEngine;
 using UnityEngine.UI;
-using Scriptables;
 
 namespace UserInterface
 {

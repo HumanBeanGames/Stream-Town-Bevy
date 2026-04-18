@@ -7,8 +7,14 @@ namespace Target
 	/// </summary>
 	public class TargetableHealth : Targetable
 	{
+        /// <summary>
+        /// The health handler.
+        /// </summary>
 		protected HealthHandler _healthHander;
 
+        /// <summary>
+        /// Gets the health handler.
+        /// </summary>
 		public HealthHandler HealthHandler => _healthHander;
 
 		/// <summary>
@@ -57,7 +63,7 @@ namespace Target
 		/// <summary>
 		/// Called when Target's health is neither full or empty.
 		/// </summary>
-		/// <param name="value"></param>
+		/// <param name="value">The health percentage.</param>
 		protected virtual void OnHealthPercentageOther(float value)
 		{
 

@@ -3,11 +3,11 @@ using Reflex.Utilities;
 
 namespace Reflex.Reflectors
 {
-    internal static class ActivatorFactoryManager
+    internal static class ActivatorFactoryProcessor
     {
         internal static readonly IActivatorFactory Factory;
 
-        static ActivatorFactoryManager()
+        static ActivatorFactoryProcessor()
         {
             Factory = GetFactory();
         }

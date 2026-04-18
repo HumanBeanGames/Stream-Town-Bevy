@@ -1,17 +1,23 @@
 using Character;
 using System.Collections.Generic;
+using Reflex.Attributes;
 
 namespace Twitch
 {
 	/// <summary>
 	/// Handles sending messages from the bot to Twitch chat.
 	/// </summary>
-	public static class MessageSender
+	public class MessageSender
 	{
+        /// <summary>
+        /// The Twitch client. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TL_Client _tlClient;
+
 		/// <summary>
 		/// Determines if messages are allowed to be sent or not.
 		/// </summary>
-		public static bool MessagesAllowed = false;
+		public bool MessagesAllowed = false;
 
 		/// <summary>
 		/// A static Dictionary of all prebuilt command responses.
@@ -42,9 +48,9 @@ namespace Twitch
 		/// <summary>
 		/// Uses a key to send a prebuilt message to Twitch chat with the player's name.
 		/// </summary>
-		/// <param name="playerName"></param>
-		/// <param name="key"></param>
-		public static void SendPreBuiltMessage(string playerName, string key)
+		/// <param name="playerName">The player name.</param>
+		/// <param name="key">The message key.</param>
+		public void SendPreBuiltMessage(string playerName, string key)
 		{
 			if (!CommandResponses.ContainsKey(key))
 				return;
@@ -56,8 +62,8 @@ namespace Twitch
 		/// <summary>
 		/// Uses a key to send a prebuilt message to Twitch chat.
 		/// </summary>
-		/// <param name="key"></param>
-		public static void SendPreBuiltMessage(string key)
+		/// <param name="key">The message key.</param>
+		public void SendPreBuiltMessage(string key)
 		{
 			if (!CommandResponses.ContainsKey(key))
 				return;
@@ -69,26 +75,32 @@ namespace Twitch
 		/// <summary>
 		/// Sends a custom message to Twitch chat with the Player's name.
 		/// </summary>
-		/// <param name="message"></param>
-		public static void SendMessage(string playerName, string message)
+		/// <param name="playerName">The player name.</param>
+		/// <param name="message">The message.</param>
+		public void SendMessage(string playerName, string message)
 		{
-			TL_Client.Client.SendMessage(TL_Client.Client.JoinedChannels[0], $"{playerName}: {message}");
+			_tlClient.Client.SendMessage(_tlClient.Client.JoinedChannels[0], $"{playerName}: {message}");
 		}
 
 		/// <summary>
 		/// Sends a custom message to Twitch chat.
 		/// </summary>
-		/// <param name="message"></param>
-		public static void SendMessage(string message)
+		/// <param name="message">The message.</param>
+		public void SendMessage(string message)
 		{
 			if (!MessagesAllowed)
 				return;
 
-			if (TL_Client.Client != null && TL_Client.Client.IsConnected)
-				TL_Client.Client.SendMessage(TL_Client.Client.JoinedChannels[0], message);
+			if (_tlClient.Client != null && _tlClient.Client.IsConnected)
+				_tlClient.Client.SendMessage(_tlClient.Client.JoinedChannels[0], message);
 		}
 
-		public static void SendPlayerMessage(Player player, string message)
+        /// <summary>
+        /// Sends a message from a player.
+        /// </summary>
+        /// <param name="player">The player.</param>
+        /// <param name="message">The message.</param>
+		public void SendPlayerMessage(Player player, string message)
 		{
 			SendMessage($"{player.TwitchUser.Username}: {message}");
 		}

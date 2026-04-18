@@ -1,38 +1,55 @@
 using Character;
 using GameEventSystem;
-using Managers;
+using Processors;
 using UnityEngine;
+using Data.Containers;
+using Reflex.Attributes;
+using Twitch.Utils;
 
 namespace Twitch.Commands
 {
 	/// <summary>
 	/// Handles all Twitch chat commands related to Moderation.
 	/// </summary>
-	public static class ModeratorCommands
+	public class ModeratorCommands
 	{
-		private static PlayerManager _playerManager;
-		private static GameEventManager _gameEventManager;
+	        /// <summary>
+        /// The player processor. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private PlayerProcessor _playerProcessor;
+	        /// <summary>
+        /// The game event processor. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private GameEventProcessor _gameEventProcessor;
+	        /// <summary>
+        /// The role commands. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private RoleCommands _roleCommands;
 
-		public static void Initialize(PlayerManager playerManager, GameEventManager gameEventManager)
+	        /// <summary>
+        /// Starts a vote for the ruler position.
+        /// </summary>
+        /// <param name="player">The player.</param>
+		public void StartKingVote(Player player)
 		{
-			_playerManager = playerManager;
-			_gameEventManager = gameEventManager;
-		}
-
-		public static void StartKingVote(Player player)
-		{
-			if (!player.IsModerator())
+			if (!IsModerator(player))
 				return;
 
-			if (_playerManager.Ruler == null)
-				_gameEventManager.StartNewRulerVote();
+			if (_playerProcessor.GetRuler() == null)
+				_gameEventProcessor.StartNewRulerVote();
 			else
-				_gameEventManager.StartKeepRulerVote();
+				_gameEventProcessor.StartKeepRulerVote();
 		}
 
-		public static void ChangePlayerRole(Player player, string command, params string[] args)
+	        /// <summary>
+        /// Changes a target player's role.
+        /// </summary>
+        /// <param name="player">The player.</param>
+        /// <param name="command">The command.</param>
+        /// <param name="args">The arguments containing the target player name and new role.</param>
+		public void ChangePlayerRole(Player player, string command, params string[] args)
 		{
-			if (!player.IsModerator())
+			if (!IsModerator(player))
 				return;
 
 			if (args.Length < 2)
@@ -40,16 +57,21 @@ namespace Twitch.Commands
 
 			string playerNameArg = args[0].ToLower();
 
-			if (_playerManager.PlayerExistsByNameToLower(playerNameArg, out int index))
+			if (_playerProcessor.PlayerExistsByNameToLower(playerNameArg, out int index))
 			{
-				Player targetPlayer = _playerManager.GetPlayer(index);
+				Player targetPlayer = _playerProcessor.GetPlayer(index);
 				string[] newArgs = new string[] { args[1] };
 
-				RoleCommands.TryChangeRole(targetPlayer, command, newArgs);
+				_roleCommands.TryChangeRole(targetPlayer, command, newArgs);
 			}
 		}
 
-		public static bool IsModerator(this Player player)
+	        /// <summary>
+        /// Checks if a player has moderator privileges.
+        /// </summary>
+        /// <param name="player">The player to check.</param>
+        /// <returns>True if the player is a moderator, broadcaster, or game master.</returns>
+		public static bool IsModerator(Player player)
 		{
 			if (player.TwitchUser.TwitchUserType == TwitchLib.Client.Enums.UserType.Moderator)
 				return true;

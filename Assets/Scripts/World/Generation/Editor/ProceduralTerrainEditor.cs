@@ -1,16 +1,17 @@
 using UnityEditor;
 using UnityEngine;
+using Processors;
 
 namespace World.Generation
 {
-	[CustomEditor(typeof(ProceduralWorldGenerator))]
+	[CustomEditor(typeof(WorldGenProcessor))]
 	public class ProceduralTerrainEditor : Editor
 	{
-		ProceduralWorldGenerator _t;
+		WorldGenProcessor _t;
 
 		private void OnEnable()
 		{
-			_t = (ProceduralWorldGenerator)target;
+			_t = (WorldGenProcessor)target;
 		}
 
 		public override void OnInspectorGUI()

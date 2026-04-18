@@ -1,6 +1,5 @@
-using Managers;
+using Processors;
 using Pathfinding;
-using Scriptables;
 using System;
 using Units;
 using UnityEngine;
@@ -14,79 +13,220 @@ namespace Character
 	[System.Serializable]
 	public class PlayerRoleData
 	{
+        /// <summary>
+        /// Multiplier for calculating acceleration from movement speed.
+        /// </summary>
 		private const float ACCELERATION_MULTIPLIER = 0.33f;
 
+        /// <summary>
+        /// The player's role.
+        /// </summary>
 		private PlayerRole _role;
+
+        /// <summary>
+        /// The player's role type.
+        /// </summary>
 		private PlayerRoleType _roleType;
 
+        /// <summary>
+        /// Whether the role is ranged.
+        /// </summary>
 		private bool _ranged;
+
+        /// <summary>
+        /// The current level of the role.
+        /// </summary>
 		private int _level;
+
+        /// <summary>
+        /// The current experience of the role.
+        /// </summary>
 		private int _experience;
+
+        /// <summary>
+        /// The required experience for the next level.
+        /// </summary>
 		private int _requiredExp;
+
+        /// <summary>
+        /// The action amount per tick.
+        /// </summary>
 		private int _actionAmount;
+
+        /// <summary>
+        /// The action rate in seconds.
+        /// </summary>
 		private float _actionRate;
+
+        /// <summary>
+        /// The action range.
+        /// </summary>
 		private float _actionRange;
+
+        /// <summary>
+        /// The maximum health.
+        /// </summary>
 		private int _maxHealth;
+
+        /// <summary>
+        /// The health regeneration rate.
+        /// </summary>
 		private float _healthRegen;
+
+        /// <summary>
+        /// The movement speed.
+        /// </summary>
 		private float _movementSpeed;
+
+        /// <summary>
+        /// The damage reduction.
+        /// </summary>
 		private int _damageReduction;
+
+        /// <summary>
+        /// Audio clips for actions.
+        /// </summary>
 		private AudioClip[] _actionClips;
 
-		private RoleManager _roleManager;
-		private PlayerInventory _playerInventory;
-		private AIPath _aiPath;
-		private HealthHandler _healthHandler;
-		private RoleHandler _roleHandler;
-		private PlayerManager _playerManager;
+        /// <summary>
+        /// The role processor.
+        /// </summary>
+		private RoleProcessor _roleProcessor;
 
+        /// <summary>
+        /// The player inventory.
+        /// </summary>
+		private PlayerInventory _playerInventory;
+
+        /// <summary>
+        /// The AI path component.
+        /// </summary>
+		private AIPath _aiPath;
+
+        /// <summary>
+        /// The health handler.
+        /// </summary>
+		private HealthHandler _healthHandler;
+
+        /// <summary>
+        /// The role handler.
+        /// </summary>
+		private RoleHandler _roleHandler;
+
+        /// <summary>
+        /// The player processor.
+        /// </summary>
+		private PlayerProcessor _playerProcessor;
+
+        /// <summary>
+        /// Gets the player's role.
+        /// </summary>
+        /// <value>The player's role.</value>
 		public PlayerRole Role => _role;
+
+        /// <summary>
+        /// Gets the action amount.
+        /// </summary>
+        /// <value>The action amount.</value>
 		public int ActionAmount => _actionAmount;
+
+        /// <summary>
+        /// Gets the action rate.
+        /// </summary>
+        /// <value>The action rate.</value>
 		public float ActionRate => _actionRate;
+
+        /// <summary>
+        /// Gets the action range.
+        /// </summary>
+        /// <value>The action range.</value>
 		public float ActionRange => _actionRange;
+
+        /// <summary>
+        /// Gets the damage reduction.
+        /// </summary>
+        /// <value>The damage reduction.</value>
 		public int DamageReduction => _damageReduction;
+
+        /// <summary>
+        /// Gets the health regeneration rate.
+        /// </summary>
+        /// <value>The health regeneration rate.</value>
 		public float HealthRegen => _healthRegen;
+
+        /// <summary>
+        /// Gets the maximum health.
+        /// </summary>
+        /// <value>The maximum health.</value>
 		public int MaxHealth => _maxHealth;
+
+        /// <summary>
+        /// Gets the movement speed.
+        /// </summary>
+        /// <value>The movement speed.</value>
 		public float MoveSpeed => _movementSpeed;
+
+        /// <summary>
+        /// Gets the current level.
+        /// </summary>
+        /// <value>The current level.</value>
 		public int CurrentLevel => _level;
+
+        /// <summary>
+        /// Gets the current experience.
+        /// </summary>
+        /// <value>The current experience.</value>
 		public int CurrentExp => _experience;
+
+        /// <summary>
+        /// Gets the required experience for the next level.
+        /// </summary>
+        /// <value>The required experience for the next level.</value>
 		public int RequiredExp => _requiredExp;
-		public bool IsMaxLevel => (_level >= RoleManager.MAX_ROLE_LEVEl);
+
+        /// <summary>
+        /// Gets whether the role is at max level.
+        /// </summary>
+        /// <value>Whether the role is at max level.</value>
+		public bool IsMaxLevel => (_level >= RoleProcessor.MAX_ROLE_LEVEL);
+
+        /// <summary>
+        /// Gets the action audio clips.
+        /// </summary>
+        /// <value>The action audio clips.</value>
 		public AudioClip[] ActionClips => _actionClips;
 
+        /// <summary>
+        /// Event fired when experience changes.
+        /// </summary>
+        /// <param name="roleHandler">The role handler.</param>
 		public event Action<RoleHandler> OnExperienceChange;
 
+        /// <summary>
+        /// Gets the health handler.
+        /// </summary>
+        /// <value>The health handler.</value>
 		public HealthHandler HealthHandler => _healthHandler;
 
 		// Constructors.
-		public PlayerRoleData(PlayerRole role, RoleManager roleManager, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler, RoleHandler roleHandler, PlayerManager playerManager)
+		public PlayerRoleData(PlayerRole role, RoleProcessor roleProcessor, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler, RoleHandler roleHandler, PlayerProcessor playerProcessor)
 		{
 			_role = role;
-			_roleManager = roleManager;
+			_roleProcessor = roleProcessor;
 			_level = 1;
 			_experience = 0;
-			_requiredExp = _roleManager.GetRequiredExperience(_level);
-			_roleType = roleManager.GetRoleData(role).RoleFlags;
+			_requiredExp = roleProcessor.GetRequiredExperience(_level);
+			_roleType = roleProcessor.GetRoleData(role).RoleFlags;
 			_playerInventory = inventory;
 			_aiPath = aiPath;
 			_healthHandler = healthHandler;
 			_roleHandler = roleHandler;
-			_playerManager = playerManager;
-			_actionClips = roleManager.GetRoleData(role).ActionClips;
+			_playerProcessor = playerProcessor;
+			_actionClips = roleProcessor.GetRoleData(role).ActionClips;
 			//TODO: Implement ranged check
 			RecalculateStats();
 		}
 
-		public PlayerRoleData(PlayerRole role, int level, int experience, RoleManager roleManager, PlayerInventory inventory, AIPath aiPath, HealthHandler healthHandler, PlayerManager playerManager)
-		{
-			_role = role;
-			_roleManager = roleManager;
-			_level = level;
-			_experience = experience;
-			_requiredExp = _roleManager.GetRequiredExperience(_level);
-			_playerManager = playerManager;
-
-			RecalculateStats();
-		}
 
 		/// <summary>
 		/// Increases the amount of current experience.
@@ -94,7 +234,7 @@ namespace Character
 		/// <param name="amount"></param>
 		public void IncreaseExperience(int amount)
 		{
-			amount = Mathf.Max(1,(int)( amount * _roleManager.GetRoleData(_role).ExpModifier));
+			amount = Mathf.Max(1,(int)( amount * _roleProcessor.GetRoleData(_role).ExpModifier));
 			if (IsMaxLevel)
 			{
 				_experience = 0;
@@ -136,7 +276,7 @@ namespace Character
 				return;
 
 			_level++;
-			_requiredExp = _roleManager.GetRequiredExperience(_level);
+			_requiredExp = _roleProcessor.GetRequiredExperience(_level);
 			RecalculateStats();
 			_healthHandler.SetHealth(_healthHandler.MaxHealth);
 		}
@@ -146,8 +286,8 @@ namespace Character
 		/// </summary>
 		public void RecalculateStats()
 		{
-			RoleDataScriptable data = _roleManager.GetRoleData(_role);
-			StatModifiers statMod = _playerManager.GetStatModifiers(_role);
+			Character.RoleData data = _roleProcessor.GetRoleData(_role);
+			StatModifiers statMod = _playerProcessor.GetStatModifiers(_role);
 
 			_actionAmount = data.BaseActionAmount + (int)(data.ActionAmountPerLevel * (_level - 1));
 			_actionAmount += AddStatModifiersInt(statMod, StatType.ActionAmount, _actionAmount);
@@ -212,7 +352,6 @@ namespace Character
 		{
 			_level = level;
 		}
-
 
 		private int AddStatModifiersInt(StatModifiers statMod, StatType statType, int baseValue)
 		{

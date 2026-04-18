@@ -1,5 +1,6 @@
 using Character;
-using Managers;
+using Processors;
+using Core;
 using System;
 using System.Collections.Generic;
 using TechTree;
@@ -35,54 +36,61 @@ namespace UserInterface.BottomBarMenu
 		[SerializeField]
 		private List<BuildingContextItem> _buildingContextData;
 
-		[Inject] private static TownResourceManager _townResourceManager;
-		[Inject] private static BuildingManager _buildingManager;
-		[Inject] private static RoleManager _roleManager;
-		[Inject] private static PlayerManager _playerManager;
-		[Inject] private static UIManager _uiManager;
-		[Inject] private static GameManager _gameManager;
+		[Inject] private TownResourceProcessor _townResourceProcessor;
+		[Inject] private BuildingProcessor _buildingProcessor;
+		[Inject] private RoleProcessor _roleProcessor;
+		[Inject] private PlayerProcessor _playerProcessor;
+		[Inject] private UIProcessor _uiProcessor;
+		[Inject] private Coordinator _gameProcessor;
+		[Inject] private PlayerInputProcessor _playerInputProcessor;
 
-		private static Dictionary<BottomBarContext, BottomBarButton> _mainButtons = new Dictionary<BottomBarContext, BottomBarButton>();
-		private static int _maxShownButtonsOnBar = 10;
-		private static BottomBarButton _activeButton;
+		private Dictionary<BottomBarContext, BottomBarButton> _mainButtons = new Dictionary<BottomBarContext, BottomBarButton>();
+		private int _maxShownButtonsOnBar = 10;
+		private BottomBarButton _activeButton;
 
-		private static List<GameObject> _activeContextButtons = new List<GameObject>();
+		private List<GameObject> _activeContextButtons = new List<GameObject>();
 
-		private static List<(BuildingType, GameObject)> _buildButtons = new List<(BuildingType, GameObject)>();
+		private List<(BuildingType, GameObject)> _buildButtons = new List<(BuildingType, GameObject)>();
 
-		private static List<(PlayerRole, GameObject)> _roleButtons = new List<(PlayerRole, GameObject)>();
+		private List<(PlayerRole, GameObject)> _roleButtons = new List<(PlayerRole, GameObject)>();
 
-		private static int _buildScrollIndex = 0;
-		private static int _roleScrollIndex = 0;
-		private static int _availableBuildings = 0;
-		private static int _availableRecruitRoles = 0;
+		private int _buildScrollIndex = 0;
+		private int _roleScrollIndex = 0;
+		private int _availableBuildings = 0;
+		private int _availableRecruitRoles = 0;
 
-		private static BottomBarContext _bottomBarContext;
+		private BottomBarContext _bottomBarContext;
 
-		private static Action _contextHidden;
-		private static Action _contextShown;
-		private static Action _canScrollRight;
-		private static Action _cantScrollRight;
-		private static Action _canScrollLeft;
-		private static Action _cantScrollLeft;
+		private Action _contextHidden;
+		private Action _contextShown;
+		private Action _canScrollRight;
+		private Action _cantScrollRight;
+		private Action _canScrollLeft;
+		private Action _cantScrollLeft;
 
-		private static Dictionary<BuildingType, BuildingContextItem> _buildingsLookup;
-		private static Dictionary<PlayerRole, RecruitContextItem> _recruitsLookup;
+		private Dictionary<BuildingType, BuildingContextItem> _buildingsLookup;
+		private Dictionary<PlayerRole, RecruitContextItem> _recruitsLookup;
 
-		public static UnityAction<Resource, int, bool> OnRecruitAdded;
-		public static void AddButton(BottomBarButton button)
+		public UnityAction<Resource, int, bool> OnRecruitAdded;
+
+		private void OnRecruitAddedWrapper(Resource resource, int amount, bool purchase)
+		{
+			OnRecruitAdded?.Invoke(resource, amount, purchase);
+		}
+
+		public void AddButton(BottomBarButton button)
 		{
 			if (!_mainButtons.ContainsKey(button.ButtonContext))
 				_mainButtons.Add(button.ButtonContext, button);
 		}
 
-		public static void RemoveButton(BottomBarButton button)
+		public void RemoveButton(BottomBarButton button)
 		{
 			if (_mainButtons.ContainsKey(button.ButtonContext))
 				_mainButtons.Remove(button.ButtonContext);
 		}
 
-		public static void OnActivatedButton(BottomBarButton button)
+		public void OnActivatedButton(BottomBarButton button)
 		{
 			if (_activeButton != null)
 			{
@@ -95,7 +103,7 @@ namespace UserInterface.BottomBarMenu
 			ShowContext(button.ButtonContext);
 		}
 
-		public static void OnDeactivatedButton(BottomBarButton button)
+		public void OnDeactivatedButton(BottomBarButton button)
 		{
 			if (_activeButton != null)
 			{
@@ -104,7 +112,7 @@ namespace UserInterface.BottomBarMenu
 			}
 		}
 
-		private static void ShowContext(BottomBarContext context)
+		private void ShowContext(BottomBarContext context)
 		{
 			switch (context)
 			{
@@ -113,7 +121,7 @@ namespace UserInterface.BottomBarMenu
 					break;
 				case BottomBarContext.RecruitMenu:
 					ShowRecruitMenu();
-					_townResourceManager.OnAnyResourceChangeEvent.AddListener(OnRecruitAdded);
+					_townResourceProcessor.OnAnyResourceChangeEvent += OnRecruitAddedWrapper;
 					break;
 				case BottomBarContext.TechTreeMenu:
 					break;
@@ -122,7 +130,7 @@ namespace UserInterface.BottomBarMenu
 			}
 		}
 
-		private static void HideContext(BottomBarContext context)
+		private void HideContext(BottomBarContext context)
 		{
 			switch (context)
 			{
@@ -131,7 +139,7 @@ namespace UserInterface.BottomBarMenu
 					break;
 				case BottomBarContext.RecruitMenu:
 					HideContextMenu();
-					_townResourceManager.OnAnyResourceChangeEvent.RemoveListener(OnRecruitAdded);
+					_townResourceProcessor.OnAnyResourceChangeEvent -= OnRecruitAddedWrapper;
 					break;
 				case BottomBarContext.TechTreeMenu:
 					break;
@@ -164,9 +172,9 @@ namespace UserInterface.BottomBarMenu
 			ShowContext(_activeButton.ButtonContext);
 		}
 
-		private static void ShowBuildMenu()
+		private void ShowBuildMenu()
 		{
-			BuildingManager bm = _buildingManager;
+			BuildingProcessor bm = _buildingProcessor;
 
 			List<GameObject> availableButtons = new List<GameObject>();
 
@@ -190,15 +198,15 @@ namespace UserInterface.BottomBarMenu
 			_contextShown?.Invoke();
 		}
 
-		private static void HideContextMenu()
+		private void HideContextMenu()
 		{
 			RemoveCurrentContextButtons();
 			_contextHidden?.Invoke();
 		}
 
-		private static void ShowRecruitMenu()
+		private void ShowRecruitMenu()
 		{
-			RoleManager rm = _roleManager;
+			RoleProcessor rm = _roleProcessor;
 
 			List<GameObject> availableButtons = new List<GameObject>();
 
@@ -207,7 +215,7 @@ namespace UserInterface.BottomBarMenu
 				if (rm.GetMaxSlots(_roleButtons[i].Item1) > 0 || rm.RoleIsInfinite(_roleButtons[i].Item1))
 					availableButtons.Add(_roleButtons[i].Item2);
 
-				if (rm.SlotsFull(_roleButtons[i].Item1) || _townResourceManager.ResourceFull(Resource.Recruit))
+				if (rm.SlotsFull(_roleButtons[i].Item1) || _townResourceProcessor.ResourceFull(Resource.Recruit))
 					_roleButtons[i].Item2.GetComponentInChildren<Button>().interactable = false;
 				else
 					_roleButtons[i].Item2.GetComponentInChildren<Button>().interactable = true;
@@ -221,7 +229,7 @@ namespace UserInterface.BottomBarMenu
 			_contextShown?.Invoke();
 		}
 
-		private static void RemoveCurrentContextButtons()
+		private void RemoveCurrentContextButtons()
 		{
 			for (int i = _activeContextButtons.Count - 1; i >= 0; i--)
 			{
@@ -292,33 +300,26 @@ namespace UserInterface.BottomBarMenu
 			}
 		}
 
-		private static void OnBuildingButtonClicked(BuildingType buildingType)
+		private void OnBuildingButtonClicked(BuildingType buildingType)
 		{
 			// Try to create building placer with that building type or update current building placer?
 			// Escape to cancel building
-			Player player = _gameManager.UserPlayer;
+			Player player = _playerProcessor.UserPlayer;
 
-			BuildingManager bm = _buildingManager;
+			BuildingProcessor bm = _buildingProcessor;
 
 			// This is terrible lmao
 			List<Button> buttonList = new List<Button>();
 			for (int i = 0; i < _buildButtons.Count; i++)
 			{
-				buttonList.Add(_buildButtons[i].Item2.GetComponentInChildren<Button>());
-			}
-
-			for (int i = 0; i < _buildButtons.Count; i++)
-			{
-				if (bm.CanAffordToBuild(_buildButtons[i].Item1))
-					_buildButtons[i].Item2.GetComponentInChildren<Button>().interactable = true;
-				else
-					_buildButtons[i].Item2.GetComponentInChildren<Button>().interactable = false;
+				if (_buildButtons[i].Item1 == buildingType)
+					buttonList.Add(_buildButtons[i].Item2.GetComponentInChildren<Button>());
 			}
 
 			bm.TryCancelBuilding(player);
 			bm.TryStartNewBuildingPlacer(player, buildingType, out string msg);
 
-			_gameManager.LastBuildingType = buildingType;
+			_buildingProcessor.LastBuildingType = buildingType;
 			for (int i = 0; i < _buildButtons.Count; i++)
 			{
 				if (bm.CanAffordToBuild(_buildButtons[i].Item1))
@@ -327,7 +328,7 @@ namespace UserInterface.BottomBarMenu
 					_buildButtons[i].Item2.GetComponentInChildren<Button>().interactable = false;
 			}
 		}
-		private static void OnRoleButtonClicked(PlayerRole role)
+		private void OnRoleButtonClicked(PlayerRole role)
 		{
 			List<Button> buttonList = new List<Button>();
 			for (int i = 0; i < _roleButtons.Count; i++)
@@ -335,18 +336,18 @@ namespace UserInterface.BottomBarMenu
 				buttonList.Add(_roleButtons[i].Item2.GetComponentInChildren<Button>());
 			}
 
-			if (_townResourceManager.ResourceFull(Resource.Recruit))
+			if (_townResourceProcessor.ResourceFull(Resource.Recruit))
 				for (int i = 0; i < buttonList.Count; i++)
 					buttonList[i].interactable = false;
 
-			RoleManager rm = _roleManager;
-			if (rm.SlotsFull(role) || _townResourceManager.ResourceFull(Resource.Recruit))
+			RoleProcessor rm = _roleProcessor;
+			if (rm.SlotsFull(role) || _townResourceProcessor.ResourceFull(Resource.Recruit))
 				return;
 
 			Player recruit = new Player(new TwitchUser($"{-UnityEngine.Random.Range(int.MinValue, 0)}", $""), true);
-			_playerManager.AddNewPlayer(recruit, role);
+			_playerProcessor.AddNewPlayer(recruit, role);
 
-			if (_townResourceManager.ResourceFull(Resource.Recruit))
+			if (_townResourceProcessor.ResourceFull(Resource.Recruit))
 			{
 				for (int i = 0; i < buttonList.Count; i++)
 					buttonList[i].interactable = false;
@@ -424,7 +425,7 @@ namespace UserInterface.BottomBarMenu
 			}
 		}
 
-		public static void UpdateBarButtons(Resource resource, int amount, bool yes)
+		public void UpdateBarButtons(Resource resource, int amount, bool yes)
 		{
 			ShowRecruitMenu();
 		}
@@ -449,9 +450,9 @@ namespace UserInterface.BottomBarMenu
 
 		private void OnEnable()
 		{
-			PlayerControls.PlayerInputManager.OnBuildMenu += OnBuildMenuKey;
-			PlayerControls.PlayerInputManager.OnRecruit += OnRecruitMenuKey;
-			PlayerControls.PlayerInputManager.OnTechTree += OnTechTreeKey;
+			_playerInputProcessor.OnBuildMenu += OnBuildMenuKey;
+			_playerInputProcessor.OnRecruit += OnRecruitMenuKey;
+			_playerInputProcessor.OnTechTree += OnTechTreeKey;
 			_contextHidden += ContextHiddenEvent;
 			_contextShown += ContextShownEvent;
 			_canScrollRight += OnCanScrollRight;
@@ -463,9 +464,9 @@ namespace UserInterface.BottomBarMenu
 
 		private void OnDisable()
 		{
-			PlayerControls.PlayerInputManager.OnBuildMenu -= OnBuildMenuKey;
-			PlayerControls.PlayerInputManager.OnRecruit -= OnRecruitMenuKey;
-			PlayerControls.PlayerInputManager.OnTechTree -= OnTechTreeKey;
+			_playerInputProcessor.OnBuildMenu -= OnBuildMenuKey;
+			_playerInputProcessor.OnRecruit -= OnRecruitMenuKey;
+			_playerInputProcessor.OnTechTree -= OnTechTreeKey;
 			_contextHidden -= ContextHiddenEvent;
 			_contextShown -= ContextShownEvent;
 			_canScrollRight -= OnCanScrollRight;
@@ -486,7 +487,7 @@ namespace UserInterface.BottomBarMenu
 
 		private void OnTechTreeKey()
 		{
-			_uiManager.TownVoteInterface.ToggleVotingMenu();
+			_uiProcessor.TownVoteInterface.ToggleVotingMenu();
 		}
 
 		[Serializable]

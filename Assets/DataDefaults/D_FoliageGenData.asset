@@ -1,0 +1,77 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 89985765080d1184f86571444e2a7efc, type: 3}
+  m_Name: D_FoliageGenData
+  m_EditorClassIdentifier: 
+  _foliageGenerationSettings:
+  - Size: 280
+    LevelOfDetail: 4
+    NoiseScale: 10
+    Octaves: 4
+    Persistance: 0.823
+    Lacunarity: 1.53
+    Seed: 41
+    Offset: {x: 0, y: 0}
+    SpawnThreshold: 0.5
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
+    Spacing: 1
+    Meshes:
+    - {fileID: 8058893416945980758, guid: 282869ff8138a3543b4d70b92c7af851, type: 3}
+    - {fileID: 6061827220838825516, guid: 5175966c4068bef4d967118579824769, type: 3}
+    - {fileID: 1775896557147596995, guid: 21bc2e6b7657c5145978f24b7107d9d5, type: 3}
+    - {fileID: -403083268311585001, guid: c121524c206475d458927fff2ddec82f, type: 3}
+    - {fileID: 9008044042321695979, guid: c0950b0aadcf48346af2a2f1fa4820fc, type: 3}
+    - {fileID: 2441210132012940588, guid: 86502b5959874f74e9d04d4ff67e15d7, type: 3}
+    - {fileID: -9082293392281029781, guid: 1fc2e6649b3d2fe438100dd3c748abbb, type: 3}
+    - {fileID: 6531153724091246894, guid: 96a0346136730584ba5429b7a211660b, type: 3}
+    - {fileID: -1907357878548606822, guid: d6395741284ff2a4898d3c074f0ff005, type: 3}
+    - {fileID: 2581051861917864700, guid: 2858f9a6526eabe4b917f053c0a1cae9, type: 3}
+    - {fileID: -3746676656174177956, guid: 47df2beabe6cdbe439fb66afd2e82018, type: 3}
+    - {fileID: 2467405435841158184, guid: 2f1122324bafe8c40a7d011f87f27b3e, type: 3}
+    Material: {fileID: 2100000, guid: cc8c8df70fc41b04e8de9824ab27af7d, type: 2}
+  - Size: 150
+    LevelOfDetail: 1
+    NoiseScale: 4
+    Octaves: 1
+    Persistance: 0.847
+    Lacunarity: 1.53
+    Seed: 0
+    Offset: {x: 0, y: 0}
+    SpawnThreshold: 0.8
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
+    Spacing: 1
+    Meshes:
+    - {fileID: -8395620281344906741, guid: 081ad282345aaf74e9922498c2c37498, type: 3}
+    - {fileID: -4102578099973827451, guid: 2ba3d99db7590424a8416d883a3d2053, type: 3}
+    - {fileID: -6542357775297470543, guid: ecb05e7e854477447812a797d6393469, type: 3}
+    - {fileID: -3940785738837229648, guid: 6c9e7b00c5a22834ea656ed208ef9468, type: 3}
+    - {fileID: 7176977385716416504, guid: a893129195c41a24cb563721a07368cc, type: 3}
+    - {fileID: 2726131248018880332, guid: d576190b92e8bfb41a46e20b61c91388, type: 3}
+    Material: {fileID: 2100000, guid: fa4085ce3ea4d394bb4e587376c58cbd, type: 2}

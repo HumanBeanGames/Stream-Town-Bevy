@@ -1,23 +1,48 @@
 using GameResources;
 using GUIDSystem;
-using Managers;
+using Processors;
 using Reflex.Attributes;
 using SavingAndLoading.Structs;
+using Data.Containers;
 using Target;
 using UnityEngine;
 using Utils.Pooling;
 
 namespace SavingAndLoading.SavableObjects
 {
+    /// <summary>
+    /// Handles saving and loading for individual resources.
+    /// </summary>
 	public class SaveableResource : SaveableObject
 	{
+        /// <summary>
+        /// The resource holder.
+        /// </summary>
 		public ResourceHolder ResourceHolder;
-		[Inject] private GUIDManager _guidManager;
+
+        /// <summary>
+        /// The GUID processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private GUIDProcessor _guidProcessor;
+
+        /// <summary>
+        /// The resource runtime data. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private ResourceProcessor _resourceProcessor;
+
+        /// <summary>
+        /// Saves the resource data.
+        /// </summary>
+        /// <returns>The resource save data.</returns>
 		public override object SaveData()
 		{
-			return (object)new ResourceSaveData(ResourceHolder.transform, PoolName, ResourceHolder.Amount, _guidManager.CreateGUIDandAddToDictionary(PoolableObject));
+			return (object)new ResourceSaveData(ResourceHolder.transform, PoolName, ResourceHolder.Amount, _guidProcessor.CreateGUIDandAddToDictionary(PoolableObject));
 		}
 
+        /// <summary>
+        /// Loads the resource data.
+        /// </summary>
+        /// <param name="data">The resource save data.</param>
 		public override void LoadData(object data)
 		{
 			ResourceSaveData resourceData = (ResourceSaveData)data;
@@ -30,9 +55,17 @@ namespace SavingAndLoading.SavableObjects
 			ResourceHolder.transform.localScale = Vector3SaveData.ToUnityVec3(resourceData.ResourceTransform.LossyScale);
 			ResourceHolder.gameObject.SetActive(true);
 			GUIDComponent.SetGUID(resourceData.GUID);
-			_guidManager.AddToDictionary(PoolableObject);
+			_guidProcessor.AddToDictionary(PoolableObject);
 		}
 
+        /// <summary>
+        /// Sets the resource variables.
+        /// </summary>
+        /// <param name="target">The targetable object.</param>
+        /// <param name="component">The GUID component.</param>
+        /// <param name="poolName">The pool name.</param>
+        /// <param name="poolableObject">The poolable object.</param>
+        /// <param name="resourceHolder">The resource holder.</param>
 		public void SetVariables(Targetable target, GUIDComponent component, string poolName, PoolableObject poolableObject, ResourceHolder resourceHolder)
 		{
 			if (poolName == "Wood")
@@ -41,54 +74,6 @@ namespace SavingAndLoading.SavableObjects
 			}
 			ResourceHolder = resourceHolder;
 			base.SetVariables(target, component, poolName, poolableObject);
-		}
-	}
-
-	/// <summary>
-	/// Saveable object for the ResourceManager that handles saving/loading ResourceData arrays.
-	/// Replaces per-object resource saving with batch saving of all resource data.
-	/// </summary>
-	public class SaveableResourceManager : SaveableObject
-	{
-		[Inject] private ResourceManager _resourceManager;
-
-		public override object SaveData()
-		{
-			return new ResourceManagerSaveData(
-				_resourceManager.GetWoodResources(),
-				_resourceManager.GetOreResources(),
-				_resourceManager.GetFoodResources(),
-				_resourceManager.GetGoldResources(),
-				_resourceManager.GetRecruitResources()
-			);
-		}
-
-		public override void LoadData(object data)
-		{
-			ResourceManagerSaveData saveData = (ResourceManagerSaveData)data;
-
-			ResourceData[] woodResources = saveData.GetWoodResources();
-			ResourceData[] oreResources = saveData.GetOreResources();
-			ResourceData[] foodResources = saveData.GetFoodResources();
-			ResourceData[] goldResources = saveData.GetGoldResources();
-			ResourceData[] recruitResources = saveData.GetRecruitResources();
-
-			// Note: Mesh and material lists need to be restored from the generation settings
-			// This should be handled by the generation system before calling this load
-			// For now, we'll pass null and the ResourceManager will use empty lists
-			_resourceManager.SetWoodResources(woodResources, null, null);
-			_resourceManager.SetOreResources(oreResources, null, null);
-			_resourceManager.SetFoodResources(foodResources, null, null);
-			_resourceManager.SetGoldResources(goldResources, null, null);
-			_resourceManager.SetRecruitResources(recruitResources, null, null);
-
-			// Update A* graph after loading
-			_resourceManager.UpdateAllGraphBounds();
-		}
-
-		public void SetVariables(ResourceManager resourceManager)
-		{
-			_resourceManager = resourceManager;
 		}
 	}
 }

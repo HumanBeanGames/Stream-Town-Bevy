@@ -1,27 +1,41 @@
 using Buildings;
 using Character;
 using GameResources;
-using Managers;
-using Scriptables;
+using Processors;
+using Twitch.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Utils;
+using Reflex.Attributes;
 
 namespace Twitch.Commands
 {
 	/// <summary>
 	/// Handles all miscellaneous Twitch chat commands.
 	/// </summary>
-	public static class MiscCommands
+	public class MiscCommands
 	{
-		private static BuildingManager _buildingManager;
+	        /// <summary>
+        /// The building processor. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private BuildingProcessor _buildingProcessor;
+	        /// <summary>
+        /// The message sender. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private MessageSender _messageSender;
+	        /// <summary>
+        /// The role commands. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private RoleCommands _roleCommands;
+	        /// <summary>
+        /// The building commands. Injected via Reflex dependency injection.
+        /// </summary>
+	[Inject] private BuildingCommands _buildingCommands;
 
-		public static void Initialize(BuildingManager buildingManager)
-		{
-			_buildingManager = buildingManager;
-		}
-
+	        /// <summary>
+        /// A dictionary mapping building types to their descriptions.
+        /// </summary>
 		public static readonly Dictionary<BuildingType, string> BuildingDescriptions = new Dictionary<BuildingType, string>
 		{
 			{ BuildingType.Barracks, "Barracks: Unlocks Soldier slots. "},
@@ -52,6 +66,9 @@ namespace Twitch.Commands
 			{ BuildingType.Woodstorage, "WoodStorage: Increases Town's wood storage. "}
 		};
 
+	        /// <summary>
+        /// A dictionary mapping player roles to their descriptions.
+        /// </summary>
 		public static readonly Dictionary<PlayerRole, string> PlayerRoleDescriptions = new Dictionary<PlayerRole, string>
 		{
 			//{ PlayerRole.Blacksmith, "Insert Description Here"},
@@ -71,6 +88,9 @@ namespace Twitch.Commands
 			{ PlayerRole.Wizard, "Wizard: Ranged combat unit. "}
 		};
 
+	        /// <summary>
+        /// A dictionary mapping resource types to their descriptions.
+        /// </summary>
 		public static readonly Dictionary<Resource, string> ResourceDescriptions = new Dictionary<Resource, string>
 		{
 			{ Resource.Gold, "Gold: Required to make and upgrade buildings. Enemies will drop Gold when they die. The Ruler can buy and sell other resources with Gold. "},
@@ -80,6 +100,9 @@ namespace Twitch.Commands
 
 		};
 
+	        /// <summary>
+        /// A dictionary mapping enemy types to their descriptions.
+        /// </summary>
 		public static readonly Dictionary<EnemyType, string> EnemyDescriptions = new Dictionary<EnemyType, string>
 		{
 			{ EnemyType.Blargul, "Blargul: Ranged combat unit. "},
@@ -95,47 +118,55 @@ namespace Twitch.Commands
 		/// <summary>
 		/// Sends the Stream Town Discord link in chat.
 		/// </summary>
-		public static void Discord()
+		public void Discord()
 		{
-			MessageSender.SendPreBuiltMessage("discord");
+			_messageSender.SendPreBuiltMessage("discord");
 		}
 
 		/// <summary>
 		/// Sends a basic Help message to chat.
 		/// </summary>
-		public static void Help()
+		public void Help()
 		{
-			MessageSender.SendPreBuiltMessage("help");
+			_messageSender.SendPreBuiltMessage("help");
 		}
 
 		/// <summary>
 		/// Sends a brief list of important Town Statistics to chat.
 		/// </summary>
-		public static void TownStats()
+		public void TownStats()
 		{
 			//TODO:: Implement
 		}
 
+		// Gets the description for a resource type.
 		private static string GetResourceInfo(Resource type, string[] args)
 		{
 			return ResourceDescriptions[type];
 		}
 
+		// Gets the description for a player role.
 		private static string GetPlayerRoleInfo(PlayerRole role, string[] args)
 		{
 			return PlayerRoleDescriptions[role];
 		}
 
-		public static void Level(Player player, string command, params string[] args)
+        /// <summary>
+        /// Levels up a player role or building.
+        /// </summary>
+        /// <param name="player">The player.</param>
+        /// <param name="command">The command.</param>
+        /// <param name="args">The arguments containing the role/building type and optional ID/amount.</param>
+		public void Level(Player player, string command, params string[] args)
 		{
 			if (Enum.TryParse(args[0], true, out PlayerRole role))
-				RoleCommands.ExperienceForRole(player, role);
+				_roleCommands.ExperienceForRole(player, role);
 
 			else if (Enum.TryParse(args[0], true, out BuildingType type))
 			{
 				if (args.Length < 2)
 				{
-					MessageSender.SendMessage($"{player.TwitchUser.Username} no enough arguments to level up building (!level <BuildingName> <Id> +- <amount>)");
+					_messageSender.SendMessage($"{player.TwitchUser.Username} no enough arguments to level up building (!level <BuildingName> <Id> +- <amount>)");
 					return;
 				}
 				int iterations = 1;
@@ -144,38 +175,38 @@ namespace Twitch.Commands
 					if (args.Length >= 3)
 						int.TryParse(args[2], out iterations);
 
-					BuildingCommands.LevelBuilding(player, type, id, iterations);
+					_buildingCommands.LevelBuilding(player, type, id, iterations);
 				}
 				else
-					MessageSender.SendMessage($"{player.TwitchUser.Username} the id {id} is not a valid id");
+					_messageSender.SendMessage($"{player.TwitchUser.Username} the id {id} is not a valid id");
 			}
 		}
 
 
-		public static string GetBuildingCost(BuildingManager manager, BuildingType building)
+        /// <summary>
+        /// Gets the cost information for a building type.
+        /// </summary>
+        /// <param name="building">The building type.</param>
+        /// <returns>The building cost information string.</returns>
+		public string GetBuildingCost(BuildingType building)
 		{
-			BuildingDataScriptable buildData = BuildingManager.GetBuildingData(building);
-
-			ResourceCostData resourceCost = buildData.BuildResourceCost;
-			int woodCost = resourceCost.WoodCost + (int)((float)(resourceCost.WoodCost * manager.BuildingCounts[building]) * buildData.CostIncreasePerBuildingMultiplier);
-			int oreCost = resourceCost.OreCost + (int)((float)(resourceCost.OreCost * manager.BuildingCounts[building]) * buildData.CostIncreasePerBuildingMultiplier);
-			int foodCost = resourceCost.FoodCost + (int)((float)(resourceCost.FoodCost * manager.BuildingCounts[building]) * buildData.CostIncreasePerBuildingMultiplier);
-			int goldCost = resourceCost.GoldCost + (int)((float)(resourceCost.GoldCost * manager.BuildingCounts[building]) * buildData.CostIncreasePerBuildingMultiplier);
-			woodCost -= manager.CalculateCostReduction(building, woodCost);
-			oreCost -= manager.CalculateCostReduction(building, oreCost);
-			foodCost -= manager.CalculateCostReduction(building, foodCost);
-			goldCost -= manager.CalculateCostReduction(building, goldCost);
-			int maxLevel = manager.BuildingsMaxLevel[building];
+			var costSummary = _buildingProcessor.GetBuildingCostSummary(building);
 
 			string description = BuildingDescriptions[building];
-			return $" Cost: Wood: {woodCost} | Ore: {oreCost} | Food: {foodCost} | Gold: {goldCost} | Max Level: {maxLevel}";
+			return $" Cost: Wood: {costSummary.woodCost} | Ore: {costSummary.oreCost} | Food: {costSummary.foodCost} | Gold: {costSummary.goldCost} | Max Level: {costSummary.maxLevel}";
 		}
 
 
 
-		public static string GetBuildingInfo(BuildingType building, string[] args)
+        /// <summary>
+        /// Gets information about a building type or specific building instance.
+        /// </summary>
+        /// <param name="building">The building type.</param>
+        /// <param name="args">The arguments containing optional building ID.</param>
+        /// <returns>The building information string.</returns>
+		public string GetBuildingInfo(BuildingType building, string[] args)
 		{
-			BuildingManager manager = _buildingManager;
+			BuildingProcessor processor = _buildingProcessor;
 
 			// Gets information for the building type
 			if (args.Count() == 1 || building == BuildingType.Townhall)
@@ -185,7 +216,7 @@ namespace Twitch.Commands
 			else if (int.TryParse(args[1], out int id))
 			{
 				int index = id - 1;
-				if (manager.TryGetBuilding(building, index, out BuildingBase buildingBase, out string errorMessage))
+				if (processor.TryGetBuilding(building, index, out BuildingBase buildingBase, out string errorMessage))
 				{
 					string extraInfo = "";
 
@@ -205,31 +236,43 @@ namespace Twitch.Commands
 				return $"Error: cant find the building of type {building}";
 		}
 
+        /// <summary>
+        /// Gets the description for an enemy type.
+        /// </summary>
+        /// <param name="type">The enemy type.</param>
+        /// <param name="args">The arguments (unused).</param>
+        /// <returns>The enemy description string.</returns>
 		public static string GetEnemyInfo(EnemyType type, string[] args)
 		{
 			return EnemyDescriptions[type];
 		}
 
-		public static void ItemInfo(Player player, string command, params string[] args)
+        /// <summary>
+        /// Gets information about a game item (resource, role, building, or enemy).
+        /// </summary>
+        /// <param name="player">The player.</param>
+        /// <param name="command">The command.</param>
+        /// <param name="args">The arguments containing the item name.</param>
+		public void ItemInfo(Player player, string command, params string[] args)
 		{
 			if (args.Length >= 1)
 			{
 				string itemName = char.ToUpper(args[0][0]) + args[0].Substring(1);
 
 				if (Enum.TryParse(itemName, out Resource resourceType))
-					MessageSender.SendMessage(GetResourceInfo(resourceType, args));
+					_messageSender.SendMessage(GetResourceInfo(resourceType, args));
 
 				else if (Enum.TryParse(itemName, out PlayerRole role))
-					MessageSender.SendMessage(GetPlayerRoleInfo(role, args));
+					_messageSender.SendMessage(GetPlayerRoleInfo(role, args));
 
 				else if (Enum.TryParse(itemName, out BuildingType building))
-					MessageSender.SendMessage(GetBuildingInfo(building, args));
+					_messageSender.SendMessage(GetBuildingInfo(building, args));
 
 				else if (Enum.TryParse(itemName, out EnemyType enemy))
-					MessageSender.SendMessage(GetEnemyInfo(enemy, args));
+					_messageSender.SendMessage(GetEnemyInfo(enemy, args));
 
 				else
-					MessageSender.SendMessage(player.TwitchUser.Username + " " + itemName + " Is not a valid argument for !info");
+					_messageSender.SendMessage(player.TwitchUser.Username + " " + itemName + " Is not a valid argument for !info");
 			}
 		}
 	}

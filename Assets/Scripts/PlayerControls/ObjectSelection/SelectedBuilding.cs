@@ -3,17 +3,31 @@ using TMPro;
 using Buildings;
 using Units;
 using Level;
-using Managers;
+using Processors;
 using GameResources;
 using Reflex.Attributes;
 
 namespace PlayerControls.ObjectSelection
 {
+    /// <summary>
+    /// Handles the display and interaction for selected buildings.
+    /// </summary>
 	public class SelectedBuilding : SelectedObject
 	{
-		[Inject] private TownResourceManager _townResourceManager;
-		[Inject] private BuildingManager _buildingManager;
+        /// <summary>
+        /// The town resource processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TownResourceProcessor _townResourceProcessor;
 
+        /// <summary>
+        /// The building processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private BuildingProcessor _buildingProcessor;
+
+        /// <summary>
+        /// Sets the display for the selected building.
+        /// </summary>
+        /// <param name="data">The building data.</param>
 		public override void SetDisplay(object data)
 		{
 			base.SetDisplay(data);
@@ -39,7 +53,7 @@ namespace PlayerControls.ObjectSelection
 				else
 					_selectedObjectTypeUI.SelectionButtonTextTwo.text = "Level Up";
 
-				if (BuildingManager.GetBuildingData(building.BuildingType).CanLevel && building.LevelHandler.CanLevel())
+				if (_buildingProcessor.GetBuildingData(building.BuildingType).CanLevel && building.LevelHandler.CanLevel())
 					_selectedObjectTypeUI.SelectionButtonTwo.interactable = true;
 				else
 					_selectedObjectTypeUI.SelectionButtonTwo.interactable = false;
@@ -49,6 +63,9 @@ namespace PlayerControls.ObjectSelection
 			//_selectedObjectTypeUI.Description.gameObject.SetActive(false);
 		}
 
+        /// <summary>
+        /// Attaches event handlers to the building.
+        /// </summary>
 		protected override void AttachEvents()
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
@@ -77,10 +94,15 @@ namespace PlayerControls.ObjectSelection
 
 			OnButtonTwoClick += OnBuildingLevelUp;
 			_selectedObjectTypeUI.SelectionButtonTwo.onClick.AddListener(OnButtonTwoClick);
-			_townResourceManager.OnAnyResourceChangeEvent.AddListener(OnResourcesAdded);
+			_townResourceProcessor.OnAnyResourceChangeEvent += OnResourcesAdded;
 		}
 
-		private void OnResourcesAdded(Utils.Resource resource, int amount, bool yes)
+        /// <summary>
+        /// Called when resources are added.
+        /// </summary>
+        /// <param name="resource">The resource type.</param>
+        /// <param name="amount">The amount added.</param>
+		private void OnResourcesAdded(Utils.Resource resource, int amount, bool purchase)
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
 			if (building.LevelHandler != null)
@@ -88,6 +110,9 @@ namespace PlayerControls.ObjectSelection
 					_selectedObjectTypeUI.SelectionButtonTwo.interactable = true;
 		}
 
+        /// <summary>
+        /// Detaches event handlers from the building.
+        /// </summary>
 		protected override void DetachEvents()
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
@@ -115,24 +140,34 @@ namespace PlayerControls.ObjectSelection
 			_selectedObjectTypeUI.RoleImage.gameObject.SetActive(true);
 			OnButtonTwoClick -= OnBuildingLevelUp;
 			_selectedObjectTypeUI.SelectionButtonTwo.onClick.RemoveAllListeners();
+			_townResourceProcessor.OnAnyResourceChangeEvent -= OnResourcesAdded;
 		}
 
+        /// <summary>
+        /// Called when the remove button is clicked.
+        /// </summary>
 		public void OnRemoveButtonClick()
 		{
 			_selectedObjectTypeUI.ConfirmCheck.SetConfirmCheck(OnCheckConfirm, OnCheckDeny, "Do you wish to remove this building?", "This action is irreversable and will delete this building!");
 		}
 
+        /// <summary>
+        /// Removes the building.
+        /// </summary>
 		public void RemoveBuilding()
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
-			if (_buildingManager.TryRemoveBuilding(building))
+			if (_buildingProcessor.TryRemoveBuilding(building))
 				_selectedObjectTypeUI.HideContext();
 		}
 
+        /// <summary>
+        /// Called when the building levels up.
+        /// </summary>
 		public void OnBuildingLevelUp()
 		{
 			BuildingBase building = (BuildingBase)_selectedObject;
-			if (!_buildingManager.CanLevelBuilding(building))
+			if (!_buildingProcessor.CanLevelBuilding(building))
 				_selectedObjectTypeUI.SelectionButtonTwo.interactable = false;
 			else if (building.LevelHandler.Level == building.LevelHandler.MaxLevel)
 			{
@@ -141,7 +176,14 @@ namespace PlayerControls.ObjectSelection
 			}
 		}
 
+        /// <summary>
+        /// Detaches the current events.
+        /// </summary>
 		public void DetachCurrentEvents() { DetachEvents(); }
+
+        /// <summary>
+        /// Updates the display.
+        /// </summary>
 		public override void UpdateDisplay()
 		{
 			BuildingBase buildingBase = (BuildingBase)_selectedObject;
@@ -150,6 +192,9 @@ namespace PlayerControls.ObjectSelection
 			UpdateBuildingLevel(buildingBase.LevelHandler);
 		}
 
+        /// <summary>
+        /// Enables the display.
+        /// </summary>
 		protected override void EnableDisplay()
 		{
 			_selectedObjectTypeUI.Title.gameObject.SetActive(true);
@@ -159,11 +204,18 @@ namespace PlayerControls.ObjectSelection
 			_selectedObjectTypeUI.ButtonHolderTwo.gameObject.SetActive(true);
 		}
 
+        /// <summary>
+        /// Sets the building name in the UI.
+        /// </summary>
 		private void SetBuildingName()
 		{
 			_selectedObjectTypeUI.Title.text = (((BuildingBase)_selectedObject).BuildingType.ToString()).ToUpper();
 		}
 
+        /// <summary>
+        /// Updates the building health display.
+        /// </summary>
+        /// <param name="health">The health handler.</param>
 		public void UpdateBuildingHealth(HealthHandler health)
 		{
 			_selectedObjectTypeUI.RedSliderValue.text = health.Health + " / " + health.MaxHealth;
@@ -173,6 +225,10 @@ namespace PlayerControls.ObjectSelection
 				_selectedObjectTypeUI.RedSlider.value = 0;
 		}
 
+        /// <summary>
+        /// Updates the building level display.
+        /// </summary>
+        /// <param name="level">The level handler.</param>
 		public void UpdateBuildingLevel(LevelHandler level)
 		{
 			if (level != null)
@@ -182,6 +238,10 @@ namespace PlayerControls.ObjectSelection
 
 		}
 
+        /// <summary>
+        /// Updates the marketplace rate display.
+        /// </summary>
+        /// <param name="incrementor">The passive resource incrementer.</param>
 		public void UpdateMarketPlaceRate(PassiveResourceIncrementer incrementor)
 		{
 			_selectedObjectTypeUI.Role.text = incrementor.GetInformation();

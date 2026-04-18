@@ -19,23 +19,38 @@ namespace Buildings
 		private List<Collider> _collidersInBounds = new List<Collider>();
 
 		// Animation Hashes
+        /// <summary>
+        /// Hash for the open animation trigger.
+        /// </summary>
 		private static int _openHash = Animator.StringToHash("Open");
+
+        /// <summary>
+        /// Hash for the close animation trigger.
+        /// </summary>
 		private static int _closeHash = Animator.StringToHash("Close");
 
 		// Required Components.
+        /// <summary>
+        /// The rigidbody component of the gate.
+        /// </summary>
 		private Rigidbody _rigidBody;
+
+        /// <summary>
+        /// Array of animators for gate animation.
+        /// </summary>
 		[SerializeField]
 		private Animator[] _animators;
 
 		/// <summary>
 		/// Sets the gate to be active or not.
 		/// </summary>
-		/// <param name="value"></param>
+		/// <param name="value">Whether the gate should be active.</param>
 		public void SetActive(bool value)
 		{
 			_active = value;
 		}
 
+        // Gets required components and sets up the rigidbody.
 		private void Awake()
 		{
 			// Get Required Components.
@@ -49,7 +64,7 @@ namespace Buildings
 		/// <summary>
 		/// Called when a collider enters the trigger box.
 		/// </summary>
-		/// <param name="other"></param>
+		/// <param name="other">The collider that entered the trigger.</param>
 		private void OnTriggerEnter(Collider other)
 		{
 			// If gate is not active, do nothing and return.
@@ -74,7 +89,7 @@ namespace Buildings
 		/// <summary>
 		/// Called when a collider exits the trigger box.
 		/// </summary>
-		/// <param name="other"></param>
+		/// <param name="other">The collider that exited the trigger.</param>
 		private void OnTriggerExit(Collider other)
 		{
 			// If gate is not active, do nothing and return.

@@ -8,6 +8,9 @@ namespace Target
 	/// </summary>
 	public class TargetableBuilding : TargetableHealth
 	{
+        /// <summary>
+        /// The building base.
+        /// </summary>
 		protected BuildingBase _building;
 
 		/// <summary>
@@ -37,7 +40,7 @@ namespace Target
 		/// <summary>
 		/// Called when the Building's health is neither zero or full.
 		/// </summary>
-		/// <param name="value"></param>
+		/// <param name="value">The health percentage.</param>
 		protected override void OnHealthPercentageOther(float value)
 		{
 			if (_building.BuildingState == BuildingState.Building)

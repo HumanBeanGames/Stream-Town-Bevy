@@ -3,7 +3,6 @@ using UnityEngine;
 using System.Collections.Generic;
 using Utils;
 using Twitch;
-using Managers;
 using Units;
 using Sensors;
 using Twitch.Utils;
@@ -14,7 +13,9 @@ using Pets.Enumerations;
 using Pets;
 using Utils.Pooling;
 using TwitchLib.Client.Enums;
+using Processors;
 using Twitch.Commands;
+using ScriptablesProcessorInfrastructure;
 
 namespace SavingAndLoading.Structs
 {
@@ -93,20 +94,19 @@ namespace SavingAndLoading.Structs
 		/// Converts PlayerSaveData to Player,
 		/// </summary>
 		/// <returns>PlayerSaveData to class</returns>
-		public Player ToPlayer(uint gUID, uint targetGUID, uint stationGUID, GameManager gameManager, ObjectPoolingManager poolingManager)
+		public Player ToPlayer(uint guid, uint targetGuid, uint stationGuid, GameSettings gameSettings, ObjectPoolingProcessor poolingProcessor)
 		{
 			Player player = new Player(new TwitchUser(TwitchID, TwitchName));
 
-			if (GameUserType == GameUserType.GameMaster && !GameMasterCommands.IsGameMaster(player))
-				GameUserType = GameUserType.Normal;
-			else if (GameMasterCommands.IsGameMaster(player))
+			// Game master status is determined by GameSettings.GM_IDs
+			if (gameSettings.GM_IDs.Contains(player.TwitchUser.UserID))
 				GameUserType = GameUserType.GameMaster;
 
 			player.TwitchUser.TwitchUserType = TwitchUserType;
 			player.TwitchUser.GameUserType = GameUserType;
 			player.TwitchUser.IsBroadcaster = IsBroadcaster;
 
-			player.Character = poolingManager.GetPooledObject("Player").gameObject;
+			player.Character = poolingProcessor.GetPooledObject("Player").gameObject;
 			player.HealthHandler = player.Character.GetComponent<HealthHandler>();
 			player.StationSensor = player.Character.GetComponent<StationSensor>();
 			player.TargetSensor = player.Character.GetComponent<TargetSensor>();
@@ -132,7 +132,7 @@ namespace SavingAndLoading.Structs
 					unlockedPets.Add((PetType)i, false);
 			}
 
-			PoolableObject petObj = poolingManager.GetPooledObject("Pet");
+			PoolableObject petObj = poolingProcessor.GetPooledObject("Pet");
 			Pet pet = petObj.GetComponent<Pet>();
 
 			player.Pet = pet;
@@ -146,19 +146,16 @@ namespace SavingAndLoading.Structs
 				pet.ActivatePet();
 			}
 
-			if (IsBroadcaster)
-				gameManager.SetUserPlayer(player);
-
 			player.Pet = pet;
 			player.PetsUnlocked = unlockedPets;
 			GUIDComponent comp = player.Character.GetComponent<GUIDComponent>();
-			comp.SetGUID(gUID);
+			comp.SetGUID(guid);
 
 			//if (stationGUID != 0)
-			//	player.StationSensor.TrySetStation(gameManager.GUIDManager.GetComponentFromID(stationGUID).gameObject.GetComponent<Station>());
+			//	player.StationSensor.TrySetStation(gameProcessor.GUIDProcessor.GetComponentFromID(stationGUID).gameObject.GetComponent<Station>());
 
 			//if (targetGUID != 0)
-			//	player.TargetSensor.TrySetTarget(gameManager.GUIDManager.GetComponentFromID(TargetGUID).gameObject.GetComponent<Targetable>());
+			//	player.TargetSensor.TrySetTarget(gameProcessor.GUIDProcessor.GetComponentFromID(TargetGUID).gameObject.GetComponent<Targetable>());
 
 			player.RoleHandler.Player = player;
 

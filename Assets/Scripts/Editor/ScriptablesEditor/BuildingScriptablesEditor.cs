@@ -1,4 +1,4 @@
-using Scriptables;
+using ScriptablesProcessorInfrastructure;
 using UnityEditor;
 using UnityEngine;
 using Utils;
@@ -9,7 +9,7 @@ namespace ScriptablesEditor
     {
         public static void DrawBuildingScriptableData(object data)
         {
-            BuildingDataScriptable building = (BuildingDataScriptable)data;
+            BuildingData building = (BuildingData)data;
 
             if (building == null)
                 return;

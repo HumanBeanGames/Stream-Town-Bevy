@@ -1,39 +1,74 @@
-using Managers;
+using Processors;
+using Core;
 using System;
 using TwitchLib.Client.Events;
 using Reflex.Attributes;
 using TechTree;
 using GameEventSystem;
+using MetaData;
 
 namespace Twitch.Commands
 {
-	public static class BroadcasterCommands
+    /// <summary>
+    /// Handles Twitch chat commands for the broadcaster.
+    /// </summary>
+	public class BroadcasterCommands
 	{
-		private static GameManager _gameManager;
-		[Inject] private static TechTreeManager _techTreeManager;
-		[Inject] private static GameEventManager _gameEventManager;
+        /// <summary>
+        /// The game coordinator. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private Coordinator _gameProcessor;
 
-		public static void Initialize(GameManager gameManager)
-		{
-			_gameManager = gameManager;
-		}
+        /// <summary>
+        /// The main menu runtime scriptable. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private MainMenuProcessor _mainMenuProcessor;
 
-		internal static void Connect(string arg, OnChatCommandReceivedArgs e)
+        /// <summary>
+        /// The player runtime scriptable. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private PlayerProcessor _playerProcessor;
+
+        /// <summary>
+        /// The tech tree processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TechTreeProcessor _techTreeProcessor;
+
+        /// <summary>
+        /// The game event processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private GameEventProcessor _gameEventProcessor;
+
+        /// <summary>
+        /// The message sender. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private MessageSender _messageSender;
+
+        /// <summary>
+        /// The player commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private PlayerCommands _playerCommands;
+
+        /// <summary>
+        /// Connects the broadcaster to the game.
+        /// </summary>
+        /// <param name="arg">The connection code argument.</param>
+        /// <param name="e">The chat command received args.</param>
+		internal void Connect(string arg, OnChatCommandReceivedArgs e)
 		{
 #if UNITY_EDITOR
-			MessageSender.MessagesAllowed = true;
+			_messageSender.MessagesAllowed = true;
 #else
-			if (arg == _gameManager.Code && e.Command.ChatMessage.IsBroadcaster)
-				MessageSender.MessagesAllowed = true;
+			if (arg == _gameProcessor.Code && e.Command.ChatMessage.IsBroadcaster)
+				_messageSender.MessagesAllowed = true;
 			else
 				return;
 #endif
-			_gameManager.CodeDisplay.text = "";
-			_gameManager.ConnectPanel.SetActive(false);
-			_techTreeManager.StartCoroutine(_techTreeManager.DelayedSetup());
-			_gameEventManager.CanStartNewRulerVote = true;
-			if (_gameManager.MetaDatas.LoadType == MetaData.LoadType.Generate || _gameManager.MetaDatas.LoadType == MetaData.LoadType.Load && _gameManager.UserPlayer == null)
-				_gameManager.SetUserPlayer(PlayerCommands.TryCreatePlayer(e));
+			_mainMenuProcessor.CodeDisplay?.Invoke("");
+			_mainMenuProcessor.ConnectPanel.SetActive(false);
+			_techTreeProcessor.RequestDelayedSetup();
+			if (_mainMenuProcessor.LoadType == LoadType.Generate || _mainMenuProcessor.LoadType == LoadType.Load && _playerProcessor.UserPlayer == null)
+				_playerProcessor.SetUserPlayer(_playerCommands.TryCreatePlayer(e));
 		}
 	}
 }

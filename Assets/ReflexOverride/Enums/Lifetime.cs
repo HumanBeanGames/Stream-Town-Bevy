@@ -1,4 +1,4 @@
-﻿namespace Reflex.Enums
+namespace Reflex.Enums
 {
     public enum Lifetime
     {

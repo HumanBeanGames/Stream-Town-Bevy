@@ -10,25 +10,50 @@ namespace Enemies
 	/// </summary>
 	public class EnemyModelHandler : MonoBehaviour
 	{
+		/// <summary>
+		/// List of base models (usually bodies).
+		/// </summary>
 		[SerializeField]
 		private List<GameObject> _baseModels;
 
+		/// <summary>
+		/// List of permanent models that should always be active.
+		/// </summary>
 		[SerializeField]
 		private List<GameObject> _permanentModels;
 
+		/// <summary>
+		/// List of optional models (pieces of armor or clothing).
+		/// </summary>
 		[SerializeField]
 		private List<GameObject> _optionalModels;
 
+		/// <summary>
+		/// List of linked weapon models.
+		/// </summary>
 		[SerializeField]
 		private List<EnemyWeaponModel> _linkedWeaponModels;
 
+		/// <summary>
+		/// Base animation variants for use when enemies don't have a weapon.
+		/// </summary>
 		[SerializeField, Tooltip("For use when enemies dont have a weapon")]
 		private int _baseAnimationVariants = 1;
 
+		/// <summary>
+		/// Whether to randomize the model on spawn.
+		/// </summary>
 		[SerializeField]
 		private bool _randomize;
 
+		/// <summary>
+		/// The current base model index.
+		/// </summary>
 		private int _baseModelIndex = 0;
+
+		/// <summary>
+		/// The current weapon model index.
+		/// </summary>
 		private int _weaponModelIndex = 0;
 
 		/// <summary>
@@ -67,7 +92,7 @@ namespace Enemies
 		/// <summary>
 		/// Returns the name of the animation used for Attacking.
 		/// </summary>
-		/// <returns></returns>
+		/// <returns>The attack animation name.</returns>
 		public AnimationName GetAttackAnimation()
 		{
 			if (_linkedWeaponModels == null || _linkedWeaponModels.Count == 0)
@@ -81,7 +106,7 @@ namespace Enemies
 		/// <summary>
 		/// Returns a random index based on the number of attack animation variants.
 		/// </summary>
-		/// <returns></returns>
+		/// <returns>A random attack animation index.</returns>
 		public int GetAttackIndex()
 		{
 			if (_linkedWeaponModels == null || _linkedWeaponModels.Count == 0)
@@ -95,7 +120,7 @@ namespace Enemies
 		/// <summary>
 		/// Returns the number of Attack Animation variants.
 		/// </summary>
-		/// <returns></returns>
+		/// <returns>The number of attack animation variants.</returns>
 		public int GetAttackVariantCount()
 		{
 			if (_linkedWeaponModels == null || _linkedWeaponModels.Count == 0)
@@ -109,7 +134,7 @@ namespace Enemies
 		/// <summary>
 		/// Returns the type of Run Animation.
 		/// </summary>
-		/// <returns></returns>
+		/// <returns>The run animation type.</returns>
 		public RunAnimation GetRunAnimation()
 		{
 			if (_linkedWeaponModels == null || _linkedWeaponModels.Count == 0)
@@ -121,6 +146,7 @@ namespace Enemies
 		}
 
 		// Unity Events.
+        // Initializes the enemy model handler and randomizes the model.
 		private void Awake()
 		{
 			AnimationHandler anim = GetComponent<AnimationHandler>();
@@ -131,6 +157,7 @@ namespace Enemies
 			RandomizeModel();
 		}
 
+        // Sets the current weapon model active on Enable.
 		private void OnEnable()
 		{
 			if (_linkedWeaponModels.Count == 0)

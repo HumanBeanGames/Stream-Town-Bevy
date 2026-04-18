@@ -1,32 +1,36 @@
 using Buildings;
 using Character;
-using Managers;
+using Processors;
+using Twitch.Utils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace Twitch.Commands
 {
 	/// <summary>
 	/// Handles all Twitch Chat Commands related to Building.
 	/// </summary>
-	public static class BuildingCommands
+	public class BuildingCommands
 	{
-		private static BuildingManager _buildingManager;
-
-		public static void Initialize(BuildingManager buildingManager)
-		{
-			_buildingManager = buildingManager;
-		}
+        /// <summary>
+        /// The building processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private BuildingProcessor _buildingProcessor;
+        /// <summary>
+        /// The message sender. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private MessageSender _messageSender;
 
 		/// <summary>
 		/// Returns the type of Building from the given argument.
 		/// </summary>
-		/// <param name="arg"></param>
-		/// <returns></returns>
-		public static string GetBuildingTypeFromArg(string arg)
+		/// <param name="arg">The argument string.</param>
+		/// <returns>The building type string.</returns>
+		public string GetBuildingTypeFromArg(string arg)
 		{
 			return char.ToUpper(arg[0]) + arg.Substring(1);
 		}
@@ -34,27 +38,27 @@ namespace Twitch.Commands
 		/// <summary>
 		/// Attempts to start a building with type given in the argument.
 		/// </summary>
-		/// <param name="player"></param>
-		/// <param name="command"></param>
-		/// <param name="args"></param>
-		public static void StartBuild(Player player, string command, params string[] args)
+		/// <param name="player">The player.</param>
+		/// <param name="command">The command.</param>
+		/// <param name="args">The arguments.</param>
+		public void StartBuild(Player player, string command, params string[] args)
 		{
 			string buildType = GetBuildingTypeFromArg(args[0]);
 
 			if (Enum.TryParse(buildType, out BuildingType type))
 			{
-				if (!_buildingManager.TryStartNewBuildingPlacer(player, type, out string errorMessage))
-					MessageSender.SendMessage($"{player.TwitchUser.Username} : Failed - {errorMessage}");
+				if (!_buildingProcessor.TryStartNewBuildingPlacer(player, type, out string errorMessage))
+					_messageSender.SendMessage($"{player.TwitchUser.Username} : Failed - {errorMessage}");
 			}
 		}
 
 		/// <summary>
 		/// Moves and Rotates the Building Placer by the specified amount.
 		/// </summary>
-		/// <param name="player"></param>
-		/// <param name="command"></param>
-		/// <param name="args"></param>
-		public static void AdjustBuildingPlacer(Player player, string command, params string[] args)
+		/// <param name="player">The player.</param>
+		/// <param name="command">The command.</param>
+		/// <param name="args">The arguments.</param>
+		public void AdjustBuildingPlacer(Player player, string command, params string[] args)
 		{
 			Vector3 moveVector = Vector3.zero;
 			int rotationAmount = 0;
@@ -93,56 +97,62 @@ namespace Twitch.Commands
 
 			}
 
-			_buildingManager.TryMoveBuilding(player, moveVector);
-			_buildingManager.TryRotateBuilding(player, rotationAmount);
+			_buildingProcessor.TryMoveBuilding(player, moveVector);
+			_buildingProcessor.TryRotateBuilding(player, rotationAmount);
 		}
 
 		/// <summary>
 		/// Confirms the placement of the building and returns a message if it failed.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void ConfirmBuildingPlacement(Player player)
+		public void ConfirmBuildingPlacement(Player player)
 		{
-			if (!_buildingManager.TryPlaceBuilding(player, out string errorMessage))
+			if (!_buildingProcessor.TryPlaceBuilding(player, out string errorMessage))
 			{
-				MessageSender.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
+				_messageSender.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
 			}
 		}
 
 		/// <summary>
 		/// Cancels the placement of a building.
 		/// </summary>
-		/// <param name="player"></param>
-		public static void CancelBuildingPlacement(Player player)
+		/// <param name="player">The player.</param>
+		public void CancelBuildingPlacement(Player player)
 		{
-			_buildingManager.TryCancelBuilding(player);
+			_buildingProcessor.TryCancelBuilding(player);
 		}
 
 		/// <summary>
 		/// Attempts to level up all buildings of a given type by the given amount;
 		/// </summary>
-		/// <param name="player"></param>
-		/// <param name="command"></param>
-		/// <param name="args"></param>
-		public static void LevelBuilding(Player player, BuildingType type, int id, int iterations)
+		/// <param name="player">The player.</param>
+		/// <param name="command">The command.</param>
+		/// <param name="args">The arguments.</param>
+		public void LevelBuilding(Player player, BuildingType type, int id, int iterations)
 		{
 
 			string errorMessage = "";
 			int successfulLevels = 0;
 			for (int i = 0; i < iterations; i++)
-				if (!_buildingManager.TryLevelBuilding(type, id - 1, out errorMessage))
+				if (!_buildingProcessor.TryLevelBuilding(type, id - 1, out errorMessage))
 					break;
 				else
 					successfulLevels++;
 
 			if (successfulLevels > 0)
-				MessageSender.SendMessage($"{player.TwitchUser.Username} Successfully Leveled Building {successfulLevels} {(successfulLevels > 1 ? "Times" : "Time")}");
+				_messageSender.SendMessage($"{player.TwitchUser.Username} Successfully Leveled Building {successfulLevels} {(successfulLevels > 1 ? "Times" : "Time")}");
 			else
-				MessageSender.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
+				_messageSender.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
 		}
 
 
-		public static void LevelAllOfType(Player player, string command, params string[] args)
+		/// <summary>
+		/// Levels all buildings of a specified type to a target level.
+		/// </summary>
+		/// <param name="player">The player.</param>
+		/// <param name="command">The command.</param>
+		/// <param name="args">The arguments.</param>
+		public void LevelAllOfType(Player player, string command, params string[] args)
 		{
 			if (args.Length < 2)
 				return;
@@ -151,7 +161,7 @@ namespace Twitch.Commands
 			int successfulAttempts = 0;
 			if (Enum.TryParse(buildType, out BuildingType type) && int.TryParse(args[1], out int levelTo))
 			{
-				var buildingsOfType = _buildingManager.GetBuildingsByType(type);
+				var buildingsOfType = _buildingProcessor.GetBuildingsByType(type);
 
 				if (buildingsOfType.Count <= 0)
 					return;
@@ -165,7 +175,7 @@ namespace Twitch.Commands
 					{
 						if (buildingsOfType[j].LevelHandler.Level >= levelTo)
 							continue;
-						if (!_buildingManager.TryLevelBuilding(buildingsOfType[j], out string errorMessage))
+						if (!_buildingProcessor.TryLevelBuilding(buildingsOfType[j], out string errorMessage))
 							continue;
 						successfulAttempts++;
 						successfulLevel = true;
@@ -178,36 +188,29 @@ namespace Twitch.Commands
 			}
 
 			if (successfulAttempts > 0)
-				MessageSender.SendPlayerMessage(player, $"Successfully leveled {successfulAttempts} times!");
+				_messageSender.SendPlayerMessage(player, $"Successfully leveled {successfulAttempts} times!");
 			else
-				MessageSender.SendPlayerMessage(player, $"Failed to level buildings");
+				_messageSender.SendPlayerMessage(player, $"Failed to level buildings");
 		}
 
-		public static void GetBuildingInformation(Player player, string command, params string[] args)
+        /// <summary>
+        /// Gets building information including cost and max level.
+        /// </summary>
+        /// <param name="player">The player.</param>
+        /// <param name="command">The command.</param>
+        /// <param name="args">The arguments.</param>
+		public void GetBuildingInformation(Player player, string command, params string[] args)
 		{
 			string buildingTypeString = GetBuildingTypeFromArg(args[0]);
 
 			if (!Enum.TryParse(buildingTypeString, out BuildingType type))
 				return;
 
-			BuildingManager manager = _buildingManager;
+			BuildingProcessor processor = _buildingProcessor;
+			var costSummary = processor.GetBuildingCostSummary(type);
 
-			var buildData = BuildingManager.GetBuildingData(type);
-
-			var resourceCost = buildData.BuildResourceCost;
-
-			int woodCost = resourceCost.WoodCost + (int)((float)(resourceCost.WoodCost * manager.BuildingCounts[type]) * buildData.CostIncreasePerBuildingMultiplier);
-			int oreCost = resourceCost.OreCost + (int)((float)(resourceCost.OreCost * manager.BuildingCounts[type]) * buildData.CostIncreasePerBuildingMultiplier);
-			int foodCost = resourceCost.FoodCost + (int)((float)(resourceCost.FoodCost * manager.BuildingCounts[type]) * buildData.CostIncreasePerBuildingMultiplier);
-			int goldCost = resourceCost.GoldCost + (int)((float)(resourceCost.GoldCost * manager.BuildingCounts[type]) * buildData.CostIncreasePerBuildingMultiplier);
-			woodCost -= manager.CalculateCostReduction(type, woodCost);
-			oreCost -= manager.CalculateCostReduction(type, oreCost);
-			foodCost -= manager.CalculateCostReduction(type, foodCost);
-			goldCost -= manager.CalculateCostReduction(type, goldCost);
-			int maxLevel = manager.BuildingsMaxLevel[type];
-
-			string message = $"Building Cost for '{type}': Wood: {woodCost} | Ore: {oreCost} | Food: {foodCost} | Gold: {goldCost} | Max Level: {maxLevel}";
-			MessageSender.SendMessage($"{player.TwitchUser.Username}: {message}");
+			string message = $"Building Cost for '{type}': Wood: {costSummary.woodCost} | Ore: {costSummary.oreCost} | Food: {costSummary.foodCost} | Gold: {costSummary.goldCost} | Max Level: {costSummary.maxLevel}";
+			_messageSender.SendMessage($"{player.TwitchUser.Username}: {message}");
 		}
 
 		/// <summary>
@@ -216,7 +219,7 @@ namespace Twitch.Commands
 		/// <param name="player"></param>
 		/// <param name="command"></param>
 		/// <param name="args"></param>
-		public static void RemoveBuilding(Player player, string command, params string[] args)
+		public void RemoveBuilding(Player player, string command, params string[] args)
 		{
 			if (args.Length < 2)
 				return;
@@ -224,10 +227,9 @@ namespace Twitch.Commands
 			string buildType = GetBuildingTypeFromArg(args[0]);
 			if (Enum.TryParse(buildType, out BuildingType type) && int.TryParse(args[1], out int index))
 			{
-
-				if (_buildingManager.TryRemoveBuilding(type, index - 1, out string errorMessage))
+				if (_buildingProcessor.TryRemoveBuilding(type, index - 1, out string errorMessage))
 				{
-					MessageSender.SendMessage($"{player.TwitchUser.Username} Successfully Removed Building");
+					_messageSender.SendMessage($"{player.TwitchUser.Username} Successfully Removed Building");
 				}
 			}
 		}
@@ -235,16 +237,16 @@ namespace Twitch.Commands
 		/// <summary>
 		/// Displays the ID of all buildings of the given type.
 		/// </summary>
-		/// <param name="player"></param>
-		/// <param name="command"></param>
-		/// <param name="args"></param>
-		public static void ShowBuildingIDsByType(Player player, string command, params string[] args)
+		/// <param name="player">The player.</param>
+		/// <param name="command">The command.</param>
+		/// <param name="args">The arguments.</param>
+		public void ShowBuildingIDsByType(Player player, string command, params string[] args)
 		{
 			string buildType = GetBuildingTypeFromArg(args[0]);
 
 			if (Enum.TryParse(buildType, out BuildingType type))
 			{
-				_buildingManager.DisplayBuildingIdsOfType(type);
+				_buildingProcessor.DisplayBuildingIdsOfType(type);
 			}
 		}
 
@@ -252,7 +254,7 @@ namespace Twitch.Commands
 		/// Displays the currently unlocked buildings.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void PrintUnlockedBuildings(Player player)
+		public void PrintUnlockedBuildings(Player player)
 		{
 			string buildingList = "Unlocked Buildings: ";
 			bool hasBuildings = false;
@@ -261,7 +263,7 @@ namespace Twitch.Commands
 			{
 				BuildingType type = (BuildingType)i;
 
-				if (_buildingManager.BuildingsUnlocked.ContainsKey(type) && _buildingManager.BuildingsUnlocked[type] && type != BuildingType.Townhall)
+				if (_buildingProcessor.BuildingsUnlocked.ContainsKey(type) && _buildingProcessor.BuildingsUnlocked[type] && type != BuildingType.Townhall)
 				{
 					hasBuildings = true;
 					buildingList += $"{type}, ";
@@ -275,7 +277,7 @@ namespace Twitch.Commands
 			else
 				buildingList += "None";
 
-			MessageSender.SendMessage($"{player.TwitchUser.Username} {buildingList}");
+			_messageSender.SendMessage($"{player.TwitchUser.Username} {buildingList}");
 		}
 	}
 }

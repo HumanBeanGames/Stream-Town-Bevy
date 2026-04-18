@@ -7,12 +7,15 @@ namespace Buildings
 	/// </summary>
 	public class PlacementProbeHandler : MonoBehaviour
 	{
+        /// <summary>
+        /// Array of placement probes.
+        /// </summary>
 		private PlacementProbe[] _probes;
 
 		/// <summary>
 		/// Returns true if all probes are on their desired surface.
 		/// </summary>
-		/// <returns></returns>
+		/// <returns>True if all probes passed the check.</returns>
 		public bool AllProbesPassedCheck()
 		{
 			// Loop through all probes and check if they are on their desired surfaces.
@@ -29,6 +32,7 @@ namespace Buildings
 		/// <summary>
 		/// Populates the probes array.
 		/// </summary>
+		// This method is used to get all child placement probes and store them in the _probes array.
 		private void GetAllProbes()
 		{
 			_probes = GetComponentsInChildren<PlacementProbe>();
@@ -38,6 +42,7 @@ namespace Buildings
 		}
 
 		// Unity Functions.
+        // Initializes the probe handler by getting all child placement probes.
 		private void Awake()
 		{
 			GetAllProbes();

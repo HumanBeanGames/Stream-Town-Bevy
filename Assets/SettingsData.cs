@@ -23,16 +23,16 @@ public class SettingsData
     /// Which preset the UI currently represents. This is informational and used to light up the correct button;
     /// values below still hold the actual applied configuration.
     /// </summary>
-    public Settings.SettingsManager.Preset preset;
+    public Settings.SettingsProcessor.Preset preset;
 
     /// <summary>
     /// Display mode index (e.g., 0=Windowed, 1=Borderless, 2=Exclusive Fullscreen).
-    /// Exact mapping is defined by the UI/SettingsManager.
+    /// Exact mapping is defined by the UI/SettingsProcessor.
     /// </summary>
     public int displayMode;
 
     /// <summary>
-    /// Resolution index into your GraphicsManager.Resolutions list.
+    /// Resolution index into your GraphicsProcessor.Resolutions list.
     /// </summary>
     public int resolution;
 
@@ -57,7 +57,7 @@ public class SettingsData
     public bool vSync;
 
     /// <summary>
-    /// FPS limiter index (e.g., 0=24,1=30,2=60,3=120,4=240,5=Unlimited). Exact mapping is in SettingsManager.
+    /// FPS limiter index (e.g., 0=24,1=30,2=60,3=120,4=240,5=Unlimited). Exact mapping is in SettingsProcessor.
     /// </summary>
     public int fpsLimiter;
 
@@ -67,7 +67,7 @@ public class SettingsData
     public float brightness;
 
     /// <summary>
-    /// Gamma lift (stored as the 'A' of LiftGammaGain.gamma). Exact mapping defined in SettingsManager.
+    /// Gamma lift (stored as the 'A' of LiftGammaGain.gamma). Exact mapping defined in SettingsProcessor.
     /// </summary>
     public float gamma;
 
@@ -85,7 +85,7 @@ public class SettingsData
     // AUDIO MIX
     // ==========
 
-    /// <summary> Linear [0..1] master bus volume. Converted to dB in SettingsManager. </summary>
+    /// <summary> Linear [0..1] master bus volume. Converted to dB in SettingsProcessor. </summary>
     public float masterVolume;
     /// <summary> Linear [0..1] music bus volume. </summary>
     public float musicVolume;
@@ -109,7 +109,7 @@ public class SettingsData
     /// <summary> Camera field-of-view in degrees. </summary>
     public int fov;
 
-    /// <summary> Autosave interval index; mapped to seconds via Autosave.Intervals in SettingsManager. </summary>
+    /// <summary> Autosave interval index; mapped to seconds via Autosave.Intervals in SettingsProcessor. </summary>
     public int autosaveTime;
 
     // ============
@@ -152,11 +152,11 @@ public class SettingsData
     public SettingsData()
     {
         // Preset recorded as "Custom" by default; actual values below define the effective state.
-        preset = Settings.SettingsManager.Preset.Custom;
+        preset = Settings.SettingsProcessor.Preset.Custom;
 
         // Sensible engine defaults (match these to your project's expected out-of-box settings)
         displayMode = 2;      // Example: Exclusive Fullscreen
-        resolution = 18;      // Example index into your GraphicsManager.Resolutions
+        resolution = 18;      // Example index into your GraphicsProcessor.Resolutions
 
         shadowType = 2;       // Soft shadows
         shadowResolution = 4; // 4096
@@ -278,7 +278,7 @@ public class SettingsData
 
     /// <summary>
     /// Field-by-field comparison of two SettingsData instances to determine if anything visible in the UI changed.
-    /// Used by SettingsManager to trigger "unsaved changes" prompts.
+    /// Used by SettingsProcessor to trigger "unsaved changes" prompts.
     /// Update this if you add/remove settings visible to the user.
     /// </summary>
     public static bool SettingsEqual(SettingsData x, SettingsData y)

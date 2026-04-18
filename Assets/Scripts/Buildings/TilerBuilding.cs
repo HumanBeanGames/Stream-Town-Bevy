@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using System;
 using TechTree;
 using UnityEngine;
@@ -12,8 +12,16 @@ namespace Buildings
 	/// </summary>
 	public class TilerBuilding : Tiler
 	{
+        /// <summary>
+        /// The building base component.
+        /// </summary>
 		private BuildingBase _buildingBase;
-		[Inject] private TechTreeManager _techTreeManager;
+
+        /// <summary>
+        /// Tech tree processor for tech tree event subscriptions.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TechTreeProcessor _techTreeProcessor;
 
 		/// <summary>
 		/// Initializes components.
@@ -23,9 +31,10 @@ namespace Buildings
 			_buildingBase = GetComponent<BuildingBase>();
 			base.Init();
 
-			_techTreeManager.OnBuildingAgedUp += OnBuildingAged;
+			_techTreeProcessor.OnBuildingAgedUp += OnBuildingAged;
 		}
 
+        // Called when a building is aged up via tech tree.
 		private void OnBuildingAged(BuildingType type)
 		{
 			if (type != _buildingBase.BuildingType)

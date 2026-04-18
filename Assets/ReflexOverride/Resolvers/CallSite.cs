@@ -1,4 +1,4 @@
-﻿public sealed class CallSite
+public sealed class CallSite
 {
     public string ClassName { get; }
     public string FunctionName { get; }

@@ -1,5 +1,4 @@
 using Globals;
-using Scriptables;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
@@ -127,7 +126,7 @@ namespace ScriptablesEditor
                 GUILayout.Space(10);
                 EditorGUILayout.BeginVertical(_mainWindowStyle, GUILayout.Width(width - 20));
 
-                if (_selectedObject.GetType() == typeof(BuildingDataScriptable))
+                if (_selectedObject.GetType() == typeof(ScriptablesProcessorInfrastructure.BuildingData))
                     BuildingScriptablesEditor.DrawBuildingScriptableData(_selectedObject);
 
                 EditorGUILayout.EndVertical();
@@ -152,7 +151,7 @@ namespace ScriptablesEditor
                 GUILayout.Space(10);
                 EditorGUILayout.BeginVertical(_mainWindowStyle, GUILayout.Width(width - 20));
 
-                if (_selectedObject.GetType() == typeof(BuildingDataScriptable))
+                if (_selectedObject.GetType() == typeof(ScriptablesProcessorInfrastructure.BuildingData))
                     BuildingScriptablesEditor.DrawBuildingScriptableData(_selectedObject);
 
                 EditorGUILayout.EndVertical();

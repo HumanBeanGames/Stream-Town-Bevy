@@ -1,25 +1,21 @@
 using Character;
-using Managers;
+using Processors;
 using System;
 using Utils;
+using Data.Containers;
+using Reflex.Attributes;
 
 namespace Twitch.Commands
 {
 	/// <summary>
 	/// Handles all Twitch chat commands related to Player Roles.
 	/// </summary>
-	public static class RoleCommands
+	public class RoleCommands
 	{
-		private static PlayerManager _playerManager;
-		private static StationManager _stationManager;
-		private static RoleManager _roleManager;
-
-		public static void Initialize(PlayerManager playerManager, StationManager stationManager, RoleManager roleManager)
-		{
-			_playerManager = playerManager;
-			_stationManager = stationManager;
-			_roleManager = roleManager;
-		}
+		[Inject] private PlayerProcessor _playerProcessor;
+		[Inject] private StationProcessor _stationProcessor;
+		[Inject] private RoleProcessor _roleProcessor;
+		[Inject] private MessageSender _messageSender;
 
 		/// <summary>
 		/// Attempts to change the role of the User.
@@ -27,19 +23,19 @@ namespace Twitch.Commands
 		/// <param name="player"></param>
 		/// <param name="command"></param>
 		/// <param name="args"></param>
-		public static void TryChangeRole(Player player, string command, params string[] args)
+		public void TryChangeRole(Player player, string command, params string[] args)
 		{
 			// Convert first letter to Uppercase to work with enum parse
 			string r = char.ToUpper(args[0][0]) + args[0].Substring(1);
 
 			if (Enum.TryParse(r, out PlayerRole role))
 			{
-				if (role == PlayerRole.Ruler && _playerManager.Ruler != player)
+				if (role == PlayerRole.Ruler && _playerProcessor.GetRuler() != player)
 					return;
 
 				if (player.RoleHandler.TrySetRole(role))
 				{
-					MessageSender.SendPreBuiltMessage(player.TwitchUser.Username, "roleSwitched");
+					_messageSender.SendPreBuiltMessage(player.TwitchUser.Username, "roleSwitched");
 				}
 			}
 		}
@@ -48,30 +44,30 @@ namespace Twitch.Commands
 		/// Sends a message detailing the User's role and level.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void Role(Player player)
+		public void Role(Player player)
 		{
 			string message = $"{player.TwitchUser.Username} you are currently a level {player.RoleHandler.PlayerRoleData.CurrentLevel} {player.RoleHandler.CurrentRole}";
-			MessageSender.SendMessage(message);
+			_messageSender.SendMessage(message);
 		}
 
 		/// <summary>
 		/// Sends a message detailing the User's health.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void Health(Player player)
+		public void Health(Player player)
 		{
 			string message = $"{player.TwitchUser.Username} your health is: ({player.HealthHandler.Health}/{player.HealthHandler.MaxHealth})";
-			MessageSender.SendMessage(message);
+			_messageSender.SendMessage(message);
 		}
 
 		/// <summary>
 		/// Sends a message detailing the User's Role, level and experience.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void Experience(Player player)
+		public void Experience(Player player)
 		{
-			string message = $"{player.TwitchUser.Username} you are a level ({player.RoleHandler.PlayerRoleData.CurrentLevel}/{RoleManager.MAX_ROLE_LEVEl}) {player.RoleHandler.CurrentRole}. Current Exp: ({player.RoleHandler.PlayerRoleData.CurrentExp}/{player.RoleHandler.PlayerRoleData.RequiredExp}).";
-			MessageSender.SendMessage(message);
+			string message = $"{player.TwitchUser.Username} you are a level ({player.RoleHandler.PlayerRoleData.CurrentLevel}/{RoleProcessor.MAX_ROLE_LEVEL}) {player.RoleHandler.CurrentRole}. Current Exp: ({player.RoleHandler.PlayerRoleData.CurrentExp}/{player.RoleHandler.PlayerRoleData.RequiredExp}).";
+			_messageSender.SendMessage(message);
 
 		}
 
@@ -79,24 +75,24 @@ namespace Twitch.Commands
 		/// Sends a message detailing the User's Role, level and experience.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void ExperienceForRole(Player player, PlayerRole role)
+		public void ExperienceForRole(Player player, PlayerRole role)
 		{
 			if (player.RoleHandler.TryGetRoleData(role, out PlayerRoleData data))
 			{
-				string message = $"{player.TwitchUser.Username} you are a level ({data.CurrentLevel}/{RoleManager.MAX_ROLE_LEVEl}) {data.Role}. Current Exp: ({data.CurrentExp}/{data.RequiredExp}).";
-				MessageSender.SendMessage(message);
+				string message = $"{player.TwitchUser.Username} you are a level ({data.CurrentLevel}/{RoleProcessor.MAX_ROLE_LEVEL}) {data.Role}. Current Exp: ({data.CurrentExp}/{data.RequiredExp}).";
+				_messageSender.SendMessage(message);
 			}
 			else
-				MessageSender.SendMessage($"{player.TwitchUser.Username} you currenty don't have data for {role}");
+				_messageSender.SendMessage($"{player.TwitchUser.Username} you currenty don't have data for {role}");
 		}
 
 		/// <summary>
 		/// Displays the Station IDs based on Player's Station Flags.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void DisplayStationIDs(Player player)
+		public void DisplayStationIDs(Player player)
 		{
-			_stationManager.DisplayStationIdByType(player.StationSensor.StationMask);
+			_stationProcessor.DisplayStationIdByType(player.StationSensor.StationMask);
 		}
 
 		/// <summary>
@@ -105,15 +101,15 @@ namespace Twitch.Commands
 		/// <param name="player"></param>
 		/// <param name="command"></param>
 		/// <param name="args"></param>
-		public static void SwitchStation(Player player, string command, params string[] args)
+		public void SwitchStation(Player player, string command, params string[] args)
 		{
 
 			if (int.TryParse(args[0], out int index))
 			{
-				var station = _stationManager.GetStationByFlaggedIndex(player.StationSensor.StationMask, index - 1);
+				var station = _stationProcessor.GetStationByFlaggedIndex(player.StationSensor.StationMask, index - 1);
 				player.StationSensor.UpdateStation = false;
 				player.StationSensor.TrySetStation(station);
-				MessageSender.SendPlayerMessage(player, "Station Switched!");
+				_messageSender.SendPlayerMessage(player, "Station Switched!");
 			}
 		}
 
@@ -121,7 +117,7 @@ namespace Twitch.Commands
 		/// Attempts to display the ID's of the targets currently stored in their station.
 		/// </summary>
 		/// <param name="player"></param>
-		public static void DisplayTargetIDs(Player player)
+		public void DisplayTargetIDs(Player player)
 		{
 			player.StationSensor.CurrentStation.DisplayTargetIDsByMask(player.RoleHandler.RoleData_SO.TargetFlags);
 		}
@@ -132,7 +128,7 @@ namespace Twitch.Commands
 		/// <param name="player"></param>
 		/// <param name="command"></param>
 		/// <param name="args"></param>
-		public static void SwitchTarget(Player player, string command, params string[] args)
+		public void SwitchTarget(Player player, string command, params string[] args)
 		{
 			if (int.TryParse(args[0], out int index))
 			{
@@ -141,7 +137,7 @@ namespace Twitch.Commands
 				if (targetable)
 				{
 					if (player.TargetSensor.TrySetTarget(targetable))
-						MessageSender.SendPlayerMessage(player, "Target Switched!");
+						_messageSender.SendPlayerMessage(player, "Target Switched!");
 				}
 			}
 		}

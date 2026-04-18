@@ -6,7 +6,8 @@ using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 using PlayerControls;
 using UserInterface.MainMenu;
-using Managers;
+using Processors;
+using Core;
 using Reflex.Attributes;
 
 namespace UserInterface 
@@ -26,11 +27,11 @@ namespace UserInterface
 		private GameObject _mainMenuPanel;
 		
 		private GameObject _settingsPanel;
-		[Inject] SettingsManager _settingsManager;
-		[Inject] private GameManager _gameManager;
-		[Inject] private SaveManager _saveManager;
+		[Inject] SettingsProcessor _settingsProcessor;
+		[Inject] private Coordinator _gameProcessor;
+		[Inject] private SaveProcessor _saveProcessor;
 
-		private LoadingManager _loadingManager;
+		private LoadingProcessor _loadingProcessor;
 		private bool _savedGame;
 
 		public bool SavedGame
@@ -65,8 +66,8 @@ namespace UserInterface
 
 		public void QuitToMainMenu()
         {
-			_settingsManager.TogglingConnectionTab(true);
-			_loadingManager.LoadNonWorldScenes(1);
+			_settingsProcessor.TogglingConnectionTab(true);
+			_loadingProcessor.LoadNonWorldScenes(1);
 		}
 
 
@@ -74,11 +75,11 @@ namespace UserInterface
         [Inject] SettingsData CurrentSettings;
         private void Start()
 		{
-			_loadingManager = FindAnyObjectByType<LoadingManager>();
+			_loadingProcessor = FindAnyObjectByType<LoadingProcessor>();
 
 			//REVISIT
-			if (_gameManager != null)
-				_saveManager.SetAutosaveTime(Autosave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
+			if (_gameProcessor != null)
+				_saveProcessor.SetAutosaveTime(Autosave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
 		}
 
 		private void Update()
@@ -91,7 +92,7 @@ namespace UserInterface
 				}
 				if (_settingsPanel.activeSelf)
 				{
-					_settingsManager.ToggleSettingsPanel();
+					_settingsProcessor.ToggleSettingsPanel();
 				}
 				if (_mainMenuPanel.activeSelf)
 				{

@@ -1,4 +1,4 @@
-﻿namespace Reflex.Core
+namespace Reflex.Core
 {
     public interface IInstaller
     {

@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using System;
 using System.Collections;
 using UnityEngine;
@@ -24,12 +24,12 @@ namespace Audio
 		private float _volumeChangeRate = 0.2f;
 
 		private AudioSource _audioSource;
-		[Inject] private SeasonManager _seasonManager;
+		[Inject] private SeasonProcessor _seasonProcessor;
 
 		private void Start()
 		{
 			_audioSource = GetComponent<AudioSource>();
-			_seasonManager.OnSeasonChanging += OnSeasonChange;
+			_seasonProcessor.OnSeasonChanging += OnSeasonChange;
 		}
 
 		private void OnSeasonChange(Season season)

@@ -33,11 +33,11 @@ namespace SavingAndLoading.Structs
     }
 
     /// <summary>
-    /// Struct for batch saving all ResourceData arrays from ResourceManager.
+    /// Struct for batch saving all ResourceData arrays from ResourceProcessor.
     /// Used for data-driven resource system save/load.
     /// </summary>
     [System.Serializable]
-    public struct ResourceManagerSaveData
+    public struct ResourceProcessorSaveData
     {
         public ResourceDataSaveData[] WoodResources;
         public ResourceDataSaveData[] OreResources;
@@ -45,12 +45,12 @@ namespace SavingAndLoading.Structs
         public ResourceDataSaveData[] GoldResources;
         public ResourceDataSaveData[] RecruitResources;
 
-        public ResourceManagerSaveData(
-            Dictionary<(int meshIndex, int materialIndex), ResourceData[]> woodResources,
-            Dictionary<(int meshIndex, int materialIndex), ResourceData[]> oreResources,
-            Dictionary<(int meshIndex, int materialIndex), ResourceData[]> foodResources,
-            Dictionary<(int meshIndex, int materialIndex), ResourceData[]> goldResources,
-            Dictionary<(int meshIndex, int materialIndex), ResourceData[]> recruitResources)
+        public ResourceProcessorSaveData(
+            ResourceData[] woodResources,
+            ResourceData[] oreResources,
+            ResourceData[] foodResources,
+            ResourceData[] goldResources,
+            ResourceData[] recruitResources)
         {
             WoodResources = null;
             OreResources = null;
@@ -65,21 +65,17 @@ namespace SavingAndLoading.Structs
             RecruitResources = ConvertToSaveData(recruitResources);
         }
 
-        private ResourceDataSaveData[] ConvertToSaveData(Dictionary<(int meshIndex, int materialIndex), ResourceData[]> resourcesDict)
+        private ResourceDataSaveData[] ConvertToSaveData(ResourceData[] resources)
         {
-            if (resourcesDict == null || resourcesDict.Count == 0)
+            if (resources == null || resources.Length == 0)
                 return new ResourceDataSaveData[0];
 
-            List<ResourceDataSaveData> saveDataList = new List<ResourceDataSaveData>();
-            foreach (var kvp in resourcesDict)
+            ResourceDataSaveData[] saveData = new ResourceDataSaveData[resources.Length];
+            for (int i = 0; i < resources.Length; i++)
             {
-                ResourceData[] resources = kvp.Value;
-                for (int i = 0; i < resources.Length; i++)
-                {
-                    saveDataList.Add(new ResourceDataSaveData(resources[i]));
-                }
+                saveData[i] = new ResourceDataSaveData(resources[i]);
             }
-            return saveDataList.ToArray();
+            return saveData;
         }
 
         public ResourceData[] GetWoodResources() => ConvertFromSaveData(WoodResources, Utils.Resource.Wood);
@@ -96,8 +92,8 @@ namespace SavingAndLoading.Structs
             ResourceData[] resources = new ResourceData[saveData.Length];
             for (int i = 0; i < saveData.Length; i++)
             {
-                // Note: Mesh/Material restoration will be handled by ResourceManager after load
-                // We save the mesh/material indices, and ResourceManager will restore them
+                // Note: Mesh/Material restoration will be handled by ResourceProcessor after load
+                // We save the mesh/material indices, and ResourceProcessor will restore them
                 resources[i] = saveData[i].ToResourceData();
             }
             return resources;
@@ -122,7 +118,7 @@ namespace SavingAndLoading.Structs
         public int MeshIndex;
         public int MaterialIndex;
 
-        public ResourceDataSaveData(ResourceData resourceData)
+        public ResourceDataSaveData(GameResources.ResourceData resourceData)
         {
             PositionX = resourceData.Position.x;
             PositionY = resourceData.Position.y;

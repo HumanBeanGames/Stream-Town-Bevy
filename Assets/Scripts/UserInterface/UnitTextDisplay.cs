@@ -1,8 +1,9 @@
-using Managers;
+using Processors;
 using Target;
 using TMPro;
 using UnityEngine;
 using Utils;
+using Reflex.Attributes;
 
 namespace UserInterface
 {
@@ -11,6 +12,8 @@ namespace UserInterface
 	/// </summary>
 	public class UnitTextDisplay : MonoBehaviour
 	{
+		[Inject] private UtilDisplayProcessor _utilDisplayProcessor;
+		
 		[SerializeField]
 		private TextMeshPro _displayText;
 
@@ -86,7 +89,7 @@ namespace UserInterface
 
 		private void OnDisable()
 		{
-			UtilDisplayManager.RemoveTextDisplay(Targetable);
+			_utilDisplayProcessor.RemoveTextDisplay(Targetable);
 		}
 	}
 }

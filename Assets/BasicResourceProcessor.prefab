@@ -1,0 +1,64 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &2204504352181787651
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3018208735759849079}
+  - component: {fileID: 111706735097196953}
+  m_Layer: 0
+  m_Name: BasicResourceProcessor
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3018208735759849079
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2204504352181787651}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &111706735097196953
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2204504352181787651}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 724ae07c90d70f34fb504492634c1117, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _woodMeshVariants:
+  - {fileID: 2066449906497955686, guid: 21f5f8034410ae749be79a132937c8d4, type: 3}
+  - {fileID: -7143475933160992522, guid: 21f5f8034410ae749be79a132937c8d4, type: 3}
+  - {fileID: 2540149935349194645, guid: c40ed57d804261344806989c2418220d, type: 3}
+  _woodMaterial: {fileID: 2100000, guid: 8e992643a4ebffc45b6fbd0fbd83d88c, type: 2}
+  _oreMeshVariants:
+  - {fileID: -7247785234928089179, guid: ca366f4b4544b8e4a90b5638c2a1a3bd, type: 3}
+  - {fileID: -3392365661791858705, guid: ca366f4b4544b8e4a90b5638c2a1a3bd, type: 3}
+  _oreMaterial: {fileID: 2100000, guid: fdfb0b9e62e356e46ae2218394e8fabc, type: 2}
+  _foodMeshVariants:
+  - {fileID: 6705514447628551469, guid: d5b51764072195245805ad1dc57736b6, type: 3}
+  - {fileID: 4087504312592355825, guid: d5b51764072195245805ad1dc57736b6, type: 3}
+  _foodMaterial: {fileID: 2100000, guid: 8e992643a4ebffc45b6fbd0fbd83d88c, type: 2}
+  _goldMeshVariants: []
+  _goldMaterial: {fileID: 0}
+  _recruitMeshVariants: []
+  _recruitMaterial: {fileID: 0}
+  _resourceBounds: {x: 1, y: 5, z: 1}

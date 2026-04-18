@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Reflex.Core;
 using Reflex.Enums;
 using Reflex.Generics;

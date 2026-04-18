@@ -1,6 +1,5 @@
 using Behaviours;
 using Character;
-using Scriptables;
 using UnityEngine;
 using Utils;
 
@@ -17,7 +16,7 @@ namespace STStateMachine.States
 
 		private PlayerInventory _playerInventory;
 		private DepositResources _depositResources;
-		private RoleDataScriptable _roleData;
+		private Character.RoleData _roleData;
 		private RoleHandler _roleHandler;
 
 		public override void OnEnter()

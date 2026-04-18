@@ -244,9 +244,6 @@ MonoBehaviour:
   - Name: Blargul
     PoolAmount: 50
     Prefab: {fileID: 6302278620436083057, guid: b2e5d7013b66b794daaf2165065e4381, type: 3}
-  - Name: Bush
-    PoolAmount: 2000
-    Prefab: {fileID: 5335933013444573462, guid: 4553f0bc9df3c0d43888689bb7396229, type: 3}
   - Name: Statue1
     PoolAmount: 25
     Prefab: {fileID: 1646107014754319142, guid: e761e8c6b249bd44db5235d608443218, type: 3}

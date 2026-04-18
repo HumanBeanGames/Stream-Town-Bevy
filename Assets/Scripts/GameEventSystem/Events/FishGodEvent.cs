@@ -1,5 +1,5 @@
 using Character;
-using Managers;
+using Processors;
 using Pets.Enumerations;
 using System.Collections;
 using Twitch;
@@ -8,118 +8,197 @@ using UserInterface;
 
 namespace GameEventSystem.Events
 {
-	public class FishGodEvent : GameEvent
-	{
-		private int _praisesRequired = 20;
-		private int _praisesGiven = 0;
-		private GameObject _fishGod;
-		private Animator _animator;
-		private UserInterface_Event _eventInterface;
-		private GameEventManager _gameEventManager;
-		private TownResourceManager _townResourceManager;
-		private PlayerManager _playerManager;
-		private ObjectPoolingManager _poolingManager;
+    /// <summary>
+    /// Represents a Fish God event where players praise the Fish God to receive rewards.
+    /// </summary>
+    public class FishGodEvent : GameEvent
+    {
+        /// <summary>
+        /// The number of praises required.
+        /// </summary>
+        private int _praisesRequired = 20;
 
-		public FishGodEvent(double startTime, GameEventManager gameEventManager, TownResourceManager townResourceManager, PlayerManager playerManager, ObjectPoolingManager poolingManager, UserInterface_Event eventInterface, double eventDuration = 300, EventType eventType = EventType.FishGod, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(startTime, eventDuration, EventType.FishGod, data, overrideCurrentEvent, timeout)
-		{
-			_gameEventManager = gameEventManager;
-			_townResourceManager = townResourceManager;
-			_playerManager = playerManager;
-			_poolingManager = poolingManager;
-			_eventInterface = eventInterface;
+        /// <summary>
+        /// The number of praises given.
+        /// </summary>
+        private int _praisesGiven = 0;
 
-			GetFishGodGameObject();
-		}
+        /// <summary>
+        /// The Fish God GameObject.
+        /// </summary>
+        private GameObject _fishGod;
 
-		protected override void OnStarted()
-		{
-			_gameEventManager.FallingFishVFX.gameObject.SetActive(true);
-			_eventInterface.Slider.gameObject.SetActive(true);
-			UpdateSlider();
-			_eventInterface.TitleTMP.text = "Fish God";
-			_eventInterface.DescriptionTMP.text = "Praise the Fish God!";
-			_eventInterface.ActivateEventContainer();
-		}
+        /// <summary>
+        /// The animator for the Fish God.
+        /// </summary>
+        private Animator _animator;
 
-		protected override void OnStopped()
-		{
-			_animator.SetTrigger("Exit");
-			_gameEventManager.StartCoroutine(DisableAfterTime());
-			_gameEventManager.FallingFishVFX.gameObject.SetActive(false);
-			_eventInterface.DeactivateEventContainer();
+        /// <summary>
+        /// The event interface.
+        /// </summary>
+        private UserInterface_Event _eventInterface;
 
-			if (Success)
-			{
-				_townResourceManager.AddResource(Utils.Resource.Food, 1000, true);
+        /// <summary>
+        /// The game event processor.
+        /// </summary>
+        private GameEventProcessor _gameEventProcessor;
 
-				// Try to give a player a fish pet if roll hits
-				int roll = Random.Range(0, 100);
+        /// <summary>
+        /// The town resource processor.
+        /// </summary>
+        private TownResourceProcessor _townResourceProcessor;
 
-				if (roll < 70)
-				{
-					if (_playerManager.PlayerCount() <= 0)
-						return;
-					
-					Player player = null;
-					int iters = 0;
-					do
-					{
-						iters++;
-						if (iters >= 50)
-							break;
+        /// <summary>
+        /// The player processor.
+        /// </summary>
+        private PlayerProcessor _playerProcessor;
 
-						int playerIndex = Random.Range(0, _playerManager.PlayerCount());
-						player = _playerManager.GetPlayer(playerIndex);
-						if (player.IsNPC)
-							continue;
-					}
-					while (player.IsNPC);
+        /// <summary>
+        /// The object pooling processor.
+        /// </summary>
+        private ObjectPoolingProcessor _poolingProcessor;
 
-					if (player == null || player.IsNPC)
-						return;
+        /// <summary>
+        /// The message sender.
+        /// </summary>
+        private MessageSender _messageSender;
 
-					player.PetsUnlocked[PetType.FishGod] = true;
-					MessageSender.SendMessage($"{player.TwitchUser.Username} unlocked the fishgod pet!");
-				}
-			}
-		}
+        /// <summary>
+        /// Initializes a new Fish God event instance.
+        /// </summary>
+        /// <param name="startTime">The start time.</param>
+        /// <param name="gameEventProcessor">The game event processor.</param>
+        /// <param name="townResourceProcessor">The town resource processor.</param>
+        /// <param name="playerProcessor">The player processor.</param>
+        /// <param name="poolingProcessor">The object pooling processor.</param>
+        /// <param name="messageSender">The message sender.</param>
+        /// <param name="eventInterface">The event interface.</param>
+        /// <param name="eventDuration">The event duration.</param>
+        /// <param name="eventType">The event type.</param>
+        /// <param name="data">Additional data.</param>
+        /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
+        /// <param name="timeout">The timeout.</param>
+        public FishGodEvent(double startTime, GameEventProcessor gameEventProcessor, TownResourceProcessor townResourceProcessor, PlayerProcessor playerProcessor, ObjectPoolingProcessor poolingProcessor, MessageSender messageSender, UserInterface_Event eventInterface, double eventDuration = 300, EventType eventType = EventType.FishGod, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(startTime, eventDuration, EventType.FishGod, data, overrideCurrentEvent, timeout)
+        {
+            _gameEventProcessor = gameEventProcessor;
+            _townResourceProcessor = townResourceProcessor;
+            _playerProcessor = playerProcessor;
+            _poolingProcessor = poolingProcessor;
+            _messageSender = messageSender;
+            _eventInterface = eventInterface;
 
-		protected void UpdateSlider()
-		{
-			_eventInterface.SliderTMP.text = $"{_praisesGiven}  /  {_praisesRequired}";
-			_eventInterface.Slider.value = (float)_praisesGiven / _praisesRequired;
-		}
+            GetFishGodGameObject();
+        }
 
-		protected override void OnActioned(object data = null)
-		{
-			_praisesGiven++;
+        /// <summary>
+        /// Called when the event starts.
+        /// </summary>
+        protected override void OnStarted()
+        {
+            _gameEventProcessor.FallingFishVFX.gameObject.SetActive(true);
+            _eventInterface.Slider.gameObject.SetActive(true);
+            UpdateSlider();
+            _eventInterface.TitleTMP.text = "Fish God";
+            _eventInterface.DescriptionTMP.text = "Praise the Fish God!";
+            _eventInterface.ActivateEventContainer();
+        }
 
-			if (_praisesGiven >= _praisesRequired)
-				OnCompleteEvent();
+        /// <summary>
+        /// Called when the event stops.
+        /// </summary>
+        protected override void OnStopped()
+        {
+            _animator.SetTrigger("Exit");
+            _gameEventProcessor.StartCoroutine(DisableAfterTime());
+            _gameEventProcessor.FallingFishVFX.gameObject.SetActive(false);
+            _eventInterface.DeactivateEventContainer();
 
-			UpdateSlider();
-		}
+            if (Success)
+            {
+                _townResourceProcessor.AddResource(Utils.Resource.Food, 1000, true);
 
-		private void GetFishGodGameObject()
-		{
-			_fishGod = _poolingManager.GetPooledObject("FishGod").gameObject;
-			_animator = _fishGod.GetComponentInChildren<Animator>();
-			_fishGod.transform.position = _gameEventManager.FishGodSpawn.position;
-			_fishGod.SetActive(true);
-		}
+                // Try to give a player a fish pet if roll hits.
+                int roll = Random.Range(0, 100);
 
-		public IEnumerator DisableAfterTime()
-		{
-			float time = 2.5f;
-			float trackedTime = 0;
+                if (roll < 70)
+                {
+                    if (_playerProcessor.PlayerCount() <= 0)
+                        return;
+                    
+                    Player player = null;
+                    int iters = 0;
+                    do
+                    {
+                        iters++;
+                        if (iters >= 50)
+                            break;
 
-			while (trackedTime < time)
-			{
-				trackedTime += Time.deltaTime;
-				yield return new WaitForEndOfFrame();
-			}
+                        int playerIndex = Random.Range(0, _playerProcessor.PlayerCount());
+                        player = _playerProcessor.GetPlayer(playerIndex);
+                        if (player.IsNPC)
+                            continue;
+                    }
+                    while (player.IsNPC);
 
-			_fishGod.SetActive(false);
-		}
-	}
+                    if (player == null || player.IsNPC)
+                        return;
+
+                    player.PetsUnlocked[PetType.FishGod] = true;
+                    _messageSender.SendMessage($"{player.TwitchUser.Username} unlocked the fishgod pet!");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates the slider UI.
+        /// </summary>
+        protected void UpdateSlider()
+        {
+            _eventInterface.SliderTMP.text = $"{_praisesGiven}  /  {_praisesRequired}";
+            _eventInterface.Slider.value = (float)_praisesGiven / _praisesRequired;
+        }
+
+        /// <summary>
+        /// Called when the event is actioned.
+        /// </summary>
+        /// <param name="data">The action data.</param>
+        protected override void OnActioned(object data = null)
+        {
+            _praisesGiven++;
+
+            if (_praisesGiven >= _praisesRequired)
+                OnCompleteEvent();
+
+            UpdateSlider();
+        }
+
+        /// <summary>
+        /// Gets the Fish God GameObject from the object pool.
+        /// </summary>
+        private void GetFishGodGameObject()
+        {
+            _fishGod = _poolingProcessor.GetPooledObject("FishGod").gameObject;
+            _animator = _fishGod.GetComponentInChildren<Animator>();
+            _fishGod.transform.position = _gameEventProcessor.FishGodSpawn.position;
+            _fishGod.SetActive(true);
+        }
+
+        /// <summary>
+        /// Coroutine to disable the Fish God after a delay.
+        /// </summary>
+        /// <returns>The enumerator for the coroutine.</returns>
+        public IEnumerator DisableAfterTime()
+        {
+            float time = 2.5f;
+            float trackedTime = 0;
+
+            while (trackedTime < time)
+            {
+                trackedTime += Time.deltaTime;
+                yield return new WaitForEndOfFrame();
+            }
+
+            _fishGod.SetActive(false);
+        }
+    }
 }

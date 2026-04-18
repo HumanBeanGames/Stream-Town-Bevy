@@ -1,23 +1,18 @@
 using UnityEngine;
 using Utils;
 
-namespace Scriptables
+namespace ScriptablesProcessorInfrastructure
 {
-	[CreateAssetMenu(fileName = "AllBuildingDataScriptableData", menuName = "ScriptableObjects/AllBuildingDataScriptable", order = 1)]
-	public class AllBuildingDataScriptable : ScriptableObject
+	/// <summary>
+	/// ScriptableObject that stores all building data configurations for the game.
+	/// Acts as a central registry for building type data.
+	/// </summary>
+	[CreateAssetMenu(fileName = "AllBuildingDataSettings", menuName = "ScriptableObjects/AllBuildingDataSettings", order = 1)]
+	public class AllBuildingDataSettings : ScriptableObject, IDataScriptable
 	{
-		public BuildingDataScriptable[] BuildingData;
-
-		public BuildingDataScriptable GetDataByBuildingType(BuildingType building)
-		{
-			for (int i = 0; i < BuildingData.Length; i++)
-			{
-				if (BuildingData[i].BuildingType == building)
-					return BuildingData[i];
-			}
-
-			Debug.LogError($"Attempted to get building data that didnt exist in All Buildings Data: {building}");
-			return null;
-		}
+		/// <summary>
+		/// Array of all building data configurations indexed by building type.
+		/// </summary>
+		public BuildingData[] BuildingData;
 	}
 }

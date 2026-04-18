@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using UnityEngine;
 using Utils;
 using Reflex.Attributes;
@@ -34,14 +34,24 @@ namespace Buildings
 		private int _totalAmount = 0;
 
 		// Required Components.
-		[Inject] private RoleManager _roleManager;
+		/// <summary>
+		/// Role processor for role slot operations.
+		/// Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private RoleProcessor _roleProcessor;
 
-		public RoleManager RoleManager
+		/// <summary>
+		/// Gets the role processor.
+		/// </summary>
+		public RoleProcessor RoleProcessor
 		{
-			get { return _roleManager; }
+			get { return _roleProcessor; }
 		}
 
 		// Properties.
+		/// <summary>
+		/// Gets the role type this component modifies.
+		/// </summary>
 		public PlayerRole Role => _role;
 
 		/// <summary>
@@ -49,7 +59,7 @@ namespace Buildings
 		/// </summary>
 		public void Increment()
 		{
-			RoleManager.AddSlots(_role, _incrementAmount);
+			RoleProcessor.AddSlots(_role, _incrementAmount);
 			_totalAmount += _incrementAmount;
 		}
 
@@ -58,7 +68,7 @@ namespace Buildings
 		/// </summary>
 		public void AddBaseSlots()
 		{
-			RoleManager.AddSlots(_role, _baseAmount);
+			RoleProcessor.AddSlots(_role, _baseAmount);
 			_totalAmount += _baseAmount;
 		}
 
@@ -67,16 +77,17 @@ namespace Buildings
 		/// </summary>
 		public void RemoveTotalSlots()
 		{
-			_roleManager.RemoveSlots(_role, _totalAmount);
+			_roleProcessor.RemoveSlots(_role, _totalAmount);
 			_totalAmount = 0;
 		}
 
 		/// <summary>
 		/// Called on object being disabled.
+		/// Removes all role slots contributed by this component.
 		/// </summary>
 		private void OnDisable()
 		{
-			if (RoleManager)
+			if (RoleProcessor)
 				RemoveTotalSlots();
 		}
 	}

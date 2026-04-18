@@ -1,11 +1,13 @@
 using Character;
-using Managers;
+using Processors;
 using UnityEngine;
+using Reflex.Attributes;
 
 namespace VFX
 {
 	public class VFXArrowPointer : MonoBehaviour
 	{
+		[Inject] private UtilDisplayProcessor _utilDisplayProcessor;
 		private Player _attachedPlayer;
 		private ParticleSystem _particleSystem;
 		private float _vfxLifetime = 0;
@@ -24,7 +26,7 @@ namespace VFX
 			{
 				_remainingLife = _vfxLifetime;
 				if (_attachedPlayer != null)
-					UtilDisplayManager.RemovePingObject(_attachedPlayer);
+					_utilDisplayProcessor.RemovePingObject(_attachedPlayer);
 				gameObject.SetActive(false);
 			}
 		}
@@ -43,7 +45,7 @@ namespace VFX
 		private void OnDisable()
 		{
 			if (_attachedPlayer != null)
-				UtilDisplayManager.RemovePingObject(_attachedPlayer);
+				_utilDisplayProcessor.RemovePingObject(_attachedPlayer);
 		}
 	}
 }

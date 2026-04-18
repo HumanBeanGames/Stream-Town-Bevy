@@ -9,12 +9,40 @@ namespace Buildings
 	[System.Serializable]
 	public class BuildPlacerData
 	{
+        /// <summary>
+        /// The name of the building.
+        /// </summary>
 		public string BuildingName;
+
+        /// <summary>
+        /// The type of the building.
+        /// </summary>
 		public BuildingType BuildingType;
+
+        /// <summary>
+        /// The 3D model for the building.
+        /// </summary>
 		public GameObject BuildingModel;
+
+        /// <summary>
+        /// The size of the building in grid units.
+        /// </summary>
 		public Vector2 BuildingSize;
-		public GameObject Prefab; //TODO:: Use pooling to spawn
+
+        /// <summary>
+        /// The prefab to spawn for the building.
+        /// TODO:: Use pooling to spawn.
+        /// </summary>
+		public GameObject Prefab;
+
+        /// <summary>
+        /// The renderer component for the building model.
+        /// </summary>
 		public Renderer Renderer;
-		public PlacementProbeHandler ProbeManager;
+
+        /// <summary>
+        /// The placement probe handler for the building.
+        /// </summary>
+		public PlacementProbeHandler ProbeProcessor;
 	}
 }

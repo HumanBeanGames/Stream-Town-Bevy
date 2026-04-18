@@ -5,7 +5,8 @@ using TMPro;
 using Utils;
 using Level;
 using System.Collections.Generic;
-using Managers;
+using Processors;
+using Core;
 using Utils.Pooling;
 using Reflex.Attributes;
 
@@ -46,9 +47,10 @@ namespace UserInterface
 		private GameObject _selectionOutline;
 
 		private object _data;
-		[Inject] private ObjectPoolingManager _poolingManager;
-		[Inject] private GameManager _gameManager;
-		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private ObjectPoolingProcessor _poolingProcessor;
+		[Inject] private Coordinator _gameProcessor;
+		[Inject] private TownResourceProcessor _townResourceProcessor;
+		[Inject] private PlayerProcessor _playerProcessor;
 
 		/// <summary>
 		/// Enables the Character Debug Menu.
@@ -144,9 +146,9 @@ namespace UserInterface
 		/// </summary>
 		public void SpawnCharacter()
 		{
-			PoolableObject obj = _poolingManager.GetPooledObject("Player");
+			PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
 			obj.gameObject.SetActive(true);
-			obj.transform.position = _gameManager.PlayerSpawnPosition;
+			obj.transform.position = _playerProcessor.PlayerSpawnPosition.position;
 			obj.GetComponent<RoleHandler>().SetStarterRole((PlayerRole)_roleDropdownDebug.value);
 		}
 
@@ -155,7 +157,7 @@ namespace UserInterface
 		/// </summary>
 		public void SetCharacterRole()
 		{
-			//_gameManager.RoleManager.QueueRoleChange((RoleHandler)_data, (PlayerRole)_roleDropdownCharacter.value);
+			//_gameProcessor.RoleProcessor.QueueRoleChange((RoleHandler)_data, (PlayerRole)_roleDropdownCharacter.value);
 			((RoleHandler)_data).TrySetRole((PlayerRole)_roleDropdownCharacter.value);
 			_characterRole.text = "Role: " + ((RoleHandler)_data).CurrentRole.ToString();
 			_roleLevel.text = "Level: " + ((RoleHandler)_data).PlayerRoleData.CurrentLevel;
@@ -215,7 +217,7 @@ namespace UserInterface
 		/// <param name="value"></param>
 		public void AddWood(int value)
 		{
-			_townResourceManager.AddResource(Utils.Resource.Wood, value);
+			_townResourceProcessor.AddResource(Utils.Resource.Wood, value);
 		}
 
 		/// <summary>
@@ -224,7 +226,7 @@ namespace UserInterface
 		/// <param name="value"></param>
 		public void AddOre(int value)
 		{
-			_townResourceManager.AddResource(Utils.Resource.Ore, value);
+			_townResourceProcessor.AddResource(Utils.Resource.Ore, value);
 		}
 
 		/// <summary>
@@ -233,7 +235,7 @@ namespace UserInterface
 		/// <param name="value"></param>
 		public void AddFood(int value)
 		{
-			_townResourceManager.AddResource(Utils.Resource.Food, value);
+			_townResourceProcessor.AddResource(Utils.Resource.Food, value);
 		}
 
 		/// <summary>
@@ -242,7 +244,7 @@ namespace UserInterface
 		/// <param name="value"></param>
 		public void AddGold(int value)
 		{
-			_townResourceManager.AddResource(Utils.Resource.Gold, value);
+			_townResourceProcessor.AddResource(Utils.Resource.Gold, value);
 		}
 
 		/// <summary>

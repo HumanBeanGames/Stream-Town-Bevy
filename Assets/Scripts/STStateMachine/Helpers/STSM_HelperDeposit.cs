@@ -1,5 +1,5 @@
 using Character;
-using Managers;
+using Processors;
 using Reflex.Attributes;
 using Sensors;
 using STStateMachine.States;
@@ -16,7 +16,7 @@ namespace STStateMachine.Helpers
 		private STSM_Action_DepositResource _depositState;
 		private RoleHandler _roleHandler;
 		private StationSensor _stationSensor;
-		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private TownResourceProcessor _townResourceProcessor;
 		private STSM_Idle_Player _idle;
 
 		public override void Init()
@@ -31,7 +31,7 @@ namespace STStateMachine.Helpers
 		public override void InvokeHelper()
 		{
 			// If the resources are already full, swap to idle and reset position.
-			if (_townResourceManager.ResourceFull(_roleHandler.RoleData_SO.Resource))
+			if (_townResourceProcessor.ResourceFull(_roleHandler.RoleData_SO.Resource))
 			{
 				_goToState.SetNextState(_idle);
 				_goToState.UsePosition = true;

@@ -6,27 +6,28 @@
 //   scripted camera motions. Runtime tuning is driven by injected SettingsData.
 //
 // Key design notes:
-//   • Uses SmoothDamp for pan/move/zoom for framerate-independent, velocity-based smoothing.
-//   • Reads user-tunable speeds/toggles (pan/zoom/wasd sensitivity, mouse controls, edge scroll, etc.)
+//   � Uses SmoothDamp for pan/move/zoom for framerate-independent, velocity-based smoothing.
+//   � Reads user-tunable speeds/toggles (pan/zoom/wasd sensitivity, mouse controls, edge scroll, etc.)
 //     from SettingsData (injected).
-//   • All user input is ignored while IsIdle == true (e.g., during cutscenes).
-//   • CommandMove coroutine runs only when IsIdle == true. Starting a manual pan cancels it.
+//   � All user input is ignored while IsIdle == true (e.g., during cutscenes).
+//   � CommandMove coroutine runs only when IsIdle == true. Starting a manual pan cancels it.
 //
 // Integration points:
-//   • Requires a Camera component (see RequireComponent).
-//   • Subscribes to PlayerInput (new Input System) for keyboard movement,
-//     and to PlayerInputManager.OnMouseScroll for mouse wheel.
-//   • GameStateManager.ReadiedPlayer → enables this component when game is ready.
-//   • Optionally interacts with SelectionManager in SetTarget() (if you wire that up).
+//   � Requires a Camera component (see RequireComponent).
+//   � Subscribes to PlayerInput (new Input System) for keyboard movement,
+//     and to PlayerInputProcessor.OnMouseScroll for mouse wheel.
+//   � GameStateProcessor.ReadiedPlayer ? enables this component when game is ready.
+//   � Optionally interacts with SelectionProcessor in SetTarget() (if you wire that up).
 //
 
-using Managers;
+using Processors;
 using UnityEngine;
 using Utils;
 using System.Collections;
 using World;
 using UnityEngine.EventSystems;
 using Reflex.Attributes;
+using Data.Containers;
 
 namespace PlayerControls
 {
@@ -35,15 +36,17 @@ namespace PlayerControls
     {
         // Source of truth for user-tunable camera settings (sensitivities, toggles, etc.)
         [Inject] SettingsData CurrentSettings;
-        [Inject] private ObjectSelectionManager _selectionManager;
+        [Inject] private ObjectSelectionProcessor _selectionProcessor;
+        [Inject] private PlayerInputProcessor _playerInputProcessor;
+        [Inject] private GameStateProcessor _gameStateProcessor;
 
         #region Inspector Fields (Constraints & Tunables)
 
         [Header("Camera Constraints")]
         [SerializeField] private float _maxCameraHeight = 30.0f;     // Upper clamp for zoom height
         [SerializeField] private float _minCameraHeight = 15.0f;     // Lower clamp for zoom height
-        [SerializeField] private Vector2 _minimumCameraPosition = Vector2.zero; // XZ min bounds (x → X, y → Z)
-        [SerializeField] private Vector2 _maximumCameraPosition = Vector2.zero; // XZ max bounds (x → X, y → Z)
+        [SerializeField] private Vector2 _minimumCameraPosition = Vector2.zero; // XZ min bounds (x ? X, y ? Z)
+        [SerializeField] private Vector2 _maximumCameraPosition = Vector2.zero; // XZ max bounds (x ? X, y ? Z)
 
         [Header("Pan")]
         [SerializeField] private bool _canPan = true;               // Global enable/disable for panning
@@ -146,7 +149,7 @@ namespace PlayerControls
             }
 
             // Only pan while MMB is held
-            if (!PlayerInputManager.IsButtonHeld(PlayerInputManager.Button.MiddleMouse))
+            if (!_playerInputProcessor.IsButtonHeld(Data.SharedTypes.InputButton.MiddleMouse))
             {
                 _isPanning = false;
                 return;
@@ -184,7 +187,7 @@ namespace PlayerControls
 
         #endregion
 
-        #region Zoom (Mouse Wheel → Smooth height)
+        #region Zoom (Mouse Wheel ? Smooth height)
 
         /// <summary>
         /// Smoothly adjusts camera Y height in response to mouse wheel input.
@@ -222,8 +225,8 @@ namespace PlayerControls
 
         /// <summary>
         /// Moves camera in XZ via:
-        ///   • Edge scrolling: when mouse is near screen edges (if enabled in settings)
-        ///   • Keyboard input: WASD/arrow keys via Input System
+        ///   � Edge scrolling: when mouse is near screen edges (if enabled in settings)
+        ///   � Keyboard input: WASD/arrow keys via Input System
         /// A "zoom-out boost" raises speed at higher zoom heights to maintain perceived speed.
         /// </summary>
         private void Move()
@@ -350,7 +353,7 @@ namespace PlayerControls
             _scrollPosition = 20f;
             _transform.position = StartPosition;
 
-            // Reset smoothing velocities so there’s no residual motion after a reset
+            // Reset smoothing velocities so there�s no residual motion after a reset
             _panVelocity = Vector3.zero;
             _moveVelocity = Vector3.zero;
             _zoomVelocity = 0f;
@@ -390,28 +393,28 @@ namespace PlayerControls
 
         /// <summary>
         /// Optional: raycasts under the cursor to set a "target" (if you wire an input event to call this).
-        /// Demonstrates SelectionManager usage but is not required for camera motion.
+        /// Demonstrates SelectionProcessor usage but is not required for camera motion.
         /// </summary>
-        private void SetTarget(PlayerInputManager.Button button)
+        private void SetTarget(Data.SharedTypes.InputButton button)
         {
             Debug.Log("Clicked");
-            if (Physics.Raycast(_camera.ScreenPointToRay(PlayerInputManager.MousePosition), out RaycastHit hitInfo, float.MaxValue))
+            if (Physics.Raycast(_camera.ScreenPointToRay(_playerInputProcessor.MousePosition), out RaycastHit hitInfo, float.MaxValue))
             {
                 SelectableObject obj = hitInfo.transform.GetComponentInChildren<SelectableObject>();
                 if (obj != null)
                 {
                     _target = obj;
-                    _selectionManager.OnObjectSelected.Invoke(_target, _target.Data);
+                    _selectionProcessor.InvokeObjectSelected(_target, _target.Data);
                 }
                 else
                 {
-                    _selectionManager.HideUI();
+                    _selectionProcessor.HideUI();
                 }
             }
         }
 
         /// <summary>
-        /// Mouse wheel callback → caches scroll delta for Zoom().
+        /// Mouse wheel callback ? caches scroll delta for Zoom().
         /// Ignored while idle or when cursor is over UI, or if mouse controls are disabled.
         /// </summary>
         private void UpdateScrollWheelInput(float value)
@@ -460,32 +463,32 @@ namespace PlayerControls
 
             // Start disabled; will be enabled when the game signals "ready"
             this.enabled = false;
-            GameStateManager.ReadiedPlayer += EnableSelf;
+            _gameStateProcessor.ReadiedPlayer += EnableSelf;
         }
 
         private void OnDestroy()
         {
-            GameStateManager.ReadiedPlayer -= EnableSelf;
+            _gameStateProcessor.ReadiedPlayer -= EnableSelf;
         }
 
         /// <summary>
-        /// One-shot callback from GameStateManager when the playable state is ready.
+        /// One-shot callback from GameStateProcessor when the playable state is ready.
         /// </summary>
         private void EnableSelf()
         {
             this.enabled = true;
-            GameStateManager.ReadiedPlayer -= EnableSelf; // ensure one-shot
+            _gameStateProcessor.ReadiedPlayer -= EnableSelf; // ensure one-shot
         }
 
         private void OnEnable()
         {
-            PlayerInputManager.OnMouseScroll += UpdateScrollWheelInput;
+            _playerInputProcessor.OnMouseScroll += UpdateScrollWheelInput;
             _playerInput.Enable();
         }
 
         private void OnDisable()
         {
-            PlayerInputManager.OnMouseScroll -= UpdateScrollWheelInput;
+            _playerInputProcessor.OnMouseScroll -= UpdateScrollWheelInput;
             _playerInput.Disable();
         }
 
@@ -497,3 +500,4 @@ namespace PlayerControls
         #endregion
     }
 }
+

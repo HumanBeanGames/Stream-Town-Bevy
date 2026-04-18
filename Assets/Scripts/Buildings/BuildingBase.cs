@@ -1,8 +1,8 @@
 using Level;
-using Managers;
+using Processors;
 using SavingAndLoading.SavableObjects;
 using SavingAndLoading.Structs;
-using Scriptables;
+using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
 using Target;
 using Units;
@@ -87,13 +87,14 @@ namespace Buildings
         protected Station _station;
         protected UpdateGraphBounds _graphUpdater;
         protected BuildingLevelHandler _levelHandler;
-        protected BuildingDataScriptable _buildingData;
+        protected BuildingData _buildingData;
         protected UnitTextDisplay _displayText;
         protected BuildingDamageMaterialHandler _damageHandler;
 
-        [Inject] protected BuildingManager _buildingManager;
-        [Inject] protected TechTreeManager _techTreeManager;
-        [Inject] protected ObjectPoolingManager _poolingManager;
+        [Inject] protected BuildingProcessor _buildingProcessor;
+        [Inject] protected TechTreeProcessor _techTreeProcessor;
+        [Inject] protected ObjectPoolingProcessor _poolingManager;
+        [Inject] protected GameEventProcessor _gameEventProcessor;
 
         public List<PoolableObject> FoliageRemoved { get; set; }
 
@@ -113,7 +114,7 @@ namespace Buildings
 
         public Station Station => _station;
 
-        public BuildingDataScriptable BuildingData
+        public BuildingData BuildingData
         {
             get => _buildingData;
             set => _buildingData = value;
@@ -199,14 +200,14 @@ namespace Buildings
                     _station.enabled = false;
             }
 
-            _buildingData = BuildingManager.GetBuildingData(_buildingType);
-            if (_levelHandler != null && _buildingManager != null)
-                _levelHandler.MaxLevel = _buildingManager.BuildingsMaxLevel[_buildingType];
+            _buildingData = _buildingProcessor.GetBuildingData(_buildingType);
+            if (_levelHandler != null && _buildingProcessor != null)
+                _levelHandler.MaxLevel = _buildingProcessor.GetBuildingsMaxLevel(_buildingType);
 
-            if (_techTreeManager != null)
+            if (_techTreeProcessor != null)
             {
-                _techTreeManager.OnBuildingLevelIncreased += OnBuildingLevelIncreased;
-                _techTreeManager.OnBuildingAgedUp += OnBuildingAged;
+                _techTreeProcessor.OnBuildingLevelIncreased += OnBuildingLevelIncreased;
+                _techTreeProcessor.OnBuildingAgedUp += OnBuildingAged;
                 OnBuildingAged(_buildingType);
             }
             FoliageRemoved = new List<PoolableObject>();
@@ -278,7 +279,7 @@ namespace Buildings
             // Set building state correctly and invoke the On Build Event.
             _buildingState = BuildingState.Building;
             _onBuiltEvent.Invoke();
-            EventManager.BuildingBuilt?.Invoke(_buildingType);
+            _gameEventProcessor.InvokeBuildingBuilt(_buildingType);
         }
 
         public void OnLoadedBuiltBuilding()
@@ -300,7 +301,7 @@ namespace Buildings
         public virtual void SetModelHandlerIndex(int index)
         {
             if (_buildingType == BuildingType.Wall)
-                index += (4 * (int)_buildingManager.BuildingAges[_buildingType]);
+                index += (4 * (int)_buildingProcessor.GetBuildingAge(_buildingType));
             if (index >= _modelHandler.Length)
                 index = _modelHandler.Length - 1;
 
@@ -315,7 +316,7 @@ namespace Buildings
         /// </summary>
         public void OnBuildingDestroyed()
         {
-            _buildingManager.OnBuildingRemoved(this);
+            _buildingProcessor.OnBuildingRemoved(this);
         }
 
         /// <summary>
@@ -363,7 +364,7 @@ namespace Buildings
             if (type != _buildingType)
                 return;
 
-            _levelHandler.MaxLevel = _buildingManager.BuildingsMaxLevel[_buildingType];
+            _levelHandler.MaxLevel = _buildingProcessor.GetBuildingsMaxLevel(_buildingType);
         }
 
         private void OnBuildingAged(BuildingType type)
@@ -371,7 +372,7 @@ namespace Buildings
             if (type != _buildingType)
                 return;
 
-            _age = _buildingManager.BuildingAges[_buildingType];
+            _age = _buildingProcessor.GetBuildingAge(_buildingType);
 
             if (_buildingType == BuildingType.Wall)
                 return;
@@ -396,10 +397,10 @@ namespace Buildings
         private void OnDisable()
         {
             _healthHandler.OnDeath -= RestoreFoliage;
-            if (_techTreeManager != null)
+            if (_techTreeProcessor != null)
             {
-                _techTreeManager.OnBuildingLevelIncreased -= OnBuildingLevelIncreased;
-                _techTreeManager.OnBuildingAgedUp -= OnBuildingAged;
+                _techTreeProcessor.OnBuildingLevelIncreased -= OnBuildingLevelIncreased;
+                _techTreeProcessor.OnBuildingAgedUp -= OnBuildingAged;
             }
         }
     }

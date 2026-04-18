@@ -6,7 +6,14 @@ namespace Requirements
 	[System.Serializable]
     public class Requirement 
 	{
+        /// <summary>
+        /// The type of requirement.
+        /// </summary>
 		public RequirementType RequirementType;
+
+        /// <summary>
+        /// The requirement data.
+        /// </summary>
 		public object Data;
     }
 }

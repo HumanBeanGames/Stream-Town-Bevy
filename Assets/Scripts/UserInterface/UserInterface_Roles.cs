@@ -1,9 +1,8 @@
 using UnityEngine;
 using Utils;
 using TMPro;
-using Managers;
+using Processors;
 using System.Collections.Generic;
-using Scriptables;
 using Character;
 using Reflex.Attributes;
 
@@ -17,8 +16,8 @@ namespace UserInterface
 		[SerializeField]
 		private GameObject _rolePanel;
 
-		[Inject] private RoleManager _roleManager;
-		[Inject] private PlayerManager _playerManager;
+		[Inject] private RoleProcessor _roleProcessor;
+		[Inject] private PlayerProcessor _playerProcessor;
 
 		[SerializeField]
 		private GameObject _roleUIPrefab;
@@ -38,9 +37,9 @@ namespace UserInterface
 				return;
 			if (role == PlayerRole.Ruler)
 				return;
-			_roleDisplays[role].RoleAmount.text = $"{_roleManager.GetSlotPrint(role)}";
+			_roleDisplays[role].RoleAmount.text = $"{_roleProcessor.GetSlotPrint(role)}";
 
-			if (_roleManager.GetMaxSlots(role) == 0 && !_roleManager.RoleIsInfinite(role))
+			if (_roleProcessor.GetMaxSlots(role) == 0 && !_roleProcessor.RoleIsInfinite(role))
 				_roleDisplays[role].gameObject.SetActive(false);
 			else
 				_roleDisplays[role].gameObject.SetActive(true);
@@ -49,19 +48,19 @@ namespace UserInterface
 		private void Start()
 		{
 			_roleDisplays = new Dictionary<PlayerRole, UIRoleDisplay>();
-			_roleManager.OnRoleSlotsChangedEvent.AddListener(OnRoleSlotsChanged);
-			List<RoleDataScriptable> _resourceRoles = new List<RoleDataScriptable>();
-			List<RoleDataScriptable> _combatRoles = new List<RoleDataScriptable>();
-			List<RoleDataScriptable> _otherRoles = new List<RoleDataScriptable>();
-			RoleDataScriptable _ruler = null;
-			RoleDataScriptable _builder = null;
+			_roleProcessor.OnRoleSlotsChangedEvent += OnRoleSlotsChanged;
+			List<Character.RoleData> _resourceRoles = new List<Character.RoleData>();
+			List<Character.RoleData> _combatRoles = new List<Character.RoleData>();
+			List<Character.RoleData> _otherRoles = new List<Character.RoleData>();
+			Character.RoleData _ruler = null;
+			Character.RoleData _builder = null;
 
 			// organize roles by type.
 
 			for (int i = 0; i < (int)PlayerRole.Count; i++)
 			{
-				_roleManager.OnRoleSlotsChangedEvent.Invoke((PlayerRole)i);
-				RoleDataScriptable rds = _roleManager.GetRoleData((PlayerRole)i);
+				OnRoleSlotsChanged((PlayerRole)i);
+				Character.RoleData rds = _roleProcessor.GetRoleData((PlayerRole)i);
 
 				if (rds.RoleFlags == PlayerRoleType.Damage || rds.RoleFlags == PlayerRoleType.Healer)
 				{
@@ -82,7 +81,7 @@ namespace UserInterface
 
 			// Ruler
 			AddNewRoleDataUI(_ruler, new Color32(255, 242, 197, 255));
-			_playerManager.OnRulerChanged += OnRulerChanged;
+			_playerProcessor.OnRulerChanged += OnRulerChanged;
 			AddNewRoleDataUI(_builder, Color.white);
 			for (int i = 0; i < _resourceRoles.Count; i++)
 				AddNewRoleDataUI(_resourceRoles[i], new Color32(230, 255, 210, 255));
@@ -94,7 +93,7 @@ namespace UserInterface
 				AddNewRoleDataUI(_otherRoles[i], Color.white);
 		}
 
-		private void AddNewRoleDataUI(RoleDataScriptable rds, Color32 textColor)
+		private void AddNewRoleDataUI(Character.RoleData rds, Color32 textColor)
 		{
 			var go = GameObject.Instantiate(_roleUIPrefab, _roleUITransform);
 			var component = go.GetComponent<UIRoleDisplay>();

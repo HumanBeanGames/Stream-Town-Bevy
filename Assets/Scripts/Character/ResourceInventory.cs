@@ -8,15 +8,44 @@ namespace Character
 	[System.Serializable]
 	public class ResourceInventory
 	{
+        /// <summary>
+        /// The maximum amount of the resource.
+        /// </summary>
 		private int _maxAmount;
+
+        /// <summary>
+        /// The current amount of the resource.
+        /// </summary>
 		private int _amount;
+
+        /// <summary>
+        /// Whether the resource storage is unlimited.
+        /// </summary>
 		private bool _unlimited = false;
 
+        /// <summary>
+        /// Gets whether the resource storage is full.
+        /// </summary>
 		public bool Full => (Amount >= MaxAmount && !_unlimited);
+
+        /// <summary>
+        /// Gets whether the resource storage is half full.
+        /// </summary>
 		public bool HalfFull => (Amount >= MaxAmount * 0.5f && !_unlimited);
+
+        /// <summary>
+        /// Gets whether the resource storage is empty.
+        /// </summary>
 		public bool Empty => (Amount == 0 && !_unlimited);
+
+        /// <summary>
+        /// Gets the resource data as a string.
+        /// </summary>
 		public string ResourceDataToString => _unlimited ? $"{StringUtils.GetShortenedNumberAsString(_amount)}" : $"{StringUtils.GetShortenedNumberAsString(_amount)}/{StringUtils.GetShortenedNumberAsString(_maxAmount)}";
 
+        /// <summary>
+        /// Gets or sets the maximum amount.
+        /// </summary>
 		public int MaxAmount
 		{
 			get { return _maxAmount; }
@@ -27,6 +56,9 @@ namespace Character
 			}
 		}
 
+        /// <summary>
+        /// Gets or sets the current amount.
+        /// </summary>
 		public int Amount
 		{
 			get { return _amount; }
@@ -37,7 +69,12 @@ namespace Character
 			}
 		}
 
-		// Constructor
+		/// <summary>
+		/// Initializes a new instance of the ResourceInventory class.
+		/// </summary>
+		/// <param name="startingAmount">The initial amount of the resource.</param>
+		/// <param name="maxAmount">The maximum amount of the resource.</param>
+		/// <param name="unlimited">Whether the resource storage is unlimited.</param>
 		public ResourceInventory(int startingAmount, int maxAmount, bool unlimited = false)
 		{
 			_amount = startingAmount;

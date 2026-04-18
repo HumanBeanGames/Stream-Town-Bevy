@@ -3,17 +3,34 @@ using System.Collections.Generic;
 using UnityEngine;
 using System;
 using SavingAndLoading.Structs;
+using Processors;
 
 namespace TownGoal.Data
 {
+    /// <summary>
+    /// Represents a goal composed of multiple objectives.
+    /// </summary>
 	public class Goal
 	{
+        /// <summary>
+        /// Event invoked when the goal is completed.
+        /// </summary>
 		public Action<Goal> OnGoalCompleted;
 
+        /// <summary>
+        /// The dictionary of objective statuses.
+        /// </summary>
 		private Dictionary<Objective, bool> _objectiveStatuses;
 
+        /// <summary>
+        /// Gets the dictionary of objective statuses.
+        /// </summary>
 		public Dictionary<Objective, bool> ObjectivesStatuses => _objectiveStatuses;
 
+        /// <summary>
+        /// Initializes a new instance of the Goal class.
+        /// </summary>
+        /// <param name="objectiveData">The list of objective data.</param>
 		public Goal(List<ObjectiveData> objectiveData)
 		{
 			_objectiveStatuses = new Dictionary<Objective, bool>();
@@ -28,6 +45,10 @@ namespace TownGoal.Data
 				CheckAllObjectivesComplete();
 		}
 
+        /// <summary>
+        /// Sets objectives from save data.
+        /// </summary>
+        /// <param name="data">The objective save data.</param>
 		public void SetobjectivesFromSave(List<ObjectiveSaveData> data)
 		{
 			int index = 0;
@@ -37,6 +58,9 @@ namespace TownGoal.Data
 			}
 		}
 
+        /// <summary>
+        /// Forces the goal to complete.
+        /// </summary>
 		public void ForceComplete()
 		{
 			if (_objectiveStatuses.Count <= 0)
@@ -56,12 +80,19 @@ namespace TownGoal.Data
 			CheckAllObjectivesComplete();
 		}
 
+        /// <summary>
+        /// Called when an objective is complete.
+        /// </summary>
+        /// <param name="objective">The objective.</param>
 		private void OnObjectiveComplete(Objective objective)
 		{
 			_objectiveStatuses[objective] = true;
 			CheckAllObjectivesComplete();
 		}
 
+        /// <summary>
+        /// Checks if all objectives are complete.
+        /// </summary>
 		private void CheckAllObjectivesComplete()
 		{
 			bool allPassed = true;

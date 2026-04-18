@@ -1,4 +1,4 @@
-﻿using Reflex.Core;
+using Reflex.Core;
 using UnityEngine;
 using UnityEngine.Pool;
 using UnityEngine.SceneManagement;

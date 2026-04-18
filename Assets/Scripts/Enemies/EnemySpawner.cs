@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using System.Collections.Generic;
 using UnityEngine;
 using Utils;
@@ -13,34 +13,85 @@ namespace Enemies
 	/// </summary>
 	public class EnemySpawner : MonoBehaviour
 	{
+        /// <summary>
+        /// The minimum total number of enemies.
+        /// </summary>
 		[SerializeField]
 		private int _minTotalEnemies = 3;
 
+        /// <summary>
+        /// The maximum total number of enemies.
+        /// </summary>
 		[SerializeField]
 		private int _maxTotalEnemies = 50;
 
+        /// <summary>
+        /// The time between spawns in seconds.
+        /// </summary>
 		[SerializeField]
 		private float _timeBetweenSpawns = 25;
 
+        /// <summary>
+        /// List of enemies with spawn chances.
+        /// </summary>
 		[SerializeField]
 		private ChanceObjectList<string> _enemies;
 
+        /// <summary>
+        /// List of spawned enemies.
+        /// </summary>
 		[SerializeField]
 		private List<Enemy> _spawnedEnemies = new List<Enemy>();
 
+        /// <summary>
+        /// Game state processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private GameStateProcessor _gameStateProcessor;
+
+        /// <summary>
+        /// Array of spawn locations.
+        /// </summary>
 		[SerializeField]
 		private Transform[] _spawnLocations;
 
-		[Inject] private ObjectPoolingManager _poolingManager;
-		[Inject] private DayAndNightManager _dayNightManager;
-		[Inject] private TimeManager _timeManager;
-		[Inject] private PlayerManager _playerManager;
+        /// <summary>
+        /// Object pooling processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private ObjectPoolingProcessor _poolingProcessor;
 
+        /// <summary>
+        /// Day and night processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private DayAndNightProcessor _dayNightProcessor;
+
+        /// <summary>
+        /// Time processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TimeProcessor _timeProcessor;
+
+        /// <summary>
+        /// Player processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private PlayerProcessor _playerProcessor;
+
+        /// <summary>
+        /// The spawn timer.
+        /// </summary>
 		private float _spawnTimer = 0;
 
+        /// <summary>
+        /// The maximum number of enemies.
+        /// </summary>
 		private int _maxEnemies = 2;
+
+        /// <summary>
+        /// Gets or sets whether enemies can be spawned.
+        /// </summary>
 		public bool CanSpawnEnemies { get; set; } = true;
 
+        /// <summary>
+        /// Gets the spawn locations.
+        /// </summary>
 		public Transform[] SpawnLocations => _spawnLocations;
 
 		/// <summary>
@@ -55,7 +106,7 @@ namespace Enemies
 
 			Transform spawnTransform = GetRandomSpawnLocation();
 
-			PoolableObject obj = _poolingManager.GetPooledObject(enemyName);
+			PoolableObject obj = _poolingProcessor.GetPooledObject(enemyName);
 			obj.transform.position = spawnTransform.position;
 			obj.transform.rotation = spawnTransform.rotation;
 			obj.gameObject.SetActive(true);
@@ -64,16 +115,27 @@ namespace Enemies
 			enemy.OnPooled();
 		}
 
+        /// <summary>
+        /// Gets a random spawn location.
+        /// </summary>
+        /// <returns>A random spawn transform.</returns>
 		public Transform GetRandomSpawnLocation()
 		{
 			return _spawnLocations[Random.Range(0, _spawnLocations.Length)];
 		}
 
+        /// <summary>
+        /// Adds an enemy to the spawned enemies list.
+        /// </summary>
+        /// <param name="enemy">The enemy to add.</param>
 		public void AddEnemySpawn(Enemy enemy)
 		{
 			_spawnedEnemies.Add(enemy);
 		}
 
+        /// <summary>
+        /// Updates the spawn timer and spawns enemies when conditions are met.
+        /// </summary>
 		public void Update()
 		{
 			// Check for enemies that have been disabled and remove them from the spawned enemies list.
@@ -84,7 +146,7 @@ namespace Enemies
 					_spawnedEnemies.RemoveAt(i);
 			}
 
-			if (!GameStateManager.ObjectsPooled || !CanSpawnEnemies || _dayNightManager.IsDayTime)
+			if (!_gameStateProcessor.ObjectsPooled || !CanSpawnEnemies || _dayNightProcessor.IsDayTime)
 				return;
 
 			if (_spawnedEnemies.Count < _maxEnemies)
@@ -99,27 +161,43 @@ namespace Enemies
 			}
 		}
 
+        /// <summary>
+        /// Called when a new day starts.
+        /// </summary>
 		private void OnDayStarted()
 		{
+			// Recalculate the maximum number of enemies when a new day starts.
 			CalculateMaxEnemies();
 		}
 
+        /// <summary>
+        /// Calculates the maximum number of enemies based on day count and player count.
+        /// </summary>
 		private void CalculateMaxEnemies()
 		{
-			_maxEnemies = Mathf.Max(Mathf.Min((int)(_timeManager.DayCount + _playerManager.Players.Count * 0.1f), _maxTotalEnemies), _minTotalEnemies);
+			// Calculate the maximum number of enemies based on day count and player count.
+			_maxEnemies = Mathf.Max(Mathf.Min((int)(_timeProcessor.DayCount + _playerProcessor.Players.Count * 0.1f), _maxTotalEnemies), _minTotalEnemies);
 		}
 
 		// Unity Functions.
+        /// <summary>
+        /// Initializes the enemy spawner on Awake.
+        /// </summary>
 		private void Awake()
 		{
+			// Initialize the spawn timer and calculate the total chance of enemies.
 			_spawnTimer = _timeBetweenSpawns;
 			_enemies.CalculateTotalChance();
 			CalculateMaxEnemies();
 		}
 
+        /// <summary>
+        /// Subscribes to day started event on Start.
+        /// </summary>
 		private void Start()
 		{
-			_dayNightManager.OnDayStarted += OnDayStarted;
+			// Subscribe to the day started event.
+			_dayNightProcessor.OnDayStarted += OnDayStarted;
 		}
 	}
 }

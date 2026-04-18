@@ -1,23 +1,18 @@
 using UnityEngine;
 using Utils;
 
-namespace Scriptables
+namespace ScriptablesProcessorInfrastructure
 {
-	[CreateAssetMenu(fileName = "AllSeasonsScriptableData", menuName = "ScriptableObjects/AllSeasonsScriptable", order = 1)]
-	public class AllSeasonsScriptable : ScriptableObject
+	/// <summary>
+	/// ScriptableObject that stores all season data configurations for the game.
+	/// Acts as a central registry for season data.
+	/// </summary>
+	[CreateAssetMenu(fileName = "AllSeasonsSettings", menuName = "ScriptableObjects/AllSeasonsSettings", order = 1)]
+	public class AllSeasonsSettings : ScriptableObject, IDataScriptable
 	{
-		public SeasonScriptable[] AllSeasons;
-
-		public SeasonScriptable GetSeasonData(Season season)
-		{
-			for (int i = 0; i < AllSeasons.Length; i++)
-			{
-				if (AllSeasons[i].Season == season)
-					return AllSeasons[i];
-			}
-
-			Debug.LogError($"Tried to return a season that hasn't been setup: {season}");
-			return null;
-		}
+		/// <summary>
+		/// Array of all season data configurations indexed by season type.
+		/// </summary>
+		public SeasonSettings[] SeasonSettingsArray;
 	}
 }

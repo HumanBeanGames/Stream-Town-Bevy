@@ -1,6 +1,5 @@
 using Character;
 using Reflex.Attributes;
-using Scriptables;
 using UnityEngine;
 
 namespace UserInterface 

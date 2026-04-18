@@ -1,27 +1,59 @@
 using GameEventSystem;
 using GameEventSystem.Events;
-using Managers;
-using System;
+using Processors;
+using Core;
+using Twitch.Utils;
 using TwitchLib.Client.Events;
 using Reflex.Attributes;
 
 namespace Twitch.Commands 
 {
-    public static class EventCommands 
+    /// <summary>
+    /// Handles Twitch chat event commands from channel point rewards.
+    /// </summary>
+    public class EventCommands 
 	{
-		private static PlayerManager _playerManager;
-		private static GameEventManager _gameEventManager;
-		[Inject] private static TownResourceManager _townResourceManager;
-		[Inject] private static ObjectPoolingManager _poolingManager;
-		[Inject] private static GameManager _gameManager;
+        /// <summary>
+        /// The player processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private PlayerProcessor _playerProcessor;
 
-		public static void Initialize(PlayerManager playerManager, GameEventManager gameEventManager)
-		{
-			_playerManager = playerManager;
-			_gameEventManager = gameEventManager;
-		}
+        /// <summary>
+        /// The game event processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private GameEventProcessor _gameEventProcessor;
 
-        public static bool EventMessage(OnMessageReceivedArgs e)
+        /// <summary>
+        /// The town resource processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TownResourceProcessor _townResourceProcessor;
+
+        /// <summary>
+        /// The object pooling processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private ObjectPoolingProcessor _poolingProcessor;
+
+        /// <summary>
+        /// The game coordinator. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private Coordinator _gameProcessor;
+
+        /// <summary>
+        /// The UI processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private UIProcessor _uiProcessor;
+
+        /// <summary>
+        /// The message sender. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private MessageSender _messageSender;
+
+        /// <summary>
+        /// Processes an event message from Twitch.
+        /// </summary>
+        /// <param name="e">The message received args.</param>
+        /// <returns>True if the message was processed, false otherwise.</returns>
+        public bool EventMessage(OnMessageReceivedArgs e)
 		{
 			string[] words = e.ChatMessage.RawIrcMessage.Split(';');
 
@@ -39,9 +71,14 @@ namespace Twitch.Commands
 			return false;
 		}
 
-		private static void ProcessReward(string[] split, OnMessageReceivedArgs e)
+        /// <summary>
+        /// Processes a channel point reward.
+        /// </summary>
+        /// <param name="split">The split reward data.</param>
+        /// <param name="e">The message received args.</param>
+		private void ProcessReward(string[] split, OnMessageReceivedArgs e)
 		{
-			if (!_playerManager.PlayerExistsByID(e.ChatMessage.UserId, out int index))
+			if (!_playerProcessor.PlayerExistsByID(e.ChatMessage.UserId, out int index))
 				return;
 
 			switch(split[1])
@@ -53,23 +90,26 @@ namespace Twitch.Commands
 			}
 		}
 
-		public static void HandleFishGodEvent()
+        /// <summary>
+        /// Handles the Fish God event.
+        /// </summary>
+		public void HandleFishGodEvent()
 		{
-			GameEventManager eventManager = _gameEventManager;
+			GameEventProcessor eventProcessor = _gameEventProcessor;
 
-			if(eventManager.CurrentEvent != null && eventManager.CurrentEvent.Event == GameEvent.EventType.FishGod)
+			if(eventProcessor.CurrentEvent != null && eventProcessor.CurrentEvent.Event == GameEvent.EventType.FishGod)
 			{
-				eventManager.CurrentEvent.Action();
+				eventProcessor.CurrentEvent.Action();
 				return;
 			}
 
-			if (eventManager.CurrentEvent != null)
+			if (eventProcessor.CurrentEvent != null)
 				return;
 
 			int rand = UnityEngine.Random.Range(0, 10);
 
 			if (rand == 0)
-				eventManager.AddEvent(new FishGodEvent(0, _gameEventManager, _townResourceManager, _playerManager, _poolingManager, _gameManager.UIManager.EventInterface));
+				eventProcessor.AddEvent(new FishGodEvent(0, _gameEventProcessor, _townResourceProcessor, _playerProcessor, _poolingProcessor, _messageSender, _uiProcessor.EventInterface));
 		}
 	}
 }

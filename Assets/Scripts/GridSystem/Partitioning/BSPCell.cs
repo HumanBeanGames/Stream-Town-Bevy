@@ -11,27 +11,82 @@ namespace GridSystem.Partitioning
 	[System.Serializable]
 	public class BSPCell
 	{
+        /// <summary>
+        /// Array of target lists organized by target type.
+        /// </summary>
 		public List<Targetable>[] _targetArray;
 
-		// Resource index storage for data-driven resource system
+        /// <summary>
+        /// Wood resource indices.
+        /// </summary>
 		public List<int> WoodResourceIndices;
+
+        /// <summary>
+        /// Ore resource indices.
+        /// </summary>
 		public List<int> OreResourceIndices;
+
+        /// <summary>
+        /// Food resource indices.
+        /// </summary>
 		public List<int> FoodResourceIndices;
+
+        /// <summary>
+        /// Gold resource indices.
+        /// </summary>
 		public List<int> GoldResourceIndices;
+
+        /// <summary>
+        /// Recruit resource indices.
+        /// </summary>
 		public List<int> RecruitResourceIndices;
 
+        /// <summary>
+        /// The top-left position of the cell.
+        /// </summary>
 		public Vector2 TopLeft;
+
+        /// <summary>
+        /// The bottom-right position of the cell.
+        /// </summary>
 		public Vector2 BottomRight;
+
+        /// <summary>
+        /// The center position of the cell.
+        /// </summary>
 		public Vector2 Center;
 
+        /// <summary>
+        /// Whether the cell has been searched.
+        /// </summary>
 		public bool Searched;
 
+        /// <summary>
+        /// Gets the top boundary.
+        /// </summary>
 		public float Top => TopLeft.y;
+
+        /// <summary>
+        /// Gets the left boundary.
+        /// </summary>
 		public float Left => TopLeft.x;
+
+        /// <summary>
+        /// Gets the bottom boundary.
+        /// </summary>
 		public float Bottom => BottomRight.y;
+
+        /// <summary>
+        /// Gets the right boundary.
+        /// </summary>
 		public float Right => BottomRight.x;
 
 		// Constructor.
+        /// <summary>
+        /// Initializes a new BSP cell instance.
+        /// </summary>
+        /// <param name="topLeft">The top-left position.</param>
+        /// <param name="bottomRight">The bottom-right position.</param>
 		public BSPCell(Vector2 topLeft, Vector2 bottomRight)
 		{
 			TopLeft = topLeft;
@@ -44,9 +99,9 @@ namespace GridSystem.Partitioning
 		/// <summary>
 		/// Returns true if overlapping.
 		/// </summary>
-		/// <param name="topLeft"></param>
-		/// <param name="bottomRight"></param>
-		/// <returns></returns>
+		/// <param name="topLeft">The top-left position.</param>
+		/// <param name="bottomRight">The bottom-right position.</param>
+		/// <returns>True if overlapping.</returns>
 		public bool IsOverlapping(Vector2 topLeft, Vector2 bottomRight)
 		{
 			return !(topLeft.x > Right
@@ -59,17 +114,17 @@ namespace GridSystem.Partitioning
 		/// <summary>
 		/// Returns true if two BSPCells are overlapping.
 		/// </summary>
-		/// <param name="other"></param>
-		/// <returns></returns>
+		/// <param name="other">The other BSP cell.</param>
+		/// <returns>True if overlapping.</returns>
 		public bool IsOverlapping(BSPCell other)
 		{
 			return IsOverlapping(other.TopLeft, other.BottomRight);
 		}
 
 		/// <summary>
-		/// Adds a target to the Cell
+		/// Adds a target to the Cell.
 		/// </summary>
-		/// <param name="target"></param>
+		/// <param name="target">The target to add.</param>
 		public void AddTarget(Targetable target)
 		{
 			for (int i = 0; i < TargetFlagHelper.TargetFlagCount - 1; i++)
@@ -82,9 +137,9 @@ namespace GridSystem.Partitioning
 		}
 
 		/// <summary>
-		/// Removes a target from the Cell
+		/// Removes a target from the Cell.
 		/// </summary>
-		/// <param name="target"></param>
+		/// <param name="target">The target to remove.</param>
 		public void RemoveTarget(Targetable target)
 		{
 			for (int i = 0; i < TargetFlagHelper.TargetFlagCount - 1; i++)
@@ -99,8 +154,8 @@ namespace GridSystem.Partitioning
 		/// <summary>
 		/// Gets all targets defined by the Target mask into one list.
 		/// </summary>
-		/// <param name="targetMask"></param>
-		/// <returns></returns>
+		/// <param name="targetMask">The target mask.</param>
+		/// <param name="targets">The list to populate with targets.</param>
 		public void GetTargetsByFlag(TargetMask targetMask, ref List<Targetable> targets)
 		{
 			Searched = true;
@@ -118,8 +173,8 @@ namespace GridSystem.Partitioning
 		/// <summary>
 		/// Adds a target to the cell.
 		/// </summary>
-		/// <param name="index"></param>
-		/// <param name="target"></param>
+		/// <param name="index">The target type index.</param>
+		/// <param name="target">The target to add.</param>
 		private void AddTarget(int index, Targetable target)
 		{
 			if (_targetArray[index] == null)
@@ -135,8 +190,8 @@ namespace GridSystem.Partitioning
 		/// <summary>
 		/// Removes a target from the cell.
 		/// </summary>
-		/// <param name="index"></param>
-		/// <param name="target"></param>
+		/// <param name="index">The target type index.</param>
+		/// <param name="target">The target to remove.</param>
 		private void RemoveTarget(int index, Targetable target)
 		{
 			if (_targetArray[index] == null)

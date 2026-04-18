@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using SavingAndLoading;
 using System;
 using System.Collections.Generic;
@@ -8,38 +8,85 @@ using UnityEngine.Profiling;
 
 namespace TechTree.Data
 {
+    /// <summary>
+    /// Manages the technology tree.
+    /// </summary>
 	public class TechnologyTree
 	{
+        /// <summary>
+        /// The tech tree ScriptableObject.
+        /// </summary>
 		private TechTree_SO _tree;
+
+        /// <summary>
+        /// The root node.
+        /// </summary>
 		private Node_SO _rootNode;
 
+        /// <summary>
+        /// The available nodes.
+        /// </summary>
 		private List<Node_SO> _availableNodes;
 
+        /// <summary>
+        /// Gets the root node.
+        /// </summary>
 		public Node_SO RootNode => _rootNode;
+
+        /// <summary>
+        /// Gets the available nodes.
+        /// </summary>
 		public List<Node_SO> AvailableNodes => _availableNodes;
+
+        /// <summary>
+        /// Event invoked when a technology is unlocked.
+        /// </summary>
 		public Action<Node_SO> TechUnlocked;
 
+        /// <summary>
+        /// The dictionary of unlocked nodes.
+        /// </summary>
 		public Dictionary<Node_SO, bool> _unlockedNodes;
 
+        /// <summary>
+        /// Whether to debug unlocks.
+        /// </summary>
 		private static bool _debugUnlocks = false;
 
-		private TechTreeManager _techTreeManager;
+        /// <summary>
+        /// The tech tree processor.
+        /// </summary>
+		private TechTreeProcessor _techTreeProcessor;
+
+        /// <summary>
+        /// The metadata.
+        /// </summary>
 		private MetaData.MetaData _metaData;
 
-		public TechnologyTree(TechTree_SO tree, TechTreeManager manager, MetaData.MetaData metaData)
+        /// <summary>
+        /// Initializes a new instance of the TechnologyTree class.
+        /// </summary>
+        /// <param name="tree">The tech tree ScriptableObject.</param>
+        /// <param name="processor">The tech tree processor.</param>
+        /// <param name="metaData">The metadata.</param>
+		public TechnologyTree(TechTree_SO tree, TechTreeProcessor processor, MetaData.MetaData metaData)
 		{
 			Profiler.BeginSample("Initialize Tech Tree");
 			_tree = tree;
 			_availableNodes = new List<Node_SO>();
 			_unlockedNodes = new Dictionary<Node_SO, bool>();
-			_techTreeManager = manager;
+			_techTreeProcessor = processor;
 			_metaData = metaData;
 			Profiler.EndSample();
-			TechUnlocked += manager.OnTechUnlocked;
+			TechUnlocked += processor.OnTechUnlocked;
 			InitializeData();
 			Debug.Log($"Root Node Result: {_rootNode.TechName}");
 		}
 
+        /// <summary>
+        /// Unlocks a node.
+        /// </summary>
+        /// <param name="node">The node to unlock.</param>
 		public void UnlockNode(Node_SO node)
 		{
 			if (AvailableNodes.Contains(node))
@@ -52,6 +99,10 @@ namespace TechTree.Data
 			}
 		}
 
+        /// <summary>
+        /// Forces a node to unlock.
+        /// </summary>
+        /// <param name="node">The node to unlock.</param>
 		public void ForceUnlockNode(Node_SO node)
 		{
 			if (AvailableNodes.Contains(node))
@@ -65,11 +116,20 @@ namespace TechTree.Data
 			TechUnlocked?.Invoke(node);
 		}
 
+        /// <summary>
+        /// Checks if a node is unlocked.
+        /// </summary>
+        /// <param name="node">The node to check.</param>
+        /// <returns>True if unlocked, false otherwise.</returns>
 		public bool IsUnlocked(Node_SO node)
 		{
 			return _unlockedNodes[node];
 		}
 
+        /// <summary>
+        /// Gets the unlocked nodes.
+        /// </summary>
+        /// <returns>The list of unlocked node states.</returns>
 		public List<bool> GetUnlockedNodes()
 		{
 			List<bool> result = new List<bool>();
@@ -82,13 +142,18 @@ namespace TechTree.Data
 			return result;
 		}
 
+        /// <summary>
+        /// Gets the current node's index.
+        /// </summary>
+        /// <returns>The current node index.</returns>
 		public int GetCurrentNodesIndex()
 		{
 			int i = 0;
+			Node_SO currentTech = _techTreeProcessor.GetCurrentTech();
 
 			foreach (Node_SO node in _unlockedNodes.Keys)
 			{
-				if (node == _techTreeManager.CurrentTech)
+				if (node == currentTech)
 					break;
 				i++;
 			}
@@ -96,6 +161,11 @@ namespace TechTree.Data
 			return i;
 		}
 
+        /// <summary>
+        /// Gets a node from its name.
+        /// </summary>
+        /// <param name="techName">The technology name.</param>
+        /// <returns>The node, or null if not found.</returns>
 		public Node_SO GetNodeFromName(string techName)
 		{
 			foreach (Node_SO node in _unlockedNodes.Keys)
@@ -107,6 +177,10 @@ namespace TechTree.Data
 			return null;
 		}
 
+        /// <summary>
+        /// Sets the unlocked nodes.
+        /// </summary>
+        /// <param name="unlockedNodes">The list of unlocked node states.</param>
 		public void SetUnlockedNodes(List<bool> unlockedNodes)
 		{
 			List<Node_SO> nodesToBeProcessed = new List<Node_SO>();
@@ -125,6 +199,9 @@ namespace TechTree.Data
 			}
 		}
 
+        /// <summary>
+        /// Initializes the tech tree data.
+        /// </summary>
 		private void InitializeData()
 		{
 			List<Node_SO> allNodes = new List<Node_SO>(_tree.UngroupedNodes);
@@ -151,6 +228,10 @@ namespace TechTree.Data
 			}
 		}
 
+        /// <summary>
+        /// Connects parent nodes to their children.
+        /// </summary>
+        /// <param name="allNodes">The list of all nodes.</param>
 		private void ConnectParents(ref List<Node_SO> allNodes)
 		{
 			for (int i = 0; i < allNodes.Count; i++)
@@ -167,6 +248,7 @@ namespace TechTree.Data
 		/// <summary>
 		/// Attempts to find the root node.
 		/// </summary>
+		/// <param name="allNodes">The list of all nodes.</param>
 		private void SetRootNode(ref List<Node_SO> allNodes)
 		{
 			for (int i = 0; i < allNodes.Count; i++)
@@ -179,6 +261,10 @@ namespace TechTree.Data
 			}
 		}
 
+        /// <summary>
+        /// Recursively adds available nodes.
+        /// </summary>
+        /// <param name="node">The node to process.</param>
 		private void RecursivelyAddAvailableNodes(Node_SO node)
 		{
 			if (!IsUnlocked(node) && !_availableNodes.Contains(node) && !node.Unavailable)

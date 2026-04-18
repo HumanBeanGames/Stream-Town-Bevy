@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using Reflex.Attributes;
 using UnityEngine;
 
@@ -19,7 +19,7 @@ namespace Audio
 		[SerializeField]
 		private AudioSource _audioSource;
 
-		[Inject] private AudioSourcesManager _audioSourcesManager;
+		[Inject] private AudioSourcesProcessor _audioSourcesProcessor;
 
 		private Camera _camera;
 
@@ -66,8 +66,8 @@ namespace Audio
 #endif
 		private void OnEnable()
 		{
-			if (!Tracked && _audioSourcesManager != null)
-				_audioSourcesManager.AddSourceToQueue(this);
+			if (!Tracked && _audioSourcesProcessor != null)
+				_audioSourcesProcessor.AddSourceToQueue(this);
 		}
 
 		private void OnDisable()

@@ -3,135 +3,179 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using Reflex.Attributes;
 
 namespace Twitch.Commands
 {
 	/// <summary>
 	/// Contains all commands used in Twitch chat.
 	/// </summary>
-	public static class CommandDictionary
+	public class CommandDictionary
 	{
+        /// <summary>
+        /// The player commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private PlayerCommands _playerCommands;
+        
+        /// <summary>
+        /// The role commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private RoleCommands _roleCommands;
+        
+        /// <summary>
+        /// The building commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private BuildingCommands _buildingCommands;
+        
+        /// <summary>
+        /// The misc commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private MiscCommands _miscCommands;
+        
+        /// <summary>
+        /// The game master commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private GameMasterCommands _gameMasterCommands;
+        
+        /// <summary>
+        /// The moderator commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private ModeratorCommands _moderatorCommands;
+        
+        /// <summary>
+        /// The ruler commands. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private RulerCommands _rulerCommands;
 
-		private static Dictionary<string, Action<Player, string, string[]>> _commandsWithArgs;
+		/// <summary>
+		/// The dictionary of commands with arguments.
+		/// </summary>
+		private Dictionary<string, Action<Player, string, string[]>> _commandsWithArgs;
 
 		/// <summary>
 		/// Contains all Game Commands that require further arguments.
 		/// </summary>
-		public static Dictionary<string, Action<Player, string, string[]>> CommandsWithArgs
+		public Dictionary<string, Action<Player, string, string[]>> CommandsWithArgs
 		{
 			get
 			{
 				if (_commandsWithArgs == null)
 				{
 					_commandsWithArgs = new Dictionary<string, Action<Player, string, string[]>>();
-					_commandsWithArgs.Add("role", RoleCommands.TryChangeRole);
-					_commandsWithArgs.Add("build", BuildingCommands.StartBuild);
-					_commandsWithArgs.Add("move", BuildingCommands.AdjustBuildingPlacer);
-					_commandsWithArgs.Add("up", BuildingCommands.AdjustBuildingPlacer);
-					_commandsWithArgs.Add("down", BuildingCommands.AdjustBuildingPlacer);
-					_commandsWithArgs.Add("left", BuildingCommands.AdjustBuildingPlacer);
-					_commandsWithArgs.Add("right", BuildingCommands.AdjustBuildingPlacer);
-					_commandsWithArgs.Add("rotate", BuildingCommands.AdjustBuildingPlacer);
-					_commandsWithArgs.Add("level", MiscCommands.Level);
-					_commandsWithArgs.Add("remove", BuildingCommands.RemoveBuilding);
-					_commandsWithArgs.Add("bid", BuildingCommands.ShowBuildingIDsByType);
-					_commandsWithArgs.Add("station", RoleCommands.SwitchStation);
-					_commandsWithArgs.Add("target", RoleCommands.SwitchTarget);
-					_commandsWithArgs.Add("hair", PlayerCommands.ChangeHairStyle);
-					_commandsWithArgs.Add("facialhair", PlayerCommands.ChangeFacialHair);
-					_commandsWithArgs.Add("eyes", PlayerCommands.ChangeEyes);
-					_commandsWithArgs.Add("body", PlayerCommands.ChangeBodyType);
-					_commandsWithArgs.Add("haircolor", PlayerCommands.ChangeHairColor);
-					_commandsWithArgs.Add("eyecolor", PlayerCommands.ChangeEyeColor);
-					_commandsWithArgs.Add("addresource", GameMasterCommands.AddResources);
-					_commandsWithArgs.Add("vote", PlayerCommands.Vote);
-					_commandsWithArgs.Add("modrole", ModeratorCommands.ChangePlayerRole);
-					_commandsWithArgs.Add("kill", GameMasterCommands.KillPlayer);
-					_commandsWithArgs.Add("grevive", GameMasterCommands.RevivePlayer);
-					_commandsWithArgs.Add("revive", PlayerCommands.RevivePlayerWithCost);
-					_commandsWithArgs.Add("givexp", GameMasterCommands.GivePlayerExp);
-					_commandsWithArgs.Add("givexpall", GameMasterCommands.GiveAllExp);
-					_commandsWithArgs.Add("levelup", GameMasterCommands.LevelUpPlayer);
-					_commandsWithArgs.Add("qevent", GameMasterCommands.QueueEvent);
-					_commandsWithArgs.Add("buy", RulerCommands.BuyResource);
-					_commandsWithArgs.Add("sell", RulerCommands.SellResource);
-					_commandsWithArgs.Add("levelall", BuildingCommands.LevelAllOfType);
-					//_commandsWithArgs.Add("bi", BuildingCommands.GetBuildingInformation);
-					_commandsWithArgs.Add("recruit", RulerCommands.RecruitNPC);
-					_commandsWithArgs.Add("givepet", GameMasterCommands.GivePlayerPet);
-					_commandsWithArgs.Add("pet", PlayerCommands.SwitchPet);
-					_commandsWithArgs.Add("cam", RulerCommands.MoveCamera);
-					_commandsWithArgs.Add("info", MiscCommands.ItemInfo);
-					_commandsWithArgs.Add("rrole", RulerCommands.SwapRecruitRole);
-					_commandsWithArgs.Add("rinfo", RulerCommands.DisplayRecruitInfo);
-					_commandsWithArgs.Add("rdismiss", RulerCommands.DismissRecruit);
-					_commandsWithArgs.Add("resetid", GameMasterCommands.ResetID);
+					_commandsWithArgs.Add("role", _roleCommands.TryChangeRole);
+					_commandsWithArgs.Add("build", _buildingCommands.StartBuild);
+					_commandsWithArgs.Add("move", _buildingCommands.AdjustBuildingPlacer);
+					_commandsWithArgs.Add("up", _buildingCommands.AdjustBuildingPlacer);
+					_commandsWithArgs.Add("down", _buildingCommands.AdjustBuildingPlacer);
+					_commandsWithArgs.Add("left", _buildingCommands.AdjustBuildingPlacer);
+					_commandsWithArgs.Add("right", _buildingCommands.AdjustBuildingPlacer);
+					_commandsWithArgs.Add("rotate", _buildingCommands.AdjustBuildingPlacer);
+					_commandsWithArgs.Add("level", _miscCommands.Level);
+					_commandsWithArgs.Add("remove", _buildingCommands.RemoveBuilding);
+					_commandsWithArgs.Add("bid", _buildingCommands.ShowBuildingIDsByType);
+					_commandsWithArgs.Add("station", _roleCommands.SwitchStation);
+					_commandsWithArgs.Add("target", _roleCommands.SwitchTarget);
+					_commandsWithArgs.Add("hair", _playerCommands.ChangeHairStyle);
+					_commandsWithArgs.Add("facialhair", _playerCommands.ChangeFacialHair);
+					_commandsWithArgs.Add("eyes", _playerCommands.ChangeEyes);
+					_commandsWithArgs.Add("body", _playerCommands.ChangeBodyType);
+					_commandsWithArgs.Add("haircolor", _playerCommands.ChangeHairColor);
+					_commandsWithArgs.Add("eyecolor", _playerCommands.ChangeEyeColor);
+					_commandsWithArgs.Add("addresource", _gameMasterCommands.AddResources);
+					_commandsWithArgs.Add("vote", _playerCommands.Vote);
+					_commandsWithArgs.Add("modrole", _moderatorCommands.ChangePlayerRole);
+					_commandsWithArgs.Add("kill", _gameMasterCommands.KillPlayer);
+					_commandsWithArgs.Add("grevive", _gameMasterCommands.RevivePlayer);
+					_commandsWithArgs.Add("revive", _playerCommands.RevivePlayerWithCost);
+					_commandsWithArgs.Add("givexp", _gameMasterCommands.GivePlayerExp);
+					_commandsWithArgs.Add("givexpall", _gameMasterCommands.GiveAllExp);
+					_commandsWithArgs.Add("levelup", _gameMasterCommands.LevelUpPlayer);
+					_commandsWithArgs.Add("qevent", _gameMasterCommands.QueueEvent);
+					_commandsWithArgs.Add("buy", _rulerCommands.BuyResource);
+					_commandsWithArgs.Add("sell", _rulerCommands.SellResource);
+					_commandsWithArgs.Add("levelall", _buildingCommands.LevelAllOfType);
+					//_commandsWithArgs.Add("bi", _buildingCommands.GetBuildingInformation);
+					_commandsWithArgs.Add("recruit", _rulerCommands.RecruitNPC);
+					_commandsWithArgs.Add("givepet", _gameMasterCommands.GivePlayerPet);
+					_commandsWithArgs.Add("pet", _playerCommands.SwitchPet);
+					_commandsWithArgs.Add("cam", _rulerCommands.MoveCamera);
+					_commandsWithArgs.Add("info", _miscCommands.ItemInfo);
+					_commandsWithArgs.Add("rrole", _rulerCommands.SwapRecruitRole);
+					_commandsWithArgs.Add("rinfo", _rulerCommands.DisplayRecruitInfo);
+					_commandsWithArgs.Add("rdismiss", _rulerCommands.DismissRecruit);
+					_commandsWithArgs.Add("resetid", _gameMasterCommands.ResetID);
 				}
 				return _commandsWithArgs;
 			}
 		}
 
-		private static Dictionary<string, Action<Player>> _commandsNoArgs;
+        /// <summary>
+        /// The dictionary of commands without arguments.
+        /// </summary>
+		private Dictionary<string, Action<Player>> _commandsNoArgs;
 
 		/// <summary>
 		/// Contains all Game Commands that do NOT require arguments.
 		/// </summary>
-		public static Dictionary<string, Action<Player>> CommandsNoArgs
+		public Dictionary<string, Action<Player>> CommandsNoArgs
 		{
 			get
 			{
 				if (_commandsNoArgs == null)
 				{
 					_commandsNoArgs = new Dictionary<string, Action<Player>>();
-					_commandsNoArgs.Add("role", RoleCommands.Experience);
-					_commandsNoArgs.Add("level", RoleCommands.Experience);
-					_commandsNoArgs.Add("health", RoleCommands.Health);
-					_commandsNoArgs.Add("revive", PlayerCommands.ReviveWithCost);
-					_commandsNoArgs.Add("confirm", BuildingCommands.ConfirmBuildingPlacement);
-					_commandsNoArgs.Add("accept", BuildingCommands.ConfirmBuildingPlacement);
-					_commandsNoArgs.Add("cancel", BuildingCommands.CancelBuildingPlacement);
-					_commandsNoArgs.Add("station", RoleCommands.DisplayStationIDs);
-					_commandsNoArgs.Add("target", RoleCommands.DisplayTargetIDs);
-					_commandsNoArgs.Add("tbuildcosts", GameMasterCommands.ToggleBuildCosts);
-					_commandsNoArgs.Add("trolelimits", GameMasterCommands.TogglePlayerRoleLimits);
-					_commandsNoArgs.Add("ping", PlayerCommands.PingPlayer);
-					_commandsNoArgs.Add("rulervote", ModeratorCommands.StartKingVote);
-					_commandsNoArgs.Add("stopevent", GameMasterCommands.StopCurrentEvent);
-					_commandsNoArgs.Add("cobj", GameMasterCommands.CompleteCurrentGoal);
-					_commandsNoArgs.Add("randtech", GameMasterCommands.StartRandomTech);
-					_commandsNoArgs.Add("techvote", GameMasterCommands.StartVoteTech);
-					_commandsNoArgs.Add("pet", PlayerCommands.PrintPetsList);
-					_commandsNoArgs.Add("pets", PlayerCommands.PrintPetsList);
-					_commandsNoArgs.Add("gaction", GameMasterCommands.ActionEvent);
-					_commandsNoArgs.Add("unlockall", GameMasterCommands.UnlockAllTech);
-					_commandsNoArgs.Add("unlockage2", GameMasterCommands.UnlockToAge2);
-					_commandsNoArgs.Add("resetcam", RulerCommands.ResetCamera);
-					_commandsNoArgs.Add("stuck", PlayerCommands.Unstuck);
-					_commandsNoArgs.Add("praise", PlayerCommands.Praise);
-					_commandsNoArgs.Add("buildings", BuildingCommands.PrintUnlockedBuildings);
-					_commandsNoArgs.Add("rid", RulerCommands.ShowRecruitIds);
-					_commandsNoArgs.Add("recruits", RulerCommands.RecruitCount);
-					_commandsNoArgs.Add("resign", RulerCommands.Resign);
+					_commandsNoArgs.Add("role", _roleCommands.Experience);
+					_commandsNoArgs.Add("level", _roleCommands.Experience);
+					_commandsNoArgs.Add("health", _roleCommands.Health);
+					_commandsNoArgs.Add("revive", _playerCommands.ReviveWithCost);
+					_commandsNoArgs.Add("confirm", _buildingCommands.ConfirmBuildingPlacement);
+					_commandsNoArgs.Add("accept", _buildingCommands.ConfirmBuildingPlacement);
+					_commandsNoArgs.Add("cancel", _buildingCommands.CancelBuildingPlacement);
+					_commandsNoArgs.Add("station", _roleCommands.DisplayStationIDs);
+					_commandsNoArgs.Add("target", _roleCommands.DisplayTargetIDs);
+					_commandsNoArgs.Add("tbuildcosts", _gameMasterCommands.ToggleBuildCosts);
+					_commandsNoArgs.Add("trolelimits", _gameMasterCommands.TogglePlayerRoleLimits);
+					_commandsNoArgs.Add("ping", _playerCommands.PingPlayer);
+					_commandsNoArgs.Add("rulervote", _moderatorCommands.StartKingVote);
+					_commandsNoArgs.Add("stopevent", _gameMasterCommands.StopCurrentEvent);
+					_commandsNoArgs.Add("cobj", _gameMasterCommands.CompleteCurrentGoal);
+					_commandsNoArgs.Add("randtech", _gameMasterCommands.StartRandomTech);
+					_commandsNoArgs.Add("techvote", _gameMasterCommands.StartVoteTech);
+					_commandsNoArgs.Add("pet", _playerCommands.PrintPetsList);
+					_commandsNoArgs.Add("pets", _playerCommands.PrintPetsList);
+					_commandsNoArgs.Add("gaction", _gameMasterCommands.ActionEvent);
+					_commandsNoArgs.Add("unlockall", _gameMasterCommands.UnlockAllTech);
+					_commandsNoArgs.Add("unlockage2", _gameMasterCommands.UnlockToAge2);
+					_commandsNoArgs.Add("resetcam", _rulerCommands.ResetCamera);
+					_commandsNoArgs.Add("stuck", _playerCommands.Unstuck);
+					_commandsNoArgs.Add("praise", _playerCommands.Praise);
+					_commandsNoArgs.Add("buildings", _buildingCommands.PrintUnlockedBuildings);
+					_commandsNoArgs.Add("rid", _rulerCommands.ShowRecruitIds);
+					_commandsNoArgs.Add("recruits", _rulerCommands.RecruitCount);
+					_commandsNoArgs.Add("resign", _rulerCommands.Resign);
 				}
 				return _commandsNoArgs;
 			}
 		}
 
-		private static Dictionary<string, Action> _simpleCommands;
+        /// <summary>
+        /// The dictionary of simple commands.
+        /// </summary>
+		private Dictionary<string, Action> _simpleCommands;
 
 		/// <summary>
 		/// Contains all Game Commands that do not require a created character or arguments.
 		/// </summary>
-		public static Dictionary<string, Action> SimpleCommands
+		public Dictionary<string, Action> SimpleCommands
 		{
 			get
 			{
 				if (_simpleCommands == null)
 				{
 					_simpleCommands = new Dictionary<string, Action>();
-					_simpleCommands.Add("stdiscord", MiscCommands.Discord);
-					_simpleCommands.Add("help", MiscCommands.Help);
-					_simpleCommands.Add("townstats", MiscCommands.TownStats);
+					_simpleCommands.Add("stdiscord", _miscCommands.Discord);
+					_simpleCommands.Add("help", _miscCommands.Help);
+					_simpleCommands.Add("townstats", _miscCommands.TownStats);
 				}
 				return _simpleCommands;
 			}
@@ -148,11 +192,11 @@ namespace Twitch.Commands
 		/// <summary>
 		/// Allows commands to have multiple variants.
 		/// </summary>
-		/// <param name="player"></param>
-		/// <param name="args"></param>
-		/// <param name="command"></param>
-		/// <param name="aliases"></param>
-		private static void AliasCommand(Player player, string[] args, Action<Player, string[]> command, params string[] aliases)
+		/// <param name="player">The player.</param>
+		/// <param name="args">The arguments.</param>
+		/// <param name="command">The command.</param>
+		/// <param name="aliases">The aliases.</param>
+		private void AliasCommand(Player player, string[] args, Action<Player, string[]> command, params string[] aliases)
 		{
 			var newArgs = args.ToList();
 			for (int i = 0; i < aliases.Length; i++)

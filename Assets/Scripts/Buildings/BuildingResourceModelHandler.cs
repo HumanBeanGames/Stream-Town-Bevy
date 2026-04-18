@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using UnityEngine;
 using Utils;
 using Reflex.Attributes;
@@ -10,9 +10,24 @@ namespace Buildings
 	/// </summary>
 	public class BuildingResourceModelHandler : MonoBehaviour
 	{
+        /// <summary>
+        /// The model to display when storage is empty.
+        /// </summary>
 		public GameObject EmptyModel;
+
+        /// <summary>
+        /// The model to display when storage is half full.
+        /// </summary>
 		public GameObject HalfFullModel;
+
+        /// <summary>
+        /// The model to display when storage is full.
+        /// </summary>
 		public GameObject FullModel;
+
+        /// <summary>
+        /// The building base component.
+        /// </summary>
 		private BuildingBase _building;
 
 		/// <summary>
@@ -21,7 +36,15 @@ namespace Buildings
 		private StorageStatus _status = StorageStatus.Full;
 
 		// Required Components.
-		[Inject] private TownResourceManager _townResourceManager;
+        /// <summary>
+        /// Town resource processor for resource change events.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TownResourceProcessor _townResourceProcessor;
+
+        /// <summary>
+        /// The resource storage modifier component.
+        /// </summary>
 		private ResourceStorageModifier _resourceModifier;
 
 		/// <summary>
@@ -67,7 +90,7 @@ namespace Buildings
 		/// <summary>
 		/// Called via the resource change event.
 		/// </summary>
-		/// <param name="status"></param>
+		/// <param name="status">The new storage status.</param>
 		private void HandleResourceChange(StorageStatus status)
 		{
 			// If the status has not changed, do nothing and return.
@@ -94,6 +117,7 @@ namespace Buildings
 		}
 
 		// Unity Functions.
+        // Initializes components and hides all resource models.
 		private void Awake()
 		{
 			HideAll();
@@ -101,10 +125,11 @@ namespace Buildings
 			_resourceModifier = GetComponentInParent<ResourceStorageModifier>();
 		}
 
+        // Subscribes to resource change event based on resource type.
 		private void Start()
 		{
 			// Subscribe to resource change event based on resource type
-			_townResourceManager.GetResourceChangeEvent(_resourceModifier.ResourceType).AddListener(HandleResourceChange);
+			_townResourceProcessor.GetResourceChangeEvent(_resourceModifier.ResourceType).AddListener(HandleResourceChange);
 		}
 	}
 }

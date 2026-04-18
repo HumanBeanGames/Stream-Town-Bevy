@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Reflex.Attributes;
@@ -35,11 +35,11 @@ namespace Reflex.Caching
                 }
                 
                 var parameters = constructor.GetParameters().Select(p => p.ParameterType).ToArray();
-                return new TypeConstructionInfo(ActivatorFactoryManager.Factory.GenerateActivator(type, constructor, parameters), parameters);
+                return new TypeConstructionInfo(ActivatorFactoryProcessor.Factory.GenerateActivator(type, constructor, parameters), parameters);
             }
 
             // Should we add this complexity yo be able to inject value types?
-            return new TypeConstructionInfo(ActivatorFactoryManager.Factory.GenerateDefaultActivator(type), Type.EmptyTypes);
+            return new TypeConstructionInfo(ActivatorFactoryProcessor.Factory.GenerateDefaultActivator(type), Type.EmptyTypes);
         }
     }
 }

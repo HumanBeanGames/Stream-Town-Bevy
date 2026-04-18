@@ -1,9 +1,11 @@
 using GameEventSystem;
 using GameEventSystem.Events.Voting;
-using Managers;
+using Processors;
+using Core;
 using System;
 using System.Collections.Generic;
-using TechTree.ScriptableObjects;
+using TechTree.Data;
+using Character;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
@@ -26,8 +28,9 @@ namespace UserInterface
 		private Button _bottomBarButton;
 
 		private List<UI_TechOption> _techOptions;
-		[Inject] private GameEventManager _gameEventManager;
-		[Inject] private GameManager _gameManager;
+		[Inject] private GameEventProcessor _gameEventProcessor;
+		[Inject] private Coordinator _gameProcessor;
+		[Inject] private PlayerProcessor _playerProcessor;
 
 		private bool _canOpenVoteContainer = false;
 
@@ -52,7 +55,7 @@ namespace UserInterface
 
 		public void BroadcasterVote(int voteId)
 		{
-			((VoteEvent)_gameEventManager.CurrentEvent).Action(new PlayerVote(_gameManager.UserPlayer, new VoteOption(voteId.ToString(), null)));
+			((VoteEvent)_gameEventProcessor.CurrentEvent).Action(new PlayerVote(_playerProcessor.UserPlayer, new VoteOption(voteId.ToString(), null)));
 			for (int i = 0; i < _techOptions.Count; i ++)
 			{
 				_techOptions[i].TechButton.onClick.RemoveAllListeners();
@@ -87,17 +90,17 @@ namespace UserInterface
 			}
 		}
 
-		public UI_TechOption AddOption(Node_SO node, int index)
+		public UI_TechOption AddOption(TechNodeData nodeData, int index)
 		{
 			GameObject go = Instantiate(TechOptionPrefab, TownVoteOptionsContainer);
 
 			UI_TechOption uiTech = go.GetComponent<UI_TechOption>();
 
-			uiTech.TitleTMP.text = node.NodeTitle;
-			uiTech.DescriptionTMP.text = node.Description;
+			uiTech.TitleTMP.text = nodeData.NodeTitle;
+			uiTech.DescriptionTMP.text = nodeData.Description;
 			uiTech.VoteCommandTMP.text = $"!vote {index}";
 			uiTech.TechButton.gameObject.SetActive(true);
-			string modPath = node.IconPath.Remove(0, 17);
+			string modPath = nodeData.IconPath.Remove(0, 17);
 			modPath = modPath.Remove(modPath.Length - 4, 4);
 			Debug.Log(modPath);
 			uiTech.TechIcon.sprite = Resources.Load<Sprite>(modPath) as Sprite;

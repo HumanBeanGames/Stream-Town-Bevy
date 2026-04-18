@@ -12,15 +12,45 @@ namespace Character
 	/// </summary>
 	public class PlayerDeathHandler : MonoBehaviour
 	{
+        /// <summary>
+        /// The time in seconds before the player revives.
+        /// </summary>
 		[SerializeField]
 		private float _reviveTime = (60 * 1);
+
+        /// <summary>
+        /// Counter for revive time.
+        /// </summary>
 		private float _reviveCounter = 0;
+
+        /// <summary>
+        /// Whether the revive process is active.
+        /// </summary>
 		private bool _reviveActive = false;
 
+        /// <summary>
+        /// The state machine for the player.
+        /// </summary>
 		private StateMachine _stateMachine;
+
+        /// <summary>
+        /// The AI path for the player.
+        /// </summary>
 		private AIPath _aIPath;
+
+        /// <summary>
+        /// The spawn position for the player.
+        /// </summary>
 		private Vector3 _spawnPosition;
+
+        /// <summary>
+        /// The animation handler for the player.
+        /// </summary>
 		private AnimationHandler _animationHandler;
+
+        /// <summary>
+        /// The health handler for the player.
+        /// </summary>
 		private HealthHandler _healthHandler;
 
 		/// <summary>
@@ -53,6 +83,7 @@ namespace Character
 		}
 
 		// Unity Events.
+        // Initializes the player death handler.
 		private void Awake()
 		{
 			_stateMachine = GetComponent<StateMachine>();
@@ -61,11 +92,13 @@ namespace Character
 			_healthHandler = GetComponent<HealthHandler>();
 		}
 
+        // Sets the spawn position.
 		private void Start()
 		{
 			_spawnPosition = transform.position;
 		}
 
+        // Updates the revive counter.
 		private void Update()
 		{
 			if (!_reviveActive)

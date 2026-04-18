@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using Reflex.Attributes;
+using Processors;
 
 namespace GameResources
 {
@@ -10,28 +11,42 @@ namespace GameResources
 	/// </summary>
 	public class ResourceRenderer : MonoBehaviour
 	{
-		[Inject] private ResourceManager _resourceManager;
+        /// <summary>
+        /// Resource processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private ResourceProcessor _resourceProcessor;
 
+        /// <summary>
+        /// Maximum instances per draw call.
+        /// </summary>
 		private const int MAX_INSTANCES_PER_DRAW = 1023;
 
+        /// <summary>
+        /// Updates the resource rendering each frame.
+        /// </summary>
 		private void Update()
 		{
-			if (_resourceManager == null)
+			if (_resourceProcessor == null)
 				return;
 
-			RenderResourceType(_resourceManager.GetWoodMatrices(), _resourceManager.GetWoodMeshMaterials());
-			RenderResourceType(_resourceManager.GetOreMatrices(), _resourceManager.GetOreMeshMaterials());
-			RenderResourceType(_resourceManager.GetFoodMatrices(), _resourceManager.GetFoodMeshMaterials());
-			RenderResourceType(_resourceManager.GetGoldMatrices(), _resourceManager.GetGoldMeshMaterials());
-			RenderResourceType(_resourceManager.GetRecruitMatrices(), _resourceManager.GetRecruitMeshMaterials());
+			RenderResourceType(_resourceProcessor.GetWoodMatrices(), _resourceProcessor.GetWoodMeshMaterials());
+			RenderResourceType(_resourceProcessor.GetOreMatrices(), _resourceProcessor.GetOreMeshMaterials());
+			RenderResourceType(_resourceProcessor.GetFoodMatrices(), _resourceProcessor.GetFoodMeshMaterials());
+			RenderResourceType(_resourceProcessor.GetGoldMatrices(), _resourceProcessor.GetGoldMeshMaterials());
+			RenderResourceType(_resourceProcessor.GetRecruitMatrices(), _resourceProcessor.GetRecruitMeshMaterials());
 		}
 
+        /// <summary>
+        /// Renders resources of a specific type using GPU instancing.
+        /// </summary>
+        /// <param name="matricesDict">Dictionary of mesh-material index combinations to transformation matrices.</param>
+        /// <param name="meshMaterialsData">Tuple of mesh and material lists.</param>
 		private void RenderResourceType(Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> matricesDict, (List<Mesh> meshes, List<Material> materials) meshMaterialsData)
 		{
 			if (matricesDict == null || matricesDict.Count == 0 || meshMaterialsData.meshes == null || meshMaterialsData.materials == null)
 				return;
 
-			// Render each mesh+material combination
+			// Render each mesh+material combination.
 			foreach (var kvp in matricesDict)
 			{
 				var (meshIndex, materialIndex) = kvp.Key;
@@ -40,7 +55,7 @@ namespace GameResources
 				if (matrices == null || matrices.Length == 0)
 					continue;
 
-				// Look up mesh and material by index
+				// Look up mesh and material by index.
 				if (meshIndex < 0 || meshIndex >= meshMaterialsData.meshes.Count || materialIndex < 0 || materialIndex >= meshMaterialsData.materials.Count)
 					continue;
 
@@ -50,13 +65,13 @@ namespace GameResources
 				if (mesh == null || material == null)
 					continue;
 
-				// Enable GPU instancing on the material if not already enabled
+				// Enable GPU instancing on the material if not already enabled.
 				if (!material.enableInstancing)
 				{
 					material.enableInstancing = true;
 				}
 
-				// Render in batches of MAX_INSTANCES_PER_DRAW
+				// Render in batches of MAX_INSTANCES_PER_DRAW.
 				for (int i = 0; i < matrices.Length; i += MAX_INSTANCES_PER_DRAW)
 				{
 					int batchCount = Mathf.Min(MAX_INSTANCES_PER_DRAW, matrices.Length - i);

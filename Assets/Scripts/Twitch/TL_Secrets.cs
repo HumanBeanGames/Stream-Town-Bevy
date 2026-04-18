@@ -1,20 +1,48 @@
 namespace Twitch
 {
+    /// <summary>
+    /// Static class for holding Twitch API secrets.
+    /// </summary>
 	public static class TL_Secrets
 	{
+        /// <summary>
+        /// The client ID.
+        /// </summary>
 		public static string ClientID = "";
+
+        /// <summary>
+        /// The client secret.
+        /// </summary>
 		public static string ClientSecret = "";
+
+        /// <summary>
+        /// The bot access token.
+        /// </summary>
 		public static string BotAccessToken = "";
+
+        /// <summary>
+        /// The bot refresh token.
+        /// </summary>
 		public static string BotRefreshToken = "";
+
+        /// <summary>
+        /// The bot name.
+        /// </summary>
 		public static string BotName = "";
 
 		// Automatically load secrets from StreamingAssets on first access.
 		// Expects a JSON file at Assets/StreamingAssets/twitch_secrets.json with fields matching these names.
+        /// <summary>
+        /// Static constructor that loads secrets from StreamingAssets.
+        /// </summary>
 		static TL_Secrets()
 		{
 			TryLoadFromStreamingAssets();
 		}
 
+        /// <summary>
+        /// Tries to load secrets from StreamingAssets.
+        /// </summary>
 		private static void TryLoadFromStreamingAssets()
 		{
 			try
@@ -46,13 +74,35 @@ namespace Twitch
 			}
 		}
 
+        /// <summary>
+        /// Data class for deserializing secrets from JSON.
+        /// </summary>
 		[System.Serializable]
 		private class SecretsData
 		{
+            /// <summary>
+            /// The client ID.
+            /// </summary>
 			public string ClientID;
+
+            /// <summary>
+            /// The client secret.
+            /// </summary>
 			public string ClientSecret;
+
+            /// <summary>
+            /// The bot access token.
+            /// </summary>
 			public string BotAccessToken;
+
+            /// <summary>
+            /// The bot refresh token.
+            /// </summary>
 			public string BotRefreshToken;
+
+            /// <summary>
+            /// The bot name.
+            /// </summary>
 			public string BotName;
 		}
 	}

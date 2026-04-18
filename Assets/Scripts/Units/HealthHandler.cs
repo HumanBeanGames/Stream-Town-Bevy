@@ -1,6 +1,6 @@
 using UnityEngine;
 using UnityEngine.Events;
-using Managers;
+using Processors;
 using System;
 using Target;
 using Reflex.Attributes;
@@ -36,7 +36,7 @@ namespace Units
 
 		private int _baseMaxHealth;
 
-		[Inject] private TownResourceManager _resourceManager;
+		[Inject] private TownResourceProcessor _resourceProcessor;
 		private bool _deathInvoked = false;
 		public bool Dead => _health <= 0 ? true : false;
 		public int Health => _health;
@@ -105,7 +105,7 @@ namespace Units
 
 		public bool TryRevive(Utils.ReviveType type)
 		{
-			if(_resourceManager.TryTakeReviveCost(type))
+			if(_resourceProcessor.TryTakeReviveCost(type))
 			{
 				Revive();
 				return true;
@@ -174,10 +174,10 @@ namespace Units
 					ModHealth(rounded);
 				else
 				{
-					if (_resourceManager.MoreThanEqualComparison(Utils.Resource.Food, rounded))
+					if (_resourceProcessor.MoreThanEqualComparison(Utils.Resource.Food, rounded))
 					{
 						ModHealth(rounded);
-						_resourceManager.RemoveResource(Utils.Resource.Food, rounded);
+						_resourceProcessor.RemoveResource(Utils.Resource.Food, rounded);
 					}
 				}
 			}

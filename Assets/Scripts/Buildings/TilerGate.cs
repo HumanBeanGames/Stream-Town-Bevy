@@ -7,6 +7,9 @@ namespace Buildings
 	/// </summary>
 	public class TilerGate : Tiler
 	{
+        /// <summary>
+        /// The building base component.
+        /// </summary>
 		private BuildingBase _buildingBase;
 
 		/// <summary>
@@ -14,6 +17,7 @@ namespace Buildings
 		/// </summary>
 		protected override void Init()
 		{
+			// Initialize the building base component
 			_buildingBase = GetComponent<BuildingBase>();
 			base.Init();
 		}

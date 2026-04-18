@@ -3,7 +3,7 @@ using Character;
 using Enemies;
 using GameResources;
 using GUIDSystem;
-using Managers;
+using Processors;
 using SavingAndLoading.SavableObjects;
 using Target;
 using Units;
@@ -25,8 +25,8 @@ namespace Utils.Pooling
 
 	public class PoolableObject : MonoBehaviour, IPooledObjectReset
 	{
-		private ObjectPoolingManager _poolingManager;
-		[Inject] private GUIDManager _guidManager;
+		[Inject] private ObjectPoolingProcessor _poolingProcessor;
+		[Inject] private GUIDProcessor _guidProcessor;
 
 		[SerializeField]
 		private string _poolName;
@@ -46,10 +46,9 @@ namespace Utils.Pooling
 			set { _poolName = value; }
 		}
 
-		public void Initialize(string name, ObjectPoolingManager poolingManager)
+		public void Initialize(string name)
 		{
 			_poolName = name;
-			_poolingManager = poolingManager;
 			SetupSaveableObject();
 		}
 
@@ -89,17 +88,17 @@ namespace Utils.Pooling
 
 		private void OnEnable()
 		{
-			if (_guidManager != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
-				_guidManager.CreateGUIDandAddToDictionary(this);
+			if (_guidProcessor != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
+				_guidProcessor.CreateGUIDandAddToDictionary(this);
 		}
 
 		private void OnDisable()
 		{
-			if (_guidManager != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
-				_guidManager.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
+			if (_guidProcessor != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
+				_guidProcessor.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
 
-			if (_poolingManager != null)
-				_poolingManager.AddToPool(_poolName, this);
+			if (_poolingProcessor != null)
+				_poolingProcessor.AddToPool(_poolName, this);
 		}
 	}
 }

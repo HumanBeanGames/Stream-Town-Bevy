@@ -1,9 +1,10 @@
 using Level;
-using Managers;
+using Processors;
 using TechTree;
 using UnityEngine;
 using Utils;
 using Reflex.Attributes;
+using Data.Containers;
 
 namespace Buildings
 {
@@ -42,10 +43,27 @@ namespace Buildings
 		private int _totalAmount = 0;
 
 		// Required Components.
-		[Inject] private TownResourceManager _resourceManager;
-		[Inject] private TechTreeManager _techTreeManager;
+        /// <summary>
+        /// Town resource processor for resource storage operations.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TownResourceProcessor _resourceProcessor;
+
+        /// <summary>
+        /// Tech tree processor for tech tree event subscriptions.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TechTreeProcessor _techTreeProcessor;
+
+        /// <summary>
+        /// Level handler for building level tracking.
+        /// </summary>
 		private LevelHandler _levelHandler;
+
 		// Properties.
+        /// <summary>
+        /// Gets the resource type this component modifies.
+        /// </summary>
 		public Resource ResourceType => _resource;
 
 		/// <summary>
@@ -57,13 +75,13 @@ namespace Buildings
 		}
 
 		/// <summary>
-		/// Adds the base amount of storage to the resource manager.
+		/// Adds the base amount of storage to the resource processor.
 		/// </summary>
 		public void AddBaseStorage()
 		{
 			//int amount = _baseAmount;
-			//amount += (int)(amount * (_resourceManager.ResourceBoostValues[_resource] / 100.0f));
-			//_resourceManager.IncreaseStorage(_resource, amount);
+			//amount += (int)(amount * (_resourceProcessor.ResourceBoostValues[_resource] / 100.0f));
+			//_resourceProcessor.IncreaseStorage(_resource, amount);
 			//_totalAmount += amount;
 			RecalculateStorageAmount();
 		}
@@ -73,22 +91,24 @@ namespace Buildings
 		/// </summary>
 		public void RemoveTotalStorage()
 		{
-			_resourceManager.ReduceStorage(_resource, _totalAmount);
+			_resourceProcessor.ReduceStorage(_resource, _totalAmount);
 			_totalAmount = 0;
 		}
 
+        // Recalculates the storage amount based on current level and resource boost.
 		private void RecalculateStorageAmount()
 		{
 			if (_levelHandler == null)
 				_levelHandler = GetComponent<LevelHandler>();
 
 			int amount = _levelHandler.Level <= 1 ? _baseAmount : _incrementAmount * (int)(_levelHandler.Level * _incrementMultiPerLevel);
-			amount += (int)(amount * (_resourceManager.ResourceBoostValues[_resource] / 100.0f));
+			amount += (int)(amount * (_resourceProcessor.GetResourceBoostValue(_resource) / 100.0f));
 			RemoveTotalStorage();
-			_resourceManager.IncreaseStorage(_resource, amount);
+			_resourceProcessor.IncreaseStorage(_resource, amount);
 			_totalAmount = amount;
 		}
 
+        // Called when resource storage boost is unlocked via tech tree.
 		private void OnResourceStorageIncreased(Resource type)
 		{
 			if (type != _resource)
@@ -97,6 +117,7 @@ namespace Buildings
 			RecalculateStorageAmount();
 		}
 
+        // Initializes the level handler.
 		private void Start()
 		{
 			_levelHandler = GetComponent<LevelHandler>();
@@ -104,18 +125,20 @@ namespace Buildings
 
 		/// <summary>
 		/// Called when object is disabled.
+		/// Removes storage and unsubscribes from events.
 		/// </summary>
 		private void OnDisable()
 		{
-			if (_resourceManager != null)
+			if (_resourceProcessor != null)
 				RemoveTotalStorage();
 
-			_techTreeManager.OnStorageBoostUnlocked -= OnResourceStorageIncreased;
+			_techTreeProcessor.OnStorageBoostUnlocked -= OnResourceStorageIncreased;
 		}
 
+        // Subscribes to tech tree events when enabled.
 		private void OnEnable()
 		{
-			_techTreeManager.OnStorageBoostUnlocked += OnResourceStorageIncreased;
+			_techTreeProcessor.OnStorageBoostUnlocked += OnResourceStorageIncreased;
 		}
 	}
 }

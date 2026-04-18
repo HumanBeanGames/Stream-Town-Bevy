@@ -1,6 +1,6 @@
 using Character;
 using GUIDSystem;
-using Managers;
+using Processors;
 using System;
 using System.Collections.Generic;
 using Target;
@@ -18,38 +18,95 @@ namespace Sensors
 	/// </summary>
 	public class TargetSensor : SensorBase
 	{
+        /// <summary>
+        /// The target mask.
+        /// </summary>
 		[SerializeField]
 		private TargetMask _targetMask = TargetMask.Player;
 
+        /// <summary>
+        /// The current target.
+        /// </summary>
 		[SerializeField]
 		private Targetable _currentTarget = null;
 
+        /// <summary>
+        /// Event invoked when the target changes.
+        /// </summary>
 		[SerializeField]
 		private UnityEvent _onTargetChange;
 
+        /// <summary>
+        /// Whether to use station targets.
+        /// </summary>
 		[SerializeField]
 		private bool _useStationTargets = true;
 
+        /// <summary>
+        /// Whether to attack the attacker.
+        /// </summary>
 		[SerializeField]
 		private bool _attackAttacker = false;
 
-		[Inject] private TargetManager _targetManager;
+        /// <summary>
+        /// The target processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private TargetProcessor _targetProcessor;
+
+        /// <summary>
+        /// The cell space partitioning. Injected via Reflex dependency injection.
+        /// </summary>
 		[Inject] private CellSpacePartitioning _cellSpacePartition;
 
+        /// <summary>
+        /// Gets the current target.
+        /// </summary>
 		public Targetable CurrentTarget => _currentTarget;
 
+        /// <summary>
+        /// The previous target.
+        /// </summary>
 		private Targetable _previousTarget = null;
 
+        /// <summary>
+        /// The station sensor.
+        /// </summary>
 		private StationSensor _stationSensor = null;
+
+        /// <summary>
+        /// The GUID component.
+        /// </summary>
 		private GUIDComponent _gUIDComponent = null;
 
+        /// <summary>
+        /// The target search range.
+        /// </summary>
 		[SerializeField]
 		private float _targetSearchRange = 100f;
 
+        /// <summary>
+        /// Gets or sets whether to update the target.
+        /// </summary>
 		public bool UpdateTarget { get; set; }
+
+        /// <summary>
+        /// Gets whether the sensor has a target.
+        /// </summary>
 		public bool HasTarget => _currentTarget == null ? false : true;
+
+        /// <summary>
+        /// Gets the distance to the current target.
+        /// </summary>
 		public float DistanceToTarget => _currentTarget == null ? float.MaxValue : Vector3.Distance(transform.position, _currentTarget.transform.position);
+
+        /// <summary>
+        /// Gets whether to use station targets.
+        /// </summary>
 		public bool UseStationTargets => _useStationTargets;
+
+        /// <summary>
+        /// Gets the GUID component.
+        /// </summary>
 		public GUIDComponent GUIDComponent => _gUIDComponent;
 
 		/// <summary>
@@ -61,6 +118,9 @@ namespace Sensors
 			set { SetTargetMask(value); }
 		}
 
+        /// <summary>
+        /// Called every frame by the sensor processor.
+        /// </summary>
 		public override void STUpdate()
 		{
 			base.STUpdate();
@@ -105,8 +165,8 @@ namespace Sensors
 		/// <summary>
 		/// Attempts to set the current target.
 		/// </summary>
-		/// <param name="target"></param>
-		/// <returns>true if successful.</returns>
+		/// <param name="target">The target to set.</param>
+		/// <returns>True if successful.</returns>
 		public bool TrySetTarget(Targetable target)
 		{
 			_currentTarget = target;
@@ -114,6 +174,12 @@ namespace Sensors
 			return true;
 		}
 
+        /// <summary>
+        /// Attempts to set the current target for a player.
+        /// </summary>
+        /// <param name="target">The target to set.</param>
+        /// <param name="player">The player.</param>
+        /// <returns>True if successful.</returns>
 		public bool TrySetTarget(Targetable target, Player player)
 		{
 			if(player.TargetSensor.TargetMask.HasFlag(target.TargetType))
@@ -129,6 +195,9 @@ namespace Sensors
 			return false;
 		}
 
+        /// <summary>
+        /// Initializes the target sensor.
+        /// </summary>
 		protected override void Init()
 		{
 			base.Init();
@@ -157,6 +226,9 @@ namespace Sensors
 			OnTargetChanged();
 		}
 
+        /// <summary>
+        /// Gets the nearest target using cell space partitioning.
+        /// </summary>
 		private void GetNearestTarget()
 		{
 			List<Targetable> validTargets = new List<Targetable>();
@@ -191,7 +263,7 @@ namespace Sensors
 		/// <summary>
 		/// Returns true if the current target is a valid target.
 		/// </summary>
-		/// <returns></returns>
+		/// <returns>True if valid, false otherwise.</returns>
 		private bool CurrentTargetValid()
 		{
 			// If the target is not null, enabled and the correct flag, then the target is valid.
@@ -204,7 +276,7 @@ namespace Sensors
 		/// <summary>
 		/// Sets the current Target Mask of the unit.
 		/// </summary>
-		/// <param name="type"></param>
+		/// <param name="type">The target mask type.</param>
 		private void SetTargetMask(TargetMask type)
 		{
 			_targetMask = type;
@@ -230,6 +302,10 @@ namespace Sensors
 			}
 		}
 
+        /// <summary>
+        /// Called when attacked.
+        /// </summary>
+        /// <param name="target">The attacker.</param>
 		private void OnAttacked(Targetable target)
 		{
 			if (!_attackAttacker || target == null)
@@ -240,11 +316,17 @@ namespace Sensors
 				_currentTarget = target;
 		}
 
+        /// <summary>
+        /// Clears the target on disable.
+        /// </summary>
 		private void OnDisable()
 		{
 			ClearTarget();
 		}
 
+        /// <summary>
+        /// Enables target updates and subscribes to damage events on start.
+        /// </summary>
 		private void Start()
 		{
 			UpdateTarget = true;

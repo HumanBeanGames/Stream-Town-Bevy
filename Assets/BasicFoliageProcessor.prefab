@@ -1,0 +1,74 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &7132176323537469739
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 534297984468277538}
+  - component: {fileID: 1592065953238188605}
+  m_Layer: 0
+  m_Name: BasicFoliageProcessor
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &534297984468277538
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7132176323537469739}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1592065953238188605
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7132176323537469739}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6a7d32c8642a9cb42b083d073f9ea446, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _grassMeshVariants:
+  - {fileID: 8058893416945980758, guid: 282869ff8138a3543b4d70b92c7af851, type: 3}
+  - {fileID: 6061827220838825516, guid: 5175966c4068bef4d967118579824769, type: 3}
+  - {fileID: 1775896557147596995, guid: 21bc2e6b7657c5145978f24b7107d9d5, type: 3}
+  - {fileID: -403083268311585001, guid: c121524c206475d458927fff2ddec82f, type: 3}
+  - {fileID: 9008044042321695979, guid: c0950b0aadcf48346af2a2f1fa4820fc, type: 3}
+  - {fileID: 2441210132012940588, guid: 86502b5959874f74e9d04d4ff67e15d7, type: 3}
+  - {fileID: -9082293392281029781, guid: 1fc2e6649b3d2fe438100dd3c748abbb, type: 3}
+  - {fileID: 6531153724091246894, guid: 96a0346136730584ba5429b7a211660b, type: 3}
+  - {fileID: -1907357878548606822, guid: d6395741284ff2a4898d3c074f0ff005, type: 3}
+  _grassMaterial: {fileID: 2100000, guid: cc8c8df70fc41b04e8de9824ab27af7d, type: 2}
+  _otherFoliageMeshVariants:
+  - {fileID: 6256513305797591282, guid: 03cca0bc76fe47a41b48bae52cb8ce60, type: 3}
+  - {fileID: -7530797450161360067, guid: 0513034094b8fb14fa587a5e12431bd3, type: 3}
+  - {fileID: 6644207666658360651, guid: 483631e71ec729f46a495af4627644b7, type: 3}
+  - {fileID: -7930880360962010297, guid: 2d75a63f384d5524490b11797e16d025, type: 3}
+  - {fileID: 3213753894354241969, guid: 8f6c95daff5f32a409eb425fe667285a, type: 3}
+  - {fileID: 2582482438786741689, guid: a4bcf91acf9bb5f4cad6bbc60be0b2ef, type: 3}
+  - {fileID: 5491547353373078794, guid: c49b963036ccbf84885792f7a7a332bd, type: 3}
+  - {fileID: -3882045938472778413, guid: d8baf7afae2e3d54a97fe7988a7c39fa, type: 3}
+  - {fileID: -6412796913440713837, guid: 4c47291fefd392846a2977c586f9cb11, type: 3}
+  - {fileID: -8395620281344906741, guid: 081ad282345aaf74e9922498c2c37498, type: 3}
+  - {fileID: -4102578099973827451, guid: 2ba3d99db7590424a8416d883a3d2053, type: 3}
+  - {fileID: -6542357775297470543, guid: ecb05e7e854477447812a797d6393469, type: 3}
+  - {fileID: -3940785738837229648, guid: 6c9e7b00c5a22834ea656ed208ef9468, type: 3}
+  - {fileID: 7176977385716416504, guid: a893129195c41a24cb563721a07368cc, type: 3}
+  - {fileID: 2726131248018880332, guid: d576190b92e8bfb41a46e20b61c91388, type: 3}
+  _otherFoliageMaterial: {fileID: 2100000, guid: fa4085ce3ea4d394bb4e587376c58cbd, type: 2}

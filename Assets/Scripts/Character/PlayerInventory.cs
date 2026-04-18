@@ -20,7 +20,7 @@ namespace Character
 		/// <summary>
 		/// Sets the entire resource dictionary,
 		/// </summary>
-		/// <param name="resources">The dictionary to be set to</param>
+		/// <param name="resources">The dictionary to be set to.</param>
 		public void SetResources(Dictionary<Resource, ResourceInventory> resources)
 		{
 			_resources = resources;
@@ -30,8 +30,8 @@ namespace Character
 		/// <summary>
 		/// Adds a given resource and amount to the player's inventory.
 		/// </summary>
-		/// <param name="type"></param>
-		/// <param name="amount"></param>
+		/// <param name="type">The resource type.</param>
+		/// <param name="amount">The amount to add.</param>
 		public void AddResource(Utils.Resource type, int amount)
 		{
 			_resources[type].Amount += amount;
@@ -40,8 +40,8 @@ namespace Character
 		/// <summary>
 		/// Removes a given resource and amount from the player's inventory.
 		/// </summary>
-		/// <param name="type"></param>
-		/// <param name="amount"></param>
+		/// <param name="type">The resource type.</param>
+		/// <param name="amount">The amount to remove.</param>
 		public void RemoveResource(Utils.Resource type, int amount)
 		{
 			_resources[type].Amount -= amount;
@@ -50,8 +50,8 @@ namespace Character
 		/// <summary>
 		/// Returns true if the player is full on a specific type of resource.
 		/// </summary>
-		/// <param name="type"></param>
-		/// <returns></returns>
+		/// <param name="type">The resource type.</param>
+		/// <returns>True if the resource is full.</returns>
 		public bool ResourceFull(Utils.Resource type)
 		{
 			if (!_resources.ContainsKey(type))
@@ -63,8 +63,8 @@ namespace Character
 		/// <summary>
 		/// Returns the amount of a specific resource the player has.
 		/// </summary>
-		/// <param name="type"></param>
-		/// <returns></returns>
+		/// <param name="type">The resource type.</param>
+		/// <returns>The amount of the resource.</returns>
 		public int ResourceCount(Utils.Resource type)
 		{
 			return _resources[type].Amount;
@@ -73,8 +73,8 @@ namespace Character
 		/// <summary>
 		/// Sets the max amount of a specific resource that the player can hold.
 		/// </summary>
-		/// <param name="type"></param>
-		/// <param name="amount"></param>
+		/// <param name="type">The resource type.</param>
+		/// <param name="amount">The max amount.</param>
 		public void SetMaxStorage(Utils.Resource type, int amount)
 		{
 			InitData();
@@ -84,6 +84,7 @@ namespace Character
 		/// <summary>
 		/// Initalizes all inventory data
 		/// </summary>
+		// Initializes the player's inventory with default resources and amounts.
 		private void InitData()
 		{
 			if (_resources.Count == 0)
@@ -95,6 +96,7 @@ namespace Character
 		}
 
 		// Unity Functions.
+        // Initializes the player inventory on Awake.
 		private void Awake()
 		{
 			// TODO: Set starting amounts to config

@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using TechTree.ScriptableObjects;
+using TechTree.Data;
 using TMPro;
 using TownGoal.Data;
 using UnityEngine;
@@ -17,7 +17,7 @@ namespace UserInterface
 
 		private Dictionary<Objective, UI_Objective> _followedObjectives;
 
-		public void AddGoal(Goal goal, Node_SO node)
+		public void AddGoal(Goal goal, TechNodeData nodeData)
 		{
 			List<Objective> objectives = new List<Objective>();
 
@@ -31,10 +31,10 @@ namespace UserInterface
 				CreateNewObjective(objectives[i]);
 			}
 
-			TechTitle.text = node.NodeTitle;
+			TechTitle.text = nodeData.NodeTitle;
 			ActivateTownGoalContainer();
 			goal.OnGoalCompleted += OnGoalFinished;
-			string modPath = node.IconPath.Remove(0, 17);
+			string modPath = nodeData.IconPath.Remove(0, 17);
 			modPath = modPath.Remove(modPath.Length - 4, 4);
 			Icon.sprite = Resources.Load<Sprite>(modPath) as Sprite;
 			Debug.Log(modPath);

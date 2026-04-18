@@ -2,7 +2,7 @@ using Enemies;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using Managers;
+using Processors;
 using UserInterface;
 using Units;
 using Utils;
@@ -10,170 +10,276 @@ using Utils.Pooling;
 
 namespace GameEventSystem.Events
 {
-	public class RaidEvent : GameEvent
-	{
-		protected string[] _pooledEnemyNames;
-		protected string _bossName;
+    /// <summary>
+    /// Represents a raid event where waves of enemies attack the town.
+    /// </summary>
+    public class RaidEvent : GameEvent
+    {
+        /// <summary>
+        /// Array of pooled enemy names.
+        /// </summary>
+        protected string[] _pooledEnemyNames;
 
-		protected int _waves;
-		protected int _currentWave;
-		protected bool _bossOnLastWave = true;
-		protected int _enemiesPerWave = 50;
-		protected List<Enemy> _trackedEnemies;
+        /// <summary>
+        /// The boss name.
+        /// </summary>
+        protected string _bossName;
 
-		protected ObjectPoolingManager _poolingManager;
-		private UserInterface_Event _eventInterface;
+        /// <summary>
+        /// The number of waves.
+        /// </summary>
+        protected int _waves;
 
-		protected StationMask _prevEnemyStationMask;
-		protected GameEventManager _eventManager;
-		protected EnemySpawner _enemySpawner;
-		protected PlayerManager _playerManager;
+        /// <summary>
+        /// The current wave.
+        /// </summary>
+        protected int _currentWave;
 
-		protected bool _forceStop = false;
+        /// <summary>
+        /// Whether the boss appears on the last wave.
+        /// </summary>
+        protected bool _bossOnLastWave = true;
 
-		public RaidEvent(double delay, double eventDuration, string[] enemies, ObjectPoolingManager poolingManager, UserInterface_Event eventInterface, GameEventManager eventManager, EnemySpawner enemySpawner, PlayerManager playerManager, int waves = 5, int enemiesPerWave = 50, string boss = null, EventType eventType = EventType.MonsterRaid, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
-		{
-			_pooledEnemyNames = enemies;
-			_waves = waves;
-			_enemiesPerWave = enemiesPerWave;
+        /// <summary>
+        /// The number of enemies per wave.
+        /// </summary>
+        protected int _enemiesPerWave = 50;
 
-			if (boss == null)
-				_bossOnLastWave = false;
-			else
-			{
-				_bossOnLastWave = true;
-				_bossName = boss;
+        /// <summary>
+        /// List of tracked enemies.
+        /// </summary>
+        protected List<Enemy> _trackedEnemies;
 
-			}
+        /// <summary>
+        /// The object pooling processor.
+        /// </summary>
+        protected ObjectPoolingProcessor _poolingProcessor;
 
-			_poolingManager = poolingManager;
-			_eventInterface = eventInterface;
-			_eventManager = eventManager;
-			_enemySpawner = enemySpawner;
-			_playerManager = playerManager;
+        /// <summary>
+        /// The event interface.
+        /// </summary>
+        private UserInterface_Event _eventInterface;
 
-			_trackedEnemies = new List<Enemy>();
-		}
+        /// <summary>
+        /// The previous enemy station mask.
+        /// </summary>
+        protected StationMask _prevEnemyStationMask;
 
-		public void SetEnemies(string[] enemies)
-		{
-			_pooledEnemyNames = enemies;
-		}
+        /// <summary>
+        /// The event processor.
+        /// </summary>
+        protected GameEventProcessor _eventProcessor;
 
-		protected override void OnStarted()
-		{
-			_eventInterface.Slider.gameObject.SetActive(true);
-			UpdateSlider();
-			_eventInterface.TitleTMP.text = "Raid";
-			_eventInterface.DescriptionTMP.text = "";
-			_eventInterface.ActivateEventContainer();
-			_eventManager.StartCoroutine(HandleWaves());
+        /// <summary>
+        /// The enemy spawner.
+        /// </summary>
+        protected EnemySpawner _enemySpawner;
 
-			_enemySpawner.CanSpawnEnemies = false;
-		}
+        /// <summary>
+        /// The player processor.
+        /// </summary>
+        protected PlayerProcessor _playerProcessor;
 
-		protected override void OnStopped()
-		{
-			_forceStop = true;
-			_eventManager.StopCoroutine(HandleWaves());
+        /// <summary>
+        /// Whether to force stop the event.
+        /// </summary>
+        protected bool _forceStop = false;
 
-			for (int i = _trackedEnemies.Count - 1; i >= 0; i--)
-			{
-				_trackedEnemies[i].HealthHandler.SetHealth(0);
-			}
+        /// <summary>
+        /// Initializes a new raid event instance.
+        /// </summary>
+        /// <param name="delay">The delay before the event starts.</param>
+        /// <param name="eventDuration">The event duration.</param>
+        /// <param name="enemies">The enemy names.</param>
+        /// <param name="poolingProcessor">The object pooling processor.</param>
+        /// <param name="eventInterface">The event interface.</param>
+        /// <param name="eventProcessor">The event processor.</param>
+        /// <param name="enemySpawner">The enemy spawner.</param>
+        /// <param name="playerProcessor">The player processor.</param>
+        /// <param name="waves">The number of waves.</param>
+        /// <param name="enemiesPerWave">The number of enemies per wave.</param>
+        /// <param name="boss">The boss name.</param>
+        /// <param name="eventType">The event type.</param>
+        /// <param name="data">Additional data.</param>
+        /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
+        /// <param name="timeout">The timeout.</param>
+        public RaidEvent(double delay, double eventDuration, string[] enemies, ObjectPoolingProcessor poolingProcessor, UserInterface_Event eventInterface, GameEventProcessor eventProcessor, EnemySpawner enemySpawner, PlayerProcessor playerProcessor, int waves = 5, int enemiesPerWave = 50, string boss = null, EventType eventType = EventType.MonsterRaid, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
+        {
+            _pooledEnemyNames = enemies;
+            _waves = waves;
+            _enemiesPerWave = enemiesPerWave;
 
-			_eventInterface.DeactivateEventContainer();
-			_enemySpawner.CanSpawnEnemies = true;
-		}
+            if (boss == null)
+                _bossOnLastWave = false;
+            else
+            {
+                _bossOnLastWave = true;
+                _bossName = boss;
 
-		public override void Update()
-		{
-			if (_currentWave < _waves - 1 || !_bossOnLastWave)
-				return;
-			UpdateSlider();
-		}
+            }
 
-		protected IEnumerator HandleWaves()
-		{
-			for (_currentWave = 0; _currentWave < _waves; _currentWave++)
-			{
-				while (_trackedEnemies.Count > 0)
-					yield return new WaitForEndOfFrame();
-				SpawnNewWave();
-			}
-		}
+            _poolingProcessor = poolingProcessor;
+            _eventInterface = eventInterface;
+            _eventProcessor = eventProcessor;
+            _enemySpawner = enemySpawner;
+            _playerProcessor = playerProcessor;
 
-		protected void UpdateSlider()
-		{
-			if (_currentWave < _waves || !_bossOnLastWave)
-			{
-				_eventInterface.SliderTMP.text = $"Waves Completed: {_currentWave}/{_waves}";
-				_eventInterface.Slider.value = (float)_currentWave / _waves;
-			}
-			else
-			{
-				if (_trackedEnemies.Count > 0 && _trackedEnemies[0] != null)
-				{
-					_eventInterface.SliderTMP.text = $"Boss HP: {_trackedEnemies[0].HealthHandler.Health}/{_trackedEnemies[0].HealthHandler.MaxHealth}";
-					_eventInterface.Slider.value = _trackedEnemies[0].HealthHandler.HealthPercentage;
-				}
-			}
-		}
+            _trackedEnemies = new List<Enemy>();
+        }
 
-		protected void SpawnNewWave()
-		{
-			if (_forceStop)
-				return;
+        /// <summary>
+        /// Sets the enemy names for the raid.
+        /// </summary>
+        /// <param name="enemies">The enemy names.</param>
+        public void SetEnemies(string[] enemies)
+        {
+            _pooledEnemyNames = enemies;
+        }
 
-			// On waves prior to last wave or there is no final boss
-			if (_currentWave < _waves - 1 || !_bossOnLastWave)
-			{
-				for (int i = 0; i < _enemiesPerWave; i++)
-				{
-					string enemyName = _pooledEnemyNames[Random.Range(0, _pooledEnemyNames.Length)];
-					PoolableObject go = _poolingManager.GetPooledObject(enemyName);
-					Enemy enemy = go.GetComponent<Enemy>();
-					enemy.OnDied += OnEnemyDeath;
-					_trackedEnemies.Add(enemy);
-					enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
-					enemy.gameObject.SetActive(true);
-				}
-			}
-			else // On Last Wave and Should spawn boss.
-			{
-				PoolableObject go = _poolingManager.GetPooledObject(_bossName);
-				Enemy enemy = go.GetComponent<Enemy>();
-				enemy.OnDied += OnEnemyDeath;
-				_trackedEnemies.Add(enemy);
-				enemy.HealthHandler.SetMaxHealth(Mathf.Max(1000, 50 * (_playerManager.PlayerCount() + _playerManager.RecruitCount())));
-				enemy.gameObject.SetActive(true);
-				enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
-			}
+        /// <summary>
+        /// Called when the event starts.
+        /// </summary>
+        protected override void OnStarted()
+        {
+            _eventInterface.Slider.gameObject.SetActive(true);
+            UpdateSlider();
+            _eventInterface.TitleTMP.text = "Raid";
+            _eventInterface.DescriptionTMP.text = "";
+            _eventInterface.ActivateEventContainer();
+            _eventProcessor.StartCoroutine(HandleWaves());
 
-			UpdateSlider();
-			UpdateUI();
-		}
+            _enemySpawner.CanSpawnEnemies = false;
+        }
 
-		protected void OnEnemyDeath(Enemy enemy)
-		{
-			enemy.OnDied -= OnEnemyDeath;
-			_trackedEnemies.Remove(enemy);
+        /// <summary>
+        /// Called when the event stops.
+        /// </summary>
+        protected override void OnStopped()
+        {
+            _forceStop = true;
+            _eventProcessor.StopCoroutine(HandleWaves());
 
-			UpdateUI();
+            for (int i = _trackedEnemies.Count - 1; i >= 0; i--)
+            {
+                _trackedEnemies[i].HealthHandler.SetHealth(0);
+            }
 
-			if (_currentWave == _waves)
-				Stop(true);
-		}
+            _eventInterface.DeactivateEventContainer();
+            _enemySpawner.CanSpawnEnemies = true;
+        }
 
-		protected void CheckComplete()
-		{
-			if (_currentWave == _waves && _trackedEnemies.Count == 0)
-				OnCompleteEvent();
-		}
+        /// <summary>
+        /// Updates the raid event.
+        /// </summary>
+        /// <param name="currentTime">The current time.</param>
+        public override void Update(double currentTime)
+        {
+            if (_currentWave < _waves - 1 || !_bossOnLastWave)
+                return;
+            UpdateSlider();
+        }
 
-		protected void UpdateUI()
-		{
-			_eventInterface.DescriptionTMP.text = $"Enemies In Wave: {_trackedEnemies.Count}";
-		}
-	}
+        /// <summary>
+        /// Handles the waves of enemies.
+        /// </summary>
+        /// <returns>The enumerator for the coroutine.</returns>
+        protected IEnumerator HandleWaves()
+        {
+            for (_currentWave = 0; _currentWave < _waves; _currentWave++)
+            {
+                while (_trackedEnemies.Count > 0)
+                    yield return new WaitForEndOfFrame();
+                SpawnNewWave();
+            }
+        }
+
+        /// <summary>
+        /// Updates the slider UI.
+        /// </summary>
+        protected void UpdateSlider()
+        {
+            if (_currentWave < _waves || !_bossOnLastWave)
+            {
+                _eventInterface.SliderTMP.text = $"Waves Completed: {_currentWave}/{_waves}";
+                _eventInterface.Slider.value = (float)_currentWave / _waves;
+            }
+            else
+            {
+                if (_trackedEnemies.Count > 0 && _trackedEnemies[0] != null)
+                {
+                    _eventInterface.SliderTMP.text = $"Boss HP: {_trackedEnemies[0].HealthHandler.Health}/{_trackedEnemies[0].HealthHandler.MaxHealth}";
+                    _eventInterface.Slider.value = _trackedEnemies[0].HealthHandler.HealthPercentage;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Spawns a new wave of enemies.
+        /// </summary>
+        protected void SpawnNewWave()
+        {
+            if (_forceStop)
+                return;
+
+            // On waves prior to last wave or there is no final boss.
+            if (_currentWave < _waves - 1 || !_bossOnLastWave)
+            {
+                for (int i = 0; i < _enemiesPerWave; i++)
+                {
+                    string enemyName = _pooledEnemyNames[Random.Range(0, _pooledEnemyNames.Length)];
+                    PoolableObject go = _poolingProcessor.GetPooledObject(enemyName);
+                    Enemy enemy = go.GetComponent<Enemy>();
+                    enemy.OnDied += OnEnemyDeath;
+                    _trackedEnemies.Add(enemy);
+                    enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
+                    enemy.gameObject.SetActive(true);
+                }
+            }
+            else // On Last Wave and Should spawn boss.
+            {
+                PoolableObject go = _poolingProcessor.GetPooledObject(_bossName);
+                Enemy enemy = go.GetComponent<Enemy>();
+                enemy.OnDied += OnEnemyDeath;
+                _trackedEnemies.Add(enemy);
+                enemy.HealthHandler.SetMaxHealth(Mathf.Max(1000, 50 * (_playerProcessor.PlayerCount() + _playerProcessor.RecruitCount())));
+                enemy.gameObject.SetActive(true);
+                enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
+            }
+
+            UpdateSlider();
+            UpdateUI();
+        }
+
+        /// <summary>
+        /// Called when an enemy dies.
+        /// </summary>
+        /// <param name="enemy">The enemy that died.</param>
+        protected void OnEnemyDeath(Enemy enemy)
+        {
+            enemy.OnDied -= OnEnemyDeath;
+            _trackedEnemies.Remove(enemy);
+
+            UpdateUI();
+
+            if (_currentWave == _waves)
+                Stop(true);
+        }
+
+        /// <summary>
+        /// Checks if the raid is complete.
+        /// </summary>
+        protected void CheckComplete()
+        {
+            if (_currentWave == _waves && _trackedEnemies.Count == 0)
+                OnCompleteEvent();
+        }
+
+        /// <summary>
+        /// Updates the UI.
+        /// </summary>
+        protected void UpdateUI()
+        {
+            _eventInterface.DescriptionTMP.text = $"Enemies In Wave: {_trackedEnemies.Count}";
+        }
+    }
 }

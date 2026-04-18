@@ -1,0 +1,90 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 709f1eb06ef6b6f4f82d88d9ce7e9fff, type: 3}
+  m_Name: D_TerrainGenData
+  m_EditorClassIdentifier: 
+  _generationSettings:
+    Size: 70
+    LevelOfDetail: 0
+    NoiseScale: 15
+    Octaves: 3
+    Persistance: 0.2
+    Lacunarity: 8
+    Seed: -1747536282
+    Offset: {x: 0, y: 0}
+    SpawnThreshold: 0
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
+      serializedVersion: 2
+      m_Curve: []
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
+    Spacing: 0
+  _meshHeightMultiplier: 4.5
+  _meshHeightCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  _enableIslandBias: 1
+  _islandBiasCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 3
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  _islandSize: 40
+  _islandMultiplier: 0.6
+  _islandAddition: 0.3
+  _quantizationFactor: 0.25
+  _topFaceProportion: 0.7

@@ -3,7 +3,7 @@ using Target;
 using UnityEngine;
 using Utils;
 using System;
-using Managers;
+using Processors;
 using UnityEngine.Profiling;
 using Pathfinding;
 using UserInterface;
@@ -73,9 +73,10 @@ namespace Buildings
 
 		// Required Components.
 		private Transform _transform;
-		[Inject] private StationManager _manager;
-		[Inject] private TargetManager _targetManager;
+		[Inject] private StationProcessor _manager;
+		[Inject] private TargetProcessor _targetProcessor;
 		[Inject] private CellSpacePartitioning _cellPartitionGrid;
+		[Inject] private UtilDisplayProcessor _utilDisplayProcessor;
 		private Targetable _targetable;
 		private GUIDComponent _gUIDComponent;
 		//private UnitTextDisplay _displayText;
@@ -143,7 +144,7 @@ namespace Buildings
 					continue;
 
 				// If Targets update type is Clear, reset the list
-				if (_targetManager.GetUpdateType(key) == StationUpdate.Clear || _targetDictionary[key] == null)
+				if (_targetProcessor.GetUpdateType(key) == StationUpdate.Clear || _targetDictionary[key] == null)
 				{
 					_targetDictionary[key] = new List<Targetable>(_maxListSize);
 				}
@@ -330,7 +331,7 @@ namespace Buildings
 
 			for (int i = 0; i < validTargets.Count; i++)
 			{
-				UtilDisplayManager.AddTextDisplay(validTargets[i], $"{i + 1}");
+				_utilDisplayProcessor.AddTextDisplay(validTargets[i], $"{i + 1}");
 			}
 
 			return true;

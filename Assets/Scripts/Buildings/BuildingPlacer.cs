@@ -1,5 +1,6 @@
 using Character;
-using Managers;
+using Processors;
+using Core;
 using Pathfinding;
 using SavingAndLoading.SavableObjects;
 using SavingAndLoading.Structs;
@@ -23,6 +24,9 @@ namespace Buildings
         [SerializeField]
         private LayerMask _collisionMask;
 
+        /// <summary>
+        /// Layer mask for terrain detection.
+        /// </summary>
         [SerializeField]
         private LayerMask _terrainMask;
 
@@ -41,28 +45,82 @@ namespace Buildings
         /// </summary>
         private bool _colliding = false;
 
-        // Colors displayed on building meshes to determine if there is a collision
+        /// <summary>
+        /// Color displayed on building meshes when placement is valid.
+        /// </summary>
         [SerializeField]
         private Color _successColor;
+
+        /// <summary>
+        /// Color displayed on building meshes when placement is invalid.
+        /// </summary>
         [SerializeField]
         private Color _failColor;
 
         // Required Components
+        /// <summary>
+        /// The player that owns this building placer.
+        /// </summary>
         private Player _owner;
+
+        /// <summary>
+        /// The current building being placed.
+        /// </summary>
         private BuildPlacerData _currentBuilding;
+
+        /// <summary>
+        /// The box collider used for collision detection.
+        /// </summary>
         private BoxCollider _boxCollider;
+
+        /// <summary>
+        /// The bounds visualizer used to display the building's bounds.
+        /// </summary>
         private BoundsVisualizer _boundsVisualizer;
+
+        /// <summary>
+        /// The text display used to show the player's username.
+        /// </summary>
         private UnitTextDisplay _textDisplay;
+
+        /// <summary>
+        /// The simple cancel building placer used to cancel building placement.
+        /// </summary>
         private SimpleCancelBuildingPlacer _simpleCallTimer;
+
+        /// <summary>
+        /// The snap to grid mouse movement used to move the building placer.
+        /// </summary>
         private SnapToGridMouseMovement _snapMovement;
-        [Inject] private BuildingManager _buildingManager;
-        [Inject] private ObjectPoolingManager _poolingManager;
-        [Inject] private GameManager _gameManager;
+
+        /// <summary>
+        /// Building processor for building operations.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private BuildingProcessor _buildingProcessor;
+
+        /// <summary>
+        /// Object pooling processor for spawning buildings.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private ObjectPoolingProcessor _poolingProcessor;
+
+        /// <summary>
+        /// Game coordinator for game state access.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Coordinator _gameProcessor;
+
+        /// <summary>
+        /// Player runtime scriptable for player data access.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private PlayerProcessor _playerProcessor;
 
         /// <summary>
         /// Called when gameobject has been pooled.
         /// </summary>
-        /// <param name="player"></param>
+        /// <param name="player">The player that owns this building placer.</param>
         public void OnPooled(Player player)
         {
             _owner = player;
@@ -70,13 +128,13 @@ namespace Buildings
             //TODO:: Fix this
             if (_textDisplay != null && player.TwitchUser.Username != "")
             {
-                if (player.TwitchUser.Username == _gameManager.UserPlayer.TwitchUser.Username)
+                if (player.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username)
                     _textDisplay.SetDisplayText("");
                 else
                     _textDisplay.SetDisplayText(player.TwitchUser.Username);
             }
 
-            if (player.TwitchUser.Username == _gameManager.UserPlayer.TwitchUser.Username)
+            if (player.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username)
             {
                 _snapMovement.enabled = true;
                 _snapMovement.OnPositionChanged += UpdateCollision;
@@ -115,8 +173,8 @@ namespace Buildings
             _boundsVisualizer.SetSize(_currentBuilding.BuildingSize);
 
             // Check if Probe Handler is set, otherwise set and store it
-            if (_currentBuilding.ProbeManager == null)
-                _currentBuilding.ProbeManager = _currentBuilding.BuildingModel.GetComponentInChildren<PlacementProbeHandler>();
+            if (_currentBuilding.ProbeProcessor == null)
+                _currentBuilding.ProbeProcessor = _currentBuilding.BuildingModel.GetComponentInChildren<PlacementProbeHandler>();
 
             // Call update on the collision.
             UpdateCollision();
@@ -140,6 +198,10 @@ namespace Buildings
                 SetBuildingIndex(index);
         }
 
+        /// <summary>
+        /// Gets the type of the current building being placed.
+        /// </summary>
+        /// <returns>The building type.</returns>
         public BuildingType GetBuildingType()
         {
             return _currentBuilding.BuildingType;
@@ -190,7 +252,7 @@ namespace Buildings
         /// <returns></returns>
         public bool CanAfford()
         {
-            return _buildingManager.CanAffordToBuild(_currentBuilding.BuildingType);
+            return _buildingProcessor.CanAffordToBuild(_currentBuilding.BuildingType);
         }
 
         /// <summary>
@@ -228,15 +290,15 @@ namespace Buildings
                 return false;
             }
 
-            // Get building from pooling manager and set it's position and rotation.
-            PoolableObject obj = _poolingManager.GetPooledObject(_currentBuilding.BuildingType.ToString());
+            // Get building from pooling processor and set it's position and rotation.
+            PoolableObject obj = _poolingProcessor.GetPooledObject(_currentBuilding.BuildingType.ToString());
 
             obj.transform.position = alignedPosition;
             obj.transform.rotation = transform.rotation;
             obj.gameObject.SetActive(true);
 
             // Add building to building dictionary.
-            _buildingManager.OnBuiltNewBuilding(obj.GetComponent<BuildingBase>());
+            _buildingProcessor.OnBuiltNewBuilding(obj.GetComponent<BuildingBase>());
 
             // Set player's last placement position to building's position
             placementPos = obj.transform.position;
@@ -254,7 +316,7 @@ namespace Buildings
             // Removes foliage
             for (int i = 0; i < (int)FoliageType.Count; i++)
             {
-                List<PoolableObject> foliageObjects = _poolingManager.GetAllActiveObjectsOfTypeWithinBoxCollider(collider, center, ((FoliageType)i).ToString());
+                List<PoolableObject> foliageObjects = _poolingProcessor.GetAllActiveObjectsOfTypeWithinBoxCollider(collider, center, ((FoliageType)i).ToString());
                 for (int j = 0; j < foliageObjects.Count; j++)
                 {
                     foliageObjects[j].gameObject.SetActive(false);
@@ -269,7 +331,7 @@ namespace Buildings
         /// </summary>
         public void UpdateCollision()
         {
-            if (_currentBuilding.ProbeManager == null)
+            if (_currentBuilding.ProbeProcessor == null)
                 return;
 
             if (_currentBuilding == null)
@@ -293,7 +355,7 @@ namespace Buildings
             _colliding = (Physics.BoxCast(transform.position + Vector3.up * 10, halfExtents, -transform.up, transform.rotation, 10, _collisionMask));
 
             // If we aren't colliding with anything, also check that the building's probes passed their check.
-            if (!_colliding && !_currentBuilding.ProbeManager.AllProbesPassedCheck())
+            if (!_colliding && !_currentBuilding.ProbeProcessor.AllProbesPassedCheck())
                 _colliding = true;
             // Check that the building doesn't block pathing to the world borders.
             if (!_colliding)
@@ -303,9 +365,9 @@ namespace Buildings
                 //TODO:: REIMPLEMENT BECAUSE IT SUCKS CURRENTLY - ALSO NEED TO PATH TO TOWNHALL
                 //GraphNode here = AstarPath.active.GetNearest(transform.position, NNConstraint.Default).node;
                 //// As soon as one path is valid, we can continue.
-                //for (int i = 0; i < GameManager.Instance.PathProbes.Count; i++)
+                //for (int i = 0; i < Coordinator.Instance.PathProbes.Count; i++)
                 //{
-                //    if (GameManager.Instance.PathProbes[i].CanPathTo(here))
+                //    if (Coordinator.Instance.PathProbes[i].CanPathTo(here))
                 //    {
                 //        _colliding = false;
                 //        canPath = true;
@@ -326,7 +388,7 @@ namespace Buildings
         /// <summary>
         /// Sets the material colour of the building to match whether there is a collision or not.
         /// </summary>
-        /// <param name="_colliding"></param>
+        /// <param name="_colliding">Whether the building is colliding.</param>
         private void SetBuildingRenderer(bool _colliding)
         {
             // Get all renderers
@@ -336,10 +398,13 @@ namespace Buildings
         /// <summary>
         /// Returns the current building's index.
         /// </summary>
-        /// <returns></returns>
+        /// <returns>The current building index.</returns>
         public int GetBuildingIndex() => _currentIndex;
 
         // Unity Functions.
+        /// <summary>
+        /// Initializes components and sets up the building placer.
+        /// </summary>
         public void Awake()
         {
             // Get Components
@@ -357,18 +422,9 @@ namespace Buildings
             _currentBuilding = _buildData[0];
         }
 
-        private void OnDisable()
-        {
-            if (_owner == null)
-                return;
-
-            if (_owner.TwitchUser.Username == _gameManager.UserPlayer.TwitchUser.Username)
-            {
-                _snapMovement.enabled = false;
-                _snapMovement.OnPositionChanged -= UpdateCollision;
-            }
-        }
-
+        /// <summary>
+        /// Draws gizmos for the building placer.
+        /// </summary>
         private void OnDrawGizmos()
         {
             if (_currentBuilding == null)

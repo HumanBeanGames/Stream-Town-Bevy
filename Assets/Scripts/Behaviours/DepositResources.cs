@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using Reflex.Attributes;
 using UnityEngine;
 using Utils;
@@ -10,15 +10,15 @@ namespace Behaviours
 	/// </summary>
 	public class DepositResources : MonoBehaviour
 	{
-		[Inject] private TownResourceManager _townResourceManager;
+		[Inject] private TownResourceProcessor _townResourceProcessor;
 		/// <summary>
-		/// Deposits resources of the determined type to the Town's Resource Manager.
+		/// Deposits resources of the determined type to the Town's Resource Processor.
 		/// </summary>
 		/// <param name="type"></param>
 		/// <param name="amount"></param>
 		public void Deposit(Utils.Resource type, int amount)
 		{
-			_townResourceManager.AddResource(type, amount);
+			_townResourceProcessor.AddResource(type, amount);
 		}
 	}
 }

@@ -17,28 +17,28 @@ public class PersistentUIInstaller : MonoBehaviour, IInstaller
         // Optional: keep the clone name, or customize if desired
         rootClone.name = name;
 
-        // Bind SettingsManager with lazy resolution - it will be found when first requested
+        // Bind SettingsProcessor with lazy resolution - it will be found when first requested
         containerBuilder.AddSingleton((container) =>
         {
             if (_persistentRoot != null)
             {
-                var settingsManager = _persistentRoot.GetComponentInChildren<SettingsManager>(true);
-                if (settingsManager != null)
+                var settingsProcessor = _persistentRoot.GetComponentInChildren<SettingsProcessor>(true);
+                if (settingsProcessor != null)
                 {
-                    Debug.Log($"PersistentUIInstaller: Resolved SettingsManager from {settingsManager.gameObject.name}", this);
-                    return settingsManager;
+                    Debug.Log($"PersistentUIInstaller: Resolved SettingsProcessor from {settingsProcessor.gameObject.name}", this);
+                    return settingsProcessor;
                 }
             }
 
             // Fallback to FindAnyObjectByType if persistent root isn't available yet
-            var fallback = FindAnyObjectByType<SettingsManager>();
+            var fallback = FindAnyObjectByType<SettingsProcessor>();
             if (fallback != null)
             {
-                Debug.Log($"PersistentUIInstaller: Resolved SettingsManager via FindAnyObjectByType from {fallback.gameObject.name}", this);
+                Debug.Log($"PersistentUIInstaller: Resolved SettingsProcessor via FindAnyObjectByType from {fallback.gameObject.name}", this);
                 return fallback;
             }
 
-            Debug.LogError("PersistentUIInstaller: Could not resolve SettingsManager!", this);
+            Debug.LogError("PersistentUIInstaller: Could not resolve SettingsProcessor!", this);
             return null;
         });
 

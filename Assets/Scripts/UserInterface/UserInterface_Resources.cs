@@ -1,5 +1,5 @@
 using UnityEngine;
-using Managers;
+using Processors;
 using TMPro;
 using Utils;
 using Reflex.Attributes;
@@ -19,35 +19,34 @@ namespace UserInterface
 		private Color _positiveColor = Color.green;
 		[SerializeField]
 		private Color _negativeColor = Color.red;
-		[Inject] private TownResourceManager _resourceManager;
+		[Inject] private TownResourceProcessor _resourceProcessor;
 
 		/// <summary>
 		/// Called when a resource amount has changed and updates the text accordingly.
 		/// </summary>
 		/// <param name="resource"></param>
 		/// <param name="amount"></param>
-		/// <param name="purchase"></param>
 		private void OnResourceChange(Resource resource, int amount, bool purchase)
 		{
 			return;
 
-			//int rateOfChange = _resourceManager.RateOfChangeForResource(resource);
+			//int rateOfChange = _resourceProcessor.RateOfChangeForResource(resource);
 			//bool positiveROC = rateOfChange >= 0;
 
 			//Color toUse = positiveROC ? _positiveColor : _negativeColor;
 			//string rateOfChangeString = $"<color=#{ColorUtility.ToHtmlStringRGBA(toUse)}>" + (positiveROC ? " + " : "-") + $"{StringUtils.GetShortenedNumberAsString(rateOfChange * 60)}/h</color>";
 			//if ((int)resource - 1 >= _resourceTMPs.Length)
 			//	return;
-			//_resourceTMPs[(int)resource - 1].text = $"{_resourceManager.ResourcePrint(resource)} {rateOfChangeString}";
+			//_resourceTMPs[(int)resource - 1].text = $"{_resourceProcessor.ResourcePrint(resource)} {rateOfChangeString}";
 		}
 
 		private void Start()
 		{
-			_resourceManager.OnAnyResourceChangeEvent.AddListener(OnResourceChange);
+			_resourceProcessor.OnAnyResourceChangeEvent += OnResourceChange;
 
 			for (int i = 1; i < (int)Resource.Count-1; i++)
 			{
-				_resourceManager.OnAnyResourceChangeEvent?.Invoke((Utils.Resource)i, 0, false);
+				OnResourceChange((Utils.Resource)i, 0, false);
 			}
 		}
 	}

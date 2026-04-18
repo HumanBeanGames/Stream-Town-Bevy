@@ -1,5 +1,4 @@
 using Character;
-using Scriptables;
 using UnityEngine;
 using Utils;
 
@@ -11,7 +10,7 @@ namespace STStateMachine.States
 	public class STSM_Action_PlayerBase : STSM_StateAction
 	{
 		protected RoleHandler _roleHandler;
-		protected RoleDataScriptable _roleData;
+		protected Character.RoleData _roleData;
 
 		protected override void OnInit()
 		{

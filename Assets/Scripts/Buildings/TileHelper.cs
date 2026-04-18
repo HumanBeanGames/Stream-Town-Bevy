@@ -27,13 +27,14 @@ namespace Buildings
 		/// Updates the value of the tile based on it's neighbours. Has the option to add neighbours
 		/// to the update queue to be processed.
 		/// </summary>
-		/// <param name="position"></param>
-		/// <param name="tag"></param>
-		/// <param name="size"></param>
-		/// <param name="enqueueNeighbours"></param>
-		/// <returns></returns>
+		/// <param name="position">The position of the tile.</param>
+		/// <param name="tag">The tag to check for neighbouring tiles.</param>
+		/// <param name="size">The size of the tile.</param>
+		/// <param name="enqueueNeighbours">Whether to enqueue neighbouring tiles for update.</param>
+		/// <returns>The calculated tile value.</returns>
 		public static int CalculateTileValue(Vector3 position, string tag, int size, bool enqueueNeighbours = false)
 		{
+			// Initialize the new tile value to 0.
 			int newTileValue = 0;
 
 			// Check all positions neighbouring this tile in a grid.

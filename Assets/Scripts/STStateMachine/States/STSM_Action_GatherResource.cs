@@ -2,6 +2,7 @@ using Behaviours;
 using Character;
 using GameResources;
 using Pets.Enumerations;
+using Reflex.Attributes;
 using STStateMachine.Helpers;
 using Twitch;
 using UnityEngine;
@@ -14,6 +15,7 @@ namespace STStateMachine.States
 	/// </summary>
 	public class STSM_Action_GatherResource : STSM_Action_PlayerBase
 	{
+		[Inject] private MessageSender _messageSender;
 		protected CollectResource _collectResource;
 		protected PlayerInventory _playerInventory;
 		protected ResourceHolder _resourceHolder;
@@ -72,7 +74,7 @@ namespace STStateMachine.States
 							return;
 
 						_roleHandler.Player.PetsUnlocked[PetType.Giraffe] = true;
-						MessageSender.SendMessage($"{_roleHandler.Player.TwitchUser.Username} unlocked the giraffe pet!");
+						_messageSender.SendMessage($"{_roleHandler.Player.TwitchUser.Username} unlocked the giraffe pet!");
 					}
 					if(_actionAnimation == AnimationName.Fishing)
 					{
@@ -80,7 +82,7 @@ namespace STStateMachine.States
 							return;
 
 						_roleHandler.Player.PetsUnlocked[PetType.Duck] = true;
-						MessageSender.SendMessage($"{_roleHandler.Player.TwitchUser.Username} unlocked the duck pet!");
+						_messageSender.SendMessage($"{_roleHandler.Player.TwitchUser.Username} unlocked the duck pet!");
 					}
 					if (_actionAnimation == AnimationName.WoodCutting)
 					{
@@ -88,7 +90,7 @@ namespace STStateMachine.States
 							return;
 
 						_roleHandler.Player.PetsUnlocked[PetType.Butterfly] = true;
-						MessageSender.SendMessage($"{_roleHandler.Player.TwitchUser.Username} unlocked the butterfly pet!");
+						_messageSender.SendMessage($"{_roleHandler.Player.TwitchUser.Username} unlocked the butterfly pet!");
 					}
 				}
             }

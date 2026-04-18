@@ -3,10 +3,19 @@ using TwitchLib.Unity;
 
 namespace Twitch
 {
+    /// <summary>
+    /// Handles the Twitch API.
+    /// </summary>
 	public class TL_API : MonoBehaviour
 	{
+        /// <summary>
+        /// The Twitch API instance.
+        /// </summary>
 		public static Api API;
 
+        /// <summary>
+        /// Initializes the Twitch API.
+        /// </summary>
 		public void InitApi()
 		{
 			Application.runInBackground = true;
@@ -17,6 +26,9 @@ namespace Twitch
 
 		}
 
+        /// <summary>
+        /// Initializes the API on start.
+        /// </summary>
 		private void Start()
 		{
 			InitApi();

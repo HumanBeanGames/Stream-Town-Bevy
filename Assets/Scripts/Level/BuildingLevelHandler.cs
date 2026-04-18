@@ -1,5 +1,5 @@
 using Buildings;
-using Managers;
+using Processors;
 using Reflex.Attributes;
 using System;
 
@@ -10,23 +10,38 @@ namespace Level
 	/// </summary>
 	public class BuildingLevelHandler : LevelHandler
 	{
-		[Inject] protected BuildingManager _buildingManager;
+        /// <summary>
+        /// The building processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] protected BuildingProcessor _buildingProcessor;
+
+        /// <summary>
+        /// The building base component.
+        /// </summary>
 		protected BuildingBase _buildingBase;
 
+        /// <summary>
+        /// Event triggered when the building levels up.
+        /// </summary>
 		public event Action<LevelHandler> OnLeveledUp;
 
+        /// <summary>
+        /// Checks if the building can level up.
+        /// </summary>
+        /// <returns>True if the building can level up.</returns>
 		public override bool CanLevel()
 		{
 			return CanLevel();
 		}
 
 		/// <summary>
-		/// returns true if the building can level up.
+		/// Returns true if the building can level up.
 		/// </summary>
-		/// <returns></returns>
+        /// <param name="skipCostCheck">Whether to skip the cost check.</param>
+        /// <returns>True if the building can level up.</returns>
 		public bool CanLevel(bool skipCostCheck = false)
 		{
-			if (base.CanLevel() && (skipCostCheck || _buildingManager.CanAffordToLevel(_buildingBase.BuildingType, _currentLevel)))
+			if (base.CanLevel() && (skipCostCheck || _buildingProcessor.CanAffordToLevel(_buildingBase.BuildingType, _currentLevel)))
 			{
 				return true;
 			}
@@ -39,7 +54,7 @@ namespace Level
 		/// </summary>
 		public override void OnLevelUp()
 		{
-			_buildingManager.OnLevelBuilding(_buildingBase.BuildingType, _currentLevel);
+			_buildingProcessor.OnLevelBuilding(_buildingBase.BuildingType, _currentLevel);
 			base.OnLevelUp();
 			OnLeveledUp?.Invoke(this);
 		}

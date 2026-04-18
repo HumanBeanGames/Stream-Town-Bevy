@@ -1,3 +1,4 @@
+using Reflex.Attributes;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Events;
@@ -14,6 +15,7 @@ namespace UserInterface.BottomBarMenu
 	}
     public class BottomBarButton : MonoBehaviour
 	{
+		[Inject] private BottomBarInterface _bottomBarInterface;
 		[SerializeField]
 		private Image _arrowImage;
 
@@ -29,9 +31,9 @@ namespace UserInterface.BottomBarMenu
         public void ToggleContext()
 		{
 			if (!_active)
-				BottomBarInterface.OnActivatedButton(this);
+				_bottomBarInterface.OnActivatedButton(this);
 			else
-				BottomBarInterface.OnDeactivatedButton(this);
+				_bottomBarInterface.OnDeactivatedButton(this);
 		}
 
 		public void OnContextHidden()
@@ -53,13 +55,13 @@ namespace UserInterface.BottomBarMenu
 
 		private void OnDisable()
 		{
-			BottomBarInterface.RemoveButton(this);
+			_bottomBarInterface.RemoveButton(this);
 		}
 
 		private IEnumerator DelayedAddButton()
 		{
 			yield return new WaitForSeconds(0.01f);
-			BottomBarInterface.AddButton(this);
+			_bottomBarInterface.AddButton(this);
 			OnContextHidden();
 		}
 	}

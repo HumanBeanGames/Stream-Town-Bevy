@@ -9,11 +9,34 @@ namespace Buildings
 	[System.Serializable]
 	public class BuildingModelHandler : MonoBehaviour
 	{
+        /// <summary>
+        /// The full building model.
+        /// </summary>
 		public GameObject FullModel;
+
+        /// <summary>
+        /// The first stage construction model.
+        /// </summary>
 		public GameObject Stage1;
+
+        /// <summary>
+        /// The second stage construction model.
+        /// </summary>
 		public GameObject Stage2;
+
+        /// <summary>
+        /// The third stage construction model.
+        /// </summary>
 		public GameObject Stage3;
+
+        /// <summary>
+        /// List of upgrade models.
+        /// </summary>
 		public List<GameObject> Upgrades;
+
+        /// <summary>
+        /// List of other models.
+        /// </summary>
 		public List<GameObject> OtherModels;
 
 		/// <summary>

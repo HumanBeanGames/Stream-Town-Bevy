@@ -14,6 +14,9 @@ namespace Buildings
 		/// </summary>
 		private const float HEIGHT_OFFSET = 0.0f;
 
+        /// <summary>
+        /// The desired surface type for placement.
+        /// </summary>
 		[SerializeField]
 		private SurfaceType _desiredSurface;
 

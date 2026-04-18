@@ -1,4 +1,4 @@
-using Managers;
+using Processors;
 using SavingAndLoading.Structs;
 using System;
 using TownGoal.Enumerations;
@@ -7,22 +7,65 @@ using Utils;
 
 namespace TownGoal.Data
 {
+    /// <summary>
+    /// Represents an objective within a goal.
+    /// </summary>
 	public class Objective
 	{
+        /// <summary>
+        /// Event invoked when the objective is complete.
+        /// </summary>
 		public Action<Objective> ObjectiveComplete;
+
+        /// <summary>
+        /// Event invoked when the amount changes.
+        /// </summary>
 		public Action<Objective, int> AmountChanged;
 
+        /// <summary>
+        /// The objective type.
+        /// </summary>
 		private ObjectiveType _objectiveType;
 
+        /// <summary>
+        /// The required amount.
+        /// </summary>
 		private int _requiredAmount;
+
+        /// <summary>
+        /// The current amount.
+        /// </summary>
 		private int _amount;
+
+        /// <summary>
+        /// The objective data.
+        /// </summary>
 		private ObjectiveData _data;
 
+        /// <summary>
+        /// Gets the current amount.
+        /// </summary>
 		public int Amount => _amount;
+
+        /// <summary>
+        /// Gets the required amount.
+        /// </summary>
 		public int RequiredAmount => _requiredAmount;
+
+        /// <summary>
+        /// Gets the objective type.
+        /// </summary>
 		public ObjectiveType ObjectiveType => _objectiveType;
+
+        /// <summary>
+        /// Gets the objective data.
+        /// </summary>
 		public ObjectiveData Data => _data;
 
+        /// <summary>
+        /// Initializes a new instance of the Objective class.
+        /// </summary>
+        /// <param name="data">The objective data.</param>
 		public Objective(ObjectiveData data)
 		{
 			_data = data;
@@ -30,94 +73,88 @@ namespace TownGoal.Data
 			_requiredAmount = (int)(data.IntValue);
 			ObjectiveComplete += ClearListeners;
 			_amount = 0;
-
-			BuildObjective();
 		}
 
-		public ObjectiveSaveData ToObjectiveSaveData()
-		{
-			return new ObjectiveSaveData(_requiredAmount, _amount);
-		}
-
-		public void SetValues(int amount, int requiredAmount)
-		{
-			_amount = amount;
-			_requiredAmount = requiredAmount;
-			OnAmountChanged();
-		}
-		
-		private void BuildObjective()
+        /// <summary>
+        /// Subscribes to game events based on objective type.
+        /// </summary>
+        /// <param name="eventProcessor">The game event processor.</param>
+		public void SubscribeToEvents(GameEventProcessor eventProcessor)
 		{
 			switch (_objectiveType)
 			{
 				case ObjectiveType.Build:
-					EventManager.BuildingBuilt += OnBuildingBuilt;
+					eventProcessor.BuildingBuilt += OnBuildingBuilt;
 					break;
 				case ObjectiveType.BuildAny:
-					EventManager.BuildingBuilt += OnBuildingBuilt;
+					eventProcessor.BuildingBuilt += OnBuildingBuilt;
 					break;
 				case ObjectiveType.Collect:
-					EventManager.ResourceGained += OnResourceGained;
+					eventProcessor.ResourceGained += OnResourceGained;
 					break;
 				case ObjectiveType.Kill:
-					EventManager.EnemyKilled += OnEnemyKilled;
+					eventProcessor.EnemyKilled += HandleEnemyKilled;
 					break;
 				case ObjectiveType.KillAny:
-					EventManager.EnemyKilled += OnEnemyKilled;
+					eventProcessor.EnemyKilled += HandleEnemyKilled;
 					break;
 				case ObjectiveType.EarnPerHour:
-					EventManager.ResourceGained += OnResourceGained;
+					eventProcessor.ResourceGained += OnResourceGained;
 					break;
 				case ObjectiveType.Sell:
-					EventManager.ResourceSold += OnResourceSold;
+					eventProcessor.ResourceSold += OnResourceSold;
 					break;
 				case ObjectiveType.SellAny:
-					EventManager.ResourceSold += OnResourceSold;
+					eventProcessor.ResourceSold += OnResourceSold;
 					break;
 				case ObjectiveType.Buy:
-					EventManager.ResourceBought += OnResourceBought;
+					eventProcessor.ResourceBought += OnResourceBought;
 					break;
 				case ObjectiveType.BuyAny:
-					EventManager.ResourceBought += OnResourceBought;
+					eventProcessor.ResourceBought += OnResourceBought;
 					break;
 				default:
 					break;
 			}
 		}
 
-		private void ClearListeners(Objective obj)
+        /// <summary>
+        /// Unsubscribes from game events based on objective type.
+        /// </summary>
+        /// <param name="eventProcessor">The game event processor.</param>
+		public void UnsubscribeFromEvents(GameEventProcessor eventProcessor)
 		{
 			switch (_objectiveType)
 			{
 				case ObjectiveType.Build:
-					EventManager.BuildingBuilt -= OnBuildingBuilt;
+					eventProcessor.BuildingBuilt -= OnBuildingBuilt;
 					break;
 				case ObjectiveType.BuildAny:
-					EventManager.BuildingBuilt -= OnBuildingBuilt;
+					eventProcessor.BuildingBuilt -= OnBuildingBuilt;
 					break;
 				case ObjectiveType.Collect:
-					EventManager.ResourceGained -= OnResourceGained;
+					eventProcessor.ResourceGained -= OnResourceGained;
 					break;
 				case ObjectiveType.Kill:
-					EventManager.EnemyKilled -= OnEnemyKilled;
+					eventProcessor.EnemyKilled -= HandleEnemyKilled;
 					break;
 				case ObjectiveType.KillAny:
-					EventManager.EnemyKilled -= OnEnemyKilled;
+					eventProcessor.EnemyKilled -= HandleEnemyKilled;
 					break;
 				case ObjectiveType.EarnPerHour:
-					EventManager.ResourceGained -= OnResourceGained;
+					eventProcessor.ResourceGained -= OnResourceGained;
 					break;
 				case ObjectiveType.Sell:
-					EventManager.ResourceSold -= OnResourceSold;
+					eventProcessor.ResourceSold -= OnResourceSold;
 					break;
 				case ObjectiveType.SellAny:
-					EventManager.ResourceSold -= OnResourceSold;
+					eventProcessor.ResourceSold -= OnResourceSold;
 					break;
 				case ObjectiveType.Buy:
-					EventManager.ResourceBought -= OnResourceBought;
+					eventProcessor.ResourceBought -= OnResourceBought;
 					break;
 				case ObjectiveType.BuyAny:
-					EventManager.ResourceBought -= OnResourceBought;
+					eventProcessor.ResourceBought -= OnResourceBought;
 					break;
 				default:
 					break;
@@ -126,7 +163,11 @@ namespace TownGoal.Data
 			ObjectiveComplete -= ClearListeners;
 		}
 
-		private void OnEnemyKilled(EnemyType enemyType)
+        /// <summary>
+        /// Handles enemy killed event.
+        /// </summary>
+        /// <param name="enemyType">The enemy type.</param>
+		public void HandleEnemyKilled(EnemyType enemyType)
 		{
 			if (_objectiveType == ObjectiveType.KillAny)
 			{
@@ -140,6 +181,11 @@ namespace TownGoal.Data
 			}
 		}
 
+        /// <summary>
+        /// Handles resource gained event.
+        /// </summary>
+        /// <param name="resource">The resource type.</param>
+        /// <param name="amount">The amount gained.</param>
 		private void OnResourceGained(Resource resource, int amount)
 		{
 			if (_objectiveType == ObjectiveType.Collect && _data.ResourceType == resource)
@@ -154,6 +200,10 @@ namespace TownGoal.Data
 			}
 		}
 
+        /// <summary>
+        /// Handles building built event.
+        /// </summary>
+        /// <param name="type">The building type.</param>
 		private void OnBuildingBuilt(BuildingType type)
 		{
 			if (_objectiveType == ObjectiveType.BuildAny)
@@ -168,6 +218,9 @@ namespace TownGoal.Data
 			}
 		}
 
+        /// <summary>
+        /// Completes the objective.
+        /// </summary>
 		public void CompleteObjective()
 		{
 			_amount = _requiredAmount;
@@ -175,6 +228,9 @@ namespace TownGoal.Data
 			Debug.Log($"Objective Complete '{_objectiveType}'");
 		}
 
+        /// <summary>
+        /// Called when the amount changes.
+        /// </summary>
 		private void OnAmountChanged()
 		{
 			AmountChanged?.Invoke(this, _amount);
@@ -184,6 +240,11 @@ namespace TownGoal.Data
 			}
 		}
 
+        /// <summary>
+        /// Handles resource bought event.
+        /// </summary>
+        /// <param name="resourceType">The resource type.</param>
+        /// <param name="amount">The amount bought.</param>
 		private void OnResourceBought(Resource resourceType, int amount)
 		{
 			if (_objectiveType == ObjectiveType.BuyAny || _data.ResourceType == resourceType)
@@ -193,6 +254,11 @@ namespace TownGoal.Data
 			}
 		}
 
+        /// <summary>
+        /// Handles resource sold event.
+        /// </summary>
+        /// <param name="resourceType">The resource type.</param>
+        /// <param name="amount">The amount sold.</param>
 		private void OnResourceSold(Resource resourceType, int amount)
 		{
 			if (_objectiveType == ObjectiveType.SellAny || _data.ResourceType == resourceType)
@@ -200,6 +266,28 @@ namespace TownGoal.Data
 				_amount += amount;
 				OnAmountChanged();
 			}
+		}
+
+		/// <summary>
+		/// Clears all event listeners.
+		/// </summary>
+		/// <param name="objective">The objective (unused, for delegate compatibility).</param>
+		private void ClearListeners(Objective objective)
+		{
+			// Clear all event subscriptions
+			ObjectiveComplete = null;
+			AmountChanged = null;
+		}
+
+		/// <summary>
+		/// Sets the amount and required amount from save data.
+		/// </summary>
+		/// <param name="amount">The current amount.</param>
+		/// <param name="requiredAmount">The required amount.</param>
+		public void SetValues(int amount, int requiredAmount)
+		{
+			_amount = amount;
+			_requiredAmount = requiredAmount;
 		}
 	}
 }
