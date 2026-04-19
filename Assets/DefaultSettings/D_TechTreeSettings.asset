@@ -12,6 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cd21f96a68647304e83ea56688e584d6, type: 3}
   m_Name: D_TechTreeSettings
   m_EditorClassIdentifier: 
-  MinTimeBetweenVotes: 0
+  MinTimeBetweenVotes: 60
   TechCountReqAge2: 50
-  TechTreeSO: {fileID: 0}
+  TechTreeSO: {fileID: 11400000, guid: ed1c7d6ad0aabae4a8a731f1264f78d1, type: 2}

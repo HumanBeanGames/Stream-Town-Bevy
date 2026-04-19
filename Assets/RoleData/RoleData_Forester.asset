@@ -1,0 +1,53 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4330d3116dab83c4685162b66f66df20, type: 3}
+  m_Name: RoleData_Forester
+  m_EditorClassIdentifier: 
+  Role: 15
+  RoleFlags: 1
+  TargetFlags: 8192
+  Resource: 6
+  ActionAnimationName: 5
+  ActionAnimationVariants: 1
+  StationFlags: 32
+  BaseActionAmount: 1
+  BaseActionSpeed: 1
+  BaseActionRange: 1
+  BaseRoleLevel: 1
+  BaseFoodUpkeep: 0.5
+  BaseGoldUpkeep: 0.5
+  BaseHealth: 100
+  BaseHealthRegen: 0
+  BaseDamageReduction: 0
+  BaseMovementSpeed: 3
+  BaseMaxResource: 10
+  MaxResourcePerLevel: 0
+  MovementSpeedPerLevel: 0.05
+  ActionAmountPerLevel: 0.33
+  ActionSpeedPerLevel: 0.01
+  ActionRangePerLevel: 0
+  HealthPerLevel: 0
+  HealthRegenPerLevel: 0
+  DamageReductionPerLevel: 0
+  GlobalActionPerLevel: 0
+  GlobalActionSpeedPerLevel: 0
+  GlobalActionRangePerLevel: 0
+  GlobalMovementSpeedPerLevel: 0
+  GlobalHealthPerLevel: 0
+  GlobalHealthRegenPerLevel: 0
+  GlobalResourceCarryPerLevel: 0
+  GlobalDamageReductionPerLevel: 0
+  HasUserLimit: 1
+  BaseMaxUserLimit: 0
+  ExpModifier: 5
+  DisplayIcon: {fileID: 21300000, guid: ccffee5b9fa255d46a9a29321bb65246, type: 3}
+  ActionClips: []

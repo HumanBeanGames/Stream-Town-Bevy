@@ -12,4 +12,30 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 803f2a9cfa31cf6438502d94ca871538, type: 3}
   m_Name: D_TargetSettings
   m_EditorClassIdentifier: 
-  _targetableData: []
+  _targetableData:
+  - TargetType: 1
+    UpdateType: 1
+  - TargetType: 2
+    UpdateType: 0
+  - TargetType: 4
+    UpdateType: 0
+  - TargetType: 8
+    UpdateType: 0
+  - TargetType: 16
+    UpdateType: 0
+  - TargetType: 32
+    UpdateType: 1
+  - TargetType: 64
+    UpdateType: 1
+  - TargetType: 128
+    UpdateType: 1
+  - TargetType: 256
+    UpdateType: 1
+  - TargetType: 512
+    UpdateType: 1
+  - TargetType: 1024
+    UpdateType: 1
+  - TargetType: 2048
+    UpdateType: 1
+  - TargetType: 4096
+    UpdateType: 1

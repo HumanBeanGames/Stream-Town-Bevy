@@ -6,9 +6,9 @@ namespace ScriptablesProcessorInfrastructure
 	/// <summary>
 	/// ScriptableObject that stores configuration data for a specific player role.
 	/// Contains role type, stats, scaling values, and resource requirements.
+	/// Not standalone - always part of AllRoleDataSettings.
 	/// </summary>
-	[CreateAssetMenu(fileName = "RoleDataSettings", menuName = "ScriptableObjects/RoleDataSettings", order = 1)]
-	public class RoleDataSettings : ScriptableObject, IDataScriptable
+	public class RoleDataSettings : ScriptableObject
 	{
 		/// <summary>
 		/// The specific role this data represents.

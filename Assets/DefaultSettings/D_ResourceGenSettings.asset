@@ -12,4 +12,112 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1c6a6799364977f45be3003665fa928d, type: 3}
   m_Name: D_ResourceGenSettings
   m_EditorClassIdentifier: 
-  _resourceGenerationSettings: []
+  _resourceGenerationSettings:
+  - Size: 150
+    LevelOfDetail: 2
+    NoiseScale: 17
+    Octaves: 6
+    Persistance: 0.452
+    Lacunarity: 22.47
+    Seed: 0
+    Offset: {x: 0, y: 0}
+    MeshHeightMultiplier: 6
+    MeshHeightCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    Spacing: 2
+    TargetType: 2
+    PoolName: Tree
+  - Size: 150
+    LevelOfDetail: 0
+    NoiseScale: 7
+    Octaves: 1
+    Persistance: 1
+    Lacunarity: 0
+    Seed: 0
+    Offset: {x: 0.5, y: 0.5}
+    MeshHeightMultiplier: 11
+    MeshHeightCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    Spacing: 1
+    TargetType: 4
+    PoolName: Ore
+  - Size: 150
+    LevelOfDetail: 0
+    NoiseScale: 7
+    Octaves: 2
+    Persistance: 1
+    Lacunarity: 0
+    Seed: 0
+    Offset: {x: 0.5, y: 0.5}
+    MeshHeightMultiplier: 10
+    MeshHeightCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    Spacing: 1
+    TargetType: 8
+    PoolName: Bush

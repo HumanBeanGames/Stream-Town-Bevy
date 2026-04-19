@@ -12,4 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f0d65ceacc9d12544a2cbc428fb5ca55, type: 3}
   m_Name: D_AllSeasonsSettings
   m_EditorClassIdentifier: 
-  SeasonSettingsArray: []
+  SeasonSettingsArray:
+  - {fileID: 11400000, guid: 53617d30c1255474fa55681a20199226, type: 2}
+  - {fileID: 11400000, guid: 2fef29ba897fad34084dfcfb15cdb7dd, type: 2}
+  - {fileID: 11400000, guid: db44ca46d8563234b96292876e2017b1, type: 2}
+  - {fileID: 11400000, guid: 2a706e41af252914d80c560e8e5efe3d, type: 2}

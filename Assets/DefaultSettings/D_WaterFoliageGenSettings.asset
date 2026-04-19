@@ -12,4 +12,83 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b0bae4585eef46f4b905dd1891750e48, type: 3}
   m_Name: D_WaterFoliageGenSettings
   m_EditorClassIdentifier: 
-  _waterFoliageGenerationSettings: []
+  _waterFoliageGenerationSettings:
+  - Size: 150
+    LevelOfDetail: 2
+    NoiseScale: 6.68
+    Octaves: 1
+    Persistance: 0.8
+    Lacunarity: 1.53
+    Seed: 0
+    Offset: {x: 0, y: 0}
+    MeshHeightMultiplier: 7
+    MeshHeightCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    Spacing: 1
+    PoolNames:
+    - Seaweed1
+    - Seaweed2
+    - Seaweed3
+  - Size: 150
+    LevelOfDetail: 2
+    NoiseScale: 6.68
+    Octaves: 1
+    Persistance: 0.8
+    Lacunarity: 1.53
+    Seed: 0
+    Offset: {x: 0, y: 0}
+    MeshHeightMultiplier: 10
+    MeshHeightCurve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 0
+        inSlope: 0
+        outSlope: 0
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 1
+        value: 1
+        inSlope: 2
+        outSlope: 2
+        tangentMode: 0
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      m_PreInfinity: 2
+      m_PostInfinity: 2
+      m_RotationOrder: 4
+    Spacing: 1
+    PoolNames:
+    - CoralBrown1
+    - CoralBrown2
+    - CoralOrange1
+    - CoralOrange2
+    - CoralPurple1
+    - CoralPurple2

@@ -5,6 +5,7 @@ using System.Linq;
 using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
 using System.Reflection;
+using Data.Containers;
 
 namespace StreamTownEditor
 {
@@ -39,15 +40,10 @@ namespace StreamTownEditor
             {
                 typeof(AllSeasonsSettings),
                 typeof(BuildingConfigSettings),
-                typeof(BuildingDataSettings),
                 typeof(GameEventConfigSettings),
                 typeof(AllRoleDataSettings),
-                typeof(PoolingConfigSettings),
                 typeof(ResourceDataSettings),
-                typeof(RoleDataSettings),
-                typeof(SeasonMaterialsSettings),
-                typeof(SeasonDataSettings),
-                typeof(TargetConfigSettings),
+                typeof(SeasonDataContainer),
                 typeof(AllBuildingDataSettings),
                 typeof(TimeSettings),
                 typeof(WeatherVFXSettings),
@@ -142,14 +138,13 @@ namespace StreamTownEditor
             // Mapping of settings type to installer type name
             Dictionary<System.Type, string> installerTypeMap = new Dictionary<System.Type, string>
             {
+                { typeof(AllBuildingDataSettings), "AllBuildingDataSettingsInstaller" },
+                { typeof(AllSeasonsSettings), "AllSeasonsSettingsInstaller" },
+                { typeof(AllRoleDataSettings), "AllRoleDataSettingsInstaller" },
                 { typeof(BuildingConfigSettings), "BuildingConfigSettingsInstaller" },
-                { typeof(BuildingDataSettings), "BuildingDataSettingsInstaller" },
                 { typeof(GameEventConfigSettings), "GameEventConfigSettingsInstaller" },
-                { typeof(PoolingConfigSettings), "PoolingConfigSettingsInstaller" },
                 { typeof(ResourceDataSettings), "ResourceDataSettingsInstaller" },
-                { typeof(RoleDataSettings), "RoleDataSettingsInstaller" },
-                { typeof(SeasonMaterialsSettings), "SeasonMaterialsSettingsInstaller" },
-                { typeof(TargetConfigSettings), "TargetConfigSettingsInstaller" },
+                { typeof(SeasonDataContainer), "SeasonDataContainerInstaller" },
                 { typeof(TimeSettings), "TimeDataSettingsInstaller" },
                 { typeof(WeatherVFXSettings), "WeatherVFXSettingsInstaller" },
                 { typeof(DayAndNightSettings), "DayAndNightSettingsInstaller" },
@@ -162,7 +157,6 @@ namespace StreamTownEditor
                 { typeof(ResourceGenSettings), "ResourceGenSettingsInstaller" },
                 { typeof(PlayerInputSettings), "PlayerInputSettingsInstaller" },
                 { typeof(SaveSettings), "SaveSettingsInstaller" },
-                { typeof(SeasonSettings), "SeasonSettingsInstaller" },
                 { typeof(GameSettings), "GameSettingsInstaller" },
                 { typeof(SensorSettings), "SensorSettingsInstaller" },
                 { typeof(TargetSettings), "TargetSettingsInstaller" },
@@ -182,6 +176,13 @@ namespace StreamTownEditor
                 { typeof(WorldGenScaleSettings), "WorldGenScaleSettingsInstaller" },
                 { typeof(CampGenSettings), "CampGenSettingsInstaller" },
                 { typeof(BuildingSettings), "BuildingSettingsInstaller" }
+            };
+
+            // Add container installers (these don't wrap settings, they just register containers in DI)
+            string[] containerInstallers = new string[]
+            {
+                "BuildingDataContainerInstaller",
+                "RoleDataContainerInstaller"
             };
 
             foreach (var kvp in installerTypeMap)
@@ -256,6 +257,44 @@ namespace StreamTownEditor
                     else
                     {
                         Debug.LogWarning($"Could not find field or property for {settingsType.Name} in {installerTypeName}");
+                    }
+                }
+            }
+
+            // Add container installers (these don't wrap settings, they just register containers in DI)
+            foreach (string containerInstallerName in containerInstallers)
+            {
+                string gameObjectName = containerInstallerName;
+                Transform existingChild = prefabRoot.transform.Find(gameObjectName);
+                
+                GameObject child;
+                if (existingChild != null)
+                {
+                    child = existingChild.gameObject;
+                }
+                else
+                {
+                    child = new GameObject(gameObjectName);
+                    child.transform.SetParent(prefabRoot.transform, false);
+                }
+
+                // Find or add installer component
+                Component installerComponent = child.GetComponent(containerInstallerName);
+                if (installerComponent == null)
+                {
+                    // Try to find the type by name
+                    System.Type installerType = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .SelectMany(a => a.GetTypes())
+                        .FirstOrDefault(t => t.Name == containerInstallerName && typeof(MonoBehaviour).IsAssignableFrom(t));
+                    
+                    if (installerType != null)
+                    {
+                        installerComponent = child.AddComponent(installerType);
+                    }
+                    else
+                    {
+                        Debug.LogError($"Could not find installer type: {containerInstallerName}");
+                        continue;
                     }
                 }
             }

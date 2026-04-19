@@ -7,8 +7,9 @@ namespace ScriptablesProcessorInfrastructure
 	/// <summary>
 	/// ScriptableObject that stores configuration data for a specific building type.
 	/// Contains building name, sprite, type, unlock status, costs, and multipliers.
+	/// Not standalone - always part of AllBuildingDataSettings.
 	/// </summary>
-	public class BuildingDataSettings : ScriptableObject, IDataScriptable
+	public class BuildingDataSettings : ScriptableObject
 	{
 		/// <summary>
 		/// Display name of the building shown in UI.

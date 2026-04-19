@@ -1,33 +1,39 @@
 using ScriptablesProcessorInfrastructure;
+using UnityEngine;
 using Utils;
 
 namespace Data.Containers
 {
 	/// <summary>
-	/// Container for season configuration data including season definitions and timing.
+	/// ScriptableObject container for season configuration data including season definitions and timing.
 	/// Registered in ProjectScope - available immediately on scene load.
 	/// </summary>
-	public class SeasonDataContainer
+	[CreateAssetMenu(fileName = "SeasonDataContainer", menuName = "ScriptableObjects/SeasonDataContainer", order = 1)]
+	public class SeasonDataContainer : ScriptableObject, IDataScriptable
 	{
         /// <summary>
         /// The all seasons scriptable data.
         /// </summary>
+		[SerializeField]
 		private AllSeasonsSettings _allSeasonsData;
 
         /// <summary>
         /// The starting season.
         /// </summary>
-		private Season _startingSeason;
+		[SerializeField]
+		private Season _startingSeason = Season.Summer;
 
         /// <summary>
         /// The number of days per season.
         /// </summary>
-		private int _daysPerSeason;
+		[SerializeField]
+		private int _daysPerSeason = 3;
 
         /// <summary>
         /// The season transition time in seconds.
         /// </summary>
-		private float _seasonTransitionTime;
+		[SerializeField]
+		private float _seasonTransitionTime = 10f;
 
         /// <summary>
         /// Gets the all seasons scriptable data.
@@ -48,21 +54,6 @@ namespace Data.Containers
         /// Gets the season transition time in seconds.
         /// </summary>
 		public float SeasonTransitionTime => _seasonTransitionTime;
-
-        /// <summary>
-        /// Initializes a new season data container.
-        /// </summary>
-        /// <param name="allSeasonsData">The all seasons scriptable data.</param>
-        /// <param name="startingSeason">The starting season.</param>
-        /// <param name="daysPerSeason">The number of days per season.</param>
-        /// <param name="seasonTransitionTime">The season transition time in seconds.</param>
-		public SeasonDataContainer(AllSeasonsSettings allSeasonsData, Season startingSeason = Season.Summer, int daysPerSeason = 3, float seasonTransitionTime = 10f)
-		{
-			_allSeasonsData = allSeasonsData;
-			_startingSeason = startingSeason;
-			_daysPerSeason = daysPerSeason;
-			_seasonTransitionTime = seasonTransitionTime;
-		}
 
         /// <summary>
         /// Gets the season scriptable data for a specific season.

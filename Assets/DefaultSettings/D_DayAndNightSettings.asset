@@ -14,11 +14,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _mainLightSource: {fileID: 0}
   _dayPercentage: 0.666
-  _dayLength: 0
+  _dayLength: 3600
   _nightLength: 0
-  _transitionLength: 0
-  _nightLightIntensity: 0
-  _dayLightIntensity: 0
-  _buildingMaterial: {fileID: 0}
-  _maxEmissionStrength: 0
+  _transitionLength: 100
+  _nightLightIntensity: 5
+  _dayLightIntensity: 10
+  _buildingMaterial: {fileID: 2100000, guid: fdfb0b9e62e356e46ae2218394e8fabc, type: 2}
+  _maxEmissionStrength: 5
   _postProcessVolume: {fileID: 0}

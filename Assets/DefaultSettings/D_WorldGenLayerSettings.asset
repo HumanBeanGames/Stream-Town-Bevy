@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _collisionMask:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 449
   _terrainMask:
     serializedVersion: 2
-    m_Bits: 0
+    m_Bits: 528
