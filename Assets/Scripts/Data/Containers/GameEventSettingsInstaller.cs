@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for GameEventSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for GameEventSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class GameEventSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private GameEventSettingsScriptable _gameEventSettingsScriptable;
+		private GameEventSettings _gameEventSettings;
 
-		public GameEventSettingsScriptable GameEventSettingsScriptable => _gameEventSettingsScriptable;
+		public GameEventSettings GameEventSettings => _gameEventSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

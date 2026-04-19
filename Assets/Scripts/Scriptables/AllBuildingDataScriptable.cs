@@ -13,6 +13,6 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Array of all building data configurations indexed by building type.
 		/// </summary>
-		public BuildingData[] BuildingData;
+		public BuildingDataSettings[] BuildingData;
 	}
 }

@@ -87,7 +87,7 @@ namespace Buildings
         protected Station _station;
         protected UpdateGraphBounds _graphUpdater;
         protected BuildingLevelHandler _levelHandler;
-        protected BuildingData _buildingData;
+        protected BuildingDataSettings _buildingData;
         protected UnitTextDisplay _displayText;
         protected BuildingDamageMaterialHandler _damageHandler;
 
@@ -114,7 +114,7 @@ namespace Buildings
 
         public Station Station => _station;
 
-        public BuildingData BuildingData
+        public BuildingDataSettings BuildingData
         {
             get => _buildingData;
             set => _buildingData = value;

@@ -19,7 +19,7 @@ namespace ScriptablesProcessorInfrastructure
 		[SerializeField]
 		private bool _weatherRunning;
 		[SerializeField]
-		private SeasonSettings _activeSeasonData;
+		private SeasonDataSettings _activeSeasonData;
 
 		public VisualEffect CurrentVFX
 		{
@@ -45,7 +45,7 @@ namespace ScriptablesProcessorInfrastructure
 			set { _weatherRunning = value; }
 		}
 
-		public SeasonSettings ActiveSeasonData
+		public SeasonDataSettings ActiveSeasonData
 		{
 			get { return _activeSeasonData; }
 			set { _activeSeasonData = value; }

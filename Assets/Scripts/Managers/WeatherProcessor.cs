@@ -24,7 +24,7 @@ namespace Processors
         /// ScriptableObject containing season settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-		[Inject] private SeasonSettingsScriptable _seasonSettings;
+		[Inject] private SeasonSettings _seasonSettings;
 
         /// <summary>
         /// Runtime data ScriptableObject for weather data.
@@ -36,7 +36,7 @@ namespace Processors
         /// ScriptableObject containing weather settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-		[Inject] private WeatherSettingsScriptable _weatherSettings;
+		[Inject] private WeatherSettings _weatherSettings;
 
         /// <summary>
         /// Processor that manages season logic for the game.
@@ -50,7 +50,7 @@ namespace Processors
         /// <param name="season">The season to start weather for.</param>
 		public void StartWeather(Season season)
 		{
-			SeasonSettings seasonData = _seasonDataContainer.GetSeasonData(season);
+			SeasonDataSettings seasonData = _seasonDataContainer.GetSeasonData(season);
 			if (seasonData == null)
 				return;
 

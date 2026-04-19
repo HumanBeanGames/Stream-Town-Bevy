@@ -13,6 +13,6 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Array of all season data configurations indexed by season type.
 		/// </summary>
-		public SeasonSettings[] SeasonSettingsArray;
+		public SeasonDataSettings[] SeasonSettingsArray;
 	}
 }

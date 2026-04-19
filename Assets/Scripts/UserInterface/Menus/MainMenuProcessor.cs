@@ -14,7 +14,7 @@ namespace Processors
 	// TODO(Architecture): Excluded from strict processor-template field conformance because this class contains serialized scene/UI references. This MAY need to be migrated to a non-processor pattern.
 	public class MainMenuProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
-		[Inject] private MainMenuSettingsScriptable _mainMenuSettingsScriptable;
+		[Inject] private MainMenuSettings _mainMenuSettings;
 
         /// <summary>
         /// Runtime main menu data ScriptableObject.
@@ -79,7 +79,7 @@ namespace Processors
 				_mainMenuRuntimeData.Loading = true;
 				_metaData.LoadType = _mainMenuRuntimeData.LoadType;
 				_settingsProcessor.TogglingConnectionTab(false);
-				_loadingProcessor.LoadWorldScene(_mainMenuSettingsScriptable.SceneIndex);
+				_loadingProcessor.LoadWorldScene(_mainMenuSettings.SceneIndex);
 			}
 		}
 
@@ -103,7 +103,7 @@ namespace Processors
 					_metaData.LoadType = LoadType.Generate;
 					Debug.Log("Generating World");
 					_settingsProcessor.TogglingConnectionTab(false);
-					_loadingProcessor.LoadWorldScene(_mainMenuSettingsScriptable.SceneIndex);
+					_loadingProcessor.LoadWorldScene(_mainMenuSettings.SceneIndex);
 				}
 				else
 				{
@@ -123,7 +123,7 @@ namespace Processors
 					_metaData.LoadType = LoadType.Load;
 					Debug.Log("Loading World");
 					_settingsProcessor.TogglingConnectionTab(false);
-					_loadingProcessor.LoadWorldScene(_mainMenuSettingsScriptable.SceneIndex);
+					_loadingProcessor.LoadWorldScene(_mainMenuSettings.SceneIndex);
 				}
 				else
 				{

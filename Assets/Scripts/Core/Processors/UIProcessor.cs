@@ -66,7 +66,7 @@ namespace Processors
         /// ScriptableObject containing UI settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private UISettingsScriptable _uiSettings;
+        [Inject] private UISettings _uiSettings;
 
         /// <summary>
         /// Gets or sets the ruler vote interface.

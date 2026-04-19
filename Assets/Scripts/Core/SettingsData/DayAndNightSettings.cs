@@ -9,7 +9,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains lighting parameters, material references, and transition configuration.
 	/// </summary>
 	[CreateAssetMenu(fileName = "DayAndNightSettings", menuName = "Scriptables/Day And Night Settings")]
-	public class DayAndNightSettingsScriptable : ScriptableObject, IDataScriptable
+	public class DayAndNightSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// The main directional light source for the scene.

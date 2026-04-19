@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for SeasonMaterials that implements IInstaller.
+	/// MonoBehaviour wrapper for SeasonMaterialsSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class SeasonMaterialsSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private SeasonMaterials _seasonMaterials;
+		private SeasonMaterialsSettings _seasonMaterials;
 
-		public SeasonMaterials SeasonMaterials => _seasonMaterials;
+		public SeasonMaterialsSettings SeasonMaterials => _seasonMaterials;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

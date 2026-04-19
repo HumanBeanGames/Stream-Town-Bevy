@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for BuildingData that implements IInstaller.
+	/// MonoBehaviour wrapper for BuildingDataSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class BuildingDataSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private BuildingData _buildingData;
+		private BuildingDataSettings _buildingData;
 
-		public BuildingData BuildingData => _buildingData;
+		public BuildingDataSettings BuildingData => _buildingData;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

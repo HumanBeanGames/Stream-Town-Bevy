@@ -9,7 +9,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains references to world generation components.
 	/// </summary>
 	[CreateAssetMenu(fileName = "SaveSettings", menuName = "Scriptables/Save Settings")]
-	public class SaveSettingsScriptable : ScriptableObject, IDataScriptable
+	public class SaveSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Reference to the procedural world generator component.

@@ -26,7 +26,7 @@ namespace Processors
 		/// ScriptableObject containing day/night settings (lighting, materials, etc.).
 		/// Injected via Reflex dependency injection.
 		/// </summary>
-		[Inject] private DayAndNightSettingsScriptable _dayAndNightSettings;
+		[Inject] private DayAndNightSettings _dayAndNightSettings;
 
 		/// <summary>
 		/// Runtime data ScriptableObject for day/night data.

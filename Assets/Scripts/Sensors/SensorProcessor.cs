@@ -13,7 +13,7 @@ namespace Sensors
 	/// </summary>
 	public class SensorProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
-		[Inject] private SensorSettingsScriptable _sensorSettingsScriptable;
+		[Inject] private SensorSettings _sensorSettings;
 		/// <summary>
 		/// Runtime sensor data ScriptableObject.
 		/// Injected via Reflex dependency injection.
@@ -46,7 +46,7 @@ namespace Sensors
 
 		public void Initialize()
 		{
-			_sensorRuntimeData.UpdateTimer = Random.Range(0, _sensorSettingsScriptable.UpdateRate);
+			_sensorRuntimeData.UpdateTimer = Random.Range(0, _sensorSettings.UpdateRate);
 		}
 
 		/// <summary>
@@ -57,9 +57,9 @@ namespace Sensors
 		{
 			_sensorRuntimeData.UpdateTimer += Time.deltaTime;
 
-			if (_sensorRuntimeData.UpdateTimer >= _sensorSettingsScriptable.UpdateRate)
+			if (_sensorRuntimeData.UpdateTimer >= _sensorSettings.UpdateRate)
 			{
-				_sensorRuntimeData.UpdateTimer -= _sensorSettingsScriptable.UpdateRate;
+				_sensorRuntimeData.UpdateTimer -= _sensorSettings.UpdateRate;
 
 				for (int i = 0; i < _sensorRuntimeData.Sensors.Count; i++)
 				{

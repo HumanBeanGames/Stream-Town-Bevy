@@ -1,0 +1,30 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 699b5eb1cfaabd147a8b4f1da014af2b, type: 3}
+  m_Name: D_ResourceDataSettings
+  m_EditorClassIdentifier: 
+  FoodStartingAmount: 5000
+  FoodMaxAmount: 15000
+  FoodInfinite: 0
+  OreStartingAmount: 5000
+  OreMaxAmount: 15000
+  OreInfinite: 0
+  WoodStartingAmount: 5000
+  WoodMaxAmount: 15000
+  WoodInfinite: 0
+  GoldStartingAmount: 5000
+  GoldMaxAmount: 0
+  GoldInfinite: 1
+  RecruitStartingAmount: 0
+  RecruitMaxAmount: 5
+  RecruitInfinite: 0
+  ResourceBounds: {x: 1, y: 5, z: 1}

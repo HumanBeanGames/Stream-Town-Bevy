@@ -8,7 +8,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains the scene index for the game world.
 	/// </summary>
 	[CreateAssetMenu(fileName = "MainMenuSettings", menuName = "Scriptables/Main Menu Settings")]
-	public class MainMenuSettingsScriptable : ScriptableObject, IDataScriptable
+	public class MainMenuSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Index of the game world scene in the Unity build settings.

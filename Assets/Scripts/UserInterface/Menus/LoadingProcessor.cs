@@ -17,7 +17,7 @@ namespace Processors
 	// TODO(Architecture): Excluded from strict processor-template field conformance because this class contains serialized scene/UI references. This MAY need to be migrated to a non-processor pattern.
 	public class LoadingProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
-		[Inject] private LoadingSettingsScriptable _loadingSettings;
+		[Inject] private LoadingSettings _loadingSettings;
 
         /// <summary>
         /// Runtime loading data ScriptableObject.

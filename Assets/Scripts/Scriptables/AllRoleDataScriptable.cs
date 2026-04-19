@@ -13,6 +13,6 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Array of all role data configurations indexed by player role type.
 		/// </summary>
-		public RoleData[] RoleData;
+		public RoleDataSettings[] RoleData;
 	}
 }

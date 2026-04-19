@@ -38,7 +38,16 @@ public class SeasonProcessorEditor : Editor
 			GUILayout.FlexibleSpace();
 		}
 		GUILayout.EndHorizontal();
-		GUILayout.Label($"Current Season: {_targetProcessor.GetCurrentSeason()}");
+		
+		// Only show current season if dependencies are initialized
+		try
+		{
+			GUILayout.Label($"Current Season: {_targetProcessor.GetCurrentSeason()}");
+		}
+		catch (System.NullReferenceException)
+		{
+			GUILayout.Label("Current Season: (Not initialized - run game to see data)");
+		}
 	}
 }
 #endif

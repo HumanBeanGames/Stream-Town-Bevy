@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for PoolingConfig that implements IInstaller.
+	/// MonoBehaviour wrapper for PoolingConfigSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class PoolingConfigSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private PoolingConfig _poolingConfig;
+		private PoolingConfigSettings _poolingConfig;
 
-		public PoolingConfig PoolingConfig => _poolingConfig;
+		public PoolingConfigSettings PoolingConfig => _poolingConfig;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

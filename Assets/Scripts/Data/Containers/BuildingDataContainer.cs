@@ -13,17 +13,17 @@ namespace Data.Containers
         /// <summary>
         /// Dictionary mapping building types to their scriptable data.
         /// </summary>
-		private Dictionary<BuildingType, BuildingData> _buildingDataDictionary;
+		private Dictionary<BuildingType, BuildingDataSettings> _buildingDataDictionary;
 
         /// <summary>
         /// Gets the building data dictionary.
         /// </summary>
-		public Dictionary<BuildingType, BuildingData> BuildingDataDictionary => _buildingDataDictionary;
+		public Dictionary<BuildingType, BuildingDataSettings> BuildingDataDictionary => _buildingDataDictionary;
 
         /// <summary>
         /// Gets the building data dictionary.
         /// </summary>
-		public Dictionary<BuildingType, BuildingData> BuildingData => _buildingDataDictionary;
+		public Dictionary<BuildingType, BuildingDataSettings> BuildingData => _buildingDataDictionary;
 
         /// <summary>
         /// Initializes a new building data container.
@@ -40,7 +40,7 @@ namespace Data.Containers
         /// <param name="allBuildingData">The all BuildingData object.</param>
 		private void InitializeBuildingData(AllBuildingDataSettings allBuildingData)
 		{
-			_buildingDataDictionary = new Dictionary<BuildingType, BuildingData>();
+			_buildingDataDictionary = new Dictionary<BuildingType, BuildingDataSettings>();
 
 			for (int i = 0; i < allBuildingData.BuildingData.Length; i++)
 			{

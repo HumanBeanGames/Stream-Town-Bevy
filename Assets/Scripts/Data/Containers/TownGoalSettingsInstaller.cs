@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for TownGoalSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for TownGoalSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class TownGoalSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private TownGoalSettingsScriptable _townGoalSettingsScriptable;
+		private TownGoalSettings _townGoalSettings;
 
-		public TownGoalSettingsScriptable TownGoalSettingsScriptable => _townGoalSettingsScriptable;
+		public TownGoalSettings TownGoalSettings => _townGoalSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

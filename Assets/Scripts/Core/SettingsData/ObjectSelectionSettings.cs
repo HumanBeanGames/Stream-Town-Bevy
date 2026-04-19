@@ -8,7 +8,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains references to the object selection UI component.
 	/// </summary>
 	[CreateAssetMenu(fileName = "ObjectSelectionSettings", menuName = "Scriptables/Object Selection Settings")]
-	public class ObjectSelectionSettingsScriptable : ScriptableObject, IDataScriptable
+	public class ObjectSelectionSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Reference to the object selection user interface component.

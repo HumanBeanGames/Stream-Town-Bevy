@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for GridSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for GridSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class GridSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private GridSettingsScriptable _gridSettingsScriptable;
+		private GridSettings _gridSettings;
 
-		public GridSettingsScriptable GridSettingsScriptable => _gridSettingsScriptable;
+		public GridSettings GridSettings => _gridSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

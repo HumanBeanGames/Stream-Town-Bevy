@@ -4,7 +4,7 @@ using UnityEngine.VFX;
 namespace ScriptablesProcessorInfrastructure
 {
 	[CreateAssetMenu(fileName = "WeatherSettings", menuName = "Scriptables/Weather Settings")]
-	public class WeatherSettingsScriptable : ScriptableObject, IDataScriptable
+	public class WeatherSettings : ScriptableObject, IDataScriptable
 	{
 		[SerializeField]
 		private VisualEffect _autumnVFX;

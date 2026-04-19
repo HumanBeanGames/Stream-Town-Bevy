@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for TradeSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for TradeSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class TradeSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private TradeSettingsScriptable _tradeSettingsScriptable;
+		private TradeSettings _tradeSettings;
 
-		public TradeSettingsScriptable TradeSettingsScriptable => _tradeSettingsScriptable;
+		public TradeSettings TradeSettings => _tradeSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for WeatherSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for WeatherSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class WeatherSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private WeatherSettingsScriptable _weatherSettingsScriptable;
+		private WeatherSettings _weatherSettings;
 
-		public WeatherSettingsScriptable WeatherSettingsScriptable => _weatherSettingsScriptable;
+		public WeatherSettings WeatherSettings => _weatherSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

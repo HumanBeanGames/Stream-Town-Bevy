@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for UISettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for UISettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class UISettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private UISettingsScriptable _uiSettingsScriptable;
+		private UISettings _uiSettings;
 
-		public UISettingsScriptable UISettingsScriptable => _uiSettingsScriptable;
+		public UISettings UISettings => _uiSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

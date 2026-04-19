@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5100135031a2ce141933d2858c32816f, type: 3}
+  m_Name: D_UISettings
+  m_EditorClassIdentifier: 
+  _woodDisplayText: {fileID: 0}
+  _foodDisplayText: {fileID: 0}
+  _oreDisplayText: {fileID: 0}
+  _goldDisplayText: {fileID: 0}
+  _woodRateOfChangeText: {fileID: 0}
+  _foodRateOfChangeText: {fileID: 0}
+  _oreRateOfChangeText: {fileID: 0}
+  _goldRateOfChangeText: {fileID: 0}
+  _seasonalSlider: {fileID: 0}
+  _seaonSliderStartOffset: 0
+  _playerCountText: {fileID: 0}
+  _buildingCountText: {fileID: 0}
+  _timeDisplayText: {fileID: 0}

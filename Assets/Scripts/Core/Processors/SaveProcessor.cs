@@ -53,7 +53,7 @@ namespace Processors
 		[Inject] private GUIDProcessor _guidProcessor;
 		[Inject] private TownGoalProcessor _townGoalProcessor;
 		[Inject] private SeasonProcessor _seasonProcessor;
-		[Inject] private SaveSettingsScriptable _saveSettings;
+		[Inject] private SaveSettings _saveSettings;
 		[Inject] private TimeSettings _timeProcessorScriptable;
 		[Inject] private SeasonSettings _seasonProcessorScriptable;
 		[Inject] private SeasonDataContainer _seasonProcessorContainer;

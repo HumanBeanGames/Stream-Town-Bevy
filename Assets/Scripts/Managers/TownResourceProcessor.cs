@@ -9,7 +9,7 @@ using Reflex.Attributes;
 using Reflex.Core;
 using ScriptablesProcessorInfrastructure;
 using Data.Containers;
-using ResourceData = ScriptablesProcessorInfrastructure.ResourceData;
+using ResourceData = ScriptablesProcessorInfrastructure.ResourceDataSettings;
 using GameEventSystem;
 
 namespace Processors

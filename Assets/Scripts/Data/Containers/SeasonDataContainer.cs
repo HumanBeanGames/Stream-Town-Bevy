@@ -69,7 +69,7 @@ namespace Data.Containers
         /// </summary>
         /// <param name="season">The season.</param>
         /// <returns>The season scriptable data.</returns>
-		public SeasonSettings GetSeasonData(Season season)
+		public SeasonDataSettings GetSeasonData(Season season)
 		{
 			for (int i = 0; i < _allSeasonsData.SeasonSettingsArray.Length; i++)
 			{

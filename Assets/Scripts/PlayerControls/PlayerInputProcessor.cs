@@ -12,7 +12,7 @@ namespace Processors
 {
 	public class PlayerInputProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
-		[Inject] private PlayerInputSettingsScriptable _playerInputSettings;
+		[Inject] private PlayerInputSettings _playerInputSettings;
 
         /// <summary>
         /// Runtime player input data ScriptableObject.

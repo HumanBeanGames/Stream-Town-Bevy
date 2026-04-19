@@ -34,7 +34,7 @@ namespace Processors
         /// ScriptableObject containing game event settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private GameEventSettingsScriptable _gameEventSettings;
+        [Inject] private GameEventSettings _gameEventSettings;
 
         /// <summary>
         /// Time processor for accessing time data.

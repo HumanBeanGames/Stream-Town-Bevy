@@ -9,7 +9,7 @@ namespace ScriptablesEditor
     {
         public static void DrawBuildingScriptableData(object data)
         {
-            BuildingData building = (BuildingData)data;
+            BuildingDataSettings building = (BuildingDataSettings)data;
 
             if (building == null)
                 return;

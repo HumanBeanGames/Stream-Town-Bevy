@@ -126,7 +126,7 @@ namespace ScriptablesEditor
                 GUILayout.Space(10);
                 EditorGUILayout.BeginVertical(_mainWindowStyle, GUILayout.Width(width - 20));
 
-                if (_selectedObject.GetType() == typeof(ScriptablesProcessorInfrastructure.BuildingData))
+                if (_selectedObject.GetType() == typeof(ScriptablesProcessorInfrastructure.BuildingDataSettings))
                     BuildingScriptablesEditor.DrawBuildingScriptableData(_selectedObject);
 
                 EditorGUILayout.EndVertical();
@@ -151,7 +151,7 @@ namespace ScriptablesEditor
                 GUILayout.Space(10);
                 EditorGUILayout.BeginVertical(_mainWindowStyle, GUILayout.Width(width - 20));
 
-                if (_selectedObject.GetType() == typeof(ScriptablesProcessorInfrastructure.BuildingData))
+                if (_selectedObject.GetType() == typeof(ScriptablesProcessorInfrastructure.BuildingDataSettings))
                     BuildingScriptablesEditor.DrawBuildingScriptableData(_selectedObject);
 
                 EditorGUILayout.EndVertical();

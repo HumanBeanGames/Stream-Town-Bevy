@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for RoleData that implements IInstaller.
+	/// MonoBehaviour wrapper for RoleDataSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class RoleDataSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private RoleData _roleData;
+		private RoleDataSettings _roleData;
 
-		public RoleData RoleData => _roleData;
+		public RoleDataSettings RoleData => _roleData;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

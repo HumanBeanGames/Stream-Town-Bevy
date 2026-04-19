@@ -7,7 +7,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains grid dimensions, cell size, and debug visualization settings.
 	/// </summary>
 	[CreateAssetMenu(fileName = "GridSettings", menuName = "Scriptables/Grid Settings")]
-	public class GridSettingsScriptable : ScriptableObject, IDataScriptable
+	public class GridSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Offset from world origin to grid origin.

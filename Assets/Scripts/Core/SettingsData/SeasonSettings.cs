@@ -3,7 +3,7 @@ using UnityEngine;
 namespace ScriptablesProcessorInfrastructure
 {
 	[CreateAssetMenu(fileName = "SeasonSettings", menuName = "Scriptables/Season Settings")]
-	public class SeasonSettingsScriptable : ScriptableObject, IDataScriptable
+	public class SeasonSettings : ScriptableObject, IDataScriptable
 	{
 		[SerializeField]
 		private Material _grassMaterial;

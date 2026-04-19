@@ -218,7 +218,7 @@ namespace Character
         /// Initializes a new role data instance from a scriptable object.
         /// </summary>
         /// <param name="e">The role data scriptable object.</param>
-		public RoleData(ScriptablesProcessorInfrastructure.RoleData e)
+		public RoleData(ScriptablesProcessorInfrastructure.RoleDataSettings e)
 		{
 			Role = e.Role;
 			RoleFlags = e.RoleFlags;

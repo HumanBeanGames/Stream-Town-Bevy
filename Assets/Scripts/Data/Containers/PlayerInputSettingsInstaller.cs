@@ -5,14 +5,14 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for PlayerInputSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for PlayerInputSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class PlayerInputSettingsInstaller : MonoBehaviour, IInstaller
 	{
-		[SerializeField] private PlayerInputSettingsScriptable _playerInputSettingsScriptable;
+		[SerializeField] private PlayerInputSettings _playerInputSettings;
 
-		public PlayerInputSettingsScriptable PlayerInputSettingsScriptable => _playerInputSettingsScriptable;
+		public PlayerInputSettings PlayerInputSettings => _playerInputSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

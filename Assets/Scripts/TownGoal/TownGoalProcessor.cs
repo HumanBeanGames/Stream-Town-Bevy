@@ -13,7 +13,7 @@ namespace TownGoal
 
 	public class TownGoalProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
-		[Inject] private TownGoalSettingsScriptable _townGoalSettings;
+		[Inject] private TownGoalSettings _townGoalSettings;
 		[Inject] private TownGoalRuntimeData _townGoalRuntimeData;
 
 		/// <summary>

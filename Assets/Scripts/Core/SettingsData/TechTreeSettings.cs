@@ -4,7 +4,7 @@ using UnityEngine;
 namespace ScriptablesProcessorInfrastructure
 {
 	[CreateAssetMenu(fileName = "TechTreeSettings", menuName = "Scriptables/Tech Tree Settings")]
-	public class TechTreeSettingsScriptable : ScriptableObject, IDataScriptable
+	public class TechTreeSettings : ScriptableObject, IDataScriptable
 	{
 		public int MinTimeBetweenVotes;
 		public int TechCountReqAge2 = 50;

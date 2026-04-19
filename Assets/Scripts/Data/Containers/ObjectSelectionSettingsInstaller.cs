@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for ObjectSelectionSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for ObjectSelectionSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class ObjectSelectionSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private ObjectSelectionSettingsScriptable _objectSelectionSettingsScriptable;
+		private ObjectSelectionSettings _objectSelectionSettings;
 
-		public ObjectSelectionSettingsScriptable ObjectSelectionSettingsScriptable => _objectSelectionSettingsScriptable;
+		public ObjectSelectionSettings ObjectSelectionSettings => _objectSelectionSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

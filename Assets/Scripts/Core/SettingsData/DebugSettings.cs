@@ -8,7 +8,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains references to debug UI components.
 	/// </summary>
 	[CreateAssetMenu(fileName = "DebugSettings", menuName = "Scriptables/Debug Settings")]
-	public class DebugSettingsScriptable : ScriptableObject, IDataScriptable
+	public class DebugSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Reference to the debug user interface component.

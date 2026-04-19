@@ -8,8 +8,8 @@ namespace ScriptablesProcessorInfrastructure
 	/// ScriptableObject that stores configuration data for a specific season.
 	/// Contains color palettes, visual effects, and particle settings for seasonal changes.
 	/// </summary>
-    [CreateAssetMenu(fileName = "SeasonScriptableData", menuName = "ScriptableObjects/SeasonScriptable", order = 1)]
-    public class SeasonSettings : ScriptableObject, IDataScriptable 
+    [CreateAssetMenu(fileName = "SeasonDataSettings", menuName = "ScriptableObjects/SeasonDataSettings", order = 1)]
+    public class SeasonDataSettings : ScriptableObject, IDataScriptable 
 	{
 		/// <summary>
 		/// The season this data represents.

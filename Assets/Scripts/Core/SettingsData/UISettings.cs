@@ -6,7 +6,7 @@ using UnityEngine.UI;
 namespace ScriptablesProcessorInfrastructure
 {
 	[CreateAssetMenu(fileName = "UISettings", menuName = "Scriptables/UI Settings")]
-	public class UISettingsScriptable : ScriptableObject, IDataScriptable
+	public class UISettings : ScriptableObject, IDataScriptable
 	{
 		[SerializeField]
 		private TextMeshProUGUI _woodDisplayText;

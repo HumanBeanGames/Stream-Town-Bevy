@@ -5,7 +5,7 @@ using Utils;
 namespace ScriptablesProcessorInfrastructure
 {
 	[CreateAssetMenu(fileName = "TradeSettings", menuName = "Scriptables/Trade Settings")]
-	public class TradeSettingsScriptable : ScriptableObject, IDataScriptable
+	public class TradeSettings : ScriptableObject, IDataScriptable
 	{
 		[SerializeField]
 		private Dictionary<Resource, float> _resourceSellRates = new Dictionary<Resource, float>()

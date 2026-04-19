@@ -13,7 +13,7 @@ namespace Data.Containers
         /// <summary>
         /// Dictionary mapping player roles to their scriptable data.
         /// </summary>
-		private Dictionary<PlayerRole, RoleData> _roleDataDictionary;
+		private Dictionary<PlayerRole, RoleDataSettings> _roleDataDictionary;
 
         /// <summary>
         /// Array of experience values for each level.
@@ -28,7 +28,7 @@ namespace Data.Containers
         /// <summary>
         /// Gets the role data dictionary.
         /// </summary>
-		public Dictionary<PlayerRole, RoleData> RoleDataDictionary => _roleDataDictionary;
+		public Dictionary<PlayerRole, RoleDataSettings> RoleDataDictionary => _roleDataDictionary;
 
         /// <summary>
         /// Gets the experience table lookup array.
@@ -57,7 +57,7 @@ namespace Data.Containers
         /// <param name="allRoleData">The all role data scriptable object.</param>
 		private void InitializeRoleData(AllRoleDataSettings allRoleData)
 		{
-			_roleDataDictionary = new Dictionary<PlayerRole, RoleData>();
+			_roleDataDictionary = new Dictionary<PlayerRole, RoleDataSettings>();
 
 			for (int i = 0; i < allRoleData.RoleData.Length; i++)
 			{

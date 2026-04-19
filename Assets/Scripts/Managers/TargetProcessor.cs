@@ -21,7 +21,7 @@ namespace Processors
         /// ScriptableObject containing target settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private TargetSettingsScriptable _targetSettingsScriptable;
+        [Inject] private TargetSettings _targetSettings;
 
         /// <summary>
         /// Runtime data ScriptableObject for target data.
@@ -37,7 +37,7 @@ namespace Processors
         /// <returns>The station update type for the target.</returns>
         public StationUpdate GetUpdateType(TargetMask type)
         {
-            return _targetSettingsScriptable.TargetableData[TargetFlagHelper.GetIndexByFlag(type)].UpdateType;
+            return _targetSettings.TargetableData[TargetFlagHelper.GetIndexByFlag(type)].UpdateType;
         }
 
         /// <summary>

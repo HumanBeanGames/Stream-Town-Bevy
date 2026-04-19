@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for SensorSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for SensorSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class SensorSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private SensorSettingsScriptable _sensorSettingsScriptable;
+		private SensorSettings _sensorSettings;
 
-		public SensorSettingsScriptable SensorSettingsScriptable => _sensorSettingsScriptable;
+		public SensorSettings SensorSettings => _sensorSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

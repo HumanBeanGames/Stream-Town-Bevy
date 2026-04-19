@@ -7,7 +7,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Currently has no editor-configurable settings but can be expanded in the future.
 	/// </summary>
 	[CreateAssetMenu(fileName = "PlayerInputSettings", menuName = "Scriptables/PlayerInput Settings")]
-	public class PlayerInputSettingsScriptable : ScriptableObject, IDataScriptable
+	public class PlayerInputSettings : ScriptableObject, IDataScriptable
 	{
 		// No editor-configurable settings currently
 		// This can be expanded if needed in the future

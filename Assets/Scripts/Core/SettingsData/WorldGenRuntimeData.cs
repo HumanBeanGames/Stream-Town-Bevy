@@ -32,7 +32,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Stores world generation state including pooled objects, buildings, resources, and foliage.
 	/// </summary>
 	[CreateAssetMenu(fileName = "WorldGenRuntimeData", menuName = "Scriptables/WorldGen Runtime Data")]
-	public class WorldGenRuntimeData : ScriptableObject
+	public class WorldGenRuntimeData : ScriptableObject, IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Dictionary of pooled objects by pool name.

@@ -22,7 +22,7 @@ namespace Processors
         /// ScriptableObject containing debug settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private DebugSettingsScriptable _debugSettings;
+        [Inject] private DebugSettings _debugSettings;
 
         /// <summary>
         /// Runtime data ScriptableObject for debug data.

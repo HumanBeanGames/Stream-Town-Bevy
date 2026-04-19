@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for TechTreeSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for TechTreeSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class TechTreeSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private TechTreeSettingsScriptable _techTreeSettingsScriptable;
+		private TechTreeSettings _techTreeSettings;
 
-		public TechTreeSettingsScriptable TechTreeSettingsScriptable => _techTreeSettingsScriptable;
+		public TechTreeSettings TechTreeSettings => _techTreeSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

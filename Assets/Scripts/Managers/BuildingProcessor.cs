@@ -175,7 +175,7 @@ namespace Processors
             if (!_buildingSettings.BuildingsCostResourcesEnabled)
                 return true;
 
-            BuildingData data = _buildingDataContainer.BuildingDataDictionary[type];
+            BuildingDataSettings data = _buildingDataContainer.BuildingDataDictionary[type];
             // Calculate costs with scaling based on existing building count
             int woodCost = data.BuildResourceCost.WoodCost + (int)((float)(data.BuildResourceCost.WoodCost * _buildingRuntimeData.BuildingCounts[type]) * data.CostIncreasePerBuildingMultiplier);
             int oreCost = data.BuildResourceCost.OreCost + (int)((float)(data.BuildResourceCost.OreCost * _buildingRuntimeData.BuildingCounts[type]) * data.CostIncreasePerBuildingMultiplier);
@@ -209,7 +209,7 @@ namespace Processors
 		/// <param name="building">The building that was built.</param>
 		public void OnBuiltNewBuilding(BuildingBase building)
 		{
-			BuildingData data = _buildingDataContainer.BuildingDataDictionary[building.BuildingType];
+			BuildingDataSettings data = _buildingDataContainer.BuildingDataDictionary[building.BuildingType];
 
 			if (_buildingSettings.BuildingsCostResourcesEnabled)
 			{
@@ -257,7 +257,7 @@ namespace Processors
 			if (!_buildingSettings.BuildingsCostResourcesEnabled)
 				return true;
 
-			BuildingData data = _buildingDataContainer.BuildingDataDictionary[type];
+			BuildingDataSettings data = _buildingDataContainer.BuildingDataDictionary[type];
 
 			int woodCost = (int)(data.LevelResourceCost.WoodCost * currentLevel * currentLevel * data.CostIncreasePerLevelMultiplier);
 			woodCost -= CalculateCostReduction(type, woodCost);
@@ -289,7 +289,7 @@ namespace Processors
 			if (!_buildingSettings.BuildingsCostResourcesEnabled)
 				return;
 
-			BuildingData data = _buildingDataContainer.BuildingDataDictionary[type];
+			BuildingDataSettings data = _buildingDataContainer.BuildingDataDictionary[type];
 			int woodCost = (int)(data.LevelResourceCost.WoodCost * currentLevel * currentLevel * data.CostIncreasePerLevelMultiplier);
 			woodCost -= CalculateCostReduction(type, woodCost);
 			int oreCost = (int)(data.LevelResourceCost.OreCost * currentLevel * currentLevel * data.CostIncreasePerLevelMultiplier);
@@ -722,7 +722,7 @@ namespace Processors
 
 		public (int woodCost, int oreCost, int foodCost, int goldCost, int maxLevel) GetBuildingCostSummary(BuildingType type)
 		{
-			BuildingData data = _buildingDataContainer.BuildingDataDictionary[type];
+			BuildingDataSettings data = _buildingDataContainer.BuildingDataDictionary[type];
 			int woodCost = data.BuildResourceCost.WoodCost + (int)((float)(data.BuildResourceCost.WoodCost * _buildingRuntimeData.BuildingCounts[type]) * data.CostIncreasePerBuildingMultiplier);
 			int oreCost = data.BuildResourceCost.OreCost + (int)((float)(data.BuildResourceCost.OreCost * _buildingRuntimeData.BuildingCounts[type]) * data.CostIncreasePerBuildingMultiplier);
 			int foodCost = data.BuildResourceCost.FoodCost + (int)((float)(data.BuildResourceCost.FoodCost * _buildingRuntimeData.BuildingCounts[type]) * data.CostIncreasePerBuildingMultiplier);
@@ -873,7 +873,7 @@ namespace Processors
 		/// </summary>
 		/// <param name="type">The building type.</param>
 		/// <returns>The building data scriptable object.</returns>
-		public BuildingData GetBuildingData(BuildingType type)
+		public BuildingDataSettings GetBuildingData(BuildingType type)
 		{
 			return _buildingDataContainer.BuildingDataDictionary[type];
 		}

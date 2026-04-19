@@ -18,7 +18,7 @@ namespace Processors
         /// ScriptableObject containing trade settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-		[Inject] private TradeSettingsScriptable _tradeSettings;
+		[Inject] private TradeSettings _tradeSettings;
 
         /// <summary>
         /// Town resource processor for accessing resource data.

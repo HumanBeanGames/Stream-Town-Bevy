@@ -40,7 +40,7 @@ namespace Processors
         /// ScriptableObject containing object selection settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private ObjectSelectionSettingsScriptable _objectSelectionSettings;
+        [Inject] private ObjectSelectionSettings _objectSelectionSettings;
 
         /// <summary>
         /// Player input processor for accessing input data.

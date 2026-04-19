@@ -25,7 +25,7 @@ namespace Processors
         /// ScriptableObject containing season settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private SeasonSettingsScriptable _seasonSettings;
+        [Inject] private SeasonSettings _seasonSettings;
 
         /// <summary>
         /// Nested runtime data class for season data.
@@ -139,8 +139,8 @@ namespace Processors
 
 			if (nextSeason == Season.Count)
 				nextSeason = 0;
-			SeasonSettings currentSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.CurrentSeason);
-			SeasonSettings nextSeasonData = _seasonDataContainer.GetSeasonData(nextSeason);
+			SeasonDataSettings currentSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.CurrentSeason);
+			SeasonDataSettings nextSeasonData = _seasonDataContainer.GetSeasonData(nextSeason);
 			// Grass Values.
 			if (_seasonSettings.GrassMaterial)
 			{
@@ -168,7 +168,7 @@ namespace Processors
 		/// <param name="selectedSeason">The season to set.</param>
 		public void SetSeason(Season selectedSeason)
 		{
-			SeasonSettings selectedSeasonData = _seasonDataContainer.GetSeasonData(selectedSeason);
+			SeasonDataSettings selectedSeasonData = _seasonDataContainer.GetSeasonData(selectedSeason);
 			// Grass Values.
 			if (_seasonSettings.GrassMaterial)
 			{
@@ -278,8 +278,8 @@ namespace Processors
 
 		private void ApplyTransition(float transition)
 		{
-			SeasonSettings currentSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.TransitionFromSeason);
-			SeasonSettings nextSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.TransitionToSeason);
+			SeasonDataSettings currentSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.TransitionFromSeason);
+			SeasonDataSettings nextSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.TransitionToSeason);
 
 			if (_seasonSettings.GrassMaterial)
 			{
@@ -306,7 +306,7 @@ namespace Processors
 		}
 
 		// Sets material shader properties based on season and transition progress.
-		private void SetSeasonMaterial(Season season, float transition, SeasonSettingsScriptable settings)
+		private void SetSeasonMaterial(Season season, float transition, SeasonSettings settings)
 		{
 			if (season == Season.Autumn)
 			{

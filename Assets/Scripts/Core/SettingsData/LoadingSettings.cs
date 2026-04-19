@@ -9,7 +9,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains loading speed, wait times, and tooltip text configuration.
 	/// </summary>
 	[CreateAssetMenu(fileName = "LoadingSettings", menuName = "Scriptables/Loading Settings")]
-	public class LoadingSettingsScriptable : ScriptableObject, IDataScriptable
+	public class LoadingSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Speed at which the loading bar progresses.

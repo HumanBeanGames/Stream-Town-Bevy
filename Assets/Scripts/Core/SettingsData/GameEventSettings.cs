@@ -7,7 +7,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// Contains references to visual effects and debug logging configuration.
 	/// </summary>
 	[CreateAssetMenu(fileName = "GameEventSettings", menuName = "Scriptables/Game Event Settings")]
-	public class GameEventSettingsScriptable : ScriptableObject, IDataScriptable
+	public class GameEventSettings : ScriptableObject, IDataScriptable
 	{
 		/// <summary>
 		/// Transform for the fish god spawn location.

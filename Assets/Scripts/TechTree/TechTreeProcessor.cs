@@ -28,7 +28,7 @@ namespace Processors
 	public class TechTreeProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
 		[Inject] private MetaData.MetaData _metaData;
-		[Inject] private TechTreeSettingsScriptable _techTreeSettings;
+		[Inject] private TechTreeSettings _techTreeSettings;
 		[Inject] private TechTreeRuntimeData _techTreeRuntimeData;
 		[Inject] private GameEventProcessor _gameEventProcessor;
 		[Inject] private TownGoalProcessor _townGoalProcessor;

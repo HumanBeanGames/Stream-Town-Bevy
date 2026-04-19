@@ -5,15 +5,15 @@ using UnityEngine;
 namespace Data.Containers
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for DayAndNightSettingsScriptable that implements IInstaller.
+	/// MonoBehaviour wrapper for DayAndNightSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class DayAndNightSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private DayAndNightSettingsScriptable _dayAndNightSettingsScriptable;
+		private DayAndNightSettings _dayAndNightSettings;
 
-		public DayAndNightSettingsScriptable DayAndNightSettingsScriptable => _dayAndNightSettingsScriptable;
+		public DayAndNightSettings DayAndNightSettings => _dayAndNightSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{

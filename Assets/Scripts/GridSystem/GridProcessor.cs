@@ -19,7 +19,7 @@ namespace GridSystem
 		/// ScriptableObject containing grid settings.
 		/// Injected via Reflex dependency injection.
 		/// </summary>
-		[Inject] private GridSettingsScriptable _gridSettingsScriptable;
+		[Inject] private GridSettings _gridSettings;
 
 		/// <summary>
 		/// Runtime data ScriptableObject for grid data.
@@ -43,12 +43,12 @@ namespace GridSystem
 		public void GenerateGrid()
 		{
 			// Calculate the number of cells in X and Z directions
-			_gridRuntimeData.CellsX = (_gridSettingsScriptable.GridWidth / _gridSettingsScriptable.CellSize);
-			_gridRuntimeData.CellsZ = (_gridSettingsScriptable.GridLength / _gridSettingsScriptable.CellSize);
+			_gridRuntimeData.CellsX = (_gridSettings.GridWidth / _gridSettings.CellSize);
+			_gridRuntimeData.CellsZ = (_gridSettings.GridLength / _gridSettings.CellSize);
 			
 			// Calculate offset to center the grid around the origin
-			_gridRuntimeData.OffSetX = -(_gridRuntimeData.CellsZ * _gridSettingsScriptable.CellSize / 2 + _gridSettingsScriptable.OriginOffset.x - transform.position.x) + (_gridSettingsScriptable.CellSize * 0.5f);
-			_gridRuntimeData.OffSetZ = -(_gridRuntimeData.CellsX * _gridSettingsScriptable.CellSize / 2 + _gridSettingsScriptable.OriginOffset.y - transform.position.z) + (_gridSettingsScriptable.CellSize * 0.5f);
+			_gridRuntimeData.OffSetX = -(_gridRuntimeData.CellsZ * _gridSettings.CellSize / 2 + _gridSettings.OriginOffset.x - transform.position.x) + (_gridSettings.CellSize * 0.5f);
+			_gridRuntimeData.OffSetZ = -(_gridRuntimeData.CellsX * _gridSettings.CellSize / 2 + _gridSettings.OriginOffset.y - transform.position.z) + (_gridSettings.CellSize * 0.5f);
 
 			// Initialize the grid array
 			_gridRuntimeData.Grid = new GridNode[_gridRuntimeData.CellsZ * _gridRuntimeData.CellsX];
@@ -61,7 +61,7 @@ namespace GridSystem
 					// Create a new grid node with random collision type and calculated position
 					_gridRuntimeData.Grid[_gridRuntimeData.CellsX * x + z] = new GridNode(
 						(CollisionType)Random.Range(0, (int)CollisionType.Friendly + 1),
-						new Vector2(x * _gridSettingsScriptable.CellSize + _gridRuntimeData.OffSetX, z * _gridSettingsScriptable.CellSize + _gridRuntimeData.OffSetZ),
+						new Vector2(x * _gridSettings.CellSize + _gridRuntimeData.OffSetX, z * _gridSettings.CellSize + _gridRuntimeData.OffSetZ),
 						-1);
 				}
 			}
