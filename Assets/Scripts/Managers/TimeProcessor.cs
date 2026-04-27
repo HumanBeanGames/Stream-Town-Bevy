@@ -21,9 +21,14 @@ namespace Processors
 
         /// <summary>
         /// ScriptableObject containing time runtime data.
-        /// Injected via Reflex dependency injection.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-        [Inject] private TimeRuntimeData _timeRuntimeData;
+        private TimeRuntimeData _timeRuntimeData;
+
+        /// <summary>
+        /// The Twitch chat processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private TwitchChatProcessor _twitchChatProcessor;
 
         /// <summary>
         /// Gets or sets the world time passed in seconds.
@@ -84,10 +89,13 @@ namespace Processors
 
         /// <summary>
         /// Initializes the time processor.
-        /// No initialization logic required.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// </summary>
 		public void Initialize()
 		{
+			if (_timeRuntimeData == null)
+				throw new InvalidOperationException("TimeProcessor runtime data has not been installed.");
+
 			_timeRuntimeData.SecondsPerDay = _timeDataScriptable.SecondsPerDay;
 		}
 
@@ -104,9 +112,11 @@ namespace Processors
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register TimeRuntimeData ScriptableObject
-			TimeRuntimeData timeRuntimeData = ScriptableObject.CreateInstance<TimeRuntimeData>();
-			containerBuilder.AddSingleton(timeRuntimeData);
+			if (_timeRuntimeData != null)
+				throw new InvalidOperationException("TimeProcessor runtime data has already been installed.");
+
+			_timeRuntimeData = new TimeRuntimeData();
+			containerBuilder.AddSingleton(_timeRuntimeData);
 		}
 
         /// <summary>
@@ -116,7 +126,17 @@ namespace Processors
 		public void Process()
 		{
 			_timeRuntimeData.WorldTimePassed += Time.deltaTime;
+			_twitchChatProcessor.SetCurrentWorldTime(_timeRuntimeData.WorldTimePassed);
 			CalculateDayCount();
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// TimeProcessor does not have scene-specific settings to refresh
 		}
 	}
 }

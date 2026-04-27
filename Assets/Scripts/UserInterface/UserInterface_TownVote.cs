@@ -1,7 +1,6 @@
 using GameEventSystem;
 using GameEventSystem.Events.Voting;
 using Processors;
-using Core;
 using System;
 using System.Collections.Generic;
 using TechTree.Data;
@@ -29,7 +28,6 @@ namespace UserInterface
 
 		private List<UI_TechOption> _techOptions;
 		[Inject] private GameEventProcessor _gameEventProcessor;
-		[Inject] private Coordinator _gameProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
 
 		private bool _canOpenVoteContainer = false;

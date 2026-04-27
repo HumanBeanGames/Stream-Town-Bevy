@@ -1,41 +1,38 @@
 using System;
-using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for GameStateProcessor.
 	/// Manages initialization state tracking and event logging configuration.
 	/// </summary>
-	public class GameStateRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class GameStateRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Whether the player has finished initialization and is ready to play.
 		/// Set to true after player setup completes.
 		/// </summary>
-		[SerializeField]
 		private bool _playerReady;
 
 		/// <summary>
 		/// Whether the game world has been generated.
 		/// Set to true after procedural generation completes.
 		/// </summary>
-		[SerializeField]
 		private bool _worldGenerated;
 
 		/// <summary>
 		/// Whether game objects have been pooled.
 		/// Set to true after object pooling system initializes.
 		/// </summary>
-		[SerializeField]
 		private bool _objectsPooled;
 
 		/// <summary>
 		/// Whether event logging is enabled.
 		/// If true, game events are logged to console for debugging.
 		/// </summary>
-		[SerializeField]
-		private bool _eventLogging = true;
+		private bool _eventLogging;
 
 		/// <summary>
 		/// Event fired when the player becomes ready.
@@ -82,9 +79,12 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the game state runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public GameStateRuntimeData()
 		{
-			// Initialize with default values if needed
+			_playerReady = false;
+			_worldGenerated = false;
+			_objectsPooled = false;
+			_eventLogging = true;
 		}
 
 		/// <summary>

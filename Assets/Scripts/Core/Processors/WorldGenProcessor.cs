@@ -4,9 +4,9 @@ using GUIDSystem;
 using Processors;
 using Pathfinding;
 using SavingAndLoading.SavableObjects;
-using ScriptablesProcessorInfrastructure;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using Utils;
 using Utils.Pooling;
@@ -17,6 +17,8 @@ using UserInterface.MainMenu;
 using World.Generation;
 using World;
 using ScriptablesProcessorInfrastructure;
+using UnityEngine.SceneManagement;
+using UnityEngine.Rendering.Universal;
 
 namespace Processors
 {
@@ -27,7 +29,7 @@ namespace Processors
 		/// </summary>
 		private const int MAX_CAMP_GENERATION_ATTEMPTS = 500;
 
-		[Inject] private ScriptablesProcessorInfrastructure.WorldGenRuntimeData _runtimeData;
+		private WorldGenRuntimeData _runtimeData;
 
 		[Inject] private WorldGenScaleSettings _scaleSettings;
 		[Inject] private TerrainGenSettings _terrainGenerationSettings;
@@ -38,15 +40,71 @@ namespace Processors
 		[Inject] private CampGenSettings _campGenerationSettings;
 
 		[Inject] private WorldGenBehaviorSettings _behaviorSettings;
+		[Inject] private ObjectPoolingProcessor _objectPoolingProcessor;
+		[Inject] private ResourceProcessor _resourceProcessor;
+		[Inject] private FoliageProcessor _foliageProcessor;
+		[Inject] private GameStateProcessor _gameStateProcessor;
+		[Inject] private ProjectCamera _projectCamera;
 
 		private const int MAX_GENERATION_ATTEMPTS = 10;
+		private Task _poolingInitializationTask = null;
+		private bool _objectsGenerated = false;
 		private const int MAX_TOWNHALL_SPIRAL_RINGS = 24;
+		private const string TERRAIN_HOST_NAME = "GeneratedTerrain";
 
 		[Inject] private WorldGenDebugSettings _debugSettings;
 
 		[Inject] private WorldGenLayerSettings _layerSettings;
 
+		private const string ENEMY_CAMP_POOL_NAME = "EnemyCamp_Goblin";
+
 		public Mesh GeneratedMesh => _runtimeData.GeneratedMesh;
+		public IReadOnlyList<EnemySpawner> EnemyCampSpawners => _runtimeData.EnemyCampSpawners;
+		public bool IsWorldGenerated => _runtimeData.WorldGenerated;
+
+		private static bool IsValidTownhallHeight(float height)
+		{
+			return height > 0f;
+		}
+
+		private void RebindProjectCameraToActiveSceneMainCamera()
+		{
+			if (_projectCamera == null)
+				return;
+
+			Scene activeScene = SceneManager.GetActiveScene();
+			Camera[] sceneCameras = FindObjectsByType<Camera>(FindObjectsSortMode.None);
+			for (int i = 0; i < sceneCameras.Length; i++)
+			{
+				Camera candidate = sceneCameras[i];
+				if (candidate == null || candidate.gameObject.scene.handle != activeScene.handle || !candidate.CompareTag("MainCamera"))
+					continue;
+
+				_projectCamera.Cam = candidate;
+				_projectCamera.Data = candidate.GetComponent<UniversalAdditionalCameraData>();
+				return;
+			}
+		}
+
+		private void FocusProjectCameraOnTownhall(GameObject townhallObject)
+		{
+			RebindProjectCameraToActiveSceneMainCamera();
+
+			if (townhallObject == null || _projectCamera == null || !_projectCamera.Exists)
+				return;
+
+			Transform cameraTransform = _projectCamera.Cam.transform;
+			Vector3 townhallPosition = townhallObject.transform.position;
+			cameraTransform.position = townhallPosition + new Vector3(0f, 25f, -25f);
+			cameraTransform.rotation = Quaternion.Euler(45f, 0f, 0f);
+		}
+
+		private void CompleteWorldGeneration(GameObject townhallObject)
+		{
+			FocusProjectCameraOnTownhall(townhallObject);
+			_runtimeData.WorldGenerated = true;
+			_gameStateProcessor.NotifyWorldLoaded();
+		}
 
 		#region IProcessor Implementation
 
@@ -57,9 +115,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register WorldGenRuntimeData
-			ScriptablesProcessorInfrastructure.WorldGenRuntimeData runtimeData = ScriptableObject.CreateInstance<ScriptablesProcessorInfrastructure.WorldGenRuntimeData>();
-			containerBuilder.AddSingleton(runtimeData);
+			if (_runtimeData != null)
+				throw new InvalidOperationException("WorldGenProcessor: WorldGenRuntimeData has already been installed.");
+
+			_runtimeData = new WorldGenRuntimeData();
+			containerBuilder.AddSingleton(_runtimeData);
 		}
 
 		/// <summary>
@@ -69,8 +129,22 @@ namespace Processors
 		/// </summary>
 		public void Initialize()
 		{
+			if (_runtimeData == null)
+				throw new InvalidOperationException("WorldGenProcessor: WorldGenRuntimeData has not been installed.");
+
+			// Check if generation is suppressed
+			if (_behaviorSettings.SuppressGeneration)
+			{
+				_runtimeData.State = GenerationState.Complete;
+				_runtimeData.WorldGenerated = true;
+				return;
+			}
+
+			// Reset generation flags
+			_objectsGenerated = false;
+
 			// Start world generation on initialization
-			_runtimeData.State = ScriptablesProcessorInfrastructure.GenerationState.GeneratingTerrain;
+			_runtimeData.State = GenerationState.InitializingPooling;
 			_runtimeData.GenerationAttempts = 0;
 		}
 
@@ -81,38 +155,71 @@ namespace Processors
 		/// </summary>
 		public void Process()
 		{
+			Debug.Log($"[WorldGen] Process called: State={_runtimeData.State}");
 			switch (_runtimeData.State)
 			{
-				case ScriptablesProcessorInfrastructure.GenerationState.Idle:
+				case GenerationState.Idle:
 					// Do nothing
 					break;
 
-				case ScriptablesProcessorInfrastructure.GenerationState.GeneratingTerrain:
-					GenerateTerrain();
-					_runtimeData.State = ScriptablesProcessorInfrastructure.GenerationState.SpawningTownhall;
+				case GenerationState.InitializingPooling:
+					// Start pooling initialization if not already started
+					if (_poolingInitializationTask == null)
+					{
+						Debug.Log("[WorldGenProcessor] Starting pooling initialization");
+						_objectPoolingProcessor.ResetPoolingInitialization();
+						_poolingInitializationTask = _objectPoolingProcessor.InitializePooling(null);
+					}
+
+					// Check if pooling initialization is complete
+					if (_poolingInitializationTask != null && _poolingInitializationTask.IsCompleted)
+					{
+						Debug.Log("[WorldGenProcessor] Pooling initialization complete");
+						_poolingInitializationTask = null;
+						_runtimeData.State = GenerationState.GeneratingTerrain;
+					}
 					break;
 
-				case ScriptablesProcessorInfrastructure.GenerationState.SpawningTownhall:
+				case GenerationState.GeneratingTerrain:
+					Debug.Log("[WorldGen] GeneratingTerrain state");
+					if (_behaviorSettings.RandomizeSeed)
+						_terrainGenerationSettings.GenerationSettings.Seed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
+
+					GenerateTerrain();
+					_runtimeData.State = GenerationState.SpawningTownhall;
+					break;
+
+				case GenerationState.SpawningTownhall:
+					Debug.Log("[WorldGen] SpawningTownhall state");
 					if (SpawnTownhall())
-						_runtimeData.State = ScriptablesProcessorInfrastructure.GenerationState.GeneratingObjects;
+						_runtimeData.State = GenerationState.GeneratingObjects;
 					else
 					{
 						_runtimeData.GenerationAttempts++;
 						if (_runtimeData.GenerationAttempts >= MAX_GENERATION_ATTEMPTS)
 						{
 							Debug.LogError($"WorldGenProcessor: Failed to spawn townhall after {MAX_GENERATION_ATTEMPTS} attempts.");
-							_runtimeData.State = ScriptablesProcessorInfrastructure.GenerationState.Complete;
+							_runtimeData.State = GenerationState.Complete;
+						}
+						else
+						{
+							_runtimeData.State = GenerationState.GeneratingTerrain;
 						}
 					}
 					break;
 
-				case ScriptablesProcessorInfrastructure.GenerationState.GeneratingObjects:
-					GeneratePooledObjectsExceptTownhallSync();
-					_runtimeData.WorldGenerated = true;
-					_runtimeData.State = ScriptablesProcessorInfrastructure.GenerationState.Complete;
+				case GenerationState.GeneratingObjects:
+					if (!_objectsGenerated)
+					{
+						Debug.Log("[WorldGen] GeneratingObjects state - calling GeneratePooledObjectsExceptTownhallSync");
+						GeneratePooledObjectsExceptTownhallSync();
+						CompleteWorldGeneration(GetActiveTownhallObject());
+						_objectsGenerated = true;
+						_runtimeData.State = GenerationState.Complete;
+					}
 					break;
 
-				case ScriptablesProcessorInfrastructure.GenerationState.Complete:
+				case GenerationState.Complete:
 					// Generation complete, do nothing
 					break;
 			}
@@ -131,6 +238,18 @@ namespace Processors
 		{
 			containerBuilder.AddSingleton(this);
 			InjectRuntimeData(containerBuilder);
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			RebindProjectCameraToActiveSceneMainCamera();
+
+			// WorldGenProcessor re-injects dependencies via Coordinator's specialized handling
+			// No additional refresh needed beyond what Coordinator already does
 		}
 
 		#endregion
@@ -184,7 +303,8 @@ namespace Processors
 
 			meshSettings.Spacing = sourceSettings.Spacing;
 
-			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(ProceduralMeshGenerator.GenerateTerrainMeshData(meshSettings, _terrainGenerationSettings.MeshHeightMultiplier, _terrainGenerationSettings.MeshHeightCurve, _terrainGenerationSettings.EnableIslandBias, _terrainGenerationSettings.IslandBiasCurve, _terrainGenerationSettings.IslandSize, _terrainGenerationSettings.IslandMultiplier, _terrainGenerationSettings.IslandAddition, _terrainGenerationSettings.QuantizationFactor, _terrainGenerationSettings.TopFaceProportion), gameObject);
+			GameObject terrainHost = GetOrCreateTerrainHost();
+			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(ProceduralMeshGenerator.GenerateTerrainMeshData(meshSettings, _terrainGenerationSettings.MeshHeightMultiplier, _terrainGenerationSettings.MeshHeightCurve, _terrainGenerationSettings.EnableIslandBias, _terrainGenerationSettings.IslandBiasCurve, _terrainGenerationSettings.IslandSize, _terrainGenerationSettings.IslandMultiplier, _terrainGenerationSettings.IslandAddition, _terrainGenerationSettings.QuantizationFactor, _terrainGenerationSettings.CellSize, _terrainGenerationSettings.TopFaceProportion), terrainHost);
 		}
 
 		private int GetScaledTerrainSize()
@@ -195,7 +315,120 @@ namespace Processors
 
 		public void SetMesh(Mesh mesh)
 		{
-			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(mesh, gameObject);
+			GameObject terrainHost = GetOrCreateTerrainHost();
+			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(mesh, terrainHost);
+		}
+
+		private GameObject GetOrCreateTerrainHost()
+		{
+			if (_runtimeData.TerrainHost != null)
+			{
+				EnsureTerrainHostSetup(_runtimeData.TerrainHost);
+				return _runtimeData.TerrainHost;
+			}
+
+			GameObject terrainPrefab = _terrainGenerationSettings.TerrainPrefab;
+			if (terrainPrefab == null)
+			{
+				throw new InvalidOperationException("Terrain prefab is not set in TerrainGenSettings.");
+			}
+
+			Scene targetScene = SceneManager.GetActiveScene();
+			GameObject terrainHost = UnityEngine.Object.Instantiate(terrainPrefab);
+			terrainHost.name = TERRAIN_HOST_NAME;
+			if (targetScene.IsValid() && targetScene.isLoaded)
+			{
+				SceneManager.MoveGameObjectToScene(terrainHost, targetScene);
+			}
+
+			_runtimeData.TerrainHost = terrainHost;
+			EnsureTerrainHostSetup(terrainHost);
+			return terrainHost;
+		}
+
+		private void EnsureTerrainHostSetup(GameObject terrainHost)
+		{
+			if (terrainHost == null)
+			{
+				return;
+			}
+
+			terrainHost.name = TERRAIN_HOST_NAME;
+			terrainHost.transform.SetParent(null, false);
+			terrainHost.transform.position = Vector3.zero;
+			terrainHost.transform.rotation = Quaternion.identity;
+			terrainHost.transform.localScale = Vector3.one;
+			terrainHost.layer = GetTerrainLayer();
+
+			if (terrainHost.TryGetComponent<MeshRenderer>(out var meshRenderer) && _terrainGenerationSettings.TerrainMaterial != null)
+			{
+				meshRenderer.material = _terrainGenerationSettings.TerrainMaterial;
+			}
+		}
+
+		private int GetTerrainLayer()
+		{
+			int terrainMask = GetTerrainMask();
+			for (int layer = 0; layer < 32; layer++)
+			{
+				if ((terrainMask & (1 << layer)) != 0)
+				{
+					return layer;
+				}
+			}
+
+			int groundLayer = LayerMask.NameToLayer("Ground");
+			return groundLayer >= 0 ? groundLayer : 0;
+		}
+
+		public void RefreshEnemyCampSpawners()
+		{
+			_runtimeData.EnemyCampSpawners.Clear();
+
+			List<PoolableObject> activeEnemyCamps = GetAllActivePooledObjectsOfType(ENEMY_CAMP_POOL_NAME);
+			for (int i = 0; i < activeEnemyCamps.Count; i++)
+			{
+				EnemySpawner enemySpawner = activeEnemyCamps[i].GetComponent<EnemySpawner>();
+				if (enemySpawner != null)
+					_runtimeData.EnemyCampSpawners.Add(enemySpawner);
+			}
+		}
+
+		public bool CanSpawnRaidEnemies()
+		{
+			return _runtimeData.EnemyCampSpawners.Count > 0;
+		}
+
+		public void SetEnemyCampSpawningEnabled(bool enabled)
+		{
+			for (int i = 0; i < _runtimeData.EnemyCampSpawners.Count; i++)
+			{
+				EnemySpawner enemySpawner = _runtimeData.EnemyCampSpawners[i];
+				if (enemySpawner != null)
+					enemySpawner.CanSpawnEnemies = enabled;
+			}
+		}
+
+		public bool TryGetRandomEnemyCampSpawnLocation(out Transform spawnLocation)
+		{
+			spawnLocation = null;
+
+			List<EnemySpawner> availableSpawners = new List<EnemySpawner>();
+			for (int i = 0; i < _runtimeData.EnemyCampSpawners.Count; i++)
+			{
+				EnemySpawner enemySpawner = _runtimeData.EnemyCampSpawners[i];
+				if (enemySpawner == null || enemySpawner.SpawnLocations == null || enemySpawner.SpawnLocations.Length == 0)
+					continue;
+
+				availableSpawners.Add(enemySpawner);
+			}
+
+			if (availableSpawners.Count == 0)
+				return false;
+
+			EnemySpawner selectedSpawner = availableSpawners[UnityEngine.Random.Range(0, availableSpawners.Count)];
+			spawnLocation = selectedSpawner.GetRandomSpawnLocation();
+			return spawnLocation != null;
 		}
 
 		private int GetTerrainMask()
@@ -220,9 +453,9 @@ namespace Processors
 			return townhallObject == null ? Vector3.zero : townhallObject.transform.position;
 		}
 
-		private float GetSpawnNoiseValue(GenerationSettings settings, int mapX, int mapY, Vector3 position, Vector3 spawnBiasOrigin)
+		private float GetSpawnNoiseValue(GenerationSettings settings, float[,] heightMap, int mapX, int mapY, Vector3 position, Vector3 spawnBiasOrigin)
 		{
-			float noiseValue = settings.HeightMap[mapX, mapY];
+			float noiseValue = heightMap[mapX, mapY];
 			if (!settings.EnableSpawnBias)
 				return noiseValue;
 
@@ -372,6 +605,9 @@ namespace Processors
 				if (!TryGetTerrainHeight(origin, out float fallbackHeight))
 					return false;
 
+				if (!IsValidTownhallHeight(fallbackHeight))
+					return false;
+
 				placement = new Vector3(origin.x, fallbackHeight, origin.z);
 				return true;
 			}
@@ -381,6 +617,9 @@ namespace Processors
 			{
 				Vector3 candidate = origin + new Vector3(offset.x * spacing, 0, offset.y * spacing);
 				if (!TryGetFlatTownhallFootprintHeight(candidate, collider, out float flatHeight))
+					continue;
+
+				if (!IsValidTownhallHeight(flatHeight))
 					continue;
 
 				placement = new Vector3(candidate.x, flatHeight, candidate.z);
@@ -422,41 +661,20 @@ namespace Processors
 
 		/// <summary>
 		/// Gets a pooled object by type.
-		/// Uses _runtimeData.PooledObjects state instead of ObjectPoolingRuntimeData.
+		/// Uses ObjectPoolingProcessor instead of local dictionary.
 		/// </summary>
 		private PoolableObject GetPooledObject(string poolName, bool createIfNotFound = true)
 		{
-			if (!_runtimeData.PooledObjects.ContainsKey(poolName))
-				return null;
-
-			List<PoolableObject> pool = _runtimeData.PooledObjects[poolName];
-			for (int i = 0; i < pool.Count; i++)
-			{
-				if (!pool[i].gameObject.activeInHierarchy)
-					return pool[i];
-			}
-
-			return null;
+			return _objectPoolingProcessor.GetPooledObject(poolName, printWarning: false);
 		}
 
 		/// <summary>
 		/// Gets all active pooled objects of a specific type.
-		/// Uses _runtimeData.PooledObjects state instead of ObjectPoolingRuntimeData.
+		/// Uses ObjectPoolingProcessor instead of local _runtimeData.PooledObjects.
 		/// </summary>
 		private List<PoolableObject> GetAllActivePooledObjectsOfType(string poolName)
 		{
-			if (!_runtimeData.PooledObjects.ContainsKey(poolName))
-				return new List<PoolableObject>();
-
-			List<PoolableObject> pool = _runtimeData.PooledObjects[poolName];
-			List<PoolableObject> activeObjects = new List<PoolableObject>();
-			for (int i = 0; i < pool.Count; i++)
-			{
-				if (pool[i].gameObject.activeInHierarchy)
-					activeObjects.Add(pool[i]);
-			}
-
-			return activeObjects;
+			return _objectPoolingProcessor.GetAllActivePooledObjectsOfType(poolName);
 		}
 
 		/// <summary>
@@ -465,26 +683,351 @@ namespace Processors
 		/// </summary>
 		private void GeneratePooledObjectsExceptTownhallSync()
 		{
-			// Initialize resource and foliage lists
-			List<GameResources.ResourceData> woodResources = new List<GameResources.ResourceData>();
-			List<GameResources.ResourceData> oreResources = new List<GameResources.ResourceData>();
-			List<GameResources.ResourceData> foodResources = new List<GameResources.ResourceData>();
-			List<GameResources.ResourceData> goldResources = new List<GameResources.ResourceData>();
-			List<GameResources.ResourceData> recruitResources = new List<GameResources.ResourceData>();
-			List<GameResources.FoliageData> onLandFoliage = new List<GameResources.FoliageData>();
-			List<GameResources.FoliageData> underWaterFoliage = new List<GameResources.FoliageData>();
+			// Track occupied positions to prevent overlapping spawns across ALL types
+			HashSet<(int, int)> occupiedCells = new HashSet<(int, int)>();
 
-			// Generate resources and foliage
-			// Note: This is a simplified synchronous version
-			// For full functionality, this would need to be expanded to handle the complex generation logic
-			// For now, we'll set empty lists to avoid null reference errors
-			_runtimeData.WoodResources = woodResources;
-			_runtimeData.OreResources = oreResources;
-			_runtimeData.FoodResources = foodResources;
-			_runtimeData.GoldResources = goldResources;
-			_runtimeData.RecruitResources = recruitResources;
-			_runtimeData.OnLandFoliage = onLandFoliage;
-			_runtimeData.UnderWaterFoliage = underWaterFoliage;
+			// Generate resources first - collect data for GPU instancing via ResourceRenderer
+			if (_resourceGenerationSettings != null)
+			{
+				foreach (ResourceGenerationSettings settings in _resourceGenerationSettings.ResourceGenerationSettings)
+				{
+					GenerateResourceData(settings, settings.Seed, WorldUtils.OnGroundCheckHeight, occupiedCells);
+				}
+			}
+
+			// Generate water resources - share occupiedCells with regular resources
+			if (_waterResourceGenerationSettings != null)
+			{
+				foreach (ResourceGenerationSettings settings in _waterResourceGenerationSettings.WaterResourceGenerationSettings)
+				{
+					GenerateResourceData(settings, settings.Seed, WorldUtils.OnShoreLineCheckHeight, occupiedCells, isWaterGeneration: true);
+				}
+			}
+
+			// Generate land foliage - share occupiedCells with resources
+			if (_foliageGenerationSettings != null)
+			{
+				foreach (FoliageGenerationSettings settings in _foliageGenerationSettings.FoliageGenerationSettings)
+				{
+					GenerateFoliageData(settings, settings.Seed, WorldUtils.OnGroundCheckHeight, _runtimeData.OnLandFoliage, occupiedCells);
+				}
+			}
+
+			// Generate water foliage - share occupiedCells with all previous types
+			if (_waterFoliageGenerationSettings != null)
+			{
+				foreach (FoliageGenerationSettings settings in _waterFoliageGenerationSettings.WaterFoliageGenerationSettings)
+				{
+					GenerateFoliageData(settings, settings.Seed, WorldUtils.UnderWaterCheckHeight, _runtimeData.UnderWaterFoliage, occupiedCells, isWaterGeneration: true);
+				}
+			}
+
+			// Transfer generated data to processors for rendering
+			TransferGeneratedDataToProcessors();
+
+			RefreshEnemyCampSpawners();
+		}
+
+		/// <summary>
+		/// Transfers generated resource and foliage data to their respective processors for rendering.
+		/// </summary>
+		private void TransferGeneratedDataToProcessors()
+		{
+			// Collect mesh and material lists from settings
+			Dictionary<global::Utils.Resource, List<Mesh>> meshListsByType = new Dictionary<global::Utils.Resource, List<Mesh>>();
+			Dictionary<global::Utils.Resource, List<Material>> materialListsByType = new Dictionary<global::Utils.Resource, List<Material>>();
+
+			if (_resourceGenerationSettings != null)
+			{
+				foreach (ResourceGenerationSettings settings in _resourceGenerationSettings.ResourceGenerationSettings)
+				{
+					global::Utils.Resource resourceType = TargetMaskToResource(settings.TargetType);
+					if (!meshListsByType.ContainsKey(resourceType))
+						meshListsByType[resourceType] = new List<Mesh>();
+					if (!materialListsByType.ContainsKey(resourceType))
+						materialListsByType[resourceType] = new List<Material>();
+
+					if (settings.Meshes != null)
+						meshListsByType[resourceType].AddRange(settings.Meshes);
+					if (settings.Materials != null)
+						materialListsByType[resourceType].AddRange(settings.Materials);
+				}
+			}
+
+			// Update ResourceProcessor with generated resources
+			_resourceProcessor.SetGeneratedResources(global::Utils.Resource.Wood, _runtimeData.WoodResources,
+				meshListsByType.ContainsKey(global::Utils.Resource.Wood) ? meshListsByType[global::Utils.Resource.Wood] : null,
+				materialListsByType.ContainsKey(global::Utils.Resource.Wood) ? materialListsByType[global::Utils.Resource.Wood] : null);
+			_resourceProcessor.SetGeneratedResources(global::Utils.Resource.Ore, _runtimeData.OreResources,
+				meshListsByType.ContainsKey(global::Utils.Resource.Ore) ? meshListsByType[global::Utils.Resource.Ore] : null,
+				materialListsByType.ContainsKey(global::Utils.Resource.Ore) ? materialListsByType[global::Utils.Resource.Ore] : null);
+			_resourceProcessor.SetGeneratedResources(global::Utils.Resource.Food, _runtimeData.FoodResources,
+				meshListsByType.ContainsKey(global::Utils.Resource.Food) ? meshListsByType[global::Utils.Resource.Food] : null,
+				materialListsByType.ContainsKey(global::Utils.Resource.Food) ? materialListsByType[global::Utils.Resource.Food] : null);
+			_resourceProcessor.SetGeneratedResources(global::Utils.Resource.Gold, _runtimeData.GoldResources,
+				meshListsByType.ContainsKey(global::Utils.Resource.Gold) ? meshListsByType[global::Utils.Resource.Gold] : null,
+				materialListsByType.ContainsKey(global::Utils.Resource.Gold) ? materialListsByType[global::Utils.Resource.Gold] : null);
+			_resourceProcessor.SetGeneratedResources(global::Utils.Resource.Recruit, _runtimeData.RecruitResources,
+				meshListsByType.ContainsKey(global::Utils.Resource.Recruit) ? meshListsByType[global::Utils.Resource.Recruit] : null,
+				materialListsByType.ContainsKey(global::Utils.Resource.Recruit) ? materialListsByType[global::Utils.Resource.Recruit] : null);
+
+			// Update FoliageProcessor with generated foliage
+			_foliageProcessor.SetGeneratedFoliage(_runtimeData.OnLandFoliage, _runtimeData.UnderWaterFoliage);
+
+			Debug.Log("[WorldGen] Transferred generated data to processors for rendering");
+		}
+
+		/// <summary>
+		/// Generates resource data for GPU instancing via ResourceRenderer instead of pooling GameObjects.
+		/// </summary>
+		private void GenerateResourceData(ResourceGenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, HashSet<(int, int)> occupiedCells, bool isWaterGeneration = false)
+		{
+			int size = settings.Size;
+			int actualSeed = seed;
+			Vector2 offset = GetPositiveNoiseOffset(actualSeed, size);
+			float[,] heightMap = Noise.GenerateNoiseMap(new GenerationSettings(size, settings.LevelOfDetail, settings.NoiseScale, settings.Octaves, settings.Persistance, settings.Lacunarity, actualSeed, offset, settings.SpawnThreshold));
+
+			int halfSize = size / 2;
+
+			int spacing = settings.Spacing;
+			if (spacing == 0)
+				spacing = 1;
+
+			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
+			int terrainMask = GetTerrainMask();
+
+			global::Utils.Resource resourceType = TargetMaskToResource(settings.TargetType);
+
+			int positionsChecked = 0;
+			int raycastFailures = 0;
+			int spawnAttempts = 0;
+			int spawns = 0;
+			int overlapSkips = 0;
+
+			Vector3 position;
+			for (int y = -halfSize + 2; y < halfSize - 2; y += spacing)
+			{
+				for (int x = -halfSize + 2; x < halfSize - 2; x += spacing)
+				{
+					positionsChecked++;
+					float centeredOffset = spacing * 0.5f;
+					position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
+
+					// Check if this cell is already occupied
+					int cellX = Mathf.FloorToInt(position.x / spacing);
+					int cellZ = Mathf.FloorToInt(position.z / spacing);
+					if (occupiedCells.Contains((cellX, cellZ)))
+					{
+						continue;
+					}
+
+					if (GetSpawnNoiseValue(settings, heightMap, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
+					{
+						(bool, float) lambaResult = comparisonLambda(position);
+
+						if (lambaResult.Item1)
+						{
+							spawnAttempts++;
+							position.y = lambaResult.Item2;
+
+							// Get terrain height at spawn position using raycast
+							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
+							{
+								raycastFailures++;
+								continue;
+							}
+
+							position.y = hit.point.y;
+
+							// Check terrain height constraints
+							if (isWaterGeneration)
+							{
+								if (position.y > -0.5f)
+								{
+									raycastFailures++;
+									continue;
+								}
+							}
+							else
+							{
+								if (position.y <= 0f)
+								{
+									raycastFailures++;
+									continue;
+								}
+							}
+
+							if (IsPositionOverlappingBuilding(position, spacing * 0.45f))
+							{
+								overlapSkips++;
+								continue;
+							}
+
+							// Select mesh and material
+							int meshIndex = -1;
+							int materialIndex = -1;
+							Mesh selectedMesh = null;
+							if (settings.Meshes != null && settings.Meshes.Count > 0)
+							{
+								meshIndex = UnityEngine.Random.Range(0, settings.Meshes.Count);
+								selectedMesh = settings.Meshes[meshIndex];
+							}
+							if (settings.Materials != null && settings.Materials.Count > 0)
+							{
+								materialIndex = UnityEngine.Random.Range(0, settings.Materials.Count);
+							}
+
+							// Calculate amount
+							int amount = 100;
+							if (settings.SetByDistance)
+							{
+								float normalizedDistance = Vector2.Distance(new Vector2(position.x, position.z), new Vector2(spawnBiasOrigin.x, spawnBiasOrigin.z)) / Mathf.Max(1f, settings.MaxDistance);
+								float eval = settings.AmountCurve.Evaluate(Mathf.Clamp01(normalizedDistance));
+								amount = (int)MathExtended.RemapValue(eval, 0, 1, settings.MinAmount, settings.MaxAmount);
+							}
+
+							// Create resource data for GPU instancing
+							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
+							Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
+							GameResources.ResourceData resourceData = new GameResources.ResourceData(position, resourceType, amount, false, Matrix4x4.TRS(position, rotation, Vector3.one), 0, meshIndex, materialIndex);
+
+							// Add to appropriate resource list
+							switch (resourceType)
+							{
+								case global::Utils.Resource.Wood:
+									_runtimeData.WoodResources.Add(resourceData);
+									break;
+								case global::Utils.Resource.Ore:
+									_runtimeData.OreResources.Add(resourceData);
+									break;
+								case global::Utils.Resource.Food:
+									_runtimeData.FoodResources.Add(resourceData);
+									break;
+								case global::Utils.Resource.Gold:
+									_runtimeData.GoldResources.Add(resourceData);
+									break;
+								case global::Utils.Resource.Recruit:
+									_runtimeData.RecruitResources.Add(resourceData);
+									break;
+							}
+
+							// Mark this cell as occupied
+							occupiedCells.Add((cellX, cellZ));
+							spawns++;
+						}
+					}
+				}
+			}
+
+			Debug.Log($"[WorldGen] Resource generation summary: ResourceType={resourceType}, PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, OverlapSkips={overlapSkips}, Spawns={spawns}");
+		}
+
+		/// <summary>
+		/// Generates foliage data for GPU instancing via FoliageRenderer instead of pooling GameObjects.
+		/// </summary>
+		private void GenerateFoliageData(FoliageGenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, List<GameResources.FoliageData> foliageList, HashSet<(int, int)> occupiedCells, bool isWaterGeneration = false)
+		{
+			int size = settings.Size;
+			int actualSeed = seed;
+			Vector2 offset = GetPositiveNoiseOffset(actualSeed, size);
+			float[,] heightMap = Noise.GenerateNoiseMap(new GenerationSettings(size, settings.LevelOfDetail, settings.NoiseScale, settings.Octaves, settings.Persistance, settings.Lacunarity, actualSeed, offset, settings.SpawnThreshold));
+
+			int halfSize = size / 2;
+
+			int spacing = settings.Spacing;
+			if (spacing == 0)
+				spacing = 1;
+
+			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
+			int terrainMask = GetTerrainMask();
+
+			int positionsChecked = 0;
+			int raycastFailures = 0;
+			int spawnAttempts = 0;
+			int spawns = 0;
+			int overlapSkips = 0;
+
+			Vector3 position;
+			for (int y = -halfSize + 2; y < halfSize - 2; y += spacing)
+			{
+				for (int x = -halfSize + 2; x < halfSize - 2; x += spacing)
+				{
+					positionsChecked++;
+					float centeredOffset = spacing * 0.5f;
+					position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
+
+					// Check if this cell is already occupied
+					int cellX = Mathf.FloorToInt(position.x / spacing);
+					int cellZ = Mathf.FloorToInt(position.z / spacing);
+					if (occupiedCells.Contains((cellX, cellZ)))
+					{
+						continue;
+					}
+
+					if (GetSpawnNoiseValue(settings, heightMap, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
+					{
+						(bool, float) lambaResult = comparisonLambda(position);
+
+						if (lambaResult.Item1)
+						{
+							spawnAttempts++;
+							position.y = lambaResult.Item2;
+
+							// Get terrain height at spawn position using raycast
+							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
+							{
+								raycastFailures++;
+								continue;
+							}
+
+							position.y = hit.point.y;
+
+							// Check terrain height constraints
+							if (isWaterGeneration)
+							{
+								if (position.y > -0.5f)
+								{
+									raycastFailures++;
+									continue;
+								}
+							}
+							else
+							{
+								if (position.y <= 0f)
+								{
+									raycastFailures++;
+									continue;
+								}
+							}
+
+							if (IsPositionOverlappingBuilding(position, spacing * 0.45f))
+							{
+								overlapSkips++;
+								continue;
+							}
+
+							// Select mesh
+							Mesh selectedMesh = null;
+							if (settings.Meshes != null && settings.Meshes.Count > 0)
+							{
+								selectedMesh = settings.Meshes[UnityEngine.Random.Range(0, settings.Meshes.Count)];
+							}
+
+							// Create foliage data for GPU instancing
+							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
+							Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
+							GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, Vector3.one, selectedMesh, settings.Material);
+							foliageList.Add(foliageData);
+
+							// Mark this cell as occupied
+							occupiedCells.Add((cellX, cellZ));
+							spawns++;
+						}
+					}
+				}
+			}
+
+			Debug.Log($"[WorldGen] Foliage generation summary: PoolName={settings.PoolName}, PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, OverlapSkips={overlapSkips}, Spawns={spawns}");
 		}
 
 		/// <summary>
@@ -529,17 +1072,31 @@ namespace Processors
 
 			PoolableObject townhallPoolObject = GetPooledObject("Townhall");
 			if (townhallPoolObject == null)
+			{
+				Debug.LogError("WorldGenProcessor: Failed to spawn townhall - Townhall pool object is null or pool 'Townhall' does not exist.");
 				return false;
+			}
 
 			SaveableBuilding saveableTownhall = townhallPoolObject.SaveableObject as SaveableBuilding;
-			if (saveableTownhall == null || saveableTownhall.BuildingBase == null)
+			if (saveableTownhall == null)
+			{
+				Debug.LogError("WorldGenProcessor: Failed to spawn townhall - Pool object does not have a SaveableBuilding component.");
 				return false;
+			}
+
+			if (saveableTownhall.BuildingBase == null)
+			{
+				Debug.LogError("WorldGenProcessor: Failed to spawn townhall - SaveableBuilding does not have a BuildingBase.");
+				return false;
+			}
 
 			townhallObject = saveableTownhall.BuildingBase.gameObject;
 			if (TryFindTownhallPlacement(townhallObject, Vector3.zero, out Vector3 placement))
 				townhallObject.transform.position = placement;
-			else if (TryGetTerrainHeight(Vector3.zero, out float fallbackHeight))
+			else if (TryGetTerrainHeight(Vector3.zero, out float fallbackHeight) && IsValidTownhallHeight(fallbackHeight))
 				townhallObject.transform.position = new Vector3(0, fallbackHeight, 0);
+			else
+				return false;
 
 			townhallObject.SetActive(true);
 			EnsureTownhallRegistered(saveableTownhall.BuildingBase);
@@ -659,6 +1216,7 @@ namespace Processors
 		/// </summary>
 		private void GeneratePooledObjects(Action<float, string> progressReporter = null)
 		{
+			Debug.Log("[WorldGen] GeneratePooledObjects called");
 			PoolableObject th = GetPooledObject("Townhall");
 			SaveableBuilding saveableTownhall = (SaveableBuilding)th.SaveableObject;
 			GameObject thObj = saveableTownhall.BuildingBase.gameObject;
@@ -680,6 +1238,12 @@ namespace Processors
 		/// </summary>
 		private void GeneratePooledObjectsExceptTownhall(Action<float, string> progressReporter = null)
 		{
+			Debug.Log("[WorldGen] GeneratePooledObjectsExceptTownhall called");
+			Debug.Log($"[WorldGen] _resourceGenerationSettings is null: {_resourceGenerationSettings == null}");
+			Debug.Log($"[WorldGen] _waterResourceGenerationSettings is null: {_waterResourceGenerationSettings == null}");
+			Debug.Log($"[WorldGen] _foliageGenerationSettings is null: {_foliageGenerationSettings == null}");
+			Debug.Log($"[WorldGen] _waterFoliageGenerationSettings is null: {_waterFoliageGenerationSettings == null}");
+
 			int seed = _terrainGenerationSettings.GenerationSettings.Seed;
 			DateTime before = DateTime.Now;
 			DateTime after;
@@ -693,6 +1257,8 @@ namespace Processors
 				totalSettings += _foliageGenerationSettings.FoliageGenerationSettings.Count;
 			if (_waterFoliageGenerationSettings != null)
 				totalSettings += _waterFoliageGenerationSettings.WaterFoliageGenerationSettings.Count;
+
+			Debug.Log($"[WorldGen] Total settings to process: {totalSettings}");
 
 			int completedSettings = 0;
 
@@ -863,6 +1429,8 @@ namespace Processors
 				UserInterface.MainMenu.ParallelProgressReporter.UnregisterTrack("OnLand Foliage");
 				UserInterface.MainMenu.ParallelProgressReporter.UnregisterTrack("UnderWater Foliage");
 
+				RefreshEnemyCampSpawners();
+
 				progressReporter?.Invoke(1f, "World resource spawning complete");
 			}
 		}
@@ -921,7 +1489,7 @@ namespace Processors
 		private void GenerateFromSettings(GenerationSettings settings, ref int seed, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision = true)
 		{
 			settings.Size = GetScaledTerrainSize();
-			settings.Seed = ++seed;
+			settings.Seed = seed;
 			settings.Offset = GetPositiveNoiseOffset(settings.Seed, settings.Size);
 			settings.HeightMap = Noise.GenerateNoiseMap(settings);
 
@@ -934,21 +1502,32 @@ namespace Processors
 			float centeredOffset = settings.Spacing * 0.5f;
 			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
 
+			int terrainMask = GetTerrainMask();
+			Debug.Log($"[WorldGen] GenerateFromSettings called: PoolName={settings.GetPoolName()}, Size={settings.Size}, Spacing={settings.Spacing}, TerrainMask={terrainMask}");
+
+			int positionsChecked = 0;
+			int raycastFailures = 0;
+			int spawnAttempts = 0;
+			int spawns = 0;
+
 			Vector3 position;
 			for (int y = -halfSize + 2; y < halfSize - 2; y += settings.Spacing)
 			{
 				for (int x = -halfSize + 2; x < halfSize - 2; x += settings.Spacing)
 				{
+					positionsChecked++;
 					position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
 					if (!IsPointWithinBounds(position))
 						continue;
 
-					if (GetSpawnNoiseValue(settings, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
+					if (GetSpawnNoiseValue(settings, settings.HeightMap, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
 					{
 						(bool, float) lambaResult = comparisonLambda(position);
 
 						if (lambaResult.Item1)
 						{
+							spawnAttempts++;
+
 							// Select mesh for offset calculation
 							Mesh selectedMesh = null;
 							if (settings is ResourceGenerationSettings meshMaterialSettings)
@@ -967,8 +1546,11 @@ namespace Processors
 							}
 
 							// Get terrain height at spawn position using raycast
-							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, _layerSettings.TerrainMask))
+							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
+							{
+								raycastFailures++;
 								continue;
+							}
 
 							position.y = hit.point.y;
 
@@ -984,10 +1566,13 @@ namespace Processors
 							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
 							obj.transform.Rotate(Vector3.up, randomRotation);
 							obj.gameObject.SetActive(true);
+							spawns++;
 						}
 					}
 				}
 			}
+
+			Debug.Log($"[WorldGen] Spawn summary for {settings.GetPoolName()}: PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
 		}
 
 		private void GenerateFromSettings(GenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision, Action<float> progressReporter, List<GameResources.ResourceData> woodResources = null, List<GameResources.ResourceData> oreResources = null, List<GameResources.ResourceData> foodResources = null, List<GameResources.ResourceData> goldResources = null, List<GameResources.ResourceData> recruitResources = null, HashSet<(int, int)> occupiedCells = null, List<GameResources.FoliageData> onLandFoliage = null, List<GameResources.FoliageData> underWaterFoliage = null)
@@ -1012,6 +1597,14 @@ namespace Processors
 			int checksProcessed = 0;
 			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
 
+			int terrainMask = GetTerrainMask();
+			Debug.Log($"[WorldGen] GenerateFromSettings (with progress) called: PoolName={settings.GetPoolName()}, Size={settings.Size}, Spacing={settings.Spacing}, TerrainMask={terrainMask}");
+
+			int positionsChecked = 0;
+			int raycastFailures = 0;
+			int spawnAttempts = 0;
+			int spawns = 0;
+
 			global::Utils.Resource resourceType = global::Utils.Resource.None;
 			if (settings is ResourceGenerationSettings resourceSettings)
 			{
@@ -1023,16 +1616,19 @@ namespace Processors
 				for (int x = start; x < end; x += settings.Spacing)
 				{
 					checksProcessed++;
+					positionsChecked++;
 					Vector3 position = new Vector3(y + centeredOffset, 0, x + centeredOffset);
 					if (!IsPointWithinBounds(position))
 						continue;
 
-					if (GetSpawnNoiseValue(settings, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
+					if (GetSpawnNoiseValue(settings, settings.HeightMap, x + halfSize, y + halfSize, position, spawnBiasOrigin) >= settings.SpawnThreshold)
 					{
 						(bool, float) lambaResult = comparisonLambda(position);
 
 						if (lambaResult.Item1)
 						{
+							spawnAttempts++;
+
 							//TODO:: Put this as an out in the lambda
 							position.y = lambaResult.Item2;
 
@@ -1096,8 +1692,11 @@ namespace Processors
 							}
 
 							// Require terrain hit at spawn position
-							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, _layerSettings.TerrainMask))
+							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
+							{
+								raycastFailures++;
 								continue;
+							}
 
 							position.y = hit.point.y;
 
@@ -1107,6 +1706,7 @@ namespace Processors
 							// Collect ResourceData if resource lists are provided
 							if (resourceType != global::Utils.Resource.None && woodResources != null && oreResources != null && foodResources != null && goldResources != null && recruitResources != null)
 							{
+								spawns++;
 								float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
 								Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
 
@@ -1142,6 +1742,7 @@ namespace Processors
 							}
 							else if (settings is FoliageGenerationSettings foliageSettings)
 							{
+								spawns++;
 								// Handle foliage data collection
 								float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
 								Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
@@ -1160,6 +1761,7 @@ namespace Processors
 							}
 							else
 							{
+								spawns++;
 								// Only instantiate if not collecting ResourceData (foliage, etc.)
 								PoolableObject obj = GetPooledObject(settings.GetPoolName(), false);
 								obj.transform.position = position;
@@ -1179,6 +1781,7 @@ namespace Processors
 			}
 
 			progressReporter?.Invoke(1f);
+			Debug.Log($"[WorldGen] Spawn summary for {settings.GetPoolName()} (with progress): PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
 		}
 
 		/// <summary>
@@ -1186,13 +1789,29 @@ namespace Processors
 		/// </summary>
 		public void TryGenerateWorld(Action<float, string> progressReporter = null)
 		{
+			Debug.Log("[WorldGen] TryGenerateWorld (public) called");
 			TryGenerateWorldInternal(false, progressReporter);
 		}
 
 		private void TryGenerateWorldInternal(bool forceGenerate, Action<float, string> progressReporter = null)
 		{
+			Debug.Log($"[WorldGen] TryGenerateWorldInternal called: forceGenerate={forceGenerate}, CurrentState={_runtimeData.State}");
+			if (_runtimeData == null)
+				throw new InvalidOperationException("WorldGenProcessor: WorldGenRuntimeData has not been installed.");
+
+			if (_behaviorSettings.SuppressGeneration)
+			{
+				Debug.Log("[WorldGen] Generation suppressed by behavior settings");
+				_runtimeData.State = GenerationState.Complete;
+				CompleteWorldGeneration(GetActiveTownhallObject());
+				progressReporter?.Invoke(1f, "World generation suppressed");
+				return;
+			}
+
 			if (forceGenerate || _behaviorSettings.GenerateOnStart)
 			{
+				_runtimeData.WorldGenerated = false;
+				_runtimeData.GenerationAttempts = 0;
 				progressReporter?.Invoke(0.0f, "Preparing terrain generation...");
 				WorldUtils.GroundLayerMask = LayerMask.GetMask("Ground");
 
@@ -1238,8 +1857,10 @@ namespace Processors
 					if (!TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 fallbackPlacement))
 					{
 						fallbackPlacement = Vector3.zero;
-						if (TryGetTerrainHeight(fallbackPlacement, out float fallbackHeight))
+						if (TryGetTerrainHeight(fallbackPlacement, out float fallbackHeight) && IsValidTownhallHeight(fallbackHeight))
 							fallbackPlacement.y = fallbackHeight;
+						else
+							return;
 					}
 
 					thObj.transform.position = fallbackPlacement;
@@ -1253,21 +1874,9 @@ namespace Processors
 				{
 					progressReporter?.Invoke(0.7f + (Mathf.Clamp01(progress) * 0.28f), status);
 				});
-				//Check that townhall is on ground, not above water.
 
 				progressReporter?.Invoke(1f, "World generation complete");
-
-				// Center camera on town hall
-				GameObject townhallObject = GetActiveTownhallObject();
-				if (townhallObject != null && Camera.main != null)
-				{
-					Vector3 townhallPosition = townhallObject.transform.position;
-					Camera.main.transform.position = new Vector3(townhallPosition.x, townhallPosition.y + 10f, townhallPosition.z - 15f);
-					Camera.main.transform.LookAt(townhallPosition);
-				}
-
-				// Notify that world has finished loading
-				_runtimeData.WorldGenerated = true;
+				CompleteWorldGeneration(GetActiveTownhallObject());
 			}
 		}
 

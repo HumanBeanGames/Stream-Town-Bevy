@@ -1,34 +1,27 @@
 using System;
-using UnityEngine;
+
+using ScriptablesProcessorInfrastructure;
 using Utils;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime season state for the game.
+	/// Runtime data class that stores season state for the game.
 	/// Manages season transitions, visual effects, and season-related events.
 	/// </summary>
-	public class SeasonRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class SeasonRuntimeData : IRuntimeDataScriptable
 	{
 		private const float _winterTint = 0.42f;
 		private const float _restTint = -0.08f;
 
-		[SerializeField]
 		private Season _currentSeason;
-		[SerializeField]
-		private bool _seasonChanging = false;
-		[SerializeField]
-		private int _daysPerSeason = 30;
-		[SerializeField]
+		private bool _seasonChanging;
+		private int _daysPerSeason;
 		private Season _transitionFromSeason;
-		[SerializeField]
 		private Season _transitionToSeason;
-		[SerializeField]
 		private float _transitionElapsed;
-		[SerializeField]
 		private float _transitionDuration;
-		[SerializeField]
-		private bool _transitionTriggerEvent = true;
+		private bool _transitionTriggerEvent;
 
 		public event Action<Season> OnSeasonChanged;
 		public event Action<Season> OnSeasonChanging;
@@ -77,9 +70,16 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the season runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public SeasonRuntimeData()
 		{
-			// Initialize with default values if needed
+			_currentSeason = Season.Spring;
+			_seasonChanging = false;
+			_daysPerSeason = 30;
+			_transitionFromSeason = Season.Spring;
+			_transitionToSeason = Season.Spring;
+			_transitionElapsed = 0f;
+			_transitionDuration = 0f;
+			_transitionTriggerEvent = true;
 		}
 
 		public void InvokeSeasonChanging(Season season)

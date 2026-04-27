@@ -2,10 +2,8 @@ using System;
 using UnityEngine;
 using Utils;
 using ScriptablesProcessorInfrastructure;
-using Processors;
-using Reflex.Attributes;
 using Reflex.Core;
-using Data.Containers;
+using Reflex.Attributes;
 
 namespace Processors
 {
@@ -13,24 +11,23 @@ namespace Processors
     /// Processor that manages the game's season system.
     /// Handles season transitions, visual effects, and season-related events.
     /// </summary>
-    public partial class SeasonProcessor : MonoBehaviour, IInstaller, IProcessor
+    public partial class SeasonProcessor : MonoBehaviour, IInstaller, IProcessor, IPostInitializeProcessor, IMainThreadInitializableProcessor
     {
         /// <summary>
         /// Container for season data definitions.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private SeasonDataContainer _seasonDataContainer;
-
+        [Inject] private TimeProcessor _timeProcessor;
         /// <summary>
-        /// ScriptableObject containing season settings.
-        /// Injected via Reflex dependency injection.
+        /// The season data container. Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private SeasonSettings _seasonSettings;
+        [Inject] private AllSeasonSettings _seasonDataContainer;
 
         /// <summary>
         /// Nested runtime data class for season data.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-        [Inject] private SeasonRuntimeData _seasonRuntimeData;
+        private SeasonRuntimeData _seasonRuntimeData;
 
         /// <summary>
         /// Gets or sets the days per season.
@@ -40,13 +37,6 @@ namespace Processors
             get => _seasonRuntimeData.DaysPerSeason;
             set => _seasonRuntimeData.DaysPerSeason = value;
         }
-
-        /// <summary>
-        /// Time processor for accessing time data.
-        /// Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private TimeProcessor _timeProcessor;
-
 
         /// <summary>
         /// Event invoked when the season has changed.
@@ -87,10 +77,10 @@ namespace Processors
         /// <summary>
         /// Gets all season data.
         /// </summary>
-        /// <returns>All seasons data scriptable object.</returns>
-		public AllSeasonsSettings GetAllSeasonsData()
+        /// <returns>Array of all season data configurations.</returns>
+		public SeasonDataSettings[] GetAllSeasonsData()
 		{
-			return _seasonDataContainer.AllSeasonsData;
+			return _seasonDataContainer.SeasonSettingsArray;
 		}
 
 		public void CallNextSeason()
@@ -142,23 +132,23 @@ namespace Processors
 			SeasonDataSettings currentSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.CurrentSeason);
 			SeasonDataSettings nextSeasonData = _seasonDataContainer.GetSeasonData(nextSeason);
 			// Grass Values.
-			if (_seasonSettings.GrassMaterial)
+			if (_seasonDataContainer.GrassMaterial)
 			{
-				_seasonSettings.GrassMaterial.SetColor("_GridColor1", Color.Lerp(currentSeasonData.GrassGridColor1, nextSeasonData.GrassGridColor1, 1));
-				_seasonSettings.GrassMaterial.SetColor("_GridColor2", Color.Lerp(currentSeasonData.GrassGridColor2, nextSeasonData.GrassGridColor2, 1));
-				_seasonSettings.GrassMaterial.SetColor("_TopColor", Color.Lerp(currentSeasonData.GrassTopColor, nextSeasonData.GrassTopColor, 1));
-				_seasonSettings.GrassMaterial.SetColor("_WindColor", Color.Lerp(currentSeasonData.GrassWindColor, nextSeasonData.GrassWindColor, 1));
+				_seasonDataContainer.GrassMaterial.SetColor("_GridColor1", Color.Lerp(currentSeasonData.GrassGridColor1, nextSeasonData.GrassGridColor1, 1));
+				_seasonDataContainer.GrassMaterial.SetColor("_GridColor2", Color.Lerp(currentSeasonData.GrassGridColor2, nextSeasonData.GrassGridColor2, 1));
+				_seasonDataContainer.GrassMaterial.SetColor("_TopColor", Color.Lerp(currentSeasonData.GrassTopColor, nextSeasonData.GrassTopColor, 1));
+				_seasonDataContainer.GrassMaterial.SetColor("_WindColor", Color.Lerp(currentSeasonData.GrassWindColor, nextSeasonData.GrassWindColor, 1));
 			}
 
 			// Terrain Values.
-			if (_seasonSettings.TerrainMaterial)
+			if (_seasonDataContainer.TerrainMaterial)
 			{
-				_seasonSettings.TerrainMaterial.SetColor("_color1", Color.Lerp(currentSeasonData.TerrainColor1, nextSeasonData.TerrainColor1, 1));
-				_seasonSettings.TerrainMaterial.SetColor("_color2", Color.Lerp(currentSeasonData.TerrainColor2, nextSeasonData.TerrainColor2, 1));
+				_seasonDataContainer.TerrainMaterial.SetColor("_color1", Color.Lerp(currentSeasonData.TerrainColor1, nextSeasonData.TerrainColor1, 1));
+				_seasonDataContainer.TerrainMaterial.SetColor("_color2", Color.Lerp(currentSeasonData.TerrainColor2, nextSeasonData.TerrainColor2, 1));
 			}
 
 			// Tree Values.
-			SetSeasonMaterial(nextSeason, 1, _seasonSettings);
+			SetSeasonMaterial(nextSeason, 1, _seasonDataContainer);
 			_seasonRuntimeData.CurrentSeason = nextSeason;
 		}
 
@@ -170,19 +160,19 @@ namespace Processors
 		{
 			SeasonDataSettings selectedSeasonData = _seasonDataContainer.GetSeasonData(selectedSeason);
 			// Grass Values.
-			if (_seasonSettings.GrassMaterial)
+			if (_seasonDataContainer.GrassMaterial)
 			{
-				_seasonSettings.GrassMaterial.SetColor("_GridColor1", selectedSeasonData.GrassGridColor1);
-				_seasonSettings.GrassMaterial.SetColor("_GridColor2", selectedSeasonData.GrassGridColor2);
-				_seasonSettings.GrassMaterial.SetColor("_TopColor", selectedSeasonData.GrassTopColor);
-				_seasonSettings.GrassMaterial.SetColor("_WindColor", selectedSeasonData.GrassWindColor);
+				_seasonDataContainer.GrassMaterial.SetColor("_GridColor1", selectedSeasonData.GrassGridColor1);
+				_seasonDataContainer.GrassMaterial.SetColor("_GridColor2", selectedSeasonData.GrassGridColor2);
+				_seasonDataContainer.GrassMaterial.SetColor("_TopColor", selectedSeasonData.GrassTopColor);
+				_seasonDataContainer.GrassMaterial.SetColor("_WindColor", selectedSeasonData.GrassWindColor);
 			}
 
 			// Terrain Values.
-			if (_seasonSettings.TerrainMaterial)
+			if (_seasonDataContainer.TerrainMaterial)
 			{
-				_seasonSettings.TerrainMaterial.SetColor("_color1", selectedSeasonData.TerrainColor1);
-				_seasonSettings.TerrainMaterial.SetColor("_color2", selectedSeasonData.TerrainColor2);
+				_seasonDataContainer.TerrainMaterial.SetColor("_color1", selectedSeasonData.TerrainColor1);
+				_seasonDataContainer.TerrainMaterial.SetColor("_color2", selectedSeasonData.TerrainColor2);
 			}
 		}
 
@@ -192,54 +182,73 @@ namespace Processors
 		public void SetSeasonByTimePassed()
 		{
 			_seasonRuntimeData.CurrentSeason = (Season)(_timeProcessor.DayCount % _seasonDataContainer.DaysPerSeason);
-			SetSeasonMaterial(_seasonRuntimeData.CurrentSeason, 1.0f, _seasonSettings);
+			SetSeasonMaterial(_seasonRuntimeData.CurrentSeason, 1.0f, _seasonDataContainer);
 		}
 
 		public void SetSeasonByTimePassed(float timePassed)
 		{
 			int totalDays = _timeProcessor.CalculateDayCount(timePassed);
 			_seasonRuntimeData.CurrentSeason = (Season)((totalDays / _seasonDataContainer.DaysPerSeason) % (int)Season.Count);
-			SetSeasonMaterial(_seasonRuntimeData.CurrentSeason, 1.0f, _seasonSettings);
+			SetSeasonMaterial(_seasonRuntimeData.CurrentSeason, 1.0f, _seasonDataContainer);
 		}
 
-		/// <summary>
-		/// Initializes the season processor.
-		/// Sets starting season and subscribes to day passed event.
-		/// </summary>
-		public void Initialize()
+        /// <summary>
+        /// Initializes the season processor.
+        /// Creates RuntimeData after all processors are confirmed ready.
+        /// Sets starting season and subscribes to day passed event.
+        /// </summary>
+        		public void Initialize()
 		{
-			_seasonRuntimeData.CurrentSeason = _seasonDataContainer.StartingSeason;
-			BeginTransition(_seasonRuntimeData.CurrentSeason, 0f, false);
-			_timeProcessor.DayPassed += OnDayPassed;
-		}
+			if (_seasonRuntimeData == null)
+				throw new InvalidOperationException("SeasonProcessor: SeasonRuntimeData has not been installed.");
 
-		/// <summary>
-		/// Registers this processor as a singleton in the dependency injection container.
-		/// Called by Reflex during container initialization.
-		/// </summary>
-		/// <param name="containerBuilder">The container builder to register bindings with.</param>
-		        public void InstallBindings(ContainerBuilder containerBuilder)
+			_seasonRuntimeData.CurrentSeason = _seasonDataContainer.StartingSeason;
+            BeginTransition(_seasonRuntimeData.CurrentSeason, 0f, false);
+        }
+
+        public void Activate()
+        {
+            _timeProcessor.DayPassed += OnDayPassed;
+        }
+
+        /// <summary>
+        /// Registers this processor as a singleton in the dependency injection container.
+        /// Called by Reflex during container initialization.
+        /// </summary>
+        /// <param name="containerBuilder">The container builder to register bindings with.</param>
+        public void InstallBindings(ContainerBuilder containerBuilder)
         {
             containerBuilder.AddSingleton(this);
             InjectRuntimeData(containerBuilder);
         }
 
-        public void InjectRuntimeData(ContainerBuilder containerBuilder)
+        		public void InjectRuntimeData(ContainerBuilder containerBuilder)
+		{
+			if (_seasonRuntimeData != null)
+				throw new InvalidOperationException("SeasonProcessor: SeasonRuntimeData has already been installed.");
+
+			_seasonRuntimeData = new SeasonRuntimeData();
+			containerBuilder.AddSingleton(_seasonRuntimeData);
+		}
+
+        /// <summary>
+        /// Processes season logic every frame.
+        /// Called every frame by the Coordinator.
+        /// SeasonProcessor does not require per-frame updates.
+        /// </summary>
+        public void Process()
         {
-            // Instantiate and register SeasonRuntimeData ScriptableObject
-            SeasonRuntimeData seasonRuntimeData = ScriptableObject.CreateInstance<SeasonRuntimeData>();
-            containerBuilder.AddSingleton(seasonRuntimeData);
+            AdvanceTransition();
         }
 
-		/// <summary>
-		/// Processes season logic every frame.
-		/// Called every frame by the Coordinator.
-		/// SeasonProcessor does not require per-frame updates.
-		/// </summary>
-		public void Process()
-		{
-			AdvanceTransition();
-		}
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // SeasonProcessor does not have scene-specific settings to refresh
+        }
 
 		private void BeginTransition(Season nextSeason, float transitionTime, bool triggerEvent)
 		{
@@ -281,21 +290,21 @@ namespace Processors
 			SeasonDataSettings currentSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.TransitionFromSeason);
 			SeasonDataSettings nextSeasonData = _seasonDataContainer.GetSeasonData(_seasonRuntimeData.TransitionToSeason);
 
-			if (_seasonSettings.GrassMaterial)
+			if (_seasonDataContainer.GrassMaterial)
 			{
-				_seasonSettings.GrassMaterial.SetColor("_GridColor1", Color.Lerp(currentSeasonData.GrassGridColor1, nextSeasonData.GrassGridColor1, transition));
-				_seasonSettings.GrassMaterial.SetColor("_GridColor2", Color.Lerp(currentSeasonData.GrassGridColor2, nextSeasonData.GrassGridColor2, transition));
-				_seasonSettings.GrassMaterial.SetColor("_TopColor", Color.Lerp(currentSeasonData.GrassTopColor, nextSeasonData.GrassTopColor, transition));
-				_seasonSettings.GrassMaterial.SetColor("_WindColor", Color.Lerp(currentSeasonData.GrassWindColor, nextSeasonData.GrassWindColor, transition));
+				_seasonDataContainer.GrassMaterial.SetColor("_GridColor1", Color.Lerp(currentSeasonData.GrassGridColor1, nextSeasonData.GrassGridColor1, transition));
+				_seasonDataContainer.GrassMaterial.SetColor("_GridColor2", Color.Lerp(currentSeasonData.GrassGridColor2, nextSeasonData.GrassGridColor2, transition));
+				_seasonDataContainer.GrassMaterial.SetColor("_TopColor", Color.Lerp(currentSeasonData.GrassTopColor, nextSeasonData.GrassTopColor, transition));
+				_seasonDataContainer.GrassMaterial.SetColor("_WindColor", Color.Lerp(currentSeasonData.GrassWindColor, nextSeasonData.GrassWindColor, transition));
 			}
 
-			if (_seasonSettings.TerrainMaterial)
+			if (_seasonDataContainer.TerrainMaterial)
 			{
-				_seasonSettings.TerrainMaterial.SetColor("_color1", Color.Lerp(currentSeasonData.TerrainColor1, nextSeasonData.TerrainColor1, transition));
-				_seasonSettings.TerrainMaterial.SetColor("_color2", Color.Lerp(currentSeasonData.TerrainColor2, nextSeasonData.TerrainColor2, transition));
+				_seasonDataContainer.TerrainMaterial.SetColor("_color1", Color.Lerp(currentSeasonData.TerrainColor1, nextSeasonData.TerrainColor1, transition));
+				_seasonDataContainer.TerrainMaterial.SetColor("_color2", Color.Lerp(currentSeasonData.TerrainColor2, nextSeasonData.TerrainColor2, transition));
 			}
 
-			SetSeasonMaterial(_seasonRuntimeData.TransitionToSeason, transition, _seasonSettings);
+			SetSeasonMaterial(_seasonRuntimeData.TransitionToSeason, transition, _seasonDataContainer);
 		}
 
 		private void CompleteTransition()
@@ -306,43 +315,43 @@ namespace Processors
 		}
 
 		// Sets material shader properties based on season and transition progress.
-		private void SetSeasonMaterial(Season season, float transition, SeasonSettings settings)
+		private void SetSeasonMaterial(Season season, float transition, ScriptablesProcessorInfrastructure.AllSeasonSettings container)
 		{
 			if (season == Season.Autumn)
 			{
-				settings.TreeMaterial.SetFloat("_AutumnPower", transition * 0.3f);
-				settings.TreeMaterial.SetFloat("_SnowPower", 0);
-				settings.BuildingMaterial.SetFloat("_SnowPower", 0);
-				settings.BuildingMaterial.SetFloat("_SnowNoiseLevels", 0);
+				container.TreeMaterial.SetFloat("_AutumnPower", transition * 0.3f);
+				container.TreeMaterial.SetFloat("_SnowPower", 0);
+				container.BuildingMaterial.SetFloat("_SnowPower", 0);
+				container.BuildingMaterial.SetFloat("_SnowNoiseLevels", 0);
 			}
 			else if (season == Season.Winter)
 			{
-				settings.TreeMaterial.SetFloat("_AutumnPower", (1 - transition) * 0.5f);
-				settings.TreeMaterial.SetFloat("_SnowPower", transition * 0.5f);
-				settings.BuildingMaterial.SetFloat("_SnowPower", transition * 1f);
-				settings.BuildingMaterial.SetFloat("_SnowNoiseLevels", transition);
-				settings.WaterMaterial.SetFloat("_IceStrength", transition);
-				settings.TerrainMaterial.SetFloat("_Tint", transition * settings.WinterTint);
-				settings.GrassMaterial.SetFloat("_Tint", transition * settings.WinterTint);
+				container.TreeMaterial.SetFloat("_AutumnPower", (1 - transition) * 0.5f);
+				container.TreeMaterial.SetFloat("_SnowPower", transition * 0.5f);
+				container.BuildingMaterial.SetFloat("_SnowPower", transition * 1f);
+				container.BuildingMaterial.SetFloat("_SnowNoiseLevels", transition);
+				container.WaterMaterial.SetFloat("_IceStrength", transition);
+				container.TerrainMaterial.SetFloat("_Tint", transition * container.WinterTint);
+				container.GrassMaterial.SetFloat("_Tint", transition * container.WinterTint);
 			}
 			else if (season == Season.Spring)
 			{
-				settings.TreeMaterial.SetFloat("_SnowPower", (1 - transition) * 0.5f);
-				settings.BuildingMaterial.SetFloat("_SnowPower", (1 - transition) * 0.5f);
-				settings.TreeMaterial.SetFloat("_Spring", transition * 0.1f);
-				settings.TreeMaterial.SetFloat("_AutumnPower", 0);
-				settings.BuildingMaterial.SetFloat("_SnowNoiseLevels", (1 - transition));
-				settings.WaterMaterial.SetFloat("_IceStrength", 1 - transition);
-				settings.TerrainMaterial.SetFloat("_Tint", (1 - transition) * settings.RestTint);
-				settings.GrassMaterial.SetFloat("_Tint", (1 - transition) * settings.RestTint);
+				container.TreeMaterial.SetFloat("_SnowPower", (1 - transition) * 0.5f);
+				container.BuildingMaterial.SetFloat("_SnowPower", (1 - transition) * 0.5f);
+				container.TreeMaterial.SetFloat("_Spring", transition * 0.1f);
+				container.TreeMaterial.SetFloat("_AutumnPower", 0);
+				container.BuildingMaterial.SetFloat("_SnowNoiseLevels", (1 - transition));
+				container.WaterMaterial.SetFloat("_IceStrength", 1 - transition);
+				container.TerrainMaterial.SetFloat("_Tint", (1 - transition) * container.RestTint);
+				container.GrassMaterial.SetFloat("_Tint", (1 - transition) * container.RestTint);
 			}
 			else
 			{
-				settings.TreeMaterial.SetFloat("_Spring", (1 - transition) * 0.1f);
-				settings.TreeMaterial.SetFloat("_SnowPower", 0);
-				settings.TreeMaterial.SetFloat("_AutumnPower", 0);
-				settings.BuildingMaterial.SetFloat("_SnowPower", 0);
-				settings.BuildingMaterial.SetFloat("_SnowNoiseLevels", 0);
+				container.TreeMaterial.SetFloat("_Spring", (1 - transition) * 0.1f);
+				container.TreeMaterial.SetFloat("_SnowPower", 0);
+				container.TreeMaterial.SetFloat("_AutumnPower", 0);
+				container.BuildingMaterial.SetFloat("_SnowPower", 0);
+				container.BuildingMaterial.SetFloat("_SnowNoiseLevels", 0);
 			}
 		}
 

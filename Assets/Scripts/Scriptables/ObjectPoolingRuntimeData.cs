@@ -1,43 +1,41 @@
 using System;
+
+using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
-using UnityEngine;
 using Utils.Pooling;
 using Utils;
+using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for ObjectPoolingProcessor.
 	/// Manages pooled object queues, all object lists, and pool parent GameObjects.
 	/// </summary>
-	public class ObjectPoolingRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class ObjectPoolingRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Dictionary mapping object types to their pooled object queues.
 		/// Each queue contains inactive objects ready for reuse.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<string, Queue<PoolableObject>> _pooledObjects;
 
 		/// <summary>
 		/// Dictionary mapping object types to lists of all objects of that type.
 		/// Includes both active and inactive objects.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<string, List<PoolableObject>> _allObjects;
 
 		/// <summary>
 		/// Dictionary mapping object types to their parent GameObjects.
 		/// Used to organize pooled objects in the scene hierarchy.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<string, GameObject> _poolParents;
 
 		/// <summary>
 		/// Time taken to complete the object pooling initialization.
 		/// Used for performance monitoring.
 		/// </summary>
-		[SerializeField]
 		private TimeSpan _poolingDuration;
 
 		/// <summary>
@@ -67,6 +65,17 @@ namespace ScriptablesProcessorInfrastructure
 		public Dictionary<string, GameObject> PoolParents => _poolParents;
 
 		/// <summary>
+		/// Initializes the object pooling runtime data with default values.
+		/// </summary>
+		public ObjectPoolingRuntimeData()
+		{
+			_pooledObjects = new Dictionary<string, Queue<PoolableObject>>();
+			_allObjects = new Dictionary<string, List<PoolableObject>>();
+			_poolParents = new Dictionary<string, GameObject>();
+			_poolingDuration = TimeSpan.Zero;
+		}
+
+		/// <summary>
 		/// Initializes the pooling state with the provided values.
 		/// </summary>
 		public void InitializePooling(Dictionary<string, Queue<PoolableObject>> pooledObjects, Dictionary<string, List<PoolableObject>> allObjects, Dictionary<string, GameObject> poolParents, TimeSpan poolingDuration)
@@ -75,14 +84,6 @@ namespace ScriptablesProcessorInfrastructure
 			_allObjects = allObjects;
 			_poolParents = poolParents;
 			_poolingDuration = poolingDuration;
-		}
-
-		/// <summary>
-		/// Initializes the object pooling runtime data with default values.
-		/// </summary>
-		public void Initialize()
-		{
-			// Initialize with default values if needed
 		}
 	}
 }

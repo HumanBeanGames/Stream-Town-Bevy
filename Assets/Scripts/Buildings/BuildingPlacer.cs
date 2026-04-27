@@ -1,6 +1,5 @@
 using Character;
 using Processors;
-using Core;
 using Pathfinding;
 using SavingAndLoading.SavableObjects;
 using SavingAndLoading.Structs;
@@ -109,7 +108,6 @@ namespace Buildings
         /// Game coordinator for game state access.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private Coordinator _gameProcessor;
 
         /// <summary>
         /// Player runtime scriptable for player data access.

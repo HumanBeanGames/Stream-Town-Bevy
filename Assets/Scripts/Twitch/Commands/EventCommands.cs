@@ -1,52 +1,44 @@
 using GameEventSystem;
 using GameEventSystem.Events;
 using Processors;
-using Core;
 using Twitch.Utils;
 using TwitchLib.Client.Events;
 using Reflex.Attributes;
+using UserInterface;
+using UnityEngine;
 
-namespace Twitch.Commands 
+namespace Twitch.Commands
 {
     /// <summary>
     /// Handles Twitch chat event commands from channel point rewards.
     /// </summary>
-    public class EventCommands 
+    public class EventCommands
 	{
-        /// <summary>
-        /// The player processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private PlayerProcessor _playerProcessor;
+        private PlayerProcessor _playerProcessor;
+        private GameEventProcessor _gameEventProcessor;
+        private TownResourceProcessor _townResourceProcessor;
+        private ObjectPoolingProcessor _poolingProcessor;
+		private UserInterface_Event _eventInterface;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
 
-        /// <summary>
-        /// The game event processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private GameEventProcessor _gameEventProcessor;
+        public EventCommands(PlayerProcessor playerProcessor, GameEventProcessor gameEventProcessor,
+            TownResourceProcessor townResourceProcessor, ObjectPoolingProcessor poolingProcessor,
+			Processors.TwitchChatProcessor twitchChatProcessor)
+        {
+            _playerProcessor = playerProcessor;
+            _gameEventProcessor = gameEventProcessor;
+            _townResourceProcessor = townResourceProcessor;
+            _poolingProcessor = poolingProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+        }
 
-        /// <summary>
-        /// The town resource processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private TownResourceProcessor _townResourceProcessor;
+		private UserInterface_Event ResolveEventInterface()
+		{
+			if (_eventInterface == null)
+				_eventInterface = UnityEngine.Object.FindFirstObjectByType<UserInterface_Event>();
 
-        /// <summary>
-        /// The object pooling processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private ObjectPoolingProcessor _poolingProcessor;
-
-        /// <summary>
-        /// The game coordinator. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private Coordinator _gameProcessor;
-
-        /// <summary>
-        /// The UI processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private UIProcessor _uiProcessor;
-
-        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private MessageSender _messageSender;
+			return _eventInterface;
+		}
 
         /// <summary>
         /// Processes an event message from Twitch.
@@ -109,7 +101,7 @@ namespace Twitch.Commands
 			int rand = UnityEngine.Random.Range(0, 10);
 
 			if (rand == 0)
-				eventProcessor.AddEvent(new FishGodEvent(0, _gameEventProcessor, _townResourceProcessor, _playerProcessor, _poolingProcessor, _messageSender, _uiProcessor.EventInterface));
+				eventProcessor.AddEvent(new FishGodEvent(0, gameEventProcessor: _gameEventProcessor, townResourceProcessor: _townResourceProcessor, playerProcessor: _playerProcessor, poolingProcessor: _poolingProcessor, twitchChatProcessor: _twitchChatProcessor, eventInterface: ResolveEventInterface()));
 		}
 	}
 }

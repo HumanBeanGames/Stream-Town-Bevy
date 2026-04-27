@@ -1,23 +1,26 @@
 using Reflex.Core;
-using ScriptablesProcessorInfrastructure;
+using System;
 using UnityEngine;
 
-namespace Data.Containers
+namespace ScriptablesProcessorInfrastructure
 {
 	/// <summary>
-	/// MonoBehaviour wrapper for AllSeasonsSettings that implements IInstaller.
+	/// MonoBehaviour wrapper for AllSeasonSettings that implements IInstaller.
 	/// References the serialized asset created in-editor.
 	/// </summary>
 	public class AllSeasonsSettingsInstaller : MonoBehaviour, IInstaller
 	{
 		[SerializeField]
-		private AllSeasonsSettings _allSeasonsData;
+		private AllSeasonSettings _allSeasonSettings;
 
-		public AllSeasonsSettings AllSeasonsData => _allSeasonsData;
+		public AllSeasonSettings AllSeasonSettings => _allSeasonSettings;
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{
-			containerBuilder.AddSingleton(this);
+			if (_allSeasonSettings == null)
+				throw new InvalidOperationException($"{nameof(AllSeasonsSettingsInstaller)} on '{gameObject.name}' is missing an {nameof(AllSeasonSettings)} reference.");
+
+			containerBuilder.AddSingleton(_allSeasonSettings);
 		}
 	}
 }

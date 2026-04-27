@@ -1,25 +1,25 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
-using Reflex.Injectors;
-using Reflex.Extensions;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using Utils.Pooling;
 using Utils;
 using Reflex.Attributes;
 using Reflex.Core;
+using Reflex.Injectors;
 using ScriptablesProcessorInfrastructure;
 using Data.Containers;
 
 namespace Processors
 {
-	/// <summary>
-	/// Processor that manages object pooling for performance optimization.
-	/// Handles pooling of game objects to reduce instantiation overhead.
-	/// </summary>
-	public partial class ObjectPoolingProcessor : MonoBehaviour, IInstaller, IProcessor
-	{
+    /// <summary>
+    /// Processor that manages object pooling for performance optimization.
+    /// Handles pooling of game objects to reduce instantiation overhead.
+    /// </summary>
+    public partial class ObjectPoolingProcessor : MonoBehaviour, IInstaller, IProcessor, IAsyncInitializableProcessor, IMainThreadInitializableProcessor
+    {
         /// <summary>
         /// Reflex DI container for dependency injection.
         /// Injected via Reflex dependency injection.
@@ -33,22 +33,27 @@ namespace Processors
         [Inject] private Container _sceneContainer;
 
         /// <summary>
-        /// ScriptableObject containing object pooling settings.
+        /// Object pooling settings containing configuration for pooled objects.
         /// Injected via Reflex dependency injection.
         /// </summary>
         [Inject] private ObjectPoolingSettings _objectPoolingSettings;
 
         /// <summary>
-        /// Runtime data ScriptableObject for object pooling.
-        /// Injected via Reflex dependency injection.
+        /// Runtime data for object pooling state.
+        /// Installed via InjectRuntimeData during container initialization.
         /// </summary>
-        [Inject] private ObjectPoolingRuntimeData _objectPoolingRuntimeData;
+        private ObjectPoolingRuntimeData _objectPoolingRuntimeData;
 
         /// <summary>
-        /// Processor containing game state runtime data.
+        /// Game state processor for notifying when objects are pooled.
         /// Injected via Reflex dependency injection.
         /// </summary>
         [Inject] private GameStateProcessor _gameStateProcessor;
+
+        /// <summary>
+        /// Tracks whether pooling has been initialized for the current scene.
+        /// </summary>
+        private bool _poolingInitializedForScene = false;
 
         /// <summary>
         /// Processor containing game event runtime data.
@@ -61,8 +66,14 @@ namespace Processors
         /// </summary>
         /// <param name="poolName">The name of the pool to add the object to.</param>
         /// <param name="go">The pooled object to return to the pool.</param>
-		public void AddToPool(string poolName, PoolableObject go)
-		{
+        public void AddToPool(string poolName, PoolableObject go)
+        {
+            if (string.IsNullOrEmpty(poolName))
+                throw new InvalidOperationException("ObjectPoolingProcessor: Tried to return a pooled object before its pool name was initialized.");
+
+            if (!_objectPoolingRuntimeData.PooledObjects.ContainsKey(poolName))
+                throw new KeyNotFoundException($"ObjectPoolingProcessor: Tried to return object to unregistered pool '{poolName}'.");
+
 			_objectPoolingRuntimeData.PooledObjects[poolName].Enqueue(go);
 		}
 
@@ -73,9 +84,46 @@ namespace Processors
 		/// <param name="progressReporter">Optional callback for reporting progress (progress, message).</param>
 		public async Task InitializePooling(Action<float, string> progressReporter = null)
 		{
+			Debug.Log($"[ObjectPoolingProcessor] InitializePooling entry - _poolingInitializedForScene: {_poolingInitializedForScene}, _objectPoolingSettings: {_objectPoolingSettings != null}, _container: {_container != null}, _sceneContainer: {_sceneContainer != null}");
+
+			if (_poolingInitializedForScene)
+			{
+				Debug.Log($"[ObjectPoolingProcessor] Pooling already initialized for current scene, skipping");
+				return;
+			}
+
+			if (_objectPoolingSettings == null)
+			{
+				Debug.LogError("[ObjectPoolingProcessor] ObjectPoolingSettings is null, cannot initialize pooling");
+				return;
+			}
+
+			Debug.Log($"[ObjectPoolingProcessor] Settings not null, ObjectsToPool: {_objectPoolingSettings.ObjectsToPool != null}, Count: {_objectPoolingSettings.ObjectsToPool?.Count ?? 0}");
+
+			if (_objectPoolingSettings.ObjectsToPool == null || _objectPoolingSettings.ObjectsToPool.Count == 0)
+			{
+				Debug.LogWarning("[ObjectPoolingProcessor] No objects to pool configured, skipping initialization");
+				_poolingInitializedForScene = true;
+				return;
+			}
+
 			Debug.Log($"[ObjectPoolingProcessor] InitializePooling called, activeSelf: {gameObject.activeSelf}, activeInHierarchy: {gameObject.activeInHierarchy}, has parent: {transform.parent != null}");
+
+			if (_objectPoolingRuntimeData.PoolParents != null)
+			{
+				foreach (var poolParent in _objectPoolingRuntimeData.PoolParents.Values)
+				{
+					if (poolParent != null)
+					{
+						Debug.Log($"[ObjectPoolingProcessor] Destroying old pool parent: {poolParent.name}");
+						UnityEngine.Object.Destroy(poolParent);
+					}
+				}
+			}
+
 			await PoolObjectsAsync(_objectPoolingSettings.ObjectsToPool, _objectPoolingSettings.DebugPooling, progressReporter);
 			_gameStateProcessor.NotifyObjectsPooled();
+			_poolingInitializedForScene = true;
 		}
 
 		/// <summary>
@@ -198,8 +246,15 @@ namespace Processors
 			Dictionary<string, Queue<PoolableObject>> pooledObjects = new Dictionary<string, Queue<PoolableObject>>();
 			Dictionary<string, GameObject> poolParents = new Dictionary<string, GameObject>();
 			Dictionary<string, List<PoolableObject>> allObjects = new Dictionary<string, List<PoolableObject>>();
+			Container injectionContainer = GetRequiredInjectionContainer();
+			_objectPoolingRuntimeData.InitializePooling(pooledObjects, allObjects, poolParents, TimeSpan.Zero);
 
 			GameObject poolParent = new GameObject("Pooled Objects");
+			Scene targetScene = SceneManager.GetActiveScene();
+			if (targetScene.IsValid() && targetScene.isLoaded)
+			{
+				SceneManager.MoveGameObjectToScene(poolParent, targetScene);
+			}
 
 			for (int i = 0; i < _objectPoolingSettings.ObjectsToPool.Count; i++)
 			{
@@ -214,13 +269,14 @@ namespace Processors
 				for (int j = 0; j < _objectPoolingSettings.ObjectsToPool[i].PoolAmount; j++)
 				{
 					GameObject obj = UnityEngine.Object.Instantiate(_objectPoolingSettings.ObjectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
-					obj.SetActive(false);
+					GameObjectInjector.InjectRecursive(obj, injectionContainer);
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
 					if (poolObj == null)
 						poolObj = obj.AddComponent<PoolableObject>();
 					obj.name = objName + j;
 					allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName);
+					obj.SetActive(false);
 				}
 			}
 
@@ -253,11 +309,39 @@ namespace Processors
 
 		/// <summary>
 		/// Initializes the object pooling processor.
-		/// No initialization logic required here; initialization happens via InitializePooling coroutine.
+		/// No initialization logic required here; initialization happens via InitializeAsync.
 		/// </summary>
 		public void Initialize()
 		{
-			// ObjectPoolingProcessor does not require runtime-data back references.
+			if (_objectPoolingRuntimeData == null)
+				throw new InvalidOperationException("ObjectPoolingProcessor: ObjectPoolingRuntimeData has not been installed.");
+
+			SceneManager.sceneLoaded += OnSceneLoaded;
+			Debug.Log($"[ObjectPoolingProcessor] Scene loaded event handler registered");
+		}
+
+		        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            Debug.Log($"[ObjectPoolingProcessor] OnSceneLoaded called - Scene: {scene.name}, mode: {mode}");
+            
+            // Reset the flag so pooling can be re-initialized for the new scene
+            _poolingInitializedForScene = false;
+
+            Debug.Log($"[ObjectPoolingProcessor] Waiting for Coordinator to refresh scene bindings before re-initializing pooling for scene: {scene.name}");
+        }
+
+        private void OnDestroy()
+        {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+		}
+
+		/// <summary>
+		/// Asynchronously initializes the object pooling processor.
+		/// Called by the Coordinator during startup.
+		/// </summary>
+		public async Task InitializeAsync(ProcessorStartupContext startupContext, CancellationToken cancellationToken)
+		{
+			await InitializePooling((progress, status) => startupContext.Report(progress, status));
 		}
 
 		/// <summary>
@@ -268,6 +352,56 @@ namespace Processors
 		public void Process()
 		{
 			// ObjectPoolingProcessor does not require per-frame updates
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			_sceneContainer = sceneContainer;
+			if (sceneContainer != null)
+			{
+				var newSettings = sceneContainer.Resolve<ObjectPoolingSettings>();
+				if (newSettings != null)
+				{
+					_objectPoolingSettings = newSettings;
+					Debug.Log($"[ObjectPoolingProcessor] Refreshed settings from scene container, ObjectsToPool count: {newSettings.ObjectsToPool?.Count ?? 0}");
+				}
+			}
+		}
+
+		/// <summary>
+		/// Ensures all pool parents are in the active scene.
+		/// Should be called before world generation to ensure pooled objects are accessible.
+		/// </summary>
+		public void EnsurePoolParentsInActiveScene()
+		{
+			if (_objectPoolingRuntimeData.PoolParents == null)
+				return;
+
+			Scene targetScene = SceneManager.GetActiveScene();
+			Debug.Log($"[ObjectPoolingProcessor] Ensuring pool parents in active scene: {targetScene.name}");
+
+			foreach (var poolParent in _objectPoolingRuntimeData.PoolParents.Values)
+			{
+				if (poolParent != null)
+				{
+					SceneManager.MoveGameObjectToScene(poolParent, targetScene);
+					Debug.Log($"[ObjectPoolingProcessor] Moved pool parent '{poolParent.name}' to scene: {targetScene.name}");
+				}
+			}
+		}
+
+		/// <summary>
+		/// Resets the pooling initialization flag to allow re-initialization.
+		/// Should be called when loading a new scene.
+		/// </summary>
+		public void ResetPoolingInitialization()
+		{
+			_poolingInitializedForScene = false;
+			Debug.Log($"[ObjectPoolingProcessor] Pooling initialization flag reset");
 		}
 
 		/// <summary>
@@ -287,18 +421,31 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			ObjectPoolingRuntimeData objectPoolingRuntimeData = ScriptableObject.CreateInstance<ObjectPoolingRuntimeData>();
-			containerBuilder.AddSingleton(objectPoolingRuntimeData);
+			if (_objectPoolingRuntimeData != null)
+				throw new InvalidOperationException("ObjectPoolingProcessor: ObjectPoolingRuntimeData has already been installed.");
+
+			_objectPoolingRuntimeData = new ObjectPoolingRuntimeData();
+			containerBuilder.AddSingleton(_objectPoolingRuntimeData);
+		}
+
+		private Container GetRequiredInjectionContainer()
+		{
+			if (_sceneContainer == null)
+				throw new InvalidOperationException("ObjectPoolingProcessor: Scene container has not been refreshed before pooled object injection.");
+
+			return _sceneContainer;
 		}
 
 		// Instantiates a new object to add to a pool when the pool is exhausted.
 		private PoolableObject InstantiateNewObjectToPool(string name, List<Utils.Pooling.PooledObjectData> objectsToPool)
 		{
+			Container injectionContainer = GetRequiredInjectionContainer();
 			for (int i = 0; i < objectsToPool.Count; i++)
 			{
 				if (objectsToPool[i].Name == name)
 				{
 					GameObject obj = UnityEngine.Object.Instantiate(objectsToPool[i].Prefab);
+					GameObjectInjector.InjectRecursive(obj, injectionContainer);
 					PoolableObject poolObj = null;
 					if (!obj.TryGetComponent(out poolObj))
 						poolObj = obj.AddComponent<PoolableObject>();
@@ -330,9 +477,24 @@ namespace Processors
 			Dictionary<string, Queue<PoolableObject>> pooledObjects = new Dictionary<string, Queue<PoolableObject>>();
 			Dictionary<string, GameObject> poolParents = new Dictionary<string, GameObject>();
 			Dictionary<string, List<PoolableObject>> allObjects = new Dictionary<string, List<PoolableObject>>();
+			Container injectionContainer = GetRequiredInjectionContainer();
+			_objectPoolingRuntimeData.InitializePooling(pooledObjects, allObjects, poolParents, TimeSpan.Zero);
 			float frameStartTime = Time.realtimeSinceStartup;
 
 			GameObject poolParent = new GameObject("Pooled Objects");
+			Scene targetScene = SceneManager.GetActiveScene();
+			Debug.Log($"[ObjectPoolingProcessor] Creating pool parent. Active scene: {targetScene.name}, isValid: {targetScene.IsValid()}, isLoaded: {targetScene.isLoaded}");
+			
+			if (targetScene.IsValid() && targetScene.isLoaded)
+			{
+				SceneManager.MoveGameObjectToScene(poolParent, targetScene);
+				Debug.Log($"[ObjectPoolingProcessor] Moved pool parent to scene: {targetScene.name}");
+			}
+			else
+			{
+				Debug.LogWarning($"[ObjectPoolingProcessor] Active scene not loaded, pool parent may not be in correct scene");
+			}
+
 			int objectTypeCount = objectsToPool.Count;
 
 			if (objectTypeCount == 0)
@@ -356,8 +518,7 @@ namespace Processors
 				for (int j = 0; j < objectsToPool[i].PoolAmount; j++)
 				{
 					GameObject obj = UnityEngine.Object.Instantiate(objectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
-
-					obj.SetActive(false);
+					GameObjectInjector.InjectRecursive(obj, injectionContainer);
 
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
 					if (poolObj == null)
@@ -365,6 +526,8 @@ namespace Processors
 					obj.name = objName + j;
 					allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName);
+
+					obj.SetActive(false);
 
 					float typeProgress = poolAmount > 0 ? (j + 1f) / poolAmount : 1f;
 					float overallProgress = (i + typeProgress) / objectTypeCount;

@@ -14,11 +14,13 @@ This project uses a strict 3-layer architecture to separate concerns and maintai
 - **Simple data access methods only** - ScriptableObjects may contain simple methods (3-5 lines) that get or set a single field with basic safety checks. Complex logic must be in processors.
 - **No references to processors** - ScriptableObjects must not reference any processor classes
 - **No references to other ScriptableObjects** - ScriptableObjects must not reference each other
+- **No behavior/service references in RuntimeData** - RuntimeData classes must not hold processors, command handlers, service objects, scene objects, or other composed behavior references; they are pure state containers
 - **No injections** - ScriptableObjects must not use `[Inject]` attributes or any dependency injection
 - **Public properties with setters** - All private data fields must be exposed via public properties with getters and setters
-- **Namespace: ScriptablesProcessorInfrastructure** - All IDataScriptable and IRuntimeDataScriptable implementations must use the `ScriptablesProcessorInfrastructure` namespace to enforce access control
+- **Namespace: ScriptablesProcessorInfrastructure for IDataScriptable** - IDataScriptable implementations must use the `ScriptablesProcessorInfrastructure` namespace to enforce access control
+- **Namespace: Processors for IRuntimeDataScriptable** - IRuntimeDataScriptable implementations must use the `Processors` namespace to allow access from implementation layer and other processors
 - **Registered in SceneScope** - ScriptableObjects are loaded in the Scene Scope on a scene-by-scene basis as needed
-- **RuntimeDatas have no installers** - RuntimeDatas DO NOT get installer classes. The processor instantiates and installs the RuntimeData directly on creation
+- **RuntimeDatas have no installers** - RuntimeDatas DO NOT get installer classes. The processor instantiates and installs the RuntimeData in the InjectRuntimeData() call during the binding/installation phase
 - **RuntimeInstaller prohibition** - IRuntimeDataScriptable types must NOT have dedicated installer classes. No `*RuntimeInstaller.cs` files should exist in the project.
 
 **Examples of acceptable methods:**
@@ -117,11 +119,15 @@ namespace Data.Containers
 - **No data fields** - Processors must not have any data fields or state
 - **Injected data objects only** - Processors may only have fields that are injected ScriptableObjects (data layer)
 - **No state** - Processors must be stateless; all state must be stored in injected ScriptableObjects
+- **Exception: Local runtime data reference** - Processors may have a private field for their own RuntimeData without `[Inject]` if they instantiate and bind it in `InjectRuntimeData()`. This is necessary because when processors use `AddSingleton(this)`, Reflex doesn't auto-inject fields on the manually-added instance. The processor must assign the field directly after creating the RuntimeData and bind it to the container for other components to inject.
 - **Properties are allowed** - Properties are acceptable if they simply pass through data from injected objects
 - **Functions only** - All logic must be implemented as methods
 - **Dependency injection** - Processors use `[Inject]` attributes to receive data objects
 - **IInstaller implementation** - Processors implement `IInstaller` to register themselves as singletons
 - **InjectRuntimeData method** - Processors implement `InjectRuntimeData(ContainerBuilder containerBuilder)`; processors that manage RuntimeData instantiate and register it there, processors without RuntimeData implement a documented no-op
+- **Install-before-initialize** - RuntimeData must be created and registered in `InjectRuntimeData()` before `Initialize()` runs
+- **No runtime-data allocation in Initialize** - `Initialize()` must populate or validate installed RuntimeData only; it must never be the first place RuntimeData is created
+- **RuntimeData is data-only** - RuntimeData does not hold processors, command handlers, service objects, or behavior composition
 - **InstallBindings call pattern** - `InstallBindings(ContainerBuilder containerBuilder)` must register `this` and call `InjectRuntimeData(containerBuilder)`
 - **No coroutines** - Processors must not use coroutines; coroutines inherently cause processors to have states. Use the `Process()` function for per-frame logic instead
 - **No Awake or Start** - Processors must not have Awake or Start methods. All initialization logic must be in the `Initialize()` method
@@ -153,13 +159,13 @@ public class ExampleProcessor : MonoBehaviour, IInstaller, IProcessor
     public void InjectRuntimeData(ContainerBuilder containerBuilder)
     {
         // Instantiate and register RuntimeData singleton
-        ExampleRuntimeData runtimeData = ScriptableObject.CreateInstance<ExampleRuntimeData>();
-        containerBuilder.AddSingleton(runtimeData);
+        _runtimeData = new ExampleRuntimeData();
+        containerBuilder.AddSingleton(_runtimeData);
     }
 
     public void Initialize()
     {
-        // Initialize data objects directly via properties
+        // Initialize installed data objects directly via properties
         _runtimeData.DataField = new DataType();
     }
 
@@ -269,12 +275,14 @@ For each ScriptableObject in the project:
 - [ ] **No methods or functions** - The ScriptableObject contains only data fields and properties
 - [ ] **No processor references** - The ScriptableObject does not reference any processor classes
 - [ ] **No ScriptableObject references** - The ScriptableObject does not reference other ScriptableObjects
-- [ ] **No dependency injection** - The ScriptableObject does not use `[Inject]` attributes or any DI framework
+- [ ] **No behavior/service references in RuntimeData** - RuntimeData does not hold processors, command handlers, service objects, or behavior composition
+- [ ] **No injections** - The ScriptableObject does not use `[Inject]` attributes or any DI framework
 - [ ] **Public properties with setters** - All private fields are exposed via public properties with both getters and setters
 - [ ] **No logic** - The ScriptableObject contains no conditional logic, loops, or calculations
 - [ ] **No events** - Events should be declared but not invoked within ScriptableObjects (invocation happens in Processors)
-- [ ] **RuntimeDatas have no installers** - RuntimeDatas DO NOT have installer classes; the processor instantiates and installs them directly on creation
-- [ ] **Correct namespace** - IDataScriptable and IRuntimeDataScriptable implementations use the `ScriptablesProcessorInfrastructure` namespace
+- [ ] **RuntimeDatas have no installers** - RuntimeDatas DO NOT have installer classes; the processor instantiates and installs them in the InjectRuntimeData() call during the binding/installation phase
+- [ ] **Correct namespace for IDataScriptable** - IDataScriptable implementations use the `ScriptablesProcessorInfrastructure` namespace
+- [ ] **Correct namespace for IRuntimeDataScriptable** - IRuntimeDataScriptable implementations use the `Processors` namespace
 
 ### Processor Layer
 
@@ -288,7 +296,9 @@ For each Processor in the project:
 - [ ] **Uses dependency injection** - The Processor uses `[Inject]` attributes for ScriptableObject dependencies
 - [ ] **Implements IInstaller** - The Processor implements `IInstaller` and registers itself as singleton
 - [ ] **Implements InjectRuntimeData signature** - The Processor implements `InjectRuntimeData(ContainerBuilder containerBuilder)`
-- [ ] **InjectRuntimeData behavior** - If owning RuntimeData, instantiate/register there; otherwise keep a documented no-op
+- [ ] **InjectRuntimeData behavior** - If owning RuntimeData, instantiate/register there before initialization; otherwise keep a documented no-op
+- [ ] **No RuntimeData allocation in Initialize** - `Initialize()` does not first create RuntimeData
+- [ ] **RuntimeData is data-only** - RuntimeData does not hold processors, command handlers, service objects, or behavior composition
 - [ ] **InstallBindings call flow** - `InstallBindings` registers `this` and calls `InjectRuntimeData(containerBuilder)`
 - [ ] **No direct ScriptableObject references in implementation** - The Processor's public API does not expose ScriptableObjects directly
 - [ ] **No Awake or Start** - The Processor does not have Awake or Start methods

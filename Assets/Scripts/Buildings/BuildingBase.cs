@@ -279,6 +279,11 @@ namespace Buildings
             // Set building state correctly and invoke the On Build Event.
             _buildingState = BuildingState.Building;
             _onBuiltEvent.Invoke();
+
+            // Bail out if _gameEventProcessor is null (DI not injected yet)
+            if (_gameEventProcessor == null)
+                return;
+
             _gameEventProcessor.InvokeBuildingBuilt(_buildingType);
         }
 

@@ -1,48 +1,44 @@
 using GridSystem.Utils;
-using GridSystem;
-using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+using GridSystem;
+
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for GridProcessor.
 	/// Contains the grid node array and grid dimensions for pathfinding and placement.
 	/// </summary>
-	public class GridRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class GridRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Array of grid nodes representing the game world grid.
 		/// Each node contains information about walkability, world position, and grid coordinates.
 		/// </summary>
-		[SerializeField]
 		private GridNode[] _grid;
 
 		/// <summary>
 		/// X-axis offset for grid positioning.
 		/// Used to center the grid in world space.
 		/// </summary>
-		[SerializeField]
-		private float _offSetX = 0;
+		private float _offSetX;
 
 		/// <summary>
 		/// Z-axis offset for grid positioning.
 		/// Used to center the grid in world space.
 		/// </summary>
-		[SerializeField]
-		private float _offSetZ = 0;
+		private float _offSetZ;
 
 		/// <summary>
 		/// Number of grid cells along the X-axis.
 		/// Determines the width of the grid.
 		/// </summary>
-		[SerializeField]
 		private int _cellsX;
 
 		/// <summary>
 		/// Number of grid cells along the Z-axis.
 		/// Determines the depth of the grid.
 		/// </summary>
-		[SerializeField]
 		private int _cellsZ;
 
 		/// <summary>
@@ -93,9 +89,13 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the grid runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public GridRuntimeData()
 		{
-			// Initialize with default values if needed
+			_grid = null;
+			_offSetX = 0f;
+			_offSetZ = 0f;
+			_cellsX = 0;
+			_cellsZ = 0;
 		}
 	}
 }

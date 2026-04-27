@@ -62,6 +62,15 @@ namespace Processors
         }
 
         /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // EventProcessor does not have scene-specific settings to refresh
+        }
+
+        /// <summary>
         /// Registers this processor as a singleton in the dependency injection container.
         /// Called by Reflex during container initialization.
         /// </summary>

@@ -1,20 +1,20 @@
 using System.Collections.Generic;
-using UnityEngine;
+
+using ScriptablesProcessorInfrastructure;
 using Audio;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime audio state for the game.
+	/// Runtime data class that stores audio state for the game.
 	/// Manages the queue of audio handlers for audio processing.
 	/// </summary>
-	public class AudioRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class AudioRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Queue of audio handlers waiting to be processed.
 		/// </summary>
-		[SerializeField]
-		private Queue<AudioHandler> _audioHandlers = new Queue<AudioHandler>();
+		private Queue<AudioHandler> _audioHandlers;
 
 		/// <summary>
 		/// Gets the queue of audio handlers.
@@ -24,9 +24,9 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the audio runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public AudioRuntimeData()
 		{
-			// Initialize with default values if needed
+			_audioHandlers = new Queue<AudioHandler>();
 		}
 	}
 }

@@ -10,15 +10,15 @@ using static Data.SharedTypes;
 
 namespace Processors
 {
-	public class PlayerInputProcessor : MonoBehaviour, IInstaller, IProcessor
+	public class PlayerInputProcessor : MonoBehaviour, IInstaller, IProcessor, IMainThreadInitializableProcessor
 	{
 		[Inject] private PlayerInputSettings _playerInputSettings;
 
         /// <summary>
-        /// Runtime player input data ScriptableObject.
-        /// Injected via Reflex dependency injection.
+        /// Runtime player input data.
+        /// Assigned in InjectRuntimeData.
         /// </summary>
-        [Inject] private PlayerInputRuntimeData _playerInputRuntimeData;
+        private PlayerInputRuntimeData _playerInputRuntimeData;
 
 		public event Action<InputButton> OnLeftClickPress;
 		public event Action<InputButton> OnLeftClickHold;
@@ -78,6 +78,9 @@ namespace Processors
 
 		public void Initialize()
 		{
+			if (_playerInputRuntimeData == null)
+				throw new InvalidOperationException("PlayerInputProcessor: PlayerInputRuntimeData has not been installed.");
+
 			_playerInputRuntimeData.PlayerInput = new PlayerInput();
 
 			_playerInputRuntimeData.PlayerInput.BasicControls.MouseLeftClick.started += ctx => OnLeftClickPress?.Invoke(InputButton.LeftMouse);     // Started is called on button clicked
@@ -140,9 +143,11 @@ namespace Processors
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register PlayerInputRuntimeData ScriptableObject
-			PlayerInputRuntimeData playerInputRuntimeData = ScriptableObject.CreateInstance<PlayerInputRuntimeData>();
-			containerBuilder.AddSingleton(playerInputRuntimeData);
+			if (_playerInputRuntimeData != null)
+				throw new InvalidOperationException("PlayerInputProcessor: PlayerInputRuntimeData has already been installed.");
+
+			_playerInputRuntimeData = new PlayerInputRuntimeData();
+			containerBuilder.AddSingleton(_playerInputRuntimeData);
 		}
 
 		/// <summary>
@@ -195,8 +200,18 @@ namespace Processors
 				return;
 
 			Vector2 currentMousePos = _playerInputRuntimeData.PlayerInput.BasicControls.MousePosition.ReadValue<Vector2>();
+			_playerInputRuntimeData.MousePosition = currentMousePos;
 			_playerInputRuntimeData.MouseDelta = _playerInputRuntimeData.PreviousMousePos - currentMousePos;
 			_playerInputRuntimeData.PreviousMousePos = currentMousePos;
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// PlayerInputProcessor does not have scene-specific settings to refresh
 		}
 
 		private void InitializeHeldKeys()

@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.Events;
 using Utils;
@@ -28,7 +29,7 @@ namespace Processors
     /// Processor that manages object selection for the game.
     /// Handles single object selection, group selection, and selection events.
     /// </summary>
-	public partial class ObjectSelectionProcessor : MonoBehaviour, IInstaller, IProcessor
+	public partial class ObjectSelectionProcessor : MonoBehaviour, IInstaller, IProcessor, IMainThreadInitializableProcessor
 	{
         /// <summary>
         /// Object pooling processor for accessing pooled objects.
@@ -50,9 +51,9 @@ namespace Processors
 
         /// <summary>
         /// Runtime data ScriptableObject for object selection data.
-        /// Injected via Reflex dependency injection.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-        [Inject] private ObjectSelectionRuntimeData _objectSelectionRuntimeData;
+        private ObjectSelectionRuntimeData _objectSelectionRuntimeData;
 
         /// <summary>
         /// Subscribes a callback to the object selected event.
@@ -319,12 +320,11 @@ namespace Processors
 				recruits[i].Player.StationSensor.TrySetStation(station, recruits[i].Player);
 		}
 
-		/// <summary>
-		/// Initializes the object selection processor.
-		/// Sets up the object selected event.
-		/// </summary>
 		public void Initialize()
 		{
+			if (_objectSelectionRuntimeData == null)
+				throw new InvalidOperationException("ObjectSelectionProcessor: ObjectSelectionRuntimeData has not been installed.");
+
 			_objectSelectionRuntimeData.OnObjectSelected = new UnityEvent<SelectableObject, object>();
 			_objectSelectionRuntimeData.OnObjectSelected.AddListener(ObjectSelected);
 
@@ -334,21 +334,18 @@ namespace Processors
 			_playerInputProcessor.OnLeftClickHold += StartGroupSelect;
 		}
 
-		/// <summary>
-		/// Updates group selection UI and handles escape key.
-		/// Called every frame by the Coordinator.
-		/// </summary>
 		public void Process()
 		{
 			if (_objectSelectionRuntimeData.StartedGroupSelection)
 			{
 				Vector3 mousePos = Vector3.zero;
 				if (RayTraceFromCamera(Camera.main, _playerInputProcessor.MousePosition, out Vector3 hitPos))
-					mousePos = hitPos + (Vector3.up * 0.01f);
+					mousePos = hitPos;
 				else
-					Debug.LogError("Cant find mouse point" + this);
+					return;
 
-				_objectSelectionSettings.SelectionUI.SetGroupSelectionArea(_objectSelectionRuntimeData.StartedSelectionPosition, mousePos);
+				_objectSelectionRuntimeData.GroupSelectionRect.anchoredPosition = _playerInputProcessor.MousePosition;
+				_objectSelectionRuntimeData.GroupSelectionRect.sizeDelta = mousePos - _objectSelectionRuntimeData.GroupSelectionStartPos;
 			}
 
 			if (_playerInputProcessor.EscapePressed)
@@ -384,6 +381,15 @@ namespace Processors
 		}
 
 		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// ObjectSelectionProcessor does not have scene-specific settings to refresh
+		}
+
+		/// <summary>
 		/// Registers this processor as a singleton in the dependency injection container.
 		/// Called by Reflex during container initialization.
 		/// </summary>
@@ -400,8 +406,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			ObjectSelectionRuntimeData objectSelectionRuntimeData = ScriptableObject.CreateInstance<ObjectSelectionRuntimeData>();
-			containerBuilder.AddSingleton(objectSelectionRuntimeData);
+			if (_objectSelectionRuntimeData != null)
+				throw new InvalidOperationException("ObjectSelectionProcessor: ObjectSelectionRuntimeData has already been installed.");
+
+			_objectSelectionRuntimeData = new ObjectSelectionRuntimeData();
+			containerBuilder.AddSingleton(_objectSelectionRuntimeData);
 		}
 	}
 }

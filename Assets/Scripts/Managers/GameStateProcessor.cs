@@ -16,10 +16,15 @@ namespace Processors
 	public partial class GameStateProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
         /// <summary>
-        /// Runtime data ScriptableObject for game state.
-        /// Injected via Reflex dependency injection.
+        /// Runtime data for game state.
+        /// Assigned in InjectRuntimeData.
         /// </summary>
-        [Inject] private GameStateRuntimeData _gameStateRuntimeData;
+        private GameStateRuntimeData _gameStateRuntimeData;
+
+        /// <summary>
+        /// The Twitch chat processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private TwitchChatProcessor _twitchChatProcessor;
 
 		/// <summary>
 		/// Player control is active and ready.
@@ -33,6 +38,7 @@ namespace Processors
 				if (_gameStateRuntimeData.PlayerReady == value) return;
 				_gameStateRuntimeData.PlayerReady = value;
 				_gameStateRuntimeData.InvokeReadiedPlayer();
+				_twitchChatProcessor.SetPlayerReady(value);
 			}
 		}
 
@@ -93,11 +99,13 @@ namespace Processors
 
         /// <summary>
         /// Initializes the game state processor.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// No initialization logic required for this processor.
         /// </summary>
-        public void Initialize()
+        		public void Initialize()
 		{
-			// GameStateProcessor doesn't require initialization logic
+			if (_gameStateRuntimeData == null)
+				throw new InvalidOperationException("GameStateProcessor: GameStateRuntimeData has not been installed.");
 		}
 
         /// <summary>
@@ -117,8 +125,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			GameStateRuntimeData gameStateRuntimeData = ScriptableObject.CreateInstance<GameStateRuntimeData>();
-			containerBuilder.AddSingleton(gameStateRuntimeData);
+			if (_gameStateRuntimeData != null)
+				throw new InvalidOperationException("GameStateProcessor: GameStateRuntimeData has already been installed.");
+
+			_gameStateRuntimeData = new GameStateRuntimeData();
+			containerBuilder.AddSingleton(_gameStateRuntimeData);
 		}
 
         /// <summary>
@@ -129,6 +140,15 @@ namespace Processors
         public void Process()
         {
             // GameStateProcessor does not require per-frame updates
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // GameStateProcessor does not have scene-specific settings to refresh
         }
 
 		/// <summary>

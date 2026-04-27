@@ -1,4 +1,6 @@
 using GridSystem.Utils;
+using GridSystem.Partitioning;
+using System;
 using UnityEngine;
 using Reflex.Attributes;
 using Reflex.Core;
@@ -22,10 +24,10 @@ namespace GridSystem
 		[Inject] private GridSettings _gridSettings;
 
 		/// <summary>
-		/// Runtime data ScriptableObject for grid data.
-		/// Injected via Reflex dependency injection.
+		/// Runtime data for grid data.
+		/// Assigned in InjectRuntimeData.
 		/// </summary>
-		[Inject] private GridRuntimeData _gridRuntimeData;
+		private GridRuntimeData _gridRuntimeData;
 
 		/// <summary>
 		/// Gets the current grid array.
@@ -60,7 +62,7 @@ namespace GridSystem
 				{
 					// Create a new grid node with random collision type and calculated position
 					_gridRuntimeData.Grid[_gridRuntimeData.CellsX * x + z] = new GridNode(
-						(CollisionType)Random.Range(0, (int)CollisionType.Friendly + 1),
+						(CollisionType)UnityEngine.Random.Range(0, (int)CollisionType.Friendly + 1),
 						new Vector2(x * _gridSettings.CellSize + _gridRuntimeData.OffSetX, z * _gridSettings.CellSize + _gridRuntimeData.OffSetZ),
 						-1);
 				}
@@ -73,7 +75,8 @@ namespace GridSystem
 		/// </summary>
 		public void Initialize()
 		{
-			// GridProcessor doesn't require initialization logic
+			if (_gridRuntimeData == null)
+				throw new InvalidOperationException("GridProcessor: GridRuntimeData has not been installed.");
 		}
 
 		/// <summary>
@@ -87,13 +90,27 @@ namespace GridSystem
 		}
 
 		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// GridProcessor does not have scene-specific settings to refresh
+		}
+
+		/// <summary>
 		/// Registers this processor as a singleton in the dependency injection container.
 		/// Called by Reflex during container initialization.
 		/// </summary>
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{
+			var cellSpacePartitioning = GetComponent<CellSpacePartitioning>();
+			if (cellSpacePartitioning == null)
+				throw new InvalidOperationException("GridProcessor requires a CellSpacePartitioning component on the same GameObject.");
+
 			containerBuilder.AddSingleton(this);
+			containerBuilder.AddSingleton(cellSpacePartitioning);
 			InjectRuntimeData(containerBuilder);
 		}
 
@@ -103,8 +120,11 @@ namespace GridSystem
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			GridRuntimeData gridRuntimeData = ScriptableObject.CreateInstance<GridRuntimeData>();
-			containerBuilder.AddSingleton(gridRuntimeData);
+			if (_gridRuntimeData != null)
+				throw new InvalidOperationException("GridProcessor: GridRuntimeData has already been installed.");
+
+			_gridRuntimeData = new GridRuntimeData();
+			containerBuilder.AddSingleton(_gridRuntimeData);
 		}
 	}
 }

@@ -1,13 +1,11 @@
 using UnityEngine;
 using Settings;
-using SavingAndLoading;
 using UnityEngine.UI;
 using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 using PlayerControls;
 using UserInterface.MainMenu;
 using Processors;
-using Core;
 using Reflex.Attributes;
 
 namespace UserInterface 
@@ -28,10 +26,8 @@ namespace UserInterface
 		
 		private GameObject _settingsPanel;
 		[Inject] SettingsProcessor _settingsProcessor;
-		[Inject] private Coordinator _gameProcessor;
-		[Inject] private SaveProcessor _saveProcessor;
 
-		private LoadingProcessor _loadingProcessor;
+		private LoadingManager _loadingProcessor;
 		private bool _savedGame;
 
 		public bool SavedGame
@@ -70,16 +66,10 @@ namespace UserInterface
 			_loadingProcessor.LoadNonWorldScenes(1);
 		}
 
-
-		[Inject] private Autosave Autosave;
-        [Inject] SettingsData CurrentSettings;
         private void Start()
 		{
-			_loadingProcessor = FindAnyObjectByType<LoadingProcessor>();
-
-			//REVISIT
-			if (_gameProcessor != null)
-				_saveProcessor.SetAutosaveTime(Autosave.Intervals[CurrentSettings.autosaveTime] * 60.0f);
+			_loadingProcessor = FindAnyObjectByType<LoadingManager>();
+			_settingsProcessor.ApplyAutosaveIntervalFromCurrentSettings();
 		}
 
 		private void Update()

@@ -1,27 +1,26 @@
-using UnityEngine;
 using UnityEngine.Events;
+
+using ScriptablesProcessorInfrastructure;
 using Utils;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for DebugProcessor.
 	/// Manages object selection events and the currently selected debug object.
 	/// </summary>
-	public class DebugRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class DebugRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Event fired when an object is selected for debugging.
 		/// Passes the selected object and associated data.
 		/// </summary>
-		[SerializeField]
-		private UnityEvent<SelectableObject, object> _onObjectSelected = new UnityEvent<SelectableObject, object>();
+		private UnityEvent<SelectableObject, object> _onObjectSelected;
 
 		/// <summary>
 		/// The currently selected object for debugging.
 		/// Tuple containing the selectable object and associated data.
 		/// </summary>
-		[SerializeField]
 		private (SelectableObject, object) _selectedObject;
 
 		/// <summary>
@@ -41,8 +40,9 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the debug runtime state.
 		/// </summary>
-		public void Initialize()
+		public DebugRuntimeData()
 		{
+			_onObjectSelected = new UnityEvent<SelectableObject, object>();
 			_selectedObject = (null, null);
 		}
 	}

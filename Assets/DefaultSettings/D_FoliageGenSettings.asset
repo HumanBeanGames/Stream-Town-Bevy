@@ -13,85 +13,61 @@ MonoBehaviour:
   m_Name: D_FoliageGenSettings
   m_EditorClassIdentifier: 
   _foliageGenerationSettings:
-  - Size: 150
+  - Size: 300
     LevelOfDetail: 2
-    NoiseScale: 6.68
+    NoiseScale: 10
     Octaves: 1
     Persistance: 0.847
     Lacunarity: 1.53
-    Seed: 0
-    Offset: {x: 0, y: 0}
-    MeshHeightMultiplier: 7
-    MeshHeightCurve:
+    Seed: -430535522
+    Offset: {x: 130.67024, y: 302.39206}
+    SpawnThreshold: 0.6
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
       serializedVersion: 2
-      m_Curve:
-      - serializedVersion: 3
-        time: 0
-        value: 0
-        inSlope: 0
-        outSlope: 0
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
-      - serializedVersion: 3
-        time: 1
-        value: 1
-        inSlope: 2
-        outSlope: 2
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
+      m_Curve: []
       m_PreInfinity: 2
       m_PostInfinity: 2
       m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
-    PoolNames:
-    - GrassLong1
-    - GrassLong2
-    - GrassLong3
-    - GrassShort1
-    - GrassShort2
-    - GrassShort3
-  - Size: 150
+    PoolName: 
+    Meshes:
+    - {fileID: -9082293392281029781, guid: 1fc2e6649b3d2fe438100dd3c748abbb, type: 3}
+    - {fileID: 6531153724091246894, guid: 96a0346136730584ba5429b7a211660b, type: 3}
+    - {fileID: -1907357878548606822, guid: d6395741284ff2a4898d3c074f0ff005, type: 3}
+    - {fileID: 2581051861917864700, guid: 2858f9a6526eabe4b917f053c0a1cae9, type: 3}
+    - {fileID: -3746676656174177956, guid: 47df2beabe6cdbe439fb66afd2e82018, type: 3}
+    - {fileID: 2467405435841158184, guid: 2f1122324bafe8c40a7d011f87f27b3e, type: 3}
+    Material: {fileID: 2100000, guid: cc8c8df70fc41b04e8de9824ab27af7d, type: 2}
+  - Size: 300
     LevelOfDetail: 2
     NoiseScale: 4
     Octaves: 1
     Persistance: 0.847
     Lacunarity: 1.53
-    Seed: 0
-    Offset: {x: 0, y: 0}
-    MeshHeightMultiplier: 14
-    MeshHeightCurve:
+    Seed: -430535523
+    Offset: {x: 321.70013, y: 185.02461}
+    SpawnThreshold: 0.8
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
       serializedVersion: 2
-      m_Curve:
-      - serializedVersion: 3
-        time: 0
-        value: 0
-        inSlope: 0
-        outSlope: 0
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
-      - serializedVersion: 3
-        time: 1
-        value: 1
-        inSlope: 2
-        outSlope: 2
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
+      m_Curve: []
       m_PreInfinity: 2
       m_PostInfinity: 2
       m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
-    PoolNames:
-    - Flower1
-    - Flower2
-    - Flower3
-    - Flower4
-    - Flower5
-    - Flower6
+    PoolName: 
+    Meshes:
+    - {fileID: -8395620281344906741, guid: 081ad282345aaf74e9922498c2c37498, type: 3}
+    - {fileID: -4102578099973827451, guid: 2ba3d99db7590424a8416d883a3d2053, type: 3}
+    - {fileID: -6542357775297470543, guid: ecb05e7e854477447812a797d6393469, type: 3}
+    - {fileID: -3940785738837229648, guid: 6c9e7b00c5a22834ea656ed208ef9468, type: 3}
+    - {fileID: 7176977385716416504, guid: a893129195c41a24cb563721a07368cc, type: 3}
+    - {fileID: 2726131248018880332, guid: d576190b92e8bfb41a46e20b61c91388, type: 3}
+    Material: {fileID: 2100000, guid: fa4085ce3ea4d394bb4e587376c58cbd, type: 2}

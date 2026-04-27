@@ -1,72 +1,63 @@
-using UnityEngine;
 using System;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for DayAndNightProcessor.
 	/// Manages the current time of day, day/night transition progress, and related visual effects.
 	/// </summary>
-	public class DayAndNightRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class DayAndNightRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Current time of day in hours (0-24).
 		/// </summary>
-		[SerializeField]
 		private float _currentTimeOfDay;
 
 		/// <summary>
 		/// Current day/night percentage (0 = midnight, 0.5 = noon, 1 = midnight).
 		/// </summary>
-		[SerializeField]
 		private float _dayNightPercentage;
 
 		/// <summary>
 		/// Whether it is currently day time.
 		/// </summary>
-		[SerializeField]
 		private bool _isDay;
 
 		/// <summary>
 		/// Whether a day/night transition is currently in progress.
 		/// </summary>
-		[SerializeField]
 		private bool _isTransitioning;
 
 		/// <summary>
 		/// Whether the current transition is to day time.
 		/// </summary>
-		[SerializeField]
 		private bool _transitionToDay;
 
 		/// <summary>
 		/// Time elapsed in the current transition.
 		/// </summary>
-		[SerializeField]
 		private float _transitionTime;
 
 		/// <summary>
 		/// Time remaining until the next transition.
 		/// </summary>
-		[SerializeField]
 		private float _timeTillTransition;
 
 		/// <summary>
 		/// Length of the day period in seconds.
 		/// </summary>
-		[SerializeField]
 		private float _dayLength;
 
 		/// <summary>
 		/// Length of the night period in seconds.
 		/// </summary>
-		[SerializeField]
 		private float _nightLength;
 
 		/// <summary>
 		/// Length of the transition period in seconds.
 		/// </summary>
-		[SerializeField]
 		private float _transitionLength;
 
 		/// <summary>
@@ -191,9 +182,18 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the day/night runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public DayAndNightRuntimeData()
 		{
-			// Initialize with default values if needed
+			_currentTimeOfDay = 0f;
+			_dayNightPercentage = 0f;
+			_isDay = true;
+			_isTransitioning = false;
+			_transitionToDay = false;
+			_transitionTime = 0f;
+			_timeTillTransition = 0f;
+			_dayLength = 0f;
+			_nightLength = 0f;
+			_transitionLength = 0f;
 		}
 
 		public void InvokeDayStarted()

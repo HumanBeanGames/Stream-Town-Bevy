@@ -15,6 +15,11 @@ namespace World.Generation
 		public List<Mesh> Meshes;
 		public List<Material> Materials;
 
+		public override string GetPoolName()
+		{
+			return TargetType.ToString();
+		}
+
 		[Header("Distance-Based Amount Settings")]
 		public bool SetByDistance = false;
 		public AnimationCurve AmountCurve;

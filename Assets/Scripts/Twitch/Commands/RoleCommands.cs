@@ -12,10 +12,19 @@ namespace Twitch.Commands
 	/// </summary>
 	public class RoleCommands
 	{
-		[Inject] private PlayerProcessor _playerProcessor;
-		[Inject] private StationProcessor _stationProcessor;
-		[Inject] private RoleProcessor _roleProcessor;
-		[Inject] private MessageSender _messageSender;
+        private PlayerProcessor _playerProcessor;
+        private StationProcessor _stationProcessor;
+        private RoleProcessor _roleProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+
+        public RoleCommands(PlayerProcessor playerProcessor, StationProcessor stationProcessor,
+            RoleProcessor roleProcessor, Processors.TwitchChatProcessor twitchChatProcessor)
+        {
+            _playerProcessor = playerProcessor;
+            _stationProcessor = stationProcessor;
+            _roleProcessor = roleProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+        }
 
 		/// <summary>
 		/// Attempts to change the role of the User.
@@ -35,7 +44,7 @@ namespace Twitch.Commands
 
 				if (player.RoleHandler.TrySetRole(role))
 				{
-					_messageSender.SendPreBuiltMessage(player.TwitchUser.Username, "roleSwitched");
+					_twitchChatProcessor.SendPreBuiltMessage(player.TwitchUser.Username, "roleSwitched");
 				}
 			}
 		}
@@ -47,7 +56,7 @@ namespace Twitch.Commands
 		public void Role(Player player)
 		{
 			string message = $"{player.TwitchUser.Username} you are currently a level {player.RoleHandler.PlayerRoleData.CurrentLevel} {player.RoleHandler.CurrentRole}";
-			_messageSender.SendMessage(message);
+			_twitchChatProcessor.SendMessage(message);
 		}
 
 		/// <summary>
@@ -57,7 +66,7 @@ namespace Twitch.Commands
 		public void Health(Player player)
 		{
 			string message = $"{player.TwitchUser.Username} your health is: ({player.HealthHandler.Health}/{player.HealthHandler.MaxHealth})";
-			_messageSender.SendMessage(message);
+			_twitchChatProcessor.SendMessage(message);
 		}
 
 		/// <summary>
@@ -67,7 +76,7 @@ namespace Twitch.Commands
 		public void Experience(Player player)
 		{
 			string message = $"{player.TwitchUser.Username} you are a level ({player.RoleHandler.PlayerRoleData.CurrentLevel}/{RoleProcessor.MAX_ROLE_LEVEL}) {player.RoleHandler.CurrentRole}. Current Exp: ({player.RoleHandler.PlayerRoleData.CurrentExp}/{player.RoleHandler.PlayerRoleData.RequiredExp}).";
-			_messageSender.SendMessage(message);
+			_twitchChatProcessor.SendMessage(message);
 
 		}
 
@@ -80,10 +89,10 @@ namespace Twitch.Commands
 			if (player.RoleHandler.TryGetRoleData(role, out PlayerRoleData data))
 			{
 				string message = $"{player.TwitchUser.Username} you are a level ({data.CurrentLevel}/{RoleProcessor.MAX_ROLE_LEVEL}) {data.Role}. Current Exp: ({data.CurrentExp}/{data.RequiredExp}).";
-				_messageSender.SendMessage(message);
+				_twitchChatProcessor.SendMessage(message);
 			}
 			else
-				_messageSender.SendMessage($"{player.TwitchUser.Username} you currenty don't have data for {role}");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you currenty don't have data for {role}");
 		}
 
 		/// <summary>
@@ -109,7 +118,7 @@ namespace Twitch.Commands
 				var station = _stationProcessor.GetStationByFlaggedIndex(player.StationSensor.StationMask, index - 1);
 				player.StationSensor.UpdateStation = false;
 				player.StationSensor.TrySetStation(station);
-				_messageSender.SendPlayerMessage(player, "Station Switched!");
+				_twitchChatProcessor.SendPlayerMessage(player, "Station Switched!");
 			}
 		}
 
@@ -137,7 +146,7 @@ namespace Twitch.Commands
 				if (targetable)
 				{
 					if (player.TargetSensor.TrySetTarget(targetable))
-						_messageSender.SendPlayerMessage(player, "Target Switched!");
+						_twitchChatProcessor.SendPlayerMessage(player, "Target Switched!");
 				}
 			}
 		}

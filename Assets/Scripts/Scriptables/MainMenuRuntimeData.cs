@@ -1,33 +1,32 @@
 using MetaData;
+
+using ScriptablesProcessorInfrastructure;
 using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime main menu state for the game.
+	/// Runtime data class that stores main menu state for the game.
 	/// Manages loading state, load type, and Twitch channel name.
 	/// </summary>
-	public class MainMenuRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class MainMenuRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Whether the game is currently loading.
 		/// Set to true when loading begins, false when loading completes.
 		/// </summary>
-		[SerializeField]
 		private bool _loading;
 
 		/// <summary>
 		/// The type of load operation to perform.
 		/// Determines whether to generate a new world or load an existing save.
 		/// </summary>
-		[SerializeField]
 		private LoadType _loadType;
 
 		/// <summary>
 		/// The Twitch channel name to connect to.
 		/// Used for Twitch integration to connect to the correct stream.
 		/// </summary>
-		[SerializeField]
 		private string _channelName;
 
 		/// <summary>
@@ -38,7 +37,6 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// The connect panel GameObject for the main menu UI.
 		/// </summary>
-		[SerializeField]
 		private GameObject _connectPanel;
 
 		/// <summary>
@@ -80,9 +78,12 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the main menu runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public MainMenuRuntimeData()
 		{
-			// Initialize with default values if needed
+			_loading = false;
+			_loadType = LoadType.Generate;
+			_channelName = string.Empty;
+			_connectPanel = null;
 		}
 	}
 }

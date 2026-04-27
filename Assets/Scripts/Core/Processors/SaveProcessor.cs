@@ -37,10 +37,10 @@ namespace Processors
 	public partial class SaveProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
 		/// <summary>
-		/// Runtime data ScriptableObject for save data.
-		/// Injected via Reflex dependency injection.
+		/// Runtime data for save data.
+		/// Assigned in InjectRuntimeData.
 		/// </summary>
-		[Inject] private SaveRuntimeData _saveRuntimeData;
+		private SaveRuntimeData _saveRuntimeData;
 
 		[Inject] private WorldGenProcessor _worldGenProcessor;
 		[Inject] private GameSettings _gameSettings;
@@ -55,8 +55,6 @@ namespace Processors
 		[Inject] private SeasonProcessor _seasonProcessor;
 		[Inject] private SaveSettings _saveSettings;
 		[Inject] private TimeSettings _timeProcessorScriptable;
-		[Inject] private SeasonSettings _seasonProcessorScriptable;
-		[Inject] private SeasonDataContainer _seasonProcessorContainer;
 
 		private const float _frameBudgetSeconds = 0.0035f;
 
@@ -467,6 +465,8 @@ namespace Processors
 				if (ShouldYieldFrame(ref frameStartTime))
 					await Task.Yield();
 			}
+
+			_worldGenProcessor.RefreshEnemyCampSpawners();
 		}
 
 		private async Task SpawnBuildingsAsync(List<BuildingSaveData> buildings, Action<float, string> progressReporter, List<UpdateGraphBounds> buildingsToUpdate)
@@ -609,7 +609,8 @@ namespace Processors
 
 		public void Initialize()
 		{
-			// Runtime data initialization handled by DI container
+			if (_saveRuntimeData == null)
+				throw new InvalidOperationException("SaveProcessor: SaveRuntimeData has not been installed.");
 		}
 
 		public void Process()
@@ -620,6 +621,15 @@ namespace Processors
 				ResetAutosaveTimer();
 				SaveGame();
 			}
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// SaveProcessor does not have scene-specific settings to refresh
 		}
 
 		public void InstallBindings(Reflex.Core.ContainerBuilder containerBuilder)
@@ -634,8 +644,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(Reflex.Core.ContainerBuilder containerBuilder)
 		{
-			SaveRuntimeData saveRuntimeData = ScriptableObject.CreateInstance<SaveRuntimeData>();
-			containerBuilder.AddSingleton(saveRuntimeData);
+			if (_saveRuntimeData != null)
+				throw new InvalidOperationException("SaveProcessor: SaveRuntimeData has already been installed.");
+
+			_saveRuntimeData = new SaveRuntimeData();
+			containerBuilder.AddSingleton(_saveRuntimeData);
 		}
 
 		private void UpdateAutosave(float deltaTime)

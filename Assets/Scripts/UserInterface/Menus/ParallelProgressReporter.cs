@@ -12,6 +12,7 @@ namespace UserInterface.MainMenu
 	{
 		public static event Action<float, string> OnOverallProgressUpdated;
 		public static event Action<Dictionary<string, (float progress, string status)>> OnTrackProgressUpdated;
+		public static event Action<string> OnTrackRegistered;
 
 		private static Dictionary<string, (float progress, string status)> _tracks = new Dictionary<string, (float, string)>();
 		private static Dictionary<string, float> _trackWeights = new Dictionary<string, float>();
@@ -25,6 +26,7 @@ namespace UserInterface.MainMenu
 		{
 			_trackWeights[trackName] = weight;
 			_tracks[trackName] = (0f, "Waiting...");
+			OnTrackRegistered?.Invoke(trackName);
 		}
 
 		/// <summary>

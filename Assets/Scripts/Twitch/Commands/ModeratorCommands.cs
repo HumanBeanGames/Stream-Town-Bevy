@@ -13,18 +13,17 @@ namespace Twitch.Commands
 	/// </summary>
 	public class ModeratorCommands
 	{
-	        /// <summary>
-        /// The player processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private PlayerProcessor _playerProcessor;
-	        /// <summary>
-        /// The game event processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private GameEventProcessor _gameEventProcessor;
-	        /// <summary>
-        /// The role commands. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private RoleCommands _roleCommands;
+        private PlayerProcessor _playerProcessor;
+        private GameEventProcessor _gameEventProcessor;
+        private RoleCommands _roleCommands;
+
+        public ModeratorCommands(PlayerProcessor playerProcessor, GameEventProcessor gameEventProcessor,
+            RoleCommands roleCommands)
+        {
+            _playerProcessor = playerProcessor;
+            _gameEventProcessor = gameEventProcessor;
+            _roleCommands = roleCommands;
+        }
 
 	        /// <summary>
         /// Starts a vote for the ruler position.

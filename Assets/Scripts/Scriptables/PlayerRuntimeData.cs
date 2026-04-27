@@ -1,71 +1,65 @@
 using Character;
+
+using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
-using UnityEngine;
 using Units;
 using Utils;
+using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime player state for the game.
+	/// Runtime data class that stores player state for the game.
 	/// Manages player lists, ruler, stat modifiers, and update queue.
 	/// </summary>
-	public class PlayerRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class PlayerRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// List of all active players in the game.
 		/// Includes all player characters currently spawned.
 		/// </summary>
-		[SerializeField]
-		private List<Player> _players = new List<Player>();
+		private List<Player> _players;
 
 		/// <summary>
 		/// List of recruits waiting to be assigned roles.
 		/// Players in this list have not yet been assigned a role.
 		/// </summary>
-		[SerializeField]
-		private List<Player> _recruits = new List<Player>();
+		private List<Player> _recruits;
 
 		/// <summary>
 		/// The current ruler player.
 		/// The ruler has special privileges and responsibilities.
 		/// </summary>
-		[SerializeField]
 		private Player _ruler;
 
 		/// <summary>
 		/// The user-controlled player (the actual human player).
 		/// This is the player that the user directly controls.
 		/// </summary>
-		[SerializeField]
 		private Player _userPlayer;
 
 		/// <summary>
 		/// Dictionary mapping player roles to their stat modifiers.
 		/// Each role has specific stat bonuses/penalties.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<PlayerRole, StatModifiers> _roleStatModifiers;
 
 		/// <summary>
 		/// Global stat modifiers applied to all players.
 		/// Used for game-wide stat adjustments.
 		/// </summary>
-		[SerializeField]
 		private StatModifiers _globalStatModifier;
 
 		/// <summary>
 		/// Queue of players pending stat updates.
 		/// Used to batch process player stat calculations.
 		/// </summary>
-		[SerializeField]
 		private Queue<Player> _playerUpdateQueue;
 
 		/// <summary>
 		/// Transform defining where players spawn in the world.
 		/// Set in the editor and used by the player spawning system.
 		/// </summary>
-		[SerializeField]
 		private Transform _playerSpawnPosition;
 
 		/// <summary>
@@ -129,12 +123,16 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the player runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public PlayerRuntimeData()
 		{
-			// Initialize with default values if needed
 			_players = new List<Player>();
 			_recruits = new List<Player>();
+			_ruler = null;
+			_userPlayer = null;
+			_roleStatModifiers = new Dictionary<PlayerRole, StatModifiers>();
+			_globalStatModifier = null;
 			_playerUpdateQueue = new Queue<Player>();
+			_playerSpawnPosition = null;
 		}
 
 		public void InitializePlayerState(Dictionary<PlayerRole, StatModifiers> roleStatModifiers, StatModifiers globalStatModifier, Queue<Player> playerUpdateQueue)

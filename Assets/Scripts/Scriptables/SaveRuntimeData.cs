@@ -1,59 +1,54 @@
-using UnityEngine;
 using Units;
+
+using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
 using Character;
 using World;
 using World.Generation;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for SaveProcessor.
 	/// Manages player/enemy lists, autosave configuration, loading progress.
 	/// </summary>
-	public class SaveRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class SaveRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// List of players to be saved/loaded.
 		/// Contains all player data for save operations.
 		/// </summary>
-		[SerializeField]
-		private List<Player> _players = null;
+		private List<Player> _players;
 
 		/// <summary>
 		/// List of enemies to be saved/loaded.
 		/// Contains all enemy data for save operations.
 		/// </summary>
-		[SerializeField]
-		private List<Enemies.Enemy> _enemies = null;
+		private List<Enemies.Enemy> _enemies;
 
 		/// <summary>
 		/// Whether autosave is currently enabled.
 		/// If true, the game automatically saves at intervals.
 		/// </summary>
-		[SerializeField]
-		private bool _autosave = false;
+		private bool _autosave;
 
 		/// <summary>
 		/// Time interval between autosaves in seconds.
 		/// Determines how frequently autosaves occur.
 		/// </summary>
-		[SerializeField]
-		private float _autosaveTime = 0.0f;
+		private float _autosaveTime;
 
 		/// <summary>
 		/// Time elapsed since the last autosave.
 		/// Used to trigger autosave at the configured interval.
 		/// </summary>
-		[SerializeField]
-		private float _timeElapsed = 0.0f;
+		private float _timeElapsed;
 
 		/// <summary>
 		/// Current loading progress percentage.
 		/// Used to display loading progress to the player.
 		/// </summary>
-		[SerializeField]
-		private int _loadPercent = 0;
+		private int _loadPercent;
 
 		/// <summary>
 		/// Gets the list of players for save/load.
@@ -108,11 +103,14 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the save runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public SaveRuntimeData()
 		{
-			// Initialize with default values if needed
 			_players = new List<Player>();
 			_enemies = new List<Enemies.Enemy>();
+			_autosave = false;
+			_autosaveTime = 0.0f;
+			_timeElapsed = 0.0f;
+			_loadPercent = 0;
 		}
 
 		public void InitializeEnemies(List<Enemies.Enemy> enemies)

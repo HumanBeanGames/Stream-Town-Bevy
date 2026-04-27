@@ -21,12 +21,15 @@ The project uses a strict 3-layer architecture to separate concerns and maintain
 - **Simple data access methods only** - ScriptableObjects may contain simple methods (3-5 lines) that get or set a single field with basic safety checks. Complex logic must be in processors.
 - **No references to processors** - ScriptableObjects must not reference any processor classes
 - **No references to other ScriptableObjects** - ScriptableObjects must not reference each other
+- **RuntimeData is data-only** - RuntimeData classes must not store processors, command handlers, service objects, scene objects, or other composed behavior references
 - **No injections** - ScriptableObjects must not use `[Inject]` attributes or any dependency injection
 - **Public properties with setters** - All private data fields must be exposed via public properties with getters and setters
-- **Namespace: ScriptablesProcessorInfrastructure** - All IDataScriptable and IRuntimeDataScriptable implementations must use the `ScriptablesProcessorInfrastructure` namespace to enforce access control
+- **Namespace: ScriptablesProcessorInfrastructure for IDataScriptable** - IDataScriptable implementations must use the `ScriptablesProcessorInfrastructure` namespace to enforce access control
+- **Namespace: Processors for IRuntimeDataScriptable** - IRuntimeDataScriptable implementations must use the `Processors` namespace to allow access from implementation layer and other processors
 - **Registered in SceneScope** - ScriptableObjects are loaded in the Scene Scope on a scene-by-scene basis as needed
-- **RuntimeDatas have no installers** - RuntimeDatas DO NOT get installer classes. The processor instantiates and installs the RuntimeData directly on creation
+- **RuntimeDatas have no installers** - RuntimeDatas DO NOT get installer classes. The processor instantiates and installs the RuntimeData in the InjectRuntimeData() call during the binding/installation phase
 - **RuntimeInstaller prohibition** - IRuntimeDataScriptable types must NOT have dedicated installer classes. No `*RuntimeInstaller.cs` files should exist in the project.
+- **No dependency injection into RuntimeData** - RuntimeData must not require processor, service, command, or scene-object dependencies; processors compose behavior separately
 
 ### Layer 2: Processor Layer
 **Purpose:** Contain logic only.
@@ -35,11 +38,15 @@ The project uses a strict 3-layer architecture to separate concerns and maintain
 - **No data fields** - Processors must not have any data fields or state
 - **Injected data objects only** - Processors may only have fields that are injected ScriptableObjects (data layer)
 - **No state** - Processors must be stateless; all state must be stored in injected ScriptableObjects
+- **Exception: Local runtime data reference** - Processors may have a private field for their own RuntimeData without `[Inject]` if they instantiate and bind it in `InjectRuntimeData()`. This is necessary because when processors use `AddSingleton(this)`, Reflex doesn't auto-inject fields on the manually-added instance. The processor must assign the field directly after creating the RuntimeData and bind it to the container for other components to inject.
 - **Properties are allowed** - Properties are acceptable if they simply pass through data from injected objects
 - **Functions only** - All logic must be implemented as methods
 - **Dependency injection** - Processors use `[Inject]` attributes to receive data objects
 - **IInstaller implementation** - Processors implement `IInstaller` to register themselves as singletons
 - **InjectRuntimeData method** - Processors implement `InjectRuntimeData(ContainerBuilder containerBuilder)`; processors that manage RuntimeData instantiate and register it there, processors without RuntimeData implement a documented no-op
+- **Install-before-initialize** - RuntimeData must be installed in `InjectRuntimeData()` before `Initialize()` executes
+- **Initialize never allocates RuntimeData** - `Initialize()` may populate installed runtime data, but must not first create it
+- **Behavior composition stays out of RuntimeData** - Command dictionaries, senders, and other service objects must be owned by processors or processor-owned services
 - **InstallBindings call pattern** - `InstallBindings(ContainerBuilder containerBuilder)` must register `this` and call `InjectRuntimeData(containerBuilder)`
 - **No coroutines** - Processors must not use coroutines; use the `Process()` function for per-frame logic instead
 - **No Awake or Start** - Processors must not have Awake or Start methods. All initialization logic must be in the `Initialize()` method
@@ -54,12 +61,12 @@ The project uses a strict 3-layer architecture to separate concerns and maintain
 **Purpose:** Use processors to interact with the system.
 
 **Rules:**
-- **No references to data objects** - Implementation layer must not reference any ScriptableObjects (data layer)
-- **Only processor references** - Implementation layer may only reference processors
-- **Data through processors** - Any data needed must be obtained by calling processor functions or accessing processor properties
-- **No direct data access** - Never bypass processors to access ScriptableObjects directly
-- **Respect namespace boundaries** - The `ScriptablesProcessorInfrastructure` namespace enforces that only processors should reference these objects; implementation layer code must not use `using ScriptablesProcessorInfrastructure`
-- **Installer exemption** - Installer classes (SettingsInstaller, RuntimeInstaller) in `Core/Installers` are DI infrastructure and are exempt from the namespace restriction; they may use `using ScriptablesProcessorInfrastructure` to reference ScriptableObjects they install
+- **No references to IDataScriptable** - Implementation layer must not reference IDataScriptable (settings ScriptableObjects)
+- **May reference IRuntimeDataScriptable** - Implementation layer may reference IRuntimeDataScriptable classes in the `Processors` namespace for direct data access when needed
+- **Processor references preferred** - Implementation layer should prefer referencing processors for logic, but may directly access RuntimeData for data reading
+- **Data through processors preferred** - Data should generally be obtained by calling processor functions or accessing processor properties, but direct RuntimeData access is allowed for performance or convenience
+- **Respect namespace boundaries** - The `ScriptablesProcessorInfrastructure` namespace enforces that only processors and installers should reference IDataScriptable; implementation layer code must not use `using ScriptablesProcessorInfrastructure` except for installer classes
+- **Installer exemption** - Installer classes (SettingsInstaller) in `Core/Installers` are DI infrastructure and are exempt from the namespace restriction; they may use `using ScriptablesProcessorInfrastructure` to reference IDataScriptable they install
 
 ## SettingsInstallers
 
@@ -81,9 +88,9 @@ The project uses a strict 3-layer architecture to separate concerns and maintain
 RuntimeData ScriptableObjects store processor runtime state. Key rules:
 
 ### 1. **Namespace and Interface**
-- Use `ScriptablesProcessorInfrastructure` namespace
+- Use `Processors` namespace (not ScriptablesProcessorInfrastructure)
 - Implement `IRuntimeDataScriptable` interface (empty marker interface)
-- Keep consistent with other ScriptableObject types
+- This allows implementation layer and other processors to access RuntimeData directly
 
 ### 2. **CreateAssetMenu**
 - Add `[CreateAssetMenu]` attribute for easy creation in Unity editor
@@ -92,7 +99,7 @@ RuntimeData ScriptableObjects store processor runtime state. Key rules:
 ### 3. **State Management**
 - Use `[SerializeField]` for private fields to allow Unity serialization
 - Expose state through public properties with both getters and setters
-- Processors are the only code that will access RuntimeData and are meant to set the state
+- RuntimeData is accessible from implementation layer and other processors
 
 ### 4. **Events**
 - Define events for state changes or important occurrences
@@ -101,9 +108,15 @@ RuntimeData ScriptableObjects store processor runtime state. Key rules:
 
 ### 5. **Initialization**
 - Provide an `Initialize()` method to set default values
-- Called by the processor when the RuntimeData is instantiated
+- Called by the processor after the RuntimeData has been instantiated and installed
+- RuntimeData constructors should remain data-only and dependency-free
 
-### 6. **No Logic Beyond State**
+### 6. **Dependencies**
+- RuntimeData must not require processor, service, or command dependencies
+- Processors may compose behavior/services separately, but RuntimeData remains a plain state container
+- Example: `new TwitchChatRuntimeData()`
+
+### 7. **No Logic Beyond State**
 - RuntimeData should only store state and manage events
 - Business logic belongs in the processor, not RuntimeData
 
@@ -118,11 +131,14 @@ For each ScriptableObject in the project:
 - [ ] **No ScriptableObject references** - The ScriptableObject does not reference other ScriptableObjects
 - [ ] **No dependency injection** - The ScriptableObject does not use `[Inject]` attributes or any DI framework
 - [ ] **Public properties with setters** - All private fields are exposed via public properties with both getters and setters
-- [ ] **Correct namespace** - IDataScriptable and IRuntimeDataScriptable implementations use the `ScriptablesProcessorInfrastructure` namespace
+- [ ] **Correct namespace for IDataScriptable** - IDataScriptable implementations use the `ScriptablesProcessorInfrastructure` namespace
+- [ ] **Correct namespace for IRuntimeDataScriptable** - IRuntimeDataScriptable implementations use the `Processors` namespace
 - [ ] **RuntimeDatas have no installers** - RuntimeDatas DO NOT have installer classes; the processor instantiates and installs them directly on creation
 - [ ] **No RuntimeInstaller files exist** - No `*RuntimeInstaller.cs` files exist in the project
 - [ ] **Events declared but not invoked** - Events are declared but not invoked within ScriptableObjects (invocation happens in Processors)
 - [ ] **RuntimeData follows template** - RuntimeData classes follow the RUNTIME_DATA_TEMPLATE.md structure with Initialize() method and event helpers
+- [ ] **RuntimeData is data-only** - RuntimeData does not hold processors, command handlers, service objects, scene objects, or behavior composition
+- [ ] **RuntimeData has no behavior dependencies** - RuntimeData constructors do not take processors, commands, services, or scene objects
 
 ### Processor Layer
 
@@ -136,7 +152,9 @@ For each Processor in the project:
 - [ ] **Uses dependency injection** - The Processor uses `[Inject]` attributes for ScriptableObject dependencies
 - [ ] **Implements IInstaller** - The Processor implements `IInstaller` and registers itself as singleton
 - [ ] **Implements InjectRuntimeData signature** - The Processor implements `InjectRuntimeData(ContainerBuilder containerBuilder)`
-- [ ] **InjectRuntimeData behavior** - If owning RuntimeData, instantiate/register there; otherwise keep a documented no-op
+- [ ] **InjectRuntimeData behavior** - If owning RuntimeData, instantiate/register there before initialization; otherwise keep a documented no-op
+- [ ] **Initialize does not allocate RuntimeData** - `Initialize()` does not first create runtime data
+- [ ] **Behavior composition not stored in RuntimeData** - Processor-owned command/services are composed outside RuntimeData
 - [ ] **InstallBindings call flow** - `InstallBindings` registers `this` and calls `InjectRuntimeData(containerBuilder)`
 - [ ] **No Awake or Start** - The Processor does not have Awake or Start methods (use Initialize() instead)
 - [ ] **No OnEnable or OnDisable** - The Processor does not have OnEnable or OnDisable methods
@@ -147,12 +165,12 @@ For each Processor in the project:
 
 For each MonoBehaviour, UI script, or game logic component:
 
-- [ ] **No ScriptableObject references** - The component does not reference any ScriptableObjects directly
-- [ ] **Only processor references** - The component only references processors via `[Inject]` or other means
-- [ ] **Data through processors** - All data access goes through processor methods or properties
-- [ ] **No bypassing processors** - The component never accesses ScriptableObjects directly
-- [ ] **Processor-based actions** - All actions are performed by calling processor methods
-- [ ] **No ScriptablesProcessorInfrastructure imports** - The component does not use `using ScriptablesProcessorInfrastructure`
+- [ ] **No IDataScriptable references** - The component does not reference IDataScriptable (settings ScriptableObjects) directly
+- [ ] **May reference IRuntimeDataScriptable** - The component may reference IRuntimeDataScriptable classes in `Processors` namespace for direct data access
+- [ ] **Processor references preferred** - The component should prefer referencing processors for logic
+- [ ] **Data through processors preferred** - Data should generally be obtained through processor methods or properties, but direct RuntimeData access is allowed
+- [ ] **No ScriptablesProcessorInfrastructure imports** - The component does not use `using ScriptablesProcessorInfrastructure` except for installer classes
+- [ ] **May use Processors namespace** - The component may use `using Processors` to access RuntimeData classes
 
 ### SettingsInstallers
 
@@ -187,8 +205,11 @@ grep -r "Processor" Assets/Scripts/Scriptables/ --include="*.cs"
 # Check for [Inject] in ScriptableObjects (should return no results)
 grep -r "\[Inject\]" Assets/Scripts/Scriptables/ --include="*.cs"
 
-# Check for correct namespace in ScriptableObjects (should be ScriptablesProcessorInfrastructure)
-grep -r "namespace Scriptables" Assets/Scripts/Scriptables/ --include="*.cs"
+# Check for correct namespace in IDataScriptable (should be ScriptablesProcessorInfrastructure)
+grep -r "namespace ScriptablesProcessorInfrastructure" Assets/Scripts/Scriptables/ --include="*.cs"
+
+# Check for correct namespace in IRuntimeDataScriptable (should be Processors)
+grep -r "namespace Processors" Assets/Scripts/Scriptables/ --include="*.cs" | grep -i "runtime"
 
 # Check for ScriptablesProcessorInfrastructure usage outside of Processors and Installers (should return NO results)
 grep -r "using ScriptablesProcessorInfrastructure" Assets/Scripts/ --include="*.cs" | grep -v "Processors/" | grep -v "Core/Installers/"

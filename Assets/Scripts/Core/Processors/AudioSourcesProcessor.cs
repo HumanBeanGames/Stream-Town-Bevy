@@ -25,16 +25,20 @@ namespace Processors
 
 		/// <summary>
 		/// Runtime audio sources data ScriptableObject.
-		/// Injected via Reflex dependency injection.
+		/// Created and bound in InjectRuntimeData().
 		/// </summary>
-		[Inject] private AudioSourcesRuntimeData _audioSourcesRuntimeData;
+		private AudioSourcesRuntimeData _audioSourcesRuntimeData;
 
 		/// <summary>
 		/// Initializes the audio processor by clearing the audio handler queue.
+		/// Creates RuntimeData after all processors are confirmed ready.
 		/// Called during game initialization to ensure clean state.
 		/// </summary>
 		public void Initialize()
 		{
+			if (_audioSourcesRuntimeData == null)
+				throw new InvalidOperationException("AudioSourcesProcessor: AudioSourcesRuntimeData has not been installed.");
+
 			_audioSourcesRuntimeData.AudioHandlers.Clear();
 		}
 
@@ -45,6 +49,15 @@ namespace Processors
 		public void Process()
 		{
 			ProcessSources();
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// AudioSourcesProcessor does not have scene-specific settings to refresh
 		}
 
 		/// <summary>
@@ -94,9 +107,11 @@ namespace Processors
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register AudioSourcesRuntimeData ScriptableObject
-			AudioSourcesRuntimeData audioSourcesRuntimeData = ScriptableObject.CreateInstance<AudioSourcesRuntimeData>();
-			containerBuilder.AddSingleton(audioSourcesRuntimeData);
+			if (_audioSourcesRuntimeData != null)
+				throw new InvalidOperationException("AudioSourcesProcessor: AudioSourcesRuntimeData has already been installed.");
+
+			_audioSourcesRuntimeData = new AudioSourcesRuntimeData();
+			containerBuilder.AddSingleton(_audioSourcesRuntimeData);
 		}
 	}
 }

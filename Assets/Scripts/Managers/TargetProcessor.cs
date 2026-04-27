@@ -24,10 +24,10 @@ namespace Processors
         [Inject] private TargetSettings _targetSettings;
 
         /// <summary>
-        /// Runtime data ScriptableObject for target data.
-        /// Injected via Reflex dependency injection.
+        /// Runtime data for target data.
+        /// Assigned in InjectRuntimeData.
         /// </summary>
-        [Inject] private TargetRuntimeData _targetRuntimeData;
+        private TargetRuntimeData _targetRuntimeData;
 
 
         /// <summary>
@@ -108,11 +108,12 @@ namespace Processors
 
         /// <summary>
         /// Initializes the target processor.
-        /// No initialization logic required.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// </summary>
         public void Initialize()
         {
-            // TargetProcessor doesn't require initialization logic
+            if (_targetRuntimeData == null)
+                throw new InvalidOperationException("TargetProcessor: TargetRuntimeData has not been installed.");
         }
 
         /// <summary>
@@ -123,6 +124,15 @@ namespace Processors
         public void Process()
         {
             // TargetProcessor does not require per-frame updates
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // TargetProcessor does not have scene-specific settings to refresh
         }
 
         /// <summary>
@@ -142,8 +152,11 @@ namespace Processors
         /// <param name="containerBuilder">The container builder to register bindings with.</param>
         public void InjectRuntimeData(ContainerBuilder containerBuilder)
         {
-            TargetRuntimeData targetRuntimeData = ScriptableObject.CreateInstance<TargetRuntimeData>();
-            containerBuilder.AddSingleton(targetRuntimeData);
+            if (_targetRuntimeData != null)
+                throw new InvalidOperationException("TargetProcessor: TargetRuntimeData has already been installed.");
+
+            _targetRuntimeData = new TargetRuntimeData();
+            containerBuilder.AddSingleton(_targetRuntimeData);
         }
 
         /// <summary>

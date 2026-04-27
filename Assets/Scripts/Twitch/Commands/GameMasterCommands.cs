@@ -3,7 +3,6 @@ using Enemies;
 using GameEventSystem;
 using GameEventSystem.Events;
 using Processors;
-using Core;
 using Pets.Enumerations;
 using System;
 using System.Linq;
@@ -13,6 +12,8 @@ using Reflex.Attributes;
 using TechTree;
 using TownGoal;
 using ScriptablesProcessorInfrastructure;
+using UserInterface;
+using UnityEngine;
 
 namespace Twitch.Commands
 {
@@ -21,58 +22,46 @@ namespace Twitch.Commands
 	/// </summary>
 	public class GameMasterCommands
 	{
-	        /// <summary>
-        /// The game coordinator. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private Coordinator _gameProcessor;
-	        /// <summary>
-        /// The role runtime scriptable. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private RoleProcessor _roleProcessor;
-	        /// <summary>
-        /// The UI processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private UIProcessor _uiProcessor;
-	        /// <summary>
-        /// The enemy spawner. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private EnemySpawner _enemySpawner;
-	        /// <summary>
-        /// The game settings scriptable. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private GameSettings _gameSettings;
-	        /// <summary>
-        /// The town resource processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private TownResourceProcessor _townResourceProcessor;
-	        /// <summary>
-        /// The player processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private PlayerProcessor _playerProcessor;
-	        /// <summary>
-        /// The game event processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private GameEventProcessor _gameEventProcessor;
-	        /// <summary>
-        /// The town goal processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private TownGoalProcessor _townGoalProcessor;
-	        /// <summary>
-        /// The tech tree processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private TechTreeProcessor _techTreeProcessor;
-	        /// <summary>
-        /// The building processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private BuildingProcessor _buildingProcessor;
-	        /// <summary>
-        /// The object pooling processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private ObjectPoolingProcessor _poolingProcessor;
-	        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private MessageSender _messageSender;
+        private RoleProcessor _roleProcessor;
+        private GameSettings _gameSettings;
+        private TownResourceProcessor _townResourceProcessor;
+        private PlayerProcessor _playerProcessor;
+        private GameEventProcessor _gameEventProcessor;
+        private TownGoalProcessor _townGoalProcessor;
+        private TechTreeProcessor _techTreeProcessor;
+        private WorldGenProcessor _worldGenProcessor;
+        private BuildingProcessor _buildingProcessor;
+        private ObjectPoolingProcessor _poolingProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+		private UserInterface_Event _eventInterface;
+
+        public GameMasterCommands(RoleProcessor roleProcessor,
+			GameSettings gameSettings,
+            TownResourceProcessor townResourceProcessor, PlayerProcessor playerProcessor,
+            GameEventProcessor gameEventProcessor, TownGoalProcessor townGoalProcessor,
+			TechTreeProcessor techTreeProcessor, WorldGenProcessor worldGenProcessor, BuildingProcessor buildingProcessor,
+            ObjectPoolingProcessor poolingProcessor, Processors.TwitchChatProcessor twitchChatProcessor)
+        {
+            _roleProcessor = roleProcessor;
+            _gameSettings = gameSettings;
+            _townResourceProcessor = townResourceProcessor;
+            _playerProcessor = playerProcessor;
+            _gameEventProcessor = gameEventProcessor;
+            _townGoalProcessor = townGoalProcessor;
+            _techTreeProcessor = techTreeProcessor;
+			_worldGenProcessor = worldGenProcessor;
+            _buildingProcessor = buildingProcessor;
+            _poolingProcessor = poolingProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+        }
+
+		private UserInterface_Event ResolveEventInterface()
+		{
+			if (_eventInterface == null)
+				_eventInterface = UnityEngine.Object.FindFirstObjectByType<UserInterface_Event>();
+
+			return _eventInterface;
+		}
 
         /// <summary>
         /// Toggles whether buildings cost resources.
@@ -83,9 +72,8 @@ namespace Twitch.Commands
 			if (!IsGameMaster(player))
 				return;
 
-			// TODO: Add BuildingsCostResources property to Coordinator
-			// _gameProcessor.BuildingsCostResources = !_gameProcessor.BuildingsCostResources;
-			// _messageSender.SendMessage($"Buildings Cost Resources: {_gameProcessor.BuildingsCostResources}");
+			bool buildingsCostResourcesEnabled = _buildingProcessor.ToggleBuildingsCostResourcesEnabled();
+			_twitchChatProcessor.SendMessage($"Buildings Cost Resources: {buildingsCostResourcesEnabled}");
 		}
 
         /// <summary>
@@ -98,7 +86,7 @@ namespace Twitch.Commands
 				return;
 
 			_roleProcessor.PlayerRoleLimits = !_roleProcessor.PlayerRoleLimits;
-			_messageSender.SendMessage($"Player Role Limits: {_roleProcessor.PlayerRoleLimits}");
+			_twitchChatProcessor.SendMessage($"Player Role Limits: {_roleProcessor.PlayerRoleLimits}");
 		}
 
         /// <summary>
@@ -299,7 +287,7 @@ namespace Twitch.Commands
 				case GameEvent.EventType.None:
 					break;
 				case GameEvent.EventType.FishGod:
-					_gameEventProcessor.AddEvent(new FishGodEvent(0, gameEventProcessor: _gameEventProcessor, townResourceProcessor: _townResourceProcessor, playerProcessor: _playerProcessor, poolingProcessor: _poolingProcessor, messageSender: _messageSender, eventInterface: _uiProcessor.EventInterface));
+					_gameEventProcessor.AddEvent(new FishGodEvent(0, gameEventProcessor: _gameEventProcessor, townResourceProcessor: _townResourceProcessor, playerProcessor: _playerProcessor, poolingProcessor: _poolingProcessor, twitchChatProcessor: _twitchChatProcessor, eventInterface: ResolveEventInterface()));
 					break;
 				case GameEvent.EventType.NightRaid:
 					break;
@@ -327,7 +315,7 @@ namespace Twitch.Commands
 					break;
 				case GameEvent.EventType.MonsterRaid:
 					string[] enemies = new string[] { "Minotaur" };
-					_gameEventProcessor.AddEvent(new RaidEvent(0, 1200, enemies, poolingProcessor: _poolingProcessor, eventInterface: _uiProcessor.EventInterface, eventProcessor: _gameEventProcessor, enemySpawner: _enemySpawner, playerProcessor: _playerProcessor, boss: "MinotaurBoss"));
+					_gameEventProcessor.AddEvent(new RaidEvent(0, 1200, enemies, poolingProcessor: _poolingProcessor, eventInterface: ResolveEventInterface(), eventProcessor: _gameEventProcessor, worldGenProcessor: _worldGenProcessor, playerProcessor: _playerProcessor, boss: "MinotaurBoss"));
 					break;
 				default:
 					break;
@@ -436,7 +424,7 @@ namespace Twitch.Commands
 						_buildingProcessor.ResetBuilding(building);
 				}
 
-				_messageSender.SendMessage($"Reset ID: {args[0]}, {args[1]}");
+				_twitchChatProcessor.SendMessage($"Reset ID: {args[0]}, {args[1]}");
 			}
 		}
 	}

@@ -6,7 +6,6 @@ using Utils;
 using Level;
 using System.Collections.Generic;
 using Processors;
-using Core;
 using Utils.Pooling;
 using Reflex.Attributes;
 
@@ -48,7 +47,6 @@ namespace UserInterface
 
 		private object _data;
 		[Inject] private ObjectPoolingProcessor _poolingProcessor;
-		[Inject] private Coordinator _gameProcessor;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
 
@@ -157,7 +155,6 @@ namespace UserInterface
 		/// </summary>
 		public void SetCharacterRole()
 		{
-			//_gameProcessor.RoleProcessor.QueueRoleChange((RoleHandler)_data, (PlayerRole)_roleDropdownCharacter.value);
 			((RoleHandler)_data).TrySetRole((PlayerRole)_roleDropdownCharacter.value);
 			_characterRole.text = "Role: " + ((RoleHandler)_data).CurrentRole.ToString();
 			_roleLevel.text = "Level: " + ((RoleHandler)_data).PlayerRoleData.CurrentLevel;

@@ -12,40 +12,27 @@ namespace Twitch.Commands
 	/// </summary>
 	public class CommandDictionary
 	{
-        /// <summary>
-        /// The player commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private PlayerCommands _playerCommands;
-        
-        /// <summary>
-        /// The role commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private RoleCommands _roleCommands;
-        
-        /// <summary>
-        /// The building commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private BuildingCommands _buildingCommands;
-        
-        /// <summary>
-        /// The misc commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private MiscCommands _miscCommands;
-        
-        /// <summary>
-        /// The game master commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private GameMasterCommands _gameMasterCommands;
-        
-        /// <summary>
-        /// The moderator commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private ModeratorCommands _moderatorCommands;
-        
-        /// <summary>
-        /// The ruler commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private RulerCommands _rulerCommands;
+        private PlayerCommands _playerCommands;
+        private RoleCommands _roleCommands;
+        private BuildingCommands _buildingCommands;
+        private MiscCommands _miscCommands;
+        private GameMasterCommands _gameMasterCommands;
+        private ModeratorCommands _moderatorCommands;
+        private RulerCommands _rulerCommands;
+
+        public CommandDictionary(PlayerCommands playerCommands, RoleCommands roleCommands,
+            BuildingCommands buildingCommands, MiscCommands miscCommands,
+            GameMasterCommands gameMasterCommands, ModeratorCommands moderatorCommands,
+            RulerCommands rulerCommands)
+        {
+            _playerCommands = playerCommands;
+            _roleCommands = roleCommands;
+            _buildingCommands = buildingCommands;
+            _miscCommands = miscCommands;
+            _gameMasterCommands = gameMasterCommands;
+            _moderatorCommands = moderatorCommands;
+            _rulerCommands = rulerCommands;
+        }
 
 		/// <summary>
 		/// The dictionary of commands with arguments.

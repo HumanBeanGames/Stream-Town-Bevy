@@ -16,22 +16,19 @@ namespace Twitch.Commands
 	/// </summary>
 	public class MiscCommands
 	{
-	        /// <summary>
-        /// The building processor. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private BuildingProcessor _buildingProcessor;
-	        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private MessageSender _messageSender;
-	        /// <summary>
-        /// The role commands. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private RoleCommands _roleCommands;
-	        /// <summary>
-        /// The building commands. Injected via Reflex dependency injection.
-        /// </summary>
-	[Inject] private BuildingCommands _buildingCommands;
+        private BuildingProcessor _buildingProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+        private RoleCommands _roleCommands;
+        private BuildingCommands _buildingCommands;
+
+        public MiscCommands(BuildingProcessor buildingProcessor, Processors.TwitchChatProcessor twitchChatProcessor,
+            RoleCommands roleCommands, BuildingCommands buildingCommands)
+        {
+            _buildingProcessor = buildingProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+            _roleCommands = roleCommands;
+            _buildingCommands = buildingCommands;
+        }
 
 	        /// <summary>
         /// A dictionary mapping building types to their descriptions.
@@ -120,7 +117,7 @@ namespace Twitch.Commands
 		/// </summary>
 		public void Discord()
 		{
-			_messageSender.SendPreBuiltMessage("discord");
+			_twitchChatProcessor.SendPreBuiltMessage("discord");
 		}
 
 		/// <summary>
@@ -128,7 +125,7 @@ namespace Twitch.Commands
 		/// </summary>
 		public void Help()
 		{
-			_messageSender.SendPreBuiltMessage("help");
+			_twitchChatProcessor.SendPreBuiltMessage("help");
 		}
 
 		/// <summary>
@@ -166,7 +163,7 @@ namespace Twitch.Commands
 			{
 				if (args.Length < 2)
 				{
-					_messageSender.SendMessage($"{player.TwitchUser.Username} no enough arguments to level up building (!level <BuildingName> <Id> +- <amount>)");
+					_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} no enough arguments to level up building (!level <BuildingName> <Id> +- <amount>)");
 					return;
 				}
 				int iterations = 1;
@@ -178,7 +175,7 @@ namespace Twitch.Commands
 					_buildingCommands.LevelBuilding(player, type, id, iterations);
 				}
 				else
-					_messageSender.SendMessage($"{player.TwitchUser.Username} the id {id} is not a valid id");
+					_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} the id {id} is not a valid id");
 			}
 		}
 
@@ -260,19 +257,19 @@ namespace Twitch.Commands
 				string itemName = char.ToUpper(args[0][0]) + args[0].Substring(1);
 
 				if (Enum.TryParse(itemName, out Resource resourceType))
-					_messageSender.SendMessage(GetResourceInfo(resourceType, args));
+					_twitchChatProcessor.SendMessage(GetResourceInfo(resourceType, args));
 
 				else if (Enum.TryParse(itemName, out PlayerRole role))
-					_messageSender.SendMessage(GetPlayerRoleInfo(role, args));
+					_twitchChatProcessor.SendMessage(GetPlayerRoleInfo(role, args));
 
 				else if (Enum.TryParse(itemName, out BuildingType building))
-					_messageSender.SendMessage(GetBuildingInfo(building, args));
+					_twitchChatProcessor.SendMessage(GetBuildingInfo(building, args));
 
 				else if (Enum.TryParse(itemName, out EnemyType enemy))
-					_messageSender.SendMessage(GetEnemyInfo(enemy, args));
+					_twitchChatProcessor.SendMessage(GetEnemyInfo(enemy, args));
 
 				else
-					_messageSender.SendMessage(player.TwitchUser.Username + " " + itemName + " Is not a valid argument for !info");
+					_twitchChatProcessor.SendMessage(player.TwitchUser.Username + " " + itemName + " Is not a valid argument for !info");
 			}
 		}
 	}

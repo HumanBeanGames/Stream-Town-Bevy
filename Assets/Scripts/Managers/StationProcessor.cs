@@ -18,10 +18,10 @@ namespace Processors
 	public partial class StationProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
         /// <summary>
-        /// Runtime data ScriptableObject for station data.
-        /// Injected via Reflex dependency injection.
+        /// Runtime data for station data.
+        /// Assigned in InjectRuntimeData.
         /// </summary>
-        [Inject] private StationRuntimeData _stationRuntimeData;
+        private StationRuntimeData _stationRuntimeData;
 
         /// <summary>
         /// Object pooling processor for accessing pooled objects.
@@ -182,12 +182,22 @@ namespace Processors
 		}
 
 		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// StationProcessor does not have scene-specific settings to refresh
+		}
+
+		/// <summary>
 		/// Initializes the station processor.
 		/// No initialization logic required.
 		/// </summary>
 		public void Initialize()
 		{
-			// StationProcessor doesn't require initialization logic
+			if (_stationRuntimeData == null)
+				throw new InvalidOperationException("StationProcessor: StationRuntimeData has not been installed.");
 		}
 
 		/// <summary>
@@ -207,8 +217,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			StationRuntimeData stationRuntimeData = ScriptableObject.CreateInstance<StationRuntimeData>();
-			containerBuilder.AddSingleton(stationRuntimeData);
+			if (_stationRuntimeData != null)
+				throw new InvalidOperationException("StationProcessor: StationRuntimeData has already been installed.");
+
+			_stationRuntimeData = new StationRuntimeData();
+			containerBuilder.AddSingleton(_stationRuntimeData);
 		}
 
 		/// <summary>

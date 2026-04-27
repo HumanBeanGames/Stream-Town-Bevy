@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using GameResources;
 using UnityEngine;
@@ -50,7 +51,7 @@ namespace Processors
 			public Dictionary<(Mesh mesh, Material material), Matrix4x4[]> UnderWaterMatricesCache { get; set; }
 		}
 
-		private readonly RuntimeData _foliageRuntimeData = new RuntimeData();
+		private RuntimeData _foliageRuntimeData;
 
 		/// <summary>
 		/// Registers this processor as a singleton in the dependency injection container.
@@ -60,6 +61,7 @@ namespace Processors
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{
 			containerBuilder.AddSingleton(this);
+			InjectRuntimeData(containerBuilder);
 		}
 
 		/// <summary>
@@ -124,6 +126,9 @@ namespace Processors
 		/// </summary>
 		public void Initialize()
 		{
+			if (_foliageRuntimeData == null)
+				throw new InvalidOperationException("FoliageProcessor: RuntimeData has not been installed.");
+
 			InitializeFromScriptableObject();
 		}
 
@@ -180,6 +185,19 @@ namespace Processors
 		public Dictionary<(Mesh mesh, Material material), FoliageData[]> GetUnderWaterFoliageCache() => _foliageRuntimeData.UnderWaterFoliageCache;
 
 		/// <summary>
+		/// Sets generated foliage data and rebuilds caches for GPU instancing.
+		/// </summary>
+		public void SetGeneratedFoliage(List<FoliageData> onLandFoliage, List<FoliageData> underWaterFoliage)
+		{
+			_foliageRuntimeData.OnLandFoliage = onLandFoliage ?? new List<FoliageData>();
+			_foliageRuntimeData.UnderWaterFoliage = underWaterFoliage ?? new List<FoliageData>();
+			_foliageRuntimeData.OnLandFoliageCache = GroupByMeshAndMaterial(_foliageRuntimeData.OnLandFoliage.ToArray());
+			_foliageRuntimeData.UnderWaterFoliageCache = GroupByMeshAndMaterial(_foliageRuntimeData.UnderWaterFoliage.ToArray());
+			_foliageRuntimeData.OnLandMatricesCache = BuildMatricesDictionary(_foliageRuntimeData.OnLandFoliageCache);
+			_foliageRuntimeData.UnderWaterMatricesCache = BuildMatricesDictionary(_foliageRuntimeData.UnderWaterFoliageCache);
+		}
+
+		/// <summary>
 		/// Gets the cached transformation matrices for on-land foliage.
 		/// </summary>
 		/// <returns>Dictionary of on-land transformation matrices.</returns>
@@ -201,5 +219,22 @@ namespace Processors
 			// FoliageProcessor does not require per-frame updates
 		}
 
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// FoliageProcessor does not have scene-specific settings to refresh
+		}
+
+		public void InjectRuntimeData(ContainerBuilder containerBuilder)
+		{
+			if (_foliageRuntimeData != null)
+				throw new InvalidOperationException("FoliageProcessor: RuntimeData has already been installed.");
+
+			_foliageRuntimeData = new RuntimeData();
+			containerBuilder.AddSingleton(_foliageRuntimeData);
+		}
 	}
 }

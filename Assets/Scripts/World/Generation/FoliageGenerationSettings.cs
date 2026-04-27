@@ -9,8 +9,14 @@ namespace World.Generation
 	[System.Serializable]
 	public class FoliageGenerationSettings : GenerationSettings
 	{
+		public string PoolName;
 		public List<Mesh> Meshes;
 		public Material Material;
+
+		public override string GetPoolName()
+		{
+			return PoolName;
+		}
 
 		// Constructor.
 		public FoliageGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f, List<Mesh> meshes = null, Material material = null) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, spawnThreshold)

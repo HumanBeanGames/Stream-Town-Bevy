@@ -1,20 +1,22 @@
 using GameEventSystem;
+
+using ScriptablesProcessorInfrastructure;
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 using World;
 using Buildings;
 using GameResources;
 using Enemies;
 using Utils;
+using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime game event state for the game.
+	/// Runtime data class that stores game event state for the game.
 	/// Manages event queue, current event status, ruler voting, and game event-related visual effects.
 	/// </summary>
-	public class GameEventRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class GameEventRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Minimum time in seconds before a new ruler vote can be started.
@@ -32,25 +34,25 @@ namespace ScriptablesProcessorInfrastructure
 		/// Sorted queue of game events waiting to be triggered.
 		/// Events are sorted by their start time for proper sequencing.
 		/// </summary>
-		private SortedSet<GameEvent> _eventQueue = new SortedSet<GameEvent>(new SortGameEventStartTime());
+		private SortedSet<GameEvent> _eventQueue;
 
 		/// <summary>
 		/// The currently active game event.
 		/// Null when no event is active.
 		/// </summary>
-		private GameEvent _currentEvent = null;
+		private GameEvent _currentEvent;
 
 		/// <summary>
 		/// Whether a game event is currently active.
 		/// Set to true when an event starts, false when it ends.
 		/// </summary>
-		private bool _eventActive = false;
+		private bool _eventActive;
 
 		/// <summary>
 		/// Whether a new ruler vote can be started.
 		/// Set to true when the minimum time has elapsed since the last vote.
 		/// </summary>
-		private bool _canStartNewRulerVote = false;
+		private bool _canStartNewRulerVote;
 
 		/// <summary>
 		/// Particle system for the falling fish visual effect.
@@ -157,6 +159,20 @@ namespace ScriptablesProcessorInfrastructure
 		/// Gets the minimum time in seconds before a new ruler vote can start.
 		/// </summary>
 		public float RulerVoteMinTime => _RULER_VOTE_MIN_TIME;
+
+		/// <summary>
+		/// Initializes the game event runtime data with default values.
+		/// </summary>
+		public GameEventRuntimeData()
+		{
+			_timeUntilRulerVote = 0f;
+			_eventQueue = new SortedSet<GameEvent>(new SortGameEventStartTime());
+			_currentEvent = null;
+			_eventActive = false;
+			_canStartNewRulerVote = false;
+			_fallingFishVFX = null;
+			_fishGodSpawn = null;
+		}
 
 		public void InvokeBuildingBuilt(BuildingType buildingType)
 		{

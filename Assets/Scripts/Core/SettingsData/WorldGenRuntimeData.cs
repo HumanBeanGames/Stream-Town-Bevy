@@ -5,8 +5,10 @@ using GameResources;
 using System.Collections.Generic;
 using Utils.Pooling;
 using Utils;
+using ScriptablesProcessorInfrastructure;
+using Enemies;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Generation state for Process-based execution.
@@ -14,6 +16,7 @@ namespace ScriptablesProcessorInfrastructure
 	public enum GenerationState
 	{
 		Idle,
+		InitializingPooling,
 		GeneratingTerrain,
 		SpawningTownhall,
 		GeneratingObjects,
@@ -31,126 +34,107 @@ namespace ScriptablesProcessorInfrastructure
 	/// Runtime data for WorldGenProcessor.
 	/// Stores world generation state including pooled objects, buildings, resources, and foliage.
 	/// </summary>
-	[CreateAssetMenu(fileName = "WorldGenRuntimeData", menuName = "Scriptables/WorldGen Runtime Data")]
-	public class WorldGenRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class WorldGenRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Dictionary of pooled objects by pool name.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<string, List<PoolableObject>> _pooledObjects = new Dictionary<string, List<PoolableObject>>();
+		private Dictionary<string, List<PoolableObject>> _pooledObjects;
 
 		/// <summary>
 		/// Dictionary of buildings by type.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<BuildingType, List<Buildings.BuildingBase>> _buildings = new Dictionary<BuildingType, List<Buildings.BuildingBase>>();
+		private Dictionary<BuildingType, List<Buildings.BuildingBase>> _buildings;
+
+		/// <summary>
+		/// List of generated enemy camp spawners.
+		/// </summary>
+		private List<EnemySpawner> _enemyCampSpawners;
 
 		/// <summary>
 		/// List of wood resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _woodResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _woodResources;
 
 		/// <summary>
 		/// List of ore resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _oreResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _oreResources;
 
 		/// <summary>
 		/// List of food resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _foodResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _foodResources;
 
 		/// <summary>
 		/// List of gold resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _goldResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _goldResources;
 
 		/// <summary>
 		/// List of recruit resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _recruitResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _recruitResources;
 
 		/// <summary>
 		/// List of on-land foliage.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.FoliageData> _onLandFoliage = new List<GameResources.FoliageData>();
+		private List<GameResources.FoliageData> _onLandFoliage;
 
 		/// <summary>
 		/// List of underwater foliage.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.FoliageData> _underWaterFoliage = new List<GameResources.FoliageData>();
+		private List<GameResources.FoliageData> _underWaterFoliage;
 
 		/// <summary>
 		/// Whether the world has been generated.
 		/// </summary>
-		[SerializeField]
-		private bool _worldGenerated = false;
+		private bool _worldGenerated;
 
 		/// <summary>
 		/// The generated terrain mesh.
 		/// </summary>
-		[SerializeField]
 		private Mesh _generatedMesh;
+
+		private GameObject _terrainHost;
 
 		/// <summary>
 		/// Whether terrain check passed.
 		/// </summary>
-		[SerializeField]
-		private bool _terrainCheckPassed = false;
+		private bool _terrainCheckPassed;
 
 		/// <summary>
 		/// Whether editor is regenerating.
 		/// </summary>
-		[SerializeField]
-		private bool _isEditorRegenerating = false;
+		private bool _isEditorRegenerating;
 
 		/// <summary>
 		/// Generation state for Process-based execution.
 		/// </summary>
-		[SerializeField]
-		private GenerationState _generationState = GenerationState.Idle;
+		private GenerationState _generationState;
 
 		/// <summary>
 		/// Number of generation attempts.
 		/// </summary>
-		[SerializeField]
-		private int _generationAttempts = 0;
+		private int _generationAttempts;
 
 		// Async generation state tracking
-		[SerializeField]
-		private int _currentGenerationSettingsIndex = 0;
-		[SerializeField]
-		private int _currentY = 0;
-		[SerializeField]
-		private int _currentX = 0;
-		[SerializeField]
-		private int _totalChecks = 0;
-		[SerializeField]
-		private int _checksProcessed = 0;
-		[SerializeField]
-		private float _frameStartTime = 0f;
-		[SerializeField]
-		private float[,] _generatedNoiseMap = null;
-		[SerializeField]
-		private int _parallelTaskCount = 0;
-		[SerializeField]
-		private int _completedParallelTasks = 0;
-		[SerializeField]
-		private bool _forceGenerate = false;
-		[SerializeField]
+		private int _currentGenerationSettingsIndex;
+		private int _currentY;
+		private int _currentX;
+		private int _totalChecks;
+		private int _checksProcessed;
+		private float _frameStartTime;
+		private float[,] _generatedNoiseMap;
+		private int _parallelTaskCount;
+		private int _completedParallelTasks;
+		private bool _forceGenerate;
 		private Action<float, string> _progressReporterCallback;
 
 		// Properties for accessing the data
 		public Dictionary<string, List<PoolableObject>> PooledObjects => _pooledObjects;
 		public Dictionary<BuildingType, List<Buildings.BuildingBase>> Buildings => _buildings;
+		public List<EnemySpawner> EnemyCampSpawners => _enemyCampSpawners;
 		public List<GameResources.ResourceData> WoodResources
 		{
 			get => _woodResources;
@@ -195,6 +179,11 @@ namespace ScriptablesProcessorInfrastructure
 		{
 			get => _generatedMesh;
 			set => _generatedMesh = value;
+		}
+		public GameObject TerrainHost
+		{
+			get => _terrainHost;
+			set => _terrainHost = value;
 		}
 		public bool TerrainCheckPassed
 		{
@@ -270,6 +259,41 @@ namespace ScriptablesProcessorInfrastructure
 		{
 			get => _progressReporterCallback;
 			set => _progressReporterCallback = value;
+		}
+
+		/// <summary>
+		/// Initializes the world generation runtime data with default values.
+		/// </summary>
+		public WorldGenRuntimeData()
+		{
+			_pooledObjects = new Dictionary<string, List<PoolableObject>>();
+			_buildings = new Dictionary<BuildingType, List<Buildings.BuildingBase>>();
+			_enemyCampSpawners = new List<EnemySpawner>();
+			_woodResources = new List<GameResources.ResourceData>();
+			_oreResources = new List<GameResources.ResourceData>();
+			_foodResources = new List<GameResources.ResourceData>();
+			_goldResources = new List<GameResources.ResourceData>();
+			_recruitResources = new List<GameResources.ResourceData>();
+			_onLandFoliage = new List<GameResources.FoliageData>();
+			_underWaterFoliage = new List<GameResources.FoliageData>();
+			_worldGenerated = false;
+			_generatedMesh = null;
+			_terrainHost = null;
+			_terrainCheckPassed = false;
+			_isEditorRegenerating = false;
+			_generationState = GenerationState.Idle;
+			_generationAttempts = 0;
+			_currentGenerationSettingsIndex = 0;
+			_currentY = 0;
+			_currentX = 0;
+			_totalChecks = 0;
+			_checksProcessed = 0;
+			_frameStartTime = 0f;
+			_generatedNoiseMap = null;
+			_parallelTaskCount = 0;
+			_completedParallelTasks = 0;
+			_forceGenerate = false;
+			_progressReporterCallback = null;
 		}
 	}
 }

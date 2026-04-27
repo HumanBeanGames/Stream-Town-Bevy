@@ -28,9 +28,9 @@ namespace Processors
 
         /// <summary>
         /// ScriptableObject containing town resource runtime data.
-        /// Injected via Reflex dependency injection.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-        [Inject] private TownResourceRuntimeData _townResourceRuntimeData;
+        private TownResourceRuntimeData _townResourceRuntimeData;
 
         /// <summary>
         /// Gets the resource boost values dictionary.
@@ -208,6 +208,12 @@ namespace Processors
 		/// </summary>
 		public void Initialize()
 		{
+			if (_townResourceRuntimeData == null)
+				throw new InvalidOperationException("TownResourceProcessor runtime data has not been installed.");
+
+			if (_townResourceRuntimeData.Resources.Count > 0)
+				throw new InvalidOperationException("TownResourceProcessor runtime data has already been initialized.");
+
 			_townResourceRuntimeData.Resources.Add(Resource.Food, new ResourceInventory(
 				_resourceData.FoodStartingAmount,
 				_resourceData.FoodMaxAmount,
@@ -260,9 +266,11 @@ namespace Processors
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register TownResourceRuntimeData ScriptableObject
-			TownResourceRuntimeData townResourceRuntimeData = ScriptableObject.CreateInstance<TownResourceRuntimeData>();
-			containerBuilder.AddSingleton(townResourceRuntimeData);
+			if (_townResourceRuntimeData != null)
+				throw new InvalidOperationException("TownResourceProcessor runtime data has already been installed.");
+
+			_townResourceRuntimeData = new TownResourceRuntimeData();
+			containerBuilder.AddSingleton(_townResourceRuntimeData);
 		}
 
 		/// <summary>
@@ -295,6 +303,15 @@ namespace Processors
 			{
 				r.Value.ProcessQueue();
 			}
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// TownResourceProcessor does not have scene-specific settings to refresh
 		}
 
 		/// <summary>

@@ -3,6 +3,7 @@ using Utils;
 using UnityEngine;
 using Character;
 using UnityEngine.Events;
+using System;
 using ScriptablesProcessorInfrastructure;
 using Reflex.Attributes;
 using Reflex.Core;
@@ -33,8 +34,9 @@ namespace Processors
 
         /// <summary>
         /// Nested runtime data class for role data.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-        [Inject] private RoleRuntimeData _roleRuntimeData;
+        private RoleRuntimeData _roleRuntimeData;
 
         /// <summary>
         /// Gets or sets whether player role limits are enforced.
@@ -330,7 +332,9 @@ namespace Processors
         /// </summary>
         public void Initialize()
         {
-            Debug.Log("Init: " + this);
+            if (_roleRuntimeData == null)
+                throw new InvalidOperationException("RoleProcessor: RoleRuntimeData has not been installed.");
+
             InitializeRoleData();
         }
 
@@ -347,9 +351,11 @@ namespace Processors
 
         public void InjectRuntimeData(ContainerBuilder containerBuilder)
         {
-            // Instantiate and register RoleRuntimeData ScriptableObject
-            RoleRuntimeData roleRuntimeData = ScriptableObject.CreateInstance<RoleRuntimeData>();
-            containerBuilder.AddSingleton(roleRuntimeData);
+            if (_roleRuntimeData != null)
+                throw new InvalidOperationException("RoleProcessor: RoleRuntimeData has already been installed.");
+
+            _roleRuntimeData = new RoleRuntimeData();
+            containerBuilder.AddSingleton(_roleRuntimeData);
         }
 
         /// <summary>
@@ -360,6 +366,15 @@ namespace Processors
         public void Process()
         {
             // RoleProcessor does not require per-frame updates
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // RoleProcessor does not have scene-specific settings to refresh
         }
     }
 }

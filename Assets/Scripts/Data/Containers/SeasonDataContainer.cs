@@ -1,21 +1,20 @@
-using ScriptablesProcessorInfrastructure;
 using UnityEngine;
 using Utils;
 
-namespace Data.Containers
+namespace ScriptablesProcessorInfrastructure
 {
 	/// <summary>
 	/// ScriptableObject container for season configuration data including season definitions and timing.
 	/// Registered in ProjectScope - available immediately on scene load.
 	/// </summary>
-	[CreateAssetMenu(fileName = "SeasonDataContainer", menuName = "ScriptableObjects/SeasonDataContainer", order = 1)]
-	public class SeasonDataContainer : ScriptableObject, IDataScriptable
+	[CreateAssetMenu(fileName = "AllSeasonSettings", menuName = "ScriptableObjects/AllSeasonSettings", order = 1)]
+	public class AllSeasonSettings : ScriptableObject, IDataScriptable
 	{
         /// <summary>
-        /// The all seasons scriptable data.
+        /// Array of all season data configurations indexed by season type.
         /// </summary>
 		[SerializeField]
-		private AllSeasonsSettings _allSeasonsData;
+		private SeasonDataSettings[] _seasonSettingsArray;
 
         /// <summary>
         /// The starting season.
@@ -36,9 +35,51 @@ namespace Data.Containers
 		private float _seasonTransitionTime = 10f;
 
         /// <summary>
-        /// Gets the all seasons scriptable data.
+        /// The grass material.
         /// </summary>
-		public AllSeasonsSettings AllSeasonsData => _allSeasonsData;
+		[SerializeField]
+		private Material _grassMaterial;
+
+        /// <summary>
+        /// The terrain material.
+        /// </summary>
+		[SerializeField]
+		private Material _terrainMaterial;
+
+        /// <summary>
+        /// The tree material.
+        /// </summary>
+		[SerializeField]
+		private Material _treeMaterial;
+
+        /// <summary>
+        /// The building material.
+        /// </summary>
+		[SerializeField]
+		private Material _buildingMaterial;
+
+        /// <summary>
+        /// The water material.
+        /// </summary>
+		[SerializeField]
+		private Material _waterMaterial;
+
+        /// <summary>
+        /// Tint value for winter season materials.
+        /// </summary>
+		[SerializeField]
+		private float _winterTint = 0.42f;
+
+        /// <summary>
+        /// Tint value for non-winter season materials.
+        /// </summary>
+		[SerializeField]
+		private float _restTint = -0.08f;
+
+        /// <summary>
+        /// Gets the array of all season data configurations.
+        /// </summary>
+		public SeasonDataSettings[] SeasonSettingsArray => _seasonSettingsArray;
 
         /// <summary>
         /// Gets the starting season.
@@ -56,16 +97,51 @@ namespace Data.Containers
 		public float SeasonTransitionTime => _seasonTransitionTime;
 
         /// <summary>
+        /// Gets the grass material.
+        /// </summary>
+		public Material GrassMaterial => _grassMaterial;
+
+        /// <summary>
+        /// Gets the terrain material.
+        /// </summary>
+		public Material TerrainMaterial => _terrainMaterial;
+
+        /// <summary>
+        /// Gets the tree material.
+        /// </summary>
+		public Material TreeMaterial => _treeMaterial;
+
+        /// <summary>
+        /// Gets the building material.
+        /// </summary>
+		public Material BuildingMaterial => _buildingMaterial;
+
+        /// <summary>
+        /// Gets the water material.
+        /// </summary>
+		public Material WaterMaterial => _waterMaterial;
+
+        /// <summary>
+        /// Gets the winter tint value.
+        /// </summary>
+		public float WinterTint => _winterTint;
+
+        /// <summary>
+        /// Gets the rest tint value.
+        /// </summary>
+		public float RestTint => _restTint;
+
+        /// <summary>
         /// Gets the season scriptable data for a specific season.
         /// </summary>
         /// <param name="season">The season.</param>
         /// <returns>The season scriptable data.</returns>
 		public SeasonDataSettings GetSeasonData(Season season)
 		{
-			for (int i = 0; i < _allSeasonsData.SeasonSettingsArray.Length; i++)
+			for (int i = 0; i < _seasonSettingsArray.Length; i++)
 			{
-				if (_allSeasonsData.SeasonSettingsArray[i].Season == season)
-					return _allSeasonsData.SeasonSettingsArray[i];
+				if (_seasonSettingsArray[i].Season == season)
+					return _seasonSettingsArray[i];
 			}
 			UnityEngine.Debug.LogError($"Tried to return a season that hasn't been setup: {season}");
 			return null;

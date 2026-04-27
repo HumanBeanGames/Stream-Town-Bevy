@@ -13,13 +13,13 @@ MonoBehaviour:
   m_Name: D_TerrainGenSettings
   m_EditorClassIdentifier: 
   _generationSettings:
-    Size: 0
+    Size: 50
     LevelOfDetail: 0
-    NoiseScale: 0
-    Octaves: 0
-    Persistance: 0
-    Lacunarity: 0
-    Seed: 0
+    NoiseScale: 50
+    Octaves: 3
+    Persistance: 0.827
+    Lacunarity: 2
+    Seed: -584623848
     Offset: {x: 0, y: 0}
     SpawnThreshold: 0
     EnableSpawnBias: 0
@@ -58,13 +58,13 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  _enableIslandBias: 0
+  _enableIslandBias: 1
   _islandBiasCurve:
     serializedVersion: 2
     m_Curve:
     - serializedVersion: 3
       time: 0
-      value: 1
+      value: 3
       inSlope: 0
       outSlope: 0
       tangentMode: 0
@@ -83,8 +83,11 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  _islandSize: 150
+  _islandSize: 200
   _islandMultiplier: 1
   _islandAddition: 0
-  _quantizationFactor: 0.1
-  _topFaceProportion: 1
+  _quantizationFactor: 0.5
+  _topFaceProportion: 0.7
+  _cellSize: 2
+  _terrainPrefab: {fileID: 782710863790500670, guid: abaffbf8fe007c749b6c03249d66c1d7, type: 3}
+  _terrainMaterial: {fileID: 2100000, guid: 4f78add7763965742bc2e69033ae53cd, type: 2}

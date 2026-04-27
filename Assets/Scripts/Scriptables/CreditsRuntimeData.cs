@@ -1,20 +1,21 @@
-using UnityEngine;
 using System;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for CreditsProcessor.
 	/// Manages credits screen state.
 	/// </summary>
-	public class CreditsRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class CreditsRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Initializes the credits runtime state.
 		/// </summary>
-		public void Initialize()
+		public CreditsRuntimeData()
 		{
-			// CreditsProcessor doesn't require runtime state initialization
+			// CreditsRuntimeData has no fields to initialize
 		}
 	}
 }

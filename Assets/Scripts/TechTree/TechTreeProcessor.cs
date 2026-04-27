@@ -12,7 +12,6 @@ using TownGoal.Data;
 using TownGoal;
 using Twitch;
 using UnityEngine;
-using World;
 using Reflex.Attributes;
 using Reflex.Core;
 using SavingAndLoading;
@@ -20,7 +19,6 @@ using ScriptablesProcessorInfrastructure;
 using Data.Containers;
 using GameEventSystem;
 using GameResources;
-using UserInterface;
 using Utils;
 
 namespace Processors
@@ -29,12 +27,11 @@ namespace Processors
 	{
 		[Inject] private MetaData.MetaData _metaData;
 		[Inject] private TechTreeSettings _techTreeSettings;
-		[Inject] private TechTreeRuntimeData _techTreeRuntimeData;
+		private TechTreeRuntimeData _techTreeRuntimeData;
 		[Inject] private GameEventProcessor _gameEventProcessor;
 		[Inject] private TownGoalProcessor _townGoalProcessor;
 		[Inject] private BuildingSettings _buildingSettings;
 		[Inject] private BuildingProcessor _buildingProcessor;
-		[Inject] private UIProcessor _uiProcessor;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
 
@@ -53,9 +50,23 @@ namespace Processors
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register TechTreeRuntimeData ScriptableObject
-			TechTreeRuntimeData techTreeRuntimeData = ScriptableObject.CreateInstance<TechTreeRuntimeData>();
-			containerBuilder.AddSingleton(techTreeRuntimeData);
+			if (_techTreeRuntimeData != null)
+				throw new InvalidOperationException("TechTreeProcessor runtime data has already been installed.");
+
+			_techTreeRuntimeData = new TechTreeRuntimeData();
+			containerBuilder.AddSingleton(_techTreeRuntimeData);
+		}
+
+		public void Initialize()
+		{
+			if (_techTreeRuntimeData == null)
+				throw new InvalidOperationException("TechTreeProcessor runtime data has not been installed.");
+
+			if (_metaData != null && _metaData.LoadType == MetaData.LoadType.Generate)
+			{
+				_techTreeRuntimeData.RequestStartTechVote = true;
+				_techTreeRuntimeData.RequestedTechVoteDelay = 20;
+			}
 		}
 
 		public void InitializeTree()
@@ -149,6 +160,27 @@ namespace Processors
 		public TechNodeData GetGoalNodeData(Goal goal)
 		{
 			return TechNodeData.FromNodeSO(_techTreeRuntimeData.GoalsFollowed[goal]);
+		}
+
+		public bool TryGetCurrentGoal(out Goal goal, out TechNodeData nodeData)
+		{
+			goal = null;
+			nodeData = null;
+
+			if (_techTreeRuntimeData.CurrentTech == null)
+				return false;
+
+			foreach (var followedGoal in _techTreeRuntimeData.GoalsFollowed)
+			{
+				if (followedGoal.Value != _techTreeRuntimeData.CurrentTech)
+					continue;
+
+				goal = followedGoal.Key;
+				nodeData = TechNodeData.FromNodeSO(followedGoal.Value);
+				return true;
+			}
+
+			return false;
 		}
 
 		// Internal method for Node_SO access (kept for internal use)
@@ -292,7 +324,6 @@ namespace Processors
 			_townGoalProcessor.StartNewGoal(goal);
 			goal.OnGoalCompleted += GoalCompleted;
 			_techTreeRuntimeData.AddGoalFollowed(goal, node);
-			_uiProcessor.TownGoalInterface.AddGoal(goal, nodeData);
 
 			_techTreeRuntimeData.CurrentTech = node;
 		}
@@ -331,7 +362,6 @@ namespace Processors
 			_townGoalProcessor.StartNewGoal(goal);
 			goal.OnGoalCompleted += GoalCompleted;
 			_techTreeRuntimeData.AddGoalFollowed(goal, node);
-			_uiProcessor.TownGoalInterface.AddGoal(goal, nodeData);
 
 			_techTreeRuntimeData.CurrentTech = node;
 			return goal;
@@ -473,12 +503,6 @@ namespace Processors
 			OnBuildingAgedUp?.Invoke(data.BuildingType);
 		}
 
-		public void Initialize()
-		{
-			if (_metaData != null && _metaData.LoadType == MetaData.LoadType.Generate)
-				StartNewTechVote(20);
-		}
-
 		/// <summary>
 		/// Processes tech tree logic every frame.
 		/// Called every frame by the Coordinator.
@@ -494,10 +518,22 @@ namespace Processors
 
 			if (_techTreeRuntimeData.RequestStartTechVote)
 			{
+				if (_techTreeRuntimeData.TechTree == null)
+					return;
+
 				StartNewTechVote(_techTreeRuntimeData.RequestedTechVoteDelay);
 				_techTreeRuntimeData.RequestStartTechVote = false;
 				_techTreeRuntimeData.RequestedTechVoteDelay = 0f;
 			}
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// TechTreeProcessor does not have scene-specific settings to refresh
 		}
 	}
 }

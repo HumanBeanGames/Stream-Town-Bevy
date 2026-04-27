@@ -7,7 +7,7 @@ namespace VFX
 {
 	public class VFXArrowPointer : MonoBehaviour
 	{
-		[Inject] private UtilDisplayProcessor _utilDisplayProcessor;
+		[Inject] private LabelDisplayProcessor _utilDisplayProcessor;
 		private Player _attachedPlayer;
 		private ParticleSystem _particleSystem;
 		private float _vfxLifetime = 0;

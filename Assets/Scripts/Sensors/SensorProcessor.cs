@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Reflex.Attributes;
@@ -15,10 +16,10 @@ namespace Sensors
 	{
 		[Inject] private SensorSettings _sensorSettings;
 		/// <summary>
-		/// Runtime sensor data ScriptableObject.
-		/// Injected via Reflex dependency injection.
+		/// Runtime sensor data.
+		/// Assigned in InjectRuntimeData.
 		/// </summary>
-		[Inject] private SensorRuntimeData _sensorRuntimeData;
+		private SensorRuntimeData _sensorRuntimeData;
 
 		/// <summary>
 		/// Adds a sensor to the unit.
@@ -46,7 +47,10 @@ namespace Sensors
 
 		public void Initialize()
 		{
-			_sensorRuntimeData.UpdateTimer = Random.Range(0, _sensorSettings.UpdateRate);
+			if (_sensorRuntimeData == null)
+				throw new InvalidOperationException("SensorProcessor: SensorRuntimeData has not been installed.");
+
+			_sensorRuntimeData.UpdateTimer = (float)(new System.Random().NextDouble() * _sensorSettings.UpdateRate);
 		}
 
 		/// <summary>
@@ -59,14 +63,27 @@ namespace Sensors
 
 			if (_sensorRuntimeData.UpdateTimer >= _sensorSettings.UpdateRate)
 			{
-				_sensorRuntimeData.UpdateTimer -= _sensorSettings.UpdateRate;
-
-				for (int i = 0; i < _sensorRuntimeData.Sensors.Count; i++)
-				{
-					if (_sensorRuntimeData.Sensors[i].gameObject.activeInHierarchy)
-						_sensorRuntimeData.Sensors[i].STUpdate();
-				}
+				_sensorRuntimeData.UpdateTimer = 0f;
+				UpdateSensors();
 			}
+		}
+
+		private void UpdateSensors()
+		{
+			for (int i = 0; i < _sensorRuntimeData.Sensors.Count; i++)
+			{
+				if (_sensorRuntimeData.Sensors[i].gameObject.activeInHierarchy)
+					_sensorRuntimeData.Sensors[i].STUpdate();
+			}
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// SensorProcessor does not have scene-specific settings to refresh
 		}
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
@@ -77,9 +94,11 @@ namespace Sensors
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register SensorRuntimeData ScriptableObject
-			SensorRuntimeData sensorRuntimeData = ScriptableObject.CreateInstance<SensorRuntimeData>();
-			containerBuilder.AddSingleton(sensorRuntimeData);
+			if (_sensorRuntimeData != null)
+				throw new InvalidOperationException("SensorProcessor: SensorRuntimeData has already been installed.");
+
+			_sensorRuntimeData = new SensorRuntimeData();
+			containerBuilder.AddSingleton(_sensorRuntimeData);
 		}
 	}
 }

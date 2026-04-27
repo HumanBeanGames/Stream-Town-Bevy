@@ -1,37 +1,30 @@
 using Character;
+
+using ScriptablesProcessorInfrastructure;
 using GameResources;
 using System.Collections.Generic;
-using UnityEngine;
 using Utils;
 using UnityEngine.Events;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime town resource state for the game.
+	/// Runtime data class that stores town resource state for the game.
 	/// Manages resource amounts, storage, and resource change events.
 	/// </summary>
-	public class TownResourceRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class TownResourceRuntimeData : IRuntimeDataScriptable
 	{
 		public const float RESOURCE_RATE_TIME_PERIOD = 25;
 		public const float RESOURCE_UPDATE_RATE = 1;
 
-		[SerializeField]
-		private Dictionary<Resource, ResourceInventory> _resources = new Dictionary<Resource, ResourceInventory>();
-		[SerializeField]
-		private Dictionary<Resource, UnityEvent<StorageStatus>> _onResourceChangeEventDict = new Dictionary<Resource, UnityEvent<StorageStatus>>();
-		[SerializeField]
-		private UnityEvent<Resource, int, bool> _onAnyResourceChangeEvent = new UnityEvent<Resource, int, bool>();
-		[SerializeField]
-		private Dictionary<Resource, ResourceRateOfChange> _resourceRatesOfChange = new Dictionary<Resource, ResourceRateOfChange>();
-		[SerializeField]
-		private Dictionary<Resource, int> _resourceBoostValues = new Dictionary<Resource, int>();
-		[SerializeField]
-		private UnityEvent<Resource, int> _resourceGained = new UnityEvent<Resource, int>();
-		[SerializeField]
-		private UnityEvent<Resource, int> _resourceSold = new UnityEvent<Resource, int>();
-		[SerializeField]
-		private UnityEvent<Resource, int> _resourceBought = new UnityEvent<Resource, int>();
+		private Dictionary<Resource, ResourceInventory> _resources;
+		private Dictionary<Resource, UnityEvent<StorageStatus>> _onResourceChangeEventDict;
+		private UnityEvent<Resource, int, bool> _onAnyResourceChangeEvent;
+		private Dictionary<Resource, ResourceRateOfChange> _resourceRatesOfChange;
+		private Dictionary<Resource, int> _resourceBoostValues;
+		private UnityEvent<Resource, int> _resourceGained;
+		private UnityEvent<Resource, int> _resourceSold;
+		private UnityEvent<Resource, int> _resourceBought;
 
 		public Dictionary<Resource, ResourceInventory> Resources => _resources;
 		public Dictionary<Resource, UnityEvent<StorageStatus>> OnResourceChangeEventDict => _onResourceChangeEventDict;
@@ -45,9 +38,16 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the town resource runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public TownResourceRuntimeData()
 		{
-			// Initialize with default values if needed
+			_resources = new Dictionary<Resource, ResourceInventory>();
+			_onResourceChangeEventDict = new Dictionary<Resource, UnityEvent<StorageStatus>>();
+			_onAnyResourceChangeEvent = new UnityEvent<Resource, int, bool>();
+			_resourceRatesOfChange = new Dictionary<Resource, ResourceRateOfChange>();
+			_resourceBoostValues = new Dictionary<Resource, int>();
+			_resourceGained = new UnityEvent<Resource, int>();
+			_resourceSold = new UnityEvent<Resource, int>();
+			_resourceBought = new UnityEvent<Resource, int>();
 		}
 	}
 }

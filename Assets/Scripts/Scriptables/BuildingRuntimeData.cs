@@ -1,57 +1,51 @@
 using Buildings;
+using ScriptablesProcessorInfrastructure;
 using Character;
 using System.Collections.Generic;
-using UnityEngine;
 using Utils;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime building state for the game.
+	/// Runtime data class that stores building state for the game.
 	/// Manages building placers, building instances, counts, and unlock status.
 	/// </summary>
-	public class BuildingRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class BuildingRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Dictionary mapping players to their building placer components.
 		/// Tracks which player is currently placing buildings.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<Player, BuildingPlacer> _placers = new Dictionary<Player, BuildingPlacer>();
+		private Dictionary<Player, BuildingPlacer> _placers;
 
 		/// <summary>
 		/// Dictionary mapping building types to lists of building instances.
 		/// Tracks all buildings currently placed in the world by type.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<BuildingType, List<BuildingBase>> _buildings = new Dictionary<BuildingType, List<BuildingBase>>();
+		private Dictionary<BuildingType, List<BuildingBase>> _buildings;
 
 		/// <summary>
 		/// Total number of buildings currently placed in the world.
 		/// Used for tracking overall building count.
 		/// </summary>
-		[SerializeField]
-		private int _numOfBuildings = 1;
+		private int _numOfBuildings;
 
 		/// <summary>
 		/// Dictionary mapping building types to their current count.
 		/// Tracks how many buildings of each type exist.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<BuildingType, int> _buildingCounts = new Dictionary<BuildingType, int>();
+		private Dictionary<BuildingType, int> _buildingCounts;
 
 		/// <summary>
 		/// Dictionary mapping building types to their unlock status.
 		/// Tracks which building types are available for construction.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<BuildingType, bool> _buildingsUnlocked = new Dictionary<BuildingType, bool>();
+		private Dictionary<BuildingType, bool> _buildingsUnlocked;
 
 		/// <summary>
 		/// The last building type selected by the user player.
 		/// Used to remember the user's last building selection.
 		/// </summary>
-		[SerializeField]
 		private BuildingType _lastBuildingType;
 
 		/// <summary>
@@ -111,9 +105,14 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the building runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public BuildingRuntimeData()
 		{
-			// Initialize with default values if needed
+			_placers = new Dictionary<Player, BuildingPlacer>();
+			_buildings = new Dictionary<BuildingType, List<BuildingBase>>();
+			_numOfBuildings = 0;
+			_buildingCounts = new Dictionary<BuildingType, int>();
+			_buildingsUnlocked = new Dictionary<BuildingType, bool>();
+			_lastBuildingType = BuildingType.Townhall;
 		}
 	}
 }

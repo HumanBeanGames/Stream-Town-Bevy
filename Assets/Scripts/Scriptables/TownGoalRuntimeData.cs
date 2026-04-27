@@ -1,16 +1,16 @@
 using System.Collections.Generic;
-using TownGoal.Data;
-using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+using TownGoal.Data;
+
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime town goal state for the game.
+	/// Runtime data class that stores town goal state for the game.
 	/// Manages current goals for the town.
 	/// </summary>
-	public class TownGoalRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class TownGoalRuntimeData : IRuntimeDataScriptable
 	{
-		[SerializeField]
 		private List<Goal> _currentGoals;
 
 		public List<Goal> CurrentGoals
@@ -22,9 +22,9 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the town goal runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public TownGoalRuntimeData()
 		{
-			// Initialize with default values if needed
+			_currentGoals = new List<Goal>();
 		}
 	}
 }

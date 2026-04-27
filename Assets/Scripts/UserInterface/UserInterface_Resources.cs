@@ -20,6 +20,7 @@ namespace UserInterface
 		[SerializeField]
 		private Color _negativeColor = Color.red;
 		[Inject] private TownResourceProcessor _resourceProcessor;
+		[Inject] private UIProcessor _uiProcessor;
 
 		/// <summary>
 		/// Called when a resource amount has changed and updates the text accordingly.
@@ -42,11 +43,25 @@ namespace UserInterface
 
 		private void Start()
 		{
+			RegisterHud();
 			_resourceProcessor.OnAnyResourceChangeEvent += OnResourceChange;
 
 			for (int i = 1; i < (int)Resource.Count-1; i++)
 			{
 				OnResourceChange((Utils.Resource)i, 0, false);
+			}
+		}
+
+		private void RegisterHud()
+		{
+			if (_uiProcessor == null || _resourceTMPs == null || _resourceTMPs.Length < 4)
+				return;
+
+			_uiProcessor.RegisterResourceDisplay(_resourceTMPs[0], _resourceTMPs[1], _resourceTMPs[2], _resourceTMPs[3]);
+
+			if (_resourceTMPs.Length >= 8)
+			{
+				_uiProcessor.RegisterResourceRateOfChangeDisplay(_resourceTMPs[4], _resourceTMPs[5], _resourceTMPs[6], _resourceTMPs[7]);
 			}
 		}
 	}

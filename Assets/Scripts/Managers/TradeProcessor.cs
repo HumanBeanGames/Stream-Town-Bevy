@@ -128,5 +128,14 @@ namespace Processors
         {
             // TradeProcessor does not require per-frame updates
         }
-	}
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // TradeProcessor does not have scene-specific settings to refresh
+        }
+    }
 }

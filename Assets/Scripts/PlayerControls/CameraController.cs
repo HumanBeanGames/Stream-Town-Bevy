@@ -39,6 +39,7 @@ namespace PlayerControls
         [Inject] private ObjectSelectionProcessor _selectionProcessor;
         [Inject] private PlayerInputProcessor _playerInputProcessor;
         [Inject] private GameStateProcessor _gameStateProcessor;
+        [Inject] private TwitchChatProcessor _twitchChatProcessor;
 
         #region Inspector Fields (Constraints & Tunables)
 
@@ -130,6 +131,27 @@ namespace PlayerControls
 
             Zoom();
         }
+
+		private void ProcessQueuedTwitchCameraRequests()
+		{
+			if (_twitchChatProcessor == null || !_isIdle)
+				return;
+
+			if (!_twitchChatProcessor.TryDequeueCameraRequest(out TwitchCameraRequest request))
+				return;
+
+			if (request.Reset)
+			{
+				ResetCamera();
+				return;
+			}
+
+			if (request.ZoomFactor != 0)
+				ZoomCamera(request.ZoomFactor);
+
+			if (request.MoveVector != Vector3.zero)
+				MoveCamera(request.MoveVector);
+		}
 
         #endregion
 
@@ -494,6 +516,7 @@ namespace PlayerControls
 
         private void Update()
         {
+            ProcessQueuedTwitchCameraRequests();
             UpdateCamera();
         }
 

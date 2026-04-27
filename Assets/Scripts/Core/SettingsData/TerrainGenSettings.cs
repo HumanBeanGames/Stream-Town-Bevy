@@ -48,6 +48,14 @@ namespace ScriptablesProcessorInfrastructure
 		[SerializeField]
 		[Range(0, 1)]
 		private float _topFaceProportion = 1f;
+		[SerializeField]
+		private float _cellSize = 1f;
+
+		[Header("Rendering")]
+		[SerializeField]
+		private GameObject _terrainPrefab;
+		[SerializeField]
+		private Material _terrainMaterial;
 
 		public GenerationSettings GenerationSettings => _generationSettings;
 		public float MeshHeightMultiplier => _meshHeightMultiplier;
@@ -59,5 +67,8 @@ namespace ScriptablesProcessorInfrastructure
 		public float IslandAddition => _islandAddition;
 		public float QuantizationFactor => _quantizationFactor;
 		public float TopFaceProportion => _topFaceProportion;
+		public float CellSize => _cellSize;
+		public GameObject TerrainPrefab => _terrainPrefab;
+		public Material TerrainMaterial => _terrainMaterial;
 	}
 }

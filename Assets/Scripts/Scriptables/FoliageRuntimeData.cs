@@ -1,57 +1,53 @@
 using System.Collections.Generic;
+
+using ScriptablesProcessorInfrastructure;
 using UnityEngine;
 using GameResources;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for FoliageProcessor.
 	/// Contains lists of foliage data for on-land and underwater foliage types.
 	/// Also contains cached data for efficient GPU instancing.
 	/// </summary>
-	public class FoliageRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class FoliageRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// List of foliage data for on-land vegetation.
 		/// Contains position, rotation, and type data for all land-based foliage.
 		/// </summary>
-		[SerializeField]
-		private List<FoliageData> _onLandFoliage = new List<FoliageData>();
+		private List<FoliageData> _onLandFoliage;
 
 		/// <summary>
 		/// List of foliage data for underwater vegetation.
 		/// Contains position, rotation, and type data for all underwater foliage.
 		/// </summary>
-		[SerializeField]
-		private List<FoliageData> _underWaterFoliage = new List<FoliageData>();
+		private List<FoliageData> _underWaterFoliage;
 
 		/// <summary>
 		/// Cache of on-land foliage grouped by mesh and material.
 		/// Used for efficient GPU instancing of land-based foliage.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<(Mesh mesh, Material material), FoliageData[]> _onLandFoliageCache = new Dictionary<(Mesh, Material material), FoliageData[]>();
+		private Dictionary<(Mesh mesh, Material material), FoliageData[]> _onLandFoliageCache;
 
 		/// <summary>
 		/// Cache of underwater foliage grouped by mesh and material.
 		/// Used for efficient GPU instancing of water-based foliage.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<(Mesh mesh, Material material), FoliageData[]> _underWaterFoliageCache = new Dictionary<(Mesh, Material material), FoliageData[]>();
+		private Dictionary<(Mesh mesh, Material material), FoliageData[]> _underWaterFoliageCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for on-land foliage.
 		/// Pre-calculated for GPU instancing performance.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<(Mesh mesh, Material material), Matrix4x4[]> _onLandMatricesCache = new Dictionary<(Mesh, Material material), Matrix4x4[]>();
+		private Dictionary<(Mesh mesh, Material material), Matrix4x4[]> _onLandMatricesCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for underwater foliage.
 		/// Pre-calculated for GPU instancing performance.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<(Mesh mesh, Material material), Matrix4x4[]> _underWaterMatricesCache = new Dictionary<(Mesh, Material material), Matrix4x4[]>();
+		private Dictionary<(Mesh mesh, Material material), Matrix4x4[]> _underWaterMatricesCache;
 
 		/// <summary>
 		/// Gets or sets the list of on-land foliage data.
@@ -110,9 +106,14 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the foliage runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public FoliageRuntimeData()
 		{
-			// Initialize with default values if needed
+			_onLandFoliage = new List<FoliageData>();
+			_underWaterFoliage = new List<FoliageData>();
+			_onLandFoliageCache = new Dictionary<(Mesh mesh, Material material), FoliageData[]>();
+			_underWaterFoliageCache = new Dictionary<(Mesh mesh, Material material), FoliageData[]>();
+			_onLandMatricesCache = new Dictionary<(Mesh mesh, Material material), Matrix4x4[]>();
+			_underWaterMatricesCache = new Dictionary<(Mesh mesh, Material material), Matrix4x4[]>();
 		}
 	}
 }

@@ -1,18 +1,19 @@
 using System;
+
+using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
 using Character;
-using UnityEngine;
 using UnityEngine.Events;
 using Utils;
 using Data.Containers;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime role state for the game.
+	/// Runtime data class that stores role state for the game.
 	/// Manages role slot availability and role data container.
 	/// </summary>
-	public class RoleRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class RoleRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Dictionary mapping player roles to their slot availability.
@@ -24,13 +25,13 @@ namespace ScriptablesProcessorInfrastructure
 		/// Event fired when role slots change.
 		/// Passes the role whose slots have changed.
 		/// </summary>
-		private UnityEvent<PlayerRole> _onRoleSlotsChangedEvent = new UnityEvent<PlayerRole>();
+		private UnityEvent<PlayerRole> _onRoleSlotsChangedEvent;
 
 		/// <summary>
 		/// Event fired when a role slot is removed.
 		/// Passes the role whose slot was removed.
 		/// </summary>
-		private UnityEvent<PlayerRole> _onSlotRemoved = new UnityEvent<PlayerRole>();
+		private UnityEvent<PlayerRole> _onSlotRemoved;
 
 		/// <summary>
 		/// Container for role data and configuration.
@@ -42,7 +43,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// Whether player role limits are enforced.
 		/// If true, limits the number of players per role; if false, unlimited.
 		/// </summary>
-		public bool PlayerRoleLimits = true;
+		public bool PlayerRoleLimits;
 
 		/// <summary>
 		/// Gets the event fired when role slots change.
@@ -63,6 +64,18 @@ namespace ScriptablesProcessorInfrastructure
 		/// Gets the event fired when a role slot is removed.
 		/// </summary>
 		public UnityEvent<PlayerRole> OnSlotRemoved => _onSlotRemoved;
+
+		/// <summary>
+		/// Initializes the role runtime data with default values.
+		/// </summary>
+		public RoleRuntimeData()
+		{
+			_roleSlotsDictionary = new Dictionary<PlayerRole, RoleSlot>();
+			_onRoleSlotsChangedEvent = new UnityEvent<PlayerRole>();
+			_onSlotRemoved = new UnityEvent<PlayerRole>();
+			_roleDataContainer = null;
+			PlayerRoleLimits = true;
+		}
 
 		/// <summary>
 		/// Initializes the role slots dictionary.

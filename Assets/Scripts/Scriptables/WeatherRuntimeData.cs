@@ -1,24 +1,19 @@
-using System.Collections;
 using UnityEngine;
-using UnityEngine.VFX;
-using ScriptablesProcessorInfrastructure;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+using UnityEngine.VFX;
+
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for WeatherProcessor.
 	/// </summary>
-	public class WeatherRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class WeatherRuntimeData : IRuntimeDataScriptable
 	{
-		[SerializeField]
 		private VisualEffect _currentVFX;
-		[SerializeField]
 		private float _remainingRunTime;
-		[SerializeField]
 		private float _particleLerpValue;
-		[SerializeField]
 		private bool _weatherRunning;
-		[SerializeField]
 		private SeasonDataSettings _activeSeasonData;
 
 		public VisualEffect CurrentVFX
@@ -54,9 +49,13 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the weather runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public WeatherRuntimeData()
 		{
-			// Initialize with default values if needed
+			_currentVFX = null;
+			_remainingRunTime = 0f;
+			_particleLerpValue = 0f;
+			_weatherRunning = false;
+			_activeSeasonData = null;
 		}
 	}
 }

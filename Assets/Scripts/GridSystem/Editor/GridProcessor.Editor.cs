@@ -7,7 +7,7 @@ namespace GridSystem
 	/// Editor-only visualization for GridProcessor.
 	/// Draws gizmos to visualize the grid in the Unity editor scene view.
 	/// </summary>
-	public partial class GridProcessor
+	public class GridProcessorEditor
 	{
 		/// <summary>
 		/// Called by Unity editor to draw gizmos for visualization.

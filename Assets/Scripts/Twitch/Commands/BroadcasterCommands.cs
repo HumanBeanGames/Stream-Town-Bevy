@@ -1,11 +1,11 @@
 using Processors;
-using Core;
 using System;
 using TwitchLib.Client.Events;
-using Reflex.Attributes;
 using TechTree;
 using GameEventSystem;
 using MetaData;
+using UserInterface.MainMenu;
+using Reflex.Attributes;
 
 namespace Twitch.Commands
 {
@@ -14,40 +14,35 @@ namespace Twitch.Commands
     /// </summary>
 	public class BroadcasterCommands
 	{
-        /// <summary>
-        /// The game coordinator. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private Coordinator _gameProcessor;
+        private MainMenuManager _mainMenuManager;
+        private PlayerProcessor _playerProcessor;
+        private TechTreeProcessor _techTreeProcessor;
+        private GameEventProcessor _gameEventProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+        private PlayerCommands _playerCommands;
+
+        public BroadcasterCommands(MainMenuManager mainMenuManager,
+            PlayerProcessor playerProcessor, TechTreeProcessor techTreeProcessor,
+            GameEventProcessor gameEventProcessor, Processors.TwitchChatProcessor twitchChatProcessor,
+            PlayerCommands playerCommands)
+        {
+            _mainMenuManager = mainMenuManager;
+            _playerProcessor = playerProcessor;
+            _techTreeProcessor = techTreeProcessor;
+            _gameEventProcessor = gameEventProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+            _playerCommands = playerCommands;
+        }
 
         /// <summary>
-        /// The main menu runtime scriptable. Injected via Reflex dependency injection.
+        /// Initializes the broadcaster commands by resolving the main menu manager via scene lookup.
         /// </summary>
-		[Inject] private MainMenuProcessor _mainMenuProcessor;
-
-        /// <summary>
-        /// The player runtime scriptable. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private PlayerProcessor _playerProcessor;
-
-        /// <summary>
-        /// The tech tree processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private TechTreeProcessor _techTreeProcessor;
-
-        /// <summary>
-        /// The game event processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private GameEventProcessor _gameEventProcessor;
-
-        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private MessageSender _messageSender;
-
-        /// <summary>
-        /// The player commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private PlayerCommands _playerCommands;
+		public void Initialize()
+		{
+			_mainMenuManager = UnityEngine.Object.FindFirstObjectByType<MainMenuManager>();
+			if (_mainMenuManager != null)
+				_mainMenuManager.CodeDisplay?.Invoke(_twitchChatProcessor.GetBroadcasterConnectCode());
+		}
 
         /// <summary>
         /// Connects the broadcaster to the game.
@@ -57,17 +52,15 @@ namespace Twitch.Commands
 		internal void Connect(string arg, OnChatCommandReceivedArgs e)
 		{
 #if UNITY_EDITOR
-			_messageSender.MessagesAllowed = true;
+			_twitchChatProcessor.MessagesAllowed = true;
 #else
-			if (arg == _gameProcessor.Code && e.Command.ChatMessage.IsBroadcaster)
-				_messageSender.MessagesAllowed = true;
-			else
+			if (!_twitchChatProcessor.TryAuthorizeBroadcasterConnection(arg, e.Command.ChatMessage.IsBroadcaster))
 				return;
 #endif
-			_mainMenuProcessor.CodeDisplay?.Invoke("");
-			_mainMenuProcessor.ConnectPanel.SetActive(false);
+			_mainMenuManager?.CodeDisplay?.Invoke("");
+			_mainMenuManager?.ConnectPanel?.SetActive(false);
 			_techTreeProcessor.RequestDelayedSetup();
-			if (_mainMenuProcessor.LoadType == LoadType.Generate || _mainMenuProcessor.LoadType == LoadType.Load && _playerProcessor.UserPlayer == null)
+			if (_mainMenuManager != null && (_mainMenuManager.LoadType == LoadType.Generate || _mainMenuManager.LoadType == LoadType.Load) && _playerProcessor.UserPlayer == null)
 				_playerProcessor.SetUserPlayer(_playerCommands.TryCreatePlayer(e));
 		}
 	}

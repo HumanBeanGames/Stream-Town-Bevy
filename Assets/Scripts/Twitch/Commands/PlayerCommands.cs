@@ -19,42 +19,29 @@ namespace Twitch.Commands
     /// </summary>
     public class PlayerCommands
     {
-        /// <summary>
-        /// The player processor. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private PlayerProcessor _playerProcessor;
-        /// <summary>
-        /// The game event processor. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private GameEventProcessor _gameEventProcessor;
-        /// <summary>
-        /// The util display processor. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private UtilDisplayProcessor _utilDisplayProcessor;
-        /// <summary>
-        /// The Twitch client. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private TL_Client _tlClient;
-        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private MessageSender _messageSender;
-        /// <summary>
-        /// The event commands. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private EventCommands _eventCommands;
-        /// <summary>
-        /// The role processor. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private RoleProcessor _roleProcessor;
-        /// <summary>
-        /// The game coordinator. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private Coordinator _coordinator;
-        /// <summary>
-        /// The game settings scriptable. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private GameSettings _gameSettings;
+        private PlayerProcessor _playerProcessor;
+        private GameEventProcessor _gameEventProcessor;
+        private LabelDisplayProcessor _utilDisplayProcessor;
+        private TwitchClientProcessor _twitchClientProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+        private EventCommands _eventCommands;
+        private RoleProcessor _roleProcessor;
+        private GameSettings _gameSettings;
+
+        public PlayerCommands(PlayerProcessor playerProcessor, GameEventProcessor gameEventProcessor,
+            LabelDisplayProcessor utilDisplayProcessor, TwitchClientProcessor twitchClientProcessor,
+            Processors.TwitchChatProcessor twitchChatProcessor, EventCommands eventCommands,
+            RoleProcessor roleProcessor, GameSettings gameSettings)
+        {
+            _playerProcessor = playerProcessor;
+            _gameEventProcessor = gameEventProcessor;
+            _utilDisplayProcessor = utilDisplayProcessor;
+            _twitchClientProcessor = twitchClientProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+            _eventCommands = eventCommands;
+            _roleProcessor = roleProcessor;
+            _gameSettings = gameSettings;
+        }
 
         /// <summary>
         /// Attempts to create a player and will set it's role if provided in the arguments.
@@ -113,9 +100,9 @@ namespace Twitch.Commands
             _playerProcessor.AddNewPlayer(player, role);
 
             if (isSub)
-                _tlClient.UserIsSubscribed(player.TwitchUser.UserID);
+                _twitchClientProcessor.UserIsSubscribed(player.TwitchUser.UserID);
 
-            _messageSender.SendPreBuiltMessage(user.Username, "characterCreated");
+            _twitchChatProcessor.SendPreBuiltMessage(user.Username, "characterCreated");
             return player;
         }
 
@@ -130,7 +117,7 @@ namespace Twitch.Commands
             if (int.TryParse(args[0], out int index))
             {
                 if (player.EquipmentHandler.SetHairByIndex(index))
-                    _messageSender.SendPlayerMessage(player, "Hair Style Changed!");
+                    _twitchChatProcessor.SendPlayerMessage(player, "Hair Style Changed!");
             }
         }
 
@@ -145,7 +132,7 @@ namespace Twitch.Commands
             if (int.TryParse(args[0], out int index))
             {
                 if (player.EquipmentHandler.SetEyesByIndex(index))
-                    _messageSender.SendPlayerMessage(player, "Eye Style Changed!");
+                    _twitchChatProcessor.SendPlayerMessage(player, "Eye Style Changed!");
             }
         }
 
@@ -160,7 +147,7 @@ namespace Twitch.Commands
             if (int.TryParse(args[0], out int index))
             {
                 if (player.EquipmentHandler.SetFacialHairByIndex(index))
-                    _messageSender.SendPlayerMessage(player, "Facial Hair Style Changed!");
+                    _twitchChatProcessor.SendPlayerMessage(player, "Facial Hair Style Changed!");
             }
         }
 
@@ -175,7 +162,7 @@ namespace Twitch.Commands
             if (int.TryParse(args[0], out int index))
             {
                 if (player.EquipmentHandler.SetBodyTypeByIndex(index))
-                    _messageSender.SendPlayerMessage(player, "Body Type Changed!");
+                    _twitchChatProcessor.SendPlayerMessage(player, "Body Type Changed!");
             }
         }
 
@@ -190,7 +177,7 @@ namespace Twitch.Commands
             if (int.TryParse(args[0], out int index))
             {
                 if (player.EquipmentHandler.SetHairColorByIndex(index))
-                    _messageSender.SendPlayerMessage(player, "Hair Color Changed!");
+                    _twitchChatProcessor.SendPlayerMessage(player, "Hair Color Changed!");
             }
         }
 
@@ -205,7 +192,7 @@ namespace Twitch.Commands
             if (int.TryParse(args[0], out int index))
             {
                 if (player.EquipmentHandler.SetEyeColorByIndex(index))
-                    _messageSender.SendPlayerMessage(player, "Eye Color Changed!");
+                    _twitchChatProcessor.SendPlayerMessage(player, "Eye Color Changed!");
             }
         }
 
@@ -230,7 +217,7 @@ namespace Twitch.Commands
 
             if (currentEvent == null || !(currentEvent is VoteEvent))
             {
-                _messageSender.SendPlayerMessage(player, "Failed - No Vote Active");
+                _twitchChatProcessor.SendPlayerMessage(player, "Failed - No Vote Active");
                 return;
             }
 
@@ -238,7 +225,7 @@ namespace Twitch.Commands
 
             if (voteEvent.HasVoted(player))
             {
-                _messageSender.SendPlayerMessage(player, "Failed - You have already voted!");
+                _twitchChatProcessor.SendPlayerMessage(player, "Failed - You have already voted!");
                 return;
             }
 
@@ -286,7 +273,7 @@ namespace Twitch.Commands
             if (!hasPet)
                 petsString = "You have no pets";
 
-            _messageSender.SendMessage($"{player.TwitchUser.Username} {petsString}");
+            _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} {petsString}");
         }
 
         /// <summary>
@@ -305,7 +292,7 @@ namespace Twitch.Commands
             if (player.PetsUnlocked[type])
             {
                 player.Pet.TrySetActivePet(type);
-                _messageSender.SendMessage($"{player.TwitchUser.Username} pet switched!");
+                _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} pet switched!");
             }
         }
 
@@ -317,11 +304,11 @@ namespace Twitch.Commands
         {
             if (player.HealthHandler.Dead)
                 if (player.HealthHandler.TryRevive(ReviveType.Self))
-                    _messageSender.SendMessage($"{player.TwitchUser.Username} you have been successfully revived!");
+                    _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you have been successfully revived!");
                 else
-                    _messageSender.SendMessage($"{player.TwitchUser.Username} you cannot afford to revive (requires 400 food)!");
+                    _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you cannot afford to revive (requires 400 food)!");
             else
-                _messageSender.SendMessage($"{player.TwitchUser.Username} you have to be dead to revive");
+                _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you have to be dead to revive");
         }
 
         /// <summary>
@@ -338,16 +325,16 @@ namespace Twitch.Commands
                         if (targetPlayer.HealthHandler.TryRevive(ReviveType.Others))
                         {
                             player.RoleHandler.PlayerRoleData.IncreaseExperience(targetPlayer.HealthHandler.MaxHealth);
-                            _messageSender.SendMessage($"{player.TwitchUser.Username} you have successfully revived {targetPlayer.TwitchUser.Username}! how nice...");
+                            _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you have successfully revived {targetPlayer.TwitchUser.Username}! how nice...");
                         }
                         else
-                            _messageSender.SendMessage($"{player.TwitchUser.Username} you cannot afford to revive {targetPlayer.TwitchUser.Username} (requires 200 food)!");
+                            _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you cannot afford to revive {targetPlayer.TwitchUser.Username} (requires 200 food)!");
                     else
-                        _messageSender.SendMessage($"{player.TwitchUser.Username} to revive others they must be dead! silly.");
+                        _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} to revive others they must be dead! silly.");
                 else
-                    _messageSender.SendMessage($"{player.TwitchUser.Username} cannot find player '{targetPlayer.TwitchUser.Username}'");
+                    _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} cannot find player '{targetPlayer.TwitchUser.Username}'");
             else
-                _messageSender.SendMessage($"{player.TwitchUser.Username} you need to be role {PlayerRole.Priest} or {PlayerRole.Paladin} to revive other players!");
+                _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you need to be role {PlayerRole.Priest} or {PlayerRole.Paladin} to revive other players!");
         }
     }
 }

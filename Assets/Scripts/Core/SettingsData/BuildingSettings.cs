@@ -86,6 +86,11 @@ namespace ScriptablesProcessorInfrastructure
 
 		public bool BuildingsCostResourcesEnabled => _buildingsCostResourcesEnabled;
 
+		public void SetBuildingsCostResourcesEnabled(bool enabled)
+		{
+			_buildingsCostResourcesEnabled = enabled;
+		}
+
 		/// <summary>
 		/// Whether tech tree unlocks are ignored.
 		/// If true, all buildings/features are available regardless of tech progress.

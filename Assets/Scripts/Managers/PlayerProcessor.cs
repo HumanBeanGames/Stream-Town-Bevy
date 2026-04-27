@@ -26,9 +26,10 @@ namespace Processors
     public class PlayerProcessor : MonoBehaviour, IInstaller, IProcessor
     {
         /// <summary>
-        /// Nested runtime data class for player data.
+        /// Runtime data for player data.
+        /// Assigned in InjectRuntimeData.
         /// </summary>
-        [Inject] private PlayerRuntimeData _playerRuntimeData;
+        private PlayerRuntimeData _playerRuntimeData;
 
         /// <summary>
         /// Gets or sets the user-controlled player.
@@ -74,11 +75,9 @@ namespace Processors
         [Inject] private TimeProcessor _timeProcessor;
 
         /// <summary>
-        /// Message sender for Twitch chat integration.
-        /// Injected via Reflex dependency injection.
+        /// The Twitch chat processor. Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private MessageSender _messageSender;
-
+        [Inject] private Processors.TwitchChatProcessor _twitchChatProcessor;
 
         /// <summary>
         /// Event invoked when the ruler changes.
@@ -153,10 +152,14 @@ namespace Processors
 
         /// <summary>
         /// Initializes the player processor.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// Sets up stat modifiers and player update queue.
         /// </summary>
         public void Initialize()
         {
+            if (_playerRuntimeData == null)
+                throw new InvalidOperationException("PlayerProcessor runtime data has not been installed.");
+
             Dictionary<PlayerRole, StatModifiers> roleStatModifiers = new Dictionary<PlayerRole, StatModifiers>();
             StatModifiers globalStatModifier = new StatModifiers();
             Queue<Player> playerUpdateQueue = new Queue<Player>();
@@ -167,6 +170,9 @@ namespace Processors
             }
 
             _playerRuntimeData.InitializePlayerState(roleStatModifiers, globalStatModifier, playerUpdateQueue);
+
+            // Set up player data access for Twitch chat
+            _twitchChatProcessor.SetPlayerDataAccess((string userID, out int index) => PlayerExistsByID(userID, out index), GetPlayer);
         }
 
         /// <summary>
@@ -182,9 +188,11 @@ namespace Processors
 
         public void InjectRuntimeData(ContainerBuilder containerBuilder)
         {
-            // Instantiate and register PlayerRuntimeData ScriptableObject
-            PlayerRuntimeData playerRuntimeData = ScriptableObject.CreateInstance<PlayerRuntimeData>();
-            containerBuilder.AddSingleton(playerRuntimeData);
+            if (_playerRuntimeData != null)
+                throw new InvalidOperationException("PlayerProcessor runtime data has already been installed.");
+
+            _playerRuntimeData = new PlayerRuntimeData();
+            containerBuilder.AddSingleton(_playerRuntimeData);
         }
 
         /// <summary>
@@ -208,8 +216,8 @@ namespace Processors
             data.RoleHandler.Player = data;
             data.StationSensor = obj.GetComponent<StationSensor>();
             data.HealthHandler = obj.GetComponent<HealthHandler>();
-            data.HealthHandler.OnDeath += (attacked) => data.OnCharacterDied(attacked, _messageSender);
-            data.HealthHandler.OnRevived += () => data.OnCharacterRespawned(_messageSender);
+            data.HealthHandler.OnDeath += (attacked) => data.OnCharacterDied(attacked, _twitchChatProcessor);
+            data.HealthHandler.OnRevived += () => data.OnCharacterRespawned(_twitchChatProcessor);
             data.TargetSensor = obj.GetComponent<TargetSensor>();
             data.EquipmentHandler = obj.GetComponent<CharacterModelHandler>();
             data.GUIDComponent = obj.GetComponent<GUIDComponent>();
@@ -438,6 +446,15 @@ namespace Processors
 
                 _playerRuntimeData.PlayerUpdateQueue.Enqueue(playerToUpdate);
             }
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // PlayerProcessor does not have scene-specific settings to refresh
         }
     }
 }

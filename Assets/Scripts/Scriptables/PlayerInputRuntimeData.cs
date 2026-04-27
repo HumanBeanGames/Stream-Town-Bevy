@@ -1,71 +1,65 @@
 using System;
+
+using ScriptablesProcessorInfrastructure;
 using PlayerControls;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime player input state for the game.
+	/// Runtime data class that stores player input state for the game.
 	/// Manages PlayerInput component, held keys, mouse position/delta, and input events.
 	/// </summary>
-	public class PlayerInputRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class PlayerInputRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Reference to the Unity PlayerInput component.
 		/// Used to handle input actions and callbacks.
 		/// </summary>
-		[SerializeField]
 		private PlayerInput _playerInput;
 
 		/// <summary>
 		/// Whether the player input system has been initialized.
 		/// Set to true after PlayerInput component is set up.
 		/// </summary>
-		[SerializeField]
-		private bool _isInitialized = false;
+		private bool _isInitialized;
 
 		/// <summary>
 		/// Dictionary tracking which input buttons are currently held down.
 		/// True indicates the button is being held, false indicates it's not.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<Data.SharedTypes.InputButton, bool> _heldKeys = new Dictionary<Data.SharedTypes.InputButton, bool>();
+		private Dictionary<Data.SharedTypes.InputButton, bool> _heldKeys;
 
 		/// <summary>
 		/// Screen position of the last mouse click.
 		/// Used for drag-and-drop and click-based interactions.
 		/// </summary>
-		[SerializeField]
-		private Vector2 _mouseLastClickPosition = Vector2.zero;
+		private Vector2 _mouseLastClickPosition;
 
 		/// <summary>
 		/// Previous frame's mouse position.
 		/// Used to calculate mouse movement delta.
 		/// </summary>
-		[SerializeField]
-		private Vector2 _previousMousePos = Vector2.zero;
+		private Vector2 _previousMousePos;
 
 		/// <summary>
 		/// Mouse movement delta since last frame.
 		/// Calculated as current position minus previous position.
 		/// </summary>
-		[SerializeField]
-		private Vector2 _mouseDelta = Vector2.zero;
+		private Vector2 _mouseDelta;
 
 		/// <summary>
 		/// Current mouse screen position.
 		/// Updated every frame from the input system.
 		/// </summary>
-		[SerializeField]
-		private Vector2 _mousePosition = Vector2.zero;
+		private Vector2 _mousePosition;
 
 		/// <summary>
 		/// Whether the escape key was pressed this frame.
 		/// Used to cancel actions or close menus.
 		/// </summary>
-		[SerializeField]
-		private bool _escapePressed = false;
+		private bool _escapePressed;
 
 		/// <summary>
 		/// Gets or sets the PlayerInput component reference.
@@ -118,9 +112,13 @@ namespace ScriptablesProcessorInfrastructure
 		}
 
 		/// <summary>
-		/// Gets the current mouse position.
+		/// Gets or sets the current mouse position.
 		/// </summary>
-		public Vector2 MousePosition => _mousePosition;
+		public Vector2 MousePosition
+		{
+			get => _mousePosition;
+			set => _mousePosition = value;
+		}
 
 		/// <summary>
 		/// Gets whether escape was pressed.
@@ -154,9 +152,16 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the player input runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public PlayerInputRuntimeData()
 		{
-			// Initialize with default values if needed
+			_playerInput = null;
+			_isInitialized = false;
+			_heldKeys = new Dictionary<Data.SharedTypes.InputButton, bool>();
+			_mouseLastClickPosition = Vector2.zero;
+			_previousMousePos = Vector2.zero;
+			_mouseDelta = Vector2.zero;
+			_mousePosition = Vector2.zero;
+			_escapePressed = false;
 		}
 	}
 }

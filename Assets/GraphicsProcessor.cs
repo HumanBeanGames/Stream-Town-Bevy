@@ -8,7 +8,7 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.Rendering;
 using Reflex.Core;
 
-public class GraphicsProcessor : UIGameObjectAccessor, IInstaller
+public class GraphicsProcessor : UIGameObjectAccessor, IInstaller, IProjectUIInjectable
 {
     public new void InstallBindings(ContainerBuilder containerBuilder)
     {
@@ -16,18 +16,22 @@ public class GraphicsProcessor : UIGameObjectAccessor, IInstaller
         containerBuilder.AddSingleton(this);
     }
 
-    [Inject]
-    private void Initialize()
+    public void OnProjectUIInjected()
     {
+        if (_initialized)
+            return;
+
         if (!Directory.Exists(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + GameIO.SAVE_FILEPATH))
         {
             Directory.CreateDirectory(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments) + GameIO.SAVE_FILEPATH);
         }
         SetUpPipelineAndPostProcessing();
         SetUpResolution();
+        _initialized = true;
     }
 
     //prviate variables
+    private bool _initialized;
     private List<Resolution> _cachedResolutions;
     public List<Resolution> Resolutions
     {

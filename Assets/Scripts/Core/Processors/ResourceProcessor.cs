@@ -71,10 +71,10 @@ namespace Processors
 	public partial class ResourceProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
 		/// <summary>
-		/// Runtime data ScriptableObject for resource data.
-		/// Injected via Reflex dependency injection.
+		/// Runtime data for resource data.
+		/// Assigned in InjectRuntimeData.
 		/// </summary>
-		[Inject] private ResourceRuntimeData _resourceData;
+		private ResourceRuntimeData _resourceData;
 
 		/// <summary>
 		/// Gets the list of wood resources.
@@ -113,21 +113,23 @@ namespace Processors
 		}
 
 		/// <summary>
-		/// Injects the ResourceRuntimeData ScriptableObject into the DI container.
+		/// Injects the ResourceRuntimeData into the DI container and assigns it to the processor.
 		/// </summary>
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			ResourceRuntimeData resourceRuntimeData = ScriptableObject.CreateInstance<ResourceRuntimeData>();
-			containerBuilder.AddSingleton(resourceRuntimeData);
+			if (_resourceData != null)
+				throw new System.InvalidOperationException("ResourceProcessor runtime data has already been installed.");
+
+			_resourceData = new ResourceRuntimeData();
+			containerBuilder.AddSingleton(_resourceData);
 		}
 
-		/// <summary>
-		/// Initializes the resource processor.
-		/// Loads and caches resource data from the ScriptableObject.
-		/// </summary>
 		public void Initialize()
 		{
+			if (_resourceData == null)
+				throw new System.InvalidOperationException("ResourceProcessor runtime data has not been installed.");
+
 			InitializeFromScriptableObject();
 		}
 
@@ -295,27 +297,52 @@ namespace Processors
 		/// <summary>
 		/// Gets the cached transformation matrices for wood resources.
 		/// </summary>
-		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetWoodMatrices() => _resourceData.WoodMatricesCache;
+		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetWoodMatrices()
+		{
+			if (_resourceData != null)
+				return _resourceData.WoodMatricesCache;
+			return new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+		}
 
 		/// <summary>
 		/// Gets the cached transformation matrices for ore resources.
 		/// </summary>
-		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetOreMatrices() => _resourceData.OreMatricesCache;
+		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetOreMatrices()
+		{
+			if (_resourceData != null)
+				return _resourceData.OreMatricesCache;
+			return new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+		}
 
 		/// <summary>
 		/// Gets the cached transformation matrices for food resources.
 		/// </summary>
-		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetFoodMatrices() => _resourceData.FoodMatricesCache;
+		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetFoodMatrices()
+		{
+			if (_resourceData != null)
+				return _resourceData.FoodMatricesCache;
+			return new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+		}
 
 		/// <summary>
 		/// Gets the cached transformation matrices for gold resources.
 		/// </summary>
-		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetGoldMatrices() => _resourceData.GoldMatricesCache;
+		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetGoldMatrices()
+		{
+			if (_resourceData != null)
+				return _resourceData.GoldMatricesCache;
+			return new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+		}
 
 		/// <summary>
 		/// Gets the cached transformation matrices for recruit resources.
 		/// </summary>
-		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetRecruitMatrices() => _resourceData.RecruitMatricesCache;
+		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetRecruitMatrices()
+		{
+			if (_resourceData != null)
+				return _resourceData.RecruitMatricesCache;
+			return new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+		}
 
 		public void SetGeneratedResources(global::Utils.Resource resourceType, List<GameResources.ResourceData> resources, List<Mesh> meshes, List<Material> materials)
 		{
@@ -856,6 +883,15 @@ namespace Processors
 		public void Process()
 		{
 			// ResourceProcessor does not require per-frame updates
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// ResourceProcessor does not have scene-specific settings to refresh
 		}
 
 	}

@@ -16,14 +16,14 @@ namespace Twitch.Commands
 	/// </summary>
 	public class BuildingCommands
 	{
-        /// <summary>
-        /// The building processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private BuildingProcessor _buildingProcessor;
-        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private MessageSender _messageSender;
+        private BuildingProcessor _buildingProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+
+        public BuildingCommands(BuildingProcessor buildingProcessor, Processors.TwitchChatProcessor twitchChatProcessor)
+        {
+            _buildingProcessor = buildingProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+        }
 
 		/// <summary>
 		/// Returns the type of Building from the given argument.
@@ -48,7 +48,7 @@ namespace Twitch.Commands
 			if (Enum.TryParse(buildType, out BuildingType type))
 			{
 				if (!_buildingProcessor.TryStartNewBuildingPlacer(player, type, out string errorMessage))
-					_messageSender.SendMessage($"{player.TwitchUser.Username} : Failed - {errorMessage}");
+					_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} : Failed - {errorMessage}");
 			}
 		}
 
@@ -109,7 +109,7 @@ namespace Twitch.Commands
 		{
 			if (!_buildingProcessor.TryPlaceBuilding(player, out string errorMessage))
 			{
-				_messageSender.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
 			}
 		}
 
@@ -140,9 +140,9 @@ namespace Twitch.Commands
 					successfulLevels++;
 
 			if (successfulLevels > 0)
-				_messageSender.SendMessage($"{player.TwitchUser.Username} Successfully Leveled Building {successfulLevels} {(successfulLevels > 1 ? "Times" : "Time")}");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} Successfully Leveled Building {successfulLevels} {(successfulLevels > 1 ? "Times" : "Time")}");
 			else
-				_messageSender.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} Failed - {errorMessage}");
 		}
 
 
@@ -188,9 +188,9 @@ namespace Twitch.Commands
 			}
 
 			if (successfulAttempts > 0)
-				_messageSender.SendPlayerMessage(player, $"Successfully leveled {successfulAttempts} times!");
+				_twitchChatProcessor.SendPlayerMessage(player, $"Successfully leveled {successfulAttempts} times!");
 			else
-				_messageSender.SendPlayerMessage(player, $"Failed to level buildings");
+				_twitchChatProcessor.SendPlayerMessage(player, $"Failed to level buildings");
 		}
 
         /// <summary>
@@ -210,7 +210,7 @@ namespace Twitch.Commands
 			var costSummary = processor.GetBuildingCostSummary(type);
 
 			string message = $"Building Cost for '{type}': Wood: {costSummary.woodCost} | Ore: {costSummary.oreCost} | Food: {costSummary.foodCost} | Gold: {costSummary.goldCost} | Max Level: {costSummary.maxLevel}";
-			_messageSender.SendMessage($"{player.TwitchUser.Username}: {message}");
+			_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username}: {message}");
 		}
 
 		/// <summary>
@@ -229,7 +229,7 @@ namespace Twitch.Commands
 			{
 				if (_buildingProcessor.TryRemoveBuilding(type, index - 1, out string errorMessage))
 				{
-					_messageSender.SendMessage($"{player.TwitchUser.Username} Successfully Removed Building");
+					_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} Successfully Removed Building");
 				}
 			}
 		}
@@ -277,7 +277,7 @@ namespace Twitch.Commands
 			else
 				buildingList += "None";
 
-			_messageSender.SendMessage($"{player.TwitchUser.Username} {buildingList}");
+			_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} {buildingList}");
 		}
 	}
 }

@@ -1,5 +1,4 @@
 using Processors;
-using Core;
 using Pathfinding;
 using UnityEngine;
 using Reflex.Attributes;
@@ -12,7 +11,6 @@ namespace World
     public class PathProbe : MonoBehaviour
     {
         private GraphNode _thisNode = null;
-        [Inject] private Coordinator _gameProcessor;
 
         /// <summary>
         /// Returns true if a path is possible to this probe.
@@ -24,7 +22,6 @@ namespace World
         private void Start()
         {
             _thisNode = AstarPath.active.GetNearest(transform.position, NNConstraint.Default).node;
-            // _gameProcessor.AddPathProbe(gameObject); // Method removed during Coordinator refactoring
         }
     }
 }

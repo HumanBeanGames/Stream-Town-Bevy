@@ -43,10 +43,10 @@ namespace Processors
         [Inject] private TimeProcessor _timeProcessor;
 
         /// <summary>
-        /// Runtime game event data ScriptableObject.
-        /// Injected via Reflex dependency injection.
+        /// Runtime game event data.
+        /// Assigned in InjectRuntimeData.
         /// </summary>
-        [Inject] private GameEventRuntimeData _gameEventRuntimeData;
+        private GameEventRuntimeData _gameEventRuntimeData;
 
         /// <summary>
         /// Gets the sorted queue of pending game events.
@@ -302,11 +302,9 @@ namespace Processors
         /// </summary>
         public void ProcessEvents()
         {
-            // Update the current event if one is active
-            if (_gameEventRuntimeData.CurrentEvent != null)
-                _gameEventRuntimeData.CurrentEvent.Update(_timeProcessor.WorldTimePassed);
-
-            // Handle ruler voting timer
+    // Update the current event if one is active
+    if (_gameEventRuntimeData.CurrentEvent != null)
+        _gameEventRuntimeData.CurrentEvent.Update(_timeProcessor.WorldTimePassed);
             HandleRulerVoting();
 
             // Get the current world time
@@ -524,10 +522,14 @@ namespace Processors
 
         /// <summary>
         /// Initializes the game event processor.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// Initializes with a 30-second initial timer.
         /// </summary>
         public void Initialize()
         {
+            if (_gameEventRuntimeData == null)
+                throw new InvalidOperationException("GameEventProcessor: GameEventRuntimeData has not been installed.");
+
             Initialize(30);
         }
 
@@ -538,6 +540,15 @@ namespace Processors
         public void Process()
         {
             ProcessEvents();
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // GameEventProcessor does not have scene-specific settings to refresh
         }
 
         /// <summary>
@@ -553,9 +564,11 @@ namespace Processors
 
         public void InjectRuntimeData(ContainerBuilder containerBuilder)
         {
-            // Instantiate and register GameEventRuntimeData ScriptableObject
-            GameEventRuntimeData gameEventRuntimeData = ScriptableObject.CreateInstance<GameEventRuntimeData>();
-            containerBuilder.AddSingleton(gameEventRuntimeData);
+            if (_gameEventRuntimeData != null)
+                throw new InvalidOperationException("GameEventProcessor: GameEventRuntimeData has already been installed.");
+
+            _gameEventRuntimeData = new GameEventRuntimeData();
+            containerBuilder.AddSingleton(_gameEventRuntimeData);
         }
     }
 }

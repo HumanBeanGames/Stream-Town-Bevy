@@ -29,7 +29,7 @@ using System.Linq;
 
 namespace Settings
 {
-    public class SettingsProcessor : MonoBehaviour, IInstaller, IProcessor
+    public class SettingsProcessor : MonoBehaviour, IInstaller, IProcessor, IProjectUIInjectable
     {
         // UI: Resolution dropdown wrapper (DI via Reflex)
         [Inject] Access_ResolutionDropdown _resolutionDropdown;
@@ -50,6 +50,30 @@ namespace Settings
 
         private bool _initialized = false;
 
+        public void Initialize()
+        {
+            // SettingsProcessor initialization is handled via TryInitialize in Update
+        }
+
+        public void Process()
+        {
+            // SettingsProcessor doesn't have continuous processing logic
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // SettingsProcessor does not have scene-specific settings to refresh
+        }
+
+        public void OnProjectUIInjected()
+        {
+            TryInitialize();
+        }
+
         private void TryInitialize()
         {
             if (_initialized)
@@ -63,11 +87,7 @@ namespace Settings
             _initialized = true;
         }
 
-        /// <summary>
-        /// Processes settings logic every frame.
-        /// Called every frame by the Coordinator.
-        /// </summary>
-        public void Process()
+        private void Update()
         {
             TryInitialize();
         }
@@ -546,7 +566,7 @@ namespace Settings
             ApplyAutosaveIntervalFromCurrentSettings();
         }
 
-		private void ApplyAutosaveIntervalFromCurrentSettings()
+		public void ApplyAutosaveIntervalFromCurrentSettings()
 		{
 			if (_saveProcessor == null || _autoSave == null)
 				return;
@@ -651,12 +671,6 @@ namespace Settings
             }
 
             _menus.list[v].SetActive(true);
-        }
-
-        public void Initialize()
-        {
-            if (_initialized) return;
-            _initialized = true;
         }
 
         public void InstallBindings(Reflex.Core.ContainerBuilder containerBuilder)

@@ -1,16 +1,17 @@
 using System.Collections.Generic;
-using UnityEngine;
+
+using ScriptablesProcessorInfrastructure;
 using Sensors;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime sensor state for the game.
+	/// Runtime data class that stores sensor state for the game.
 	/// </summary>
-	public class SensorRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class SensorRuntimeData : IRuntimeDataScriptable
 	{
-		private float _updateTimer = 0;
-		private List<SensorBase> _sensors = new List<SensorBase>();
+		private float _updateTimer;
+		private List<SensorBase> _sensors;
 
 		public float UpdateTimer
 		{
@@ -18,5 +19,14 @@ namespace ScriptablesProcessorInfrastructure
 			set { _updateTimer = value; }
 		}
 		public List<SensorBase> Sensors => _sensors;
+
+		/// <summary>
+		/// Initializes the sensor runtime data with default values.
+		/// </summary>
+		public SensorRuntimeData()
+		{
+			_updateTimer = 0;
+			_sensors = new List<SensorBase>();
+		}
 	}
 }

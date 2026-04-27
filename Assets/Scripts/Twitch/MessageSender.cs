@@ -1,6 +1,6 @@
 using Character;
 using System.Collections.Generic;
-using Reflex.Attributes;
+using Processors;
 
 namespace Twitch
 {
@@ -9,15 +9,18 @@ namespace Twitch
 	/// </summary>
 	public class MessageSender
 	{
-        /// <summary>
-        /// The Twitch client. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private TL_Client _tlClient;
+		private readonly TwitchClientProcessor _twitchClientProcessor;
 
 		/// <summary>
-		/// Determines if messages are allowed to be sent or not.
+		/// The runtime data for Twitch chat.
 		/// </summary>
-		public bool MessagesAllowed = false;
+		private readonly TwitchChatRuntimeData _twitchChatRuntimeData;
+
+		public MessageSender(TwitchClientProcessor twitchClientProcessor, TwitchChatRuntimeData runtimeData)
+		{
+			_twitchClientProcessor = twitchClientProcessor;
+			_twitchChatRuntimeData = runtimeData;
+		}
 
 		/// <summary>
 		/// A static Dictionary of all prebuilt command responses.
@@ -79,7 +82,7 @@ namespace Twitch
 		/// <param name="message">The message.</param>
 		public void SendMessage(string playerName, string message)
 		{
-			_tlClient.Client.SendMessage(_tlClient.Client.JoinedChannels[0], $"{playerName}: {message}");
+			_twitchClientProcessor.Client.SendMessage(_twitchClientProcessor.Client.JoinedChannels[0], $"{playerName}: {message}");
 		}
 
 		/// <summary>
@@ -88,11 +91,11 @@ namespace Twitch
 		/// <param name="message">The message.</param>
 		public void SendMessage(string message)
 		{
-			if (!MessagesAllowed)
+			if (_twitchChatRuntimeData == null || !_twitchChatRuntimeData.MessagesAllowed)
 				return;
 
-			if (_tlClient.Client != null && _tlClient.Client.IsConnected)
-				_tlClient.Client.SendMessage(_tlClient.Client.JoinedChannels[0], message);
+			if (_twitchClientProcessor.Client != null && _twitchClientProcessor.Client.IsConnected)
+				_twitchClientProcessor.Client.SendMessage(_twitchClientProcessor.Client.JoinedChannels[0], message);
 		}
 
         /// <summary>

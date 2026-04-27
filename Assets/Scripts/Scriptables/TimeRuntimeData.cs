@@ -1,20 +1,19 @@
 using System;
+
+using ScriptablesProcessorInfrastructure;
 using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime time state for the game.
+	/// Runtime data class that stores time state for the game.
 	/// Manages day count, world time passed, and seconds per day.
 	/// </summary>
-	public class TimeRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class TimeRuntimeData : IRuntimeDataScriptable
 	{
-		[SerializeField]
-		private int _dayCount = 0;
-		[SerializeField]
-		private float _worldTimePassed = 0;
-		[SerializeField]
-		private float _secondsPerDay = 120f;
+		private int _dayCount;
+		private float _worldTimePassed;
+		private float _secondsPerDay;
 
 		public int DayCount
 		{
@@ -37,9 +36,11 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the time runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public TimeRuntimeData()
 		{
-			// Initialize with default values if needed
+			_dayCount = 0;
+			_worldTimePassed = 0;
+			_secondsPerDay = 120f;
 		}
 
 		public int CalculateDayCount(float worldTimePassed)

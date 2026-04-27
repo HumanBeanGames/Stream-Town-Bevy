@@ -59,9 +59,9 @@ namespace GameEventSystem.Events
         private ObjectPoolingProcessor _poolingProcessor;
 
         /// <summary>
-        /// The message sender.
+        /// The Twitch chat processor.
         /// </summary>
-        private MessageSender _messageSender;
+        private TwitchChatProcessor _twitchChatProcessor;
 
         /// <summary>
         /// Initializes a new Fish God event instance.
@@ -71,20 +71,20 @@ namespace GameEventSystem.Events
         /// <param name="townResourceProcessor">The town resource processor.</param>
         /// <param name="playerProcessor">The player processor.</param>
         /// <param name="poolingProcessor">The object pooling processor.</param>
-        /// <param name="messageSender">The message sender.</param>
+        /// <param name="twitchChatProcessor">The Twitch chat processor.</param>
         /// <param name="eventInterface">The event interface.</param>
         /// <param name="eventDuration">The event duration.</param>
         /// <param name="eventType">The event type.</param>
         /// <param name="data">Additional data.</param>
         /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
         /// <param name="timeout">The timeout.</param>
-        public FishGodEvent(double startTime, GameEventProcessor gameEventProcessor, TownResourceProcessor townResourceProcessor, PlayerProcessor playerProcessor, ObjectPoolingProcessor poolingProcessor, MessageSender messageSender, UserInterface_Event eventInterface, double eventDuration = 300, EventType eventType = EventType.FishGod, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(startTime, eventDuration, EventType.FishGod, data, overrideCurrentEvent, timeout)
+        public FishGodEvent(double startTime, GameEventProcessor gameEventProcessor, TownResourceProcessor townResourceProcessor, PlayerProcessor playerProcessor, ObjectPoolingProcessor poolingProcessor, TwitchChatProcessor twitchChatProcessor, UserInterface_Event eventInterface, double eventDuration = 300, EventType eventType = EventType.FishGod, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(startTime, eventDuration, EventType.FishGod, data, overrideCurrentEvent, timeout)
         {
             _gameEventProcessor = gameEventProcessor;
             _townResourceProcessor = townResourceProcessor;
             _playerProcessor = playerProcessor;
             _poolingProcessor = poolingProcessor;
-            _messageSender = messageSender;
+            _twitchChatProcessor = twitchChatProcessor;
             _eventInterface = eventInterface;
 
             GetFishGodGameObject();
@@ -144,7 +144,7 @@ namespace GameEventSystem.Events
                         return;
 
                     player.PetsUnlocked[PetType.FishGod] = true;
-                    _messageSender.SendMessage($"{player.TwitchUser.Username} unlocked the fishgod pet!");
+                    _twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} unlocked the fishgod pet!");
                 }
             }
         }

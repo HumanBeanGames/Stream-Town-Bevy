@@ -71,9 +71,9 @@ namespace GameEventSystem.Events
         protected GameEventProcessor _eventProcessor;
 
         /// <summary>
-        /// The enemy spawner.
+        /// The world generation processor.
         /// </summary>
-        protected EnemySpawner _enemySpawner;
+        protected WorldGenProcessor _worldGenProcessor;
 
         /// <summary>
         /// The player processor.
@@ -94,7 +94,7 @@ namespace GameEventSystem.Events
         /// <param name="poolingProcessor">The object pooling processor.</param>
         /// <param name="eventInterface">The event interface.</param>
         /// <param name="eventProcessor">The event processor.</param>
-        /// <param name="enemySpawner">The enemy spawner.</param>
+        /// <param name="worldGenProcessor">The world generation processor.</param>
         /// <param name="playerProcessor">The player processor.</param>
         /// <param name="waves">The number of waves.</param>
         /// <param name="enemiesPerWave">The number of enemies per wave.</param>
@@ -103,7 +103,7 @@ namespace GameEventSystem.Events
         /// <param name="data">Additional data.</param>
         /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
         /// <param name="timeout">The timeout.</param>
-        public RaidEvent(double delay, double eventDuration, string[] enemies, ObjectPoolingProcessor poolingProcessor, UserInterface_Event eventInterface, GameEventProcessor eventProcessor, EnemySpawner enemySpawner, PlayerProcessor playerProcessor, int waves = 5, int enemiesPerWave = 50, string boss = null, EventType eventType = EventType.MonsterRaid, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
+        public RaidEvent(double delay, double eventDuration, string[] enemies, ObjectPoolingProcessor poolingProcessor, UserInterface_Event eventInterface, GameEventProcessor eventProcessor, WorldGenProcessor worldGenProcessor, PlayerProcessor playerProcessor, int waves = 5, int enemiesPerWave = 50, string boss = null, EventType eventType = EventType.MonsterRaid, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
         {
             _pooledEnemyNames = enemies;
             _waves = waves;
@@ -121,7 +121,7 @@ namespace GameEventSystem.Events
             _poolingProcessor = poolingProcessor;
             _eventInterface = eventInterface;
             _eventProcessor = eventProcessor;
-            _enemySpawner = enemySpawner;
+            _worldGenProcessor = worldGenProcessor;
             _playerProcessor = playerProcessor;
 
             _trackedEnemies = new List<Enemy>();
@@ -148,7 +148,8 @@ namespace GameEventSystem.Events
             _eventInterface.ActivateEventContainer();
             _eventProcessor.StartCoroutine(HandleWaves());
 
-            _enemySpawner.CanSpawnEnemies = false;
+            _worldGenProcessor?.RefreshEnemyCampSpawners();
+            _worldGenProcessor?.SetEnemyCampSpawningEnabled(false);
         }
 
         /// <summary>
@@ -165,7 +166,7 @@ namespace GameEventSystem.Events
             }
 
             _eventInterface.DeactivateEventContainer();
-            _enemySpawner.CanSpawnEnemies = true;
+            _worldGenProcessor?.SetEnemyCampSpawningEnabled(true);
         }
 
         /// <summary>
@@ -221,29 +222,47 @@ namespace GameEventSystem.Events
             if (_forceStop)
                 return;
 
+            if (_worldGenProcessor == null || !_worldGenProcessor.CanSpawnRaidEnemies())
+            {
+                Stop(false);
+                return;
+            }
+
             // On waves prior to last wave or there is no final boss.
             if (_currentWave < _waves - 1 || !_bossOnLastWave)
             {
                 for (int i = 0; i < _enemiesPerWave; i++)
                 {
+                    if (!_worldGenProcessor.TryGetRandomEnemyCampSpawnLocation(out Transform spawnLocation))
+                    {
+                        Stop(false);
+                        return;
+                    }
+
                     string enemyName = _pooledEnemyNames[Random.Range(0, _pooledEnemyNames.Length)];
                     PoolableObject go = _poolingProcessor.GetPooledObject(enemyName);
                     Enemy enemy = go.GetComponent<Enemy>();
                     enemy.OnDied += OnEnemyDeath;
                     _trackedEnemies.Add(enemy);
-                    enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
+                    enemy.transform.position = spawnLocation.position;
                     enemy.gameObject.SetActive(true);
                 }
             }
             else // On Last Wave and Should spawn boss.
             {
+                if (!_worldGenProcessor.TryGetRandomEnemyCampSpawnLocation(out Transform spawnLocation))
+                {
+                    Stop(false);
+                    return;
+                }
+
                 PoolableObject go = _poolingProcessor.GetPooledObject(_bossName);
                 Enemy enemy = go.GetComponent<Enemy>();
                 enemy.OnDied += OnEnemyDeath;
                 _trackedEnemies.Add(enemy);
                 enemy.HealthHandler.SetMaxHealth(Mathf.Max(1000, 50 * (_playerProcessor.PlayerCount() + _playerProcessor.RecruitCount())));
                 enemy.gameObject.SetActive(true);
-                enemy.transform.position = _enemySpawner.GetRandomSpawnLocation().position;
+                enemy.transform.position = spawnLocation.position;
             }
 
             UpdateSlider();

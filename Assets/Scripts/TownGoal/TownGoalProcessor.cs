@@ -14,7 +14,7 @@ namespace TownGoal
 	public class TownGoalProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
 		[Inject] private TownGoalSettings _townGoalSettings;
-		[Inject] private TownGoalRuntimeData _townGoalRuntimeData;
+		private TownGoalRuntimeData _townGoalRuntimeData;
 
 		/// <summary>
 		/// Gets or sets the current goals list.
@@ -32,6 +32,9 @@ namespace TownGoal
 
 		public void Initialize()
 		{
+			if (_townGoalRuntimeData == null)
+				throw new InvalidOperationException("TownGoalProcessor runtime data has not been installed.");
+
 			_townGoalRuntimeData.CurrentGoals = new List<Goal>(1);
 		}
 
@@ -43,9 +46,11 @@ namespace TownGoal
 
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			// Instantiate and register TownGoalRuntimeData ScriptableObject
-			TownGoalRuntimeData townGoalRuntimeData = ScriptableObject.CreateInstance<TownGoalRuntimeData>();
-			containerBuilder.AddSingleton(townGoalRuntimeData);
+			if (_townGoalRuntimeData != null)
+				throw new InvalidOperationException("TownGoalProcessor runtime data has already been installed.");
+
+			_townGoalRuntimeData = new TownGoalRuntimeData();
+			containerBuilder.AddSingleton(_townGoalRuntimeData);
 		}
 
 		public bool StartNewGoal(Goal goal)
@@ -142,6 +147,15 @@ namespace TownGoal
 		public void Process()
 		{
 			// TownGoalProcessor does not require per-frame updates
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// TownGoalProcessor does not have scene-specific settings to refresh
 		}
 	}
 }

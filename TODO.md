@@ -17,4 +17,4 @@
 ## Excluded Processor Files (serialized scene/UI refs)
 
 - `Assets/Scripts/UserInterface/Menus/MainMenuProcessor.cs`
-- `Assets/Scripts/UserInterface/Menus/LoadingProcessor.cs`
+- `Assets/Scripts/UserInterface/Menus/LoadingManager.cs`

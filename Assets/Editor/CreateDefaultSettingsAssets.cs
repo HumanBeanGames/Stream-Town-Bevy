@@ -33,25 +33,269 @@ namespace StreamTownEditor
             UpdateDefaultSettingsPrefab(folderPath);
         }
 
+        [MenuItem("Tools/Create Prefab From Selection")]
+        public static void CreatePrefabFromSelection()
+        {
+            Object[] selectedObjects = Selection.objects;
+            if (selectedObjects == null || selectedObjects.Length == 0)
+            {
+                Debug.LogError("No objects selected. Please select ScriptableObject settings assets.");
+                return;
+            }
+
+            // Get the folder path from the first selected object
+            string assetPath = AssetDatabase.GetAssetPath(selectedObjects[0]);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                Debug.LogError("Selected object is not an asset in the project.");
+                return;
+            }
+
+            string folderPath = Path.GetDirectoryName(assetPath);
+            string folderName = new DirectoryInfo(folderPath).Name;
+            string prefabPath = Path.Combine(folderPath, $"{folderName}_Settings.prefab");
+
+            // Filter selected objects to only ScriptableObjects that implement IDataScriptable
+            Dictionary<System.Type, ScriptableObject> selectedSettings = new Dictionary<System.Type, ScriptableObject>();
+            foreach (Object obj in selectedObjects)
+            {
+                if (obj is ScriptableObject scriptableObject && scriptableObject is IDataScriptable)
+                {
+                    System.Type type = scriptableObject.GetType();
+                    if (!selectedSettings.ContainsKey(type))
+                    {
+                        selectedSettings[type] = scriptableObject;
+                    }
+                }
+            }
+
+            if (selectedSettings.Count == 0)
+            {
+                Debug.LogError("No valid ScriptableObject settings selected. Please select assets that implement IDataScriptable.");
+                return;
+            }
+
+            CreatePrefabFromSettings(folderPath, prefabPath, selectedSettings);
+        }
+
+        private static void CreatePrefabFromSettings(string folderPath, string prefabPath, Dictionary<System.Type, ScriptableObject> selectedSettings)
+        {
+            GameObject prefabRoot;
+
+            // Create new prefab
+            prefabRoot = new GameObject(Path.GetFileNameWithoutExtension(prefabPath));
+            PrefabUtility.SaveAsPrefabAsset(prefabRoot, prefabPath);
+            Object.DestroyImmediate(prefabRoot);
+
+            // Load prefab contents for editing
+            prefabRoot = PrefabUtility.LoadPrefabContents(prefabPath);
+
+            if (prefabRoot == null)
+            {
+                Debug.LogError("Failed to load prefab at: " + prefabPath);
+                return;
+            }
+
+            // Mapping of settings type to installer type name
+            Dictionary<System.Type, string> installerTypeMap = new Dictionary<System.Type, string>
+            {
+                { typeof(AllBuildingDataSettings), "AllBuildingDataSettingsInstaller" },
+                { typeof(AllRoleDataSettings), "AllRoleDataSettingsInstaller" },
+                { typeof(BuildingConfigSettings), "BuildingConfigSettingsInstaller" },
+                { typeof(GameEventConfigSettings), "GameEventConfigSettingsInstaller" },
+                { typeof(ResourceDataSettings), "ResourceDataSettingsInstaller" },
+                { typeof(ScriptablesProcessorInfrastructure.AllSeasonSettings), "AllSeasonSettingsInstaller" },
+                { typeof(TimeSettings), "TimeDataSettingsInstaller" },
+                { typeof(DayAndNightSettings), "DayAndNightSettingsInstaller" },
+                { typeof(GameEventSettings), "GameEventSettingsInstaller" },
+                { typeof(GridSettings), "GridSettingsInstaller" },
+                { typeof(ObjectPoolingSettings), "ObjectPoolingSettingsInstaller" },
+                { typeof(ObjectSelectionSettings), "ObjectSelectionSettingsInstaller" },
+                { typeof(ResourceGenSettings), "ResourceGenSettingsInstaller" },
+                { typeof(PlayerInputSettings), "PlayerInputSettingsInstaller" },
+                { typeof(SaveSettings), "SaveSettingsInstaller" },
+                { typeof(GameSettings), "GameSettingsInstaller" },
+                { typeof(SensorSettings), "SensorSettingsInstaller" },
+                { typeof(TargetSettings), "TargetSettingsInstaller" },
+                { typeof(TerrainGenSettings), "TerrainGenSettingsInstaller" },
+                { typeof(TownGoalSettings), "TownGoalSettingsInstaller" },
+                { typeof(TradeSettings), "TradeSettingsInstaller" },
+                { typeof(UISettings), "UISettingsInstaller" },
+                { typeof(WaterFoliageGenSettings), "WaterFoliageGenSettingsInstaller" },
+                { typeof(WeatherSettings), "WeatherSettingsInstaller" },
+                { typeof(WaterResourceGenSettings), "WaterResourceGenSettingsInstaller" },
+                { typeof(TechTreeSettings), "TechTreeSettingsInstaller" },
+                { typeof(FoliageGenSettings), "FoliageGenSettingsInstaller" },
+                { typeof(WorldGenBehaviorSettings), "WorldGenBehaviorSettingsInstaller" },
+                { typeof(DebugSettings), "DebugSettingsInstaller" },
+                { typeof(WorldGenLayerSettings), "WorldGenLayerSettingsInstaller" },
+                { typeof(WorldGenDebugSettings), "WorldGenDebugSettingsInstaller" },
+                { typeof(WorldGenScaleSettings), "WorldGenScaleSettingsInstaller" },
+                { typeof(CampGenSettings), "CampGenSettingsInstaller" },
+                { typeof(BuildingSettings), "BuildingSettingsInstaller" }
+            };
+
+            // Add container installers
+            string[] containerInstallers = new string[]
+            {
+                "BuildingDataContainerInstaller",
+                "RoleDataContainerInstaller"
+            };
+
+            foreach (var kvp in installerTypeMap)
+            {
+                System.Type settingsType = kvp.Key;
+                string installerTypeName = kvp.Value;
+
+                ScriptableObject asset;
+
+                // Check if this settings type is in the selection
+                if (selectedSettings.ContainsKey(settingsType))
+                {
+                    asset = selectedSettings[settingsType];
+                }
+                else
+                {
+                    // Copy from default
+                    string defaultAssetName = $"D_{settingsType.Name}";
+                    string defaultAssetPath = Path.Combine("Assets/DefaultSettings", $"{defaultAssetName}.asset");
+                    ScriptableObject defaultAsset = AssetDatabase.LoadAssetAtPath<ScriptableObject>(defaultAssetPath);
+
+                    if (defaultAsset == null)
+                    {
+                        Debug.LogWarning($"Default asset not found: {defaultAssetPath}, skipping.");
+                        continue;
+                    }
+
+                    // Create a copy in the target folder
+                    string folderName = new DirectoryInfo(folderPath).Name;
+                    string targetAssetName = $"{folderName}_{settingsType.Name}";
+                    string targetAssetPath = Path.Combine(folderPath, $"{targetAssetName}.asset");
+
+                    asset = Object.Instantiate(defaultAsset);
+                    AssetDatabase.CreateAsset(asset, targetAssetPath);
+                    AssetDatabase.SaveAssets();
+                }
+
+                string gameObjectName = asset.name;
+                Transform existingChild = prefabRoot.transform.Find(gameObjectName);
+
+                GameObject child;
+                if (existingChild != null)
+                {
+                    child = existingChild.gameObject;
+                }
+                else
+                {
+                    child = new GameObject(gameObjectName);
+                    child.transform.SetParent(prefabRoot.transform, false);
+                }
+
+                // Find or add installer component
+                Component installerComponent = child.GetComponent(installerTypeName);
+                if (installerComponent == null)
+                {
+                    System.Type installerType = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .SelectMany(a => a.GetTypes())
+                        .FirstOrDefault(t => t.Name == installerTypeName && typeof(MonoBehaviour).IsAssignableFrom(t));
+
+                    if (installerType != null)
+                    {
+                        installerComponent = child.AddComponent(installerType);
+                    }
+                    else
+                    {
+                        Debug.LogError($"Could not find installer type: {installerTypeName}");
+                        continue;
+                    }
+                }
+
+                // Set the serialized field to reference the asset
+                FieldInfo field = installerComponent.GetType().GetFields(
+                    BindingFlags.NonPublic | BindingFlags.Instance)
+                    .FirstOrDefault(f => f.FieldType == settingsType);
+
+                if (field != null)
+                {
+                    field.SetValue(installerComponent, asset);
+                }
+                else
+                {
+                    PropertyInfo property = installerComponent.GetType().GetProperty(
+                        settingsType.Name,
+                        BindingFlags.Public | BindingFlags.Instance);
+
+                    if (property != null && property.CanWrite)
+                    {
+                        property.SetValue(installerComponent, asset);
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"Could not find field or property for {settingsType.Name} in {installerTypeName}");
+                    }
+                }
+            }
+
+            // Add container installers
+            foreach (string containerInstallerName in containerInstallers)
+            {
+                string gameObjectName = containerInstallerName;
+                Transform existingChild = prefabRoot.transform.Find(gameObjectName);
+
+                GameObject child;
+                if (existingChild != null)
+                {
+                    child = existingChild.gameObject;
+                }
+                else
+                {
+                    child = new GameObject(gameObjectName);
+                    child.transform.SetParent(prefabRoot.transform, false);
+                }
+
+                Component installerComponent = child.GetComponent(containerInstallerName);
+                if (installerComponent == null)
+                {
+                    System.Type installerType = System.AppDomain.CurrentDomain.GetAssemblies()
+                        .SelectMany(a => a.GetTypes())
+                        .FirstOrDefault(t => t.Name == containerInstallerName && typeof(MonoBehaviour).IsAssignableFrom(t));
+
+                    if (installerType != null)
+                    {
+                        installerComponent = child.AddComponent(installerType);
+                    }
+                    else
+                    {
+                        Debug.LogError($"Could not find installer type: {containerInstallerName}");
+                        continue;
+                    }
+                }
+            }
+
+            // Save and unload the prefab
+            PrefabUtility.SaveAsPrefabAsset(prefabRoot, prefabPath);
+            PrefabUtility.UnloadPrefabContents(prefabRoot);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            Debug.Log($"Created prefab at: {prefabPath}");
+        }
+
         private static void CreateSettingsAssets(string folderPath)
         {
             // List of all IDataScriptable types to create assets for
             System.Type[] settingsTypes = new System.Type[]
             {
-                typeof(AllSeasonsSettings),
                 typeof(BuildingConfigSettings),
                 typeof(GameEventConfigSettings),
                 typeof(AllRoleDataSettings),
                 typeof(ResourceDataSettings),
-                typeof(SeasonDataContainer),
+                typeof(ScriptablesProcessorInfrastructure.AllSeasonSettings),
                 typeof(AllBuildingDataSettings),
                 typeof(TimeSettings),
-                typeof(WeatherVFXSettings),
                 typeof(DayAndNightSettings),
                 typeof(GameEventSettings),
                 typeof(GridSettings),
-                typeof(MainMenuSettings),
-                typeof(LoadingSettings),
                 typeof(ObjectPoolingSettings),
                 typeof(ObjectSelectionSettings),
                 typeof(ResourceGenSettings),
@@ -139,19 +383,15 @@ namespace StreamTownEditor
             Dictionary<System.Type, string> installerTypeMap = new Dictionary<System.Type, string>
             {
                 { typeof(AllBuildingDataSettings), "AllBuildingDataSettingsInstaller" },
-                { typeof(AllSeasonsSettings), "AllSeasonsSettingsInstaller" },
                 { typeof(AllRoleDataSettings), "AllRoleDataSettingsInstaller" },
                 { typeof(BuildingConfigSettings), "BuildingConfigSettingsInstaller" },
                 { typeof(GameEventConfigSettings), "GameEventConfigSettingsInstaller" },
                 { typeof(ResourceDataSettings), "ResourceDataSettingsInstaller" },
-                { typeof(SeasonDataContainer), "SeasonDataContainerInstaller" },
+                { typeof(ScriptablesProcessorInfrastructure.AllSeasonSettings), "AllSeasonSettingsInstaller" },
                 { typeof(TimeSettings), "TimeDataSettingsInstaller" },
-                { typeof(WeatherVFXSettings), "WeatherVFXSettingsInstaller" },
                 { typeof(DayAndNightSettings), "DayAndNightSettingsInstaller" },
                 { typeof(GameEventSettings), "GameEventSettingsInstaller" },
                 { typeof(GridSettings), "GridSettingsInstaller" },
-                { typeof(MainMenuSettings), "MainMenuSettingsInstaller" },
-                { typeof(LoadingSettings), "LoadingSettingsInstaller" },
                 { typeof(ObjectPoolingSettings), "ObjectPoolingSettingsInstaller" },
                 { typeof(ObjectSelectionSettings), "ObjectSelectionSettingsInstaller" },
                 { typeof(ResourceGenSettings), "ResourceGenSettingsInstaller" },

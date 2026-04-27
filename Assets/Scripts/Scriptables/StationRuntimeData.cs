@@ -1,22 +1,19 @@
 using Buildings;
-using System;
+
+using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
-using UnityEngine;
 using Utils;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for StationProcessor.
 	/// </summary>
-	public class StationRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class StationRuntimeData : IRuntimeDataScriptable
 	{
-		[SerializeField]
-		private Dictionary<StationMask, List<Station>> _stationsDictionary = new Dictionary<StationMask, List<Station>>();
-		[SerializeField]
-		private Queue<Station> _stationUpdateQueue = new Queue<Station>();
-		[SerializeField]
-		private Queue<Station> _clearDisabledQueue = new Queue<Station>();
+		private Dictionary<StationMask, List<Station>> _stationsDictionary;
+		private Queue<Station> _stationUpdateQueue;
+		private Queue<Station> _clearDisabledQueue;
 
 		public Dictionary<StationMask, List<Station>> StationsDictionary => _stationsDictionary;
 		public Queue<Station> StationUpdateQueue => _stationUpdateQueue;
@@ -25,9 +22,11 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the station runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public StationRuntimeData()
 		{
-			// Initialize with default values if needed
+			_stationsDictionary = new Dictionary<StationMask, List<Station>>();
+			_stationUpdateQueue = new Queue<Station>();
+			_clearDisabledQueue = new Queue<Station>();
 		}
 	}
 }

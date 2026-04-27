@@ -13,82 +13,58 @@ MonoBehaviour:
   m_Name: D_WaterFoliageGenSettings
   m_EditorClassIdentifier: 
   _waterFoliageGenerationSettings:
-  - Size: 150
-    LevelOfDetail: 2
+  - Size: 500
+    LevelOfDetail: 1
     NoiseScale: 6.68
     Octaves: 1
     Persistance: 0.8
     Lacunarity: 1.53
-    Seed: 0
-    Offset: {x: 0, y: 0}
-    MeshHeightMultiplier: 7
-    MeshHeightCurve:
+    Seed: -430535520
+    Offset: {x: 112.729996, y: 467.65717}
+    SpawnThreshold: 0.7
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
       serializedVersion: 2
-      m_Curve:
-      - serializedVersion: 3
-        time: 0
-        value: 0
-        inSlope: 0
-        outSlope: 0
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
-      - serializedVersion: 3
-        time: 1
-        value: 1
-        inSlope: 2
-        outSlope: 2
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
+      m_Curve: []
       m_PreInfinity: 2
       m_PostInfinity: 2
       m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
-    PoolNames:
-    - Seaweed1
-    - Seaweed2
-    - Seaweed3
-  - Size: 150
-    LevelOfDetail: 2
+    PoolName: 
+    Meshes:
+    - {fileID: 5491547353373078794, guid: c49b963036ccbf84885792f7a7a332bd, type: 3}
+    - {fileID: -3882045938472778413, guid: d8baf7afae2e3d54a97fe7988a7c39fa, type: 3}
+    - {fileID: -6412796913440713837, guid: 4c47291fefd392846a2977c586f9cb11, type: 3}
+    Material: {fileID: 2100000, guid: cc8c8df70fc41b04e8de9824ab27af7d, type: 2}
+  - Size: 500
+    LevelOfDetail: 1
     NoiseScale: 6.68
     Octaves: 1
     Persistance: 0.8
     Lacunarity: 1.53
-    Seed: 0
-    Offset: {x: 0, y: 0}
-    MeshHeightMultiplier: 10
-    MeshHeightCurve:
+    Seed: -430535519
+    Offset: {x: 303.75986, y: 350.28973}
+    SpawnThreshold: 0.7
+    EnableSpawnBias: 0
+    SpawnBiasCurve:
       serializedVersion: 2
-      m_Curve:
-      - serializedVersion: 3
-        time: 0
-        value: 0
-        inSlope: 0
-        outSlope: 0
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
-      - serializedVersion: 3
-        time: 1
-        value: 1
-        inSlope: 2
-        outSlope: 2
-        tangentMode: 0
-        weightedMode: 0
-        inWeight: 0
-        outWeight: 0
+      m_Curve: []
       m_PreInfinity: 2
       m_PostInfinity: 2
       m_RotationOrder: 4
+    SpawnBiasMultiplier: 0
+    SpawnBiasAddition: 0
+    SpawnBiasMaxDistance: 0
     Spacing: 1
-    PoolNames:
-    - CoralBrown1
-    - CoralBrown2
-    - CoralOrange1
-    - CoralOrange2
-    - CoralPurple1
-    - CoralPurple2
+    PoolName: 
+    Meshes:
+    - {fileID: 6256513305797591282, guid: 03cca0bc76fe47a41b48bae52cb8ce60, type: 3}
+    - {fileID: -7530797450161360067, guid: 0513034094b8fb14fa587a5e12431bd3, type: 3}
+    - {fileID: 6644207666658360651, guid: 483631e71ec729f46a495af4627644b7, type: 3}
+    - {fileID: -7930880360962010297, guid: 2d75a63f384d5524490b11797e16d025, type: 3}
+    - {fileID: 3213753894354241969, guid: 8f6c95daff5f32a409eb425fe667285a, type: 3}
+    - {fileID: 2582482438786741689, guid: a4bcf91acf9bb5f4cad6bbc60be0b2ef, type: 3}
+    Material: {fileID: 2100000, guid: fa4085ce3ea4d394bb4e587376c58cbd, type: 2}

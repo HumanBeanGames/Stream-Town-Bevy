@@ -76,7 +76,7 @@ namespace Buildings
 		[Inject] private StationProcessor _manager;
 		[Inject] private TargetProcessor _targetProcessor;
 		[Inject] private CellSpacePartitioning _cellPartitionGrid;
-		[Inject] private UtilDisplayProcessor _utilDisplayProcessor;
+		[Inject] private LabelDisplayProcessor _utilDisplayProcessor;
 		private Targetable _targetable;
 		private GUIDComponent _gUIDComponent;
 		//private UnitTextDisplay _displayText;

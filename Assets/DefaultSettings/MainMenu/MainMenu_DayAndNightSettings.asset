@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6fb4fe07b2e3cfe4d82df2da04bc0242, type: 3}
+  m_Name: MainMenu_DayAndNightSettings
+  m_EditorClassIdentifier: 
+  _mainLightSource: {fileID: 0}
+  _dayPercentage: 0.666
+  _dayLength: 3600
+  _nightLength: 0
+  _transitionLength: 100
+  _nightLightIntensity: 5
+  _dayLightIntensity: 10
+  _buildingMaterial: {fileID: 2100000, guid: fdfb0b9e62e356e46ae2218394e8fabc, type: 2}
+  _maxEmissionStrength: 5
+  _postProcessVolume: {fileID: 0}

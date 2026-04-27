@@ -17,7 +17,7 @@ namespace Data.Containers
 
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{
-			containerBuilder.AddSingleton(this);
+			containerBuilder.AddSingleton(_allRoleData);
 		}
 	}
 }

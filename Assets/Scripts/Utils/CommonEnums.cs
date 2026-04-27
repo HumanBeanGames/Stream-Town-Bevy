@@ -456,6 +456,20 @@ namespace Utils
 		//Cached Index Data
 		private static Dictionary<TargetMask, int> _cachedIndices;
 
+		static TargetFlagHelper()
+		{
+			// Initialize cached indices on class load
+			int index = -1;
+			_targetFlags = new List<TargetMask>();
+			_cachedIndices = new Dictionary<TargetMask, int>();
+			foreach (int i in Enum.GetValues(typeof(TargetMask)))
+			{
+				TargetMask t = (TargetMask)i;
+				_targetFlags.Add(t);
+				_cachedIndices.Add(t, index++);
+			}
+		}
+
 		public static List<TargetMask> TargetFlags
 		{
 			get

@@ -1,34 +1,27 @@
 using System.Collections.Generic;
+
+using ScriptablesProcessorInfrastructure;
 using TechTree.Data;
 using TechTree.ScriptableObjects;
 using TechTree;
 using TownGoal;
 using TownGoal.Data;
-using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime tech tree state for the game.
+	/// Runtime data class that stores tech tree state for the game.
 	/// Manages technology tree, goals, and unlock state.
 	/// </summary>
-	public class TechTreeRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class TechTreeRuntimeData : IRuntimeDataScriptable
 	{
-		[SerializeField]
 		private int _timeSinceLastUnlock;
-		[SerializeField]
 		private TechnologyTree _techTree;
-		[SerializeField]
 		private Dictionary<Goal, Node_SO> _goalsFollowed;
-		[SerializeField]
-		private int _techsUnlocked = 0;
-		[SerializeField]
+		private int _techsUnlocked;
 		private Node_SO _currentTech;
-		[SerializeField]
 		private bool _requestStartTechVote;
-		[SerializeField]
 		private float _requestedTechVoteDelay;
-		[SerializeField]
 		private bool _requestDelayedSetup;
 
 		public int TimeSinceLastUnlock
@@ -67,7 +60,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// <summary>
 		/// Initializes the TechTreeRuntimeData with default values.
 		/// </summary>
-		public void Initialize()
+		public TechTreeRuntimeData()
 		{
 			_timeSinceLastUnlock = 0;
 			_techsUnlocked = 0;

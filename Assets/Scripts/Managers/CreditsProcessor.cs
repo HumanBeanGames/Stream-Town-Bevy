@@ -2,9 +2,6 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UserInterface.MainMenu;
 using Reflex.Core;
-using Reflex.Attributes;
-using ScriptablesProcessorInfrastructure;
-using Processors;
 
 namespace Processors 
 {
@@ -12,19 +9,10 @@ namespace Processors
     /// Processor that manages credits screen functionality.
     /// Handles credits skipping and scene transitions.
     /// </summary>
-    public partial class CreditsProcessor : MonoBehaviour, IInstaller, IProcessor 
+	public partial class CreditsProcessor : MonoBehaviour, IInstaller, IProcessor 
 	{
-        /// <summary>
-        /// Runtime data ScriptableObject for credits data.
-        /// Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private CreditsRuntimeData _creditsRuntimeData;
-
-        /// <summary>
-        /// Loading processor for scene load requests.
-        /// Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private LoadingProcessor _loadingProcessor;
+		[SerializeField]
+        private LoadingManager _loadingProcessor;
 
         /// <summary>
         /// Skips the credits screen and requests scene load.
@@ -34,44 +22,34 @@ namespace Processors
 			_loadingProcessor.LoadWorldScene(1);
 		}
 
-        /// <summary>
-        /// Initializes the credits processor.
-        /// No initialization logic required for this processor.
-        /// </summary>
-        public void Initialize()
+		public void Initialize()
 		{
-			// CreditsProcessor doesn't require initialization logic
+			// No initialization logic required
 		}
 
-        /// <summary>
-        /// Checks for escape key press to skip credits.
-        /// Called every frame by the Coordinator.
-        /// </summary>
-        public void Process()
-        {
-            if(Keyboard.current.escapeKey.wasReleasedThisFrame)
-                SkipCredits();
-        }
-
-        /// <summary>
-        /// Registers this processor as a singleton in the dependency injection container.
-        /// Called by Reflex during container initialization.
-        /// </summary>
-        /// <param name="containerBuilder">The container builder to register bindings with.</param>
-        public void InstallBindings(ContainerBuilder containerBuilder)
+		public void Process()
 		{
-			containerBuilder.AddSingleton(this);
-			InjectRuntimeData(containerBuilder);
+			if (Keyboard.current.escapeKey.wasReleasedThisFrame)
+				SkipCredits();
 		}
 
 		/// <summary>
-		/// Injects the CreditsRuntimeData ScriptableObject into the DI container.
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
 		/// </summary>
-		/// <param name="containerBuilder">The container builder to register bindings with.</param>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// CreditsProcessor does not have scene-specific settings to refresh
+		}
+
+		public void InstallBindings(ContainerBuilder containerBuilder)
+		{
+			containerBuilder.AddSingleton(this);
+		}
+
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			CreditsRuntimeData creditsRuntimeData = ScriptableObject.CreateInstance<CreditsRuntimeData>();
-			containerBuilder.AddSingleton(creditsRuntimeData);
+			// No runtime data for CreditsProcessor
 		}
 	}
 }

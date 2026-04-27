@@ -12,7 +12,7 @@ namespace UserInterface
 	/// </summary>
 	public class UnitTextDisplay : MonoBehaviour
 	{
-		[Inject] private UtilDisplayProcessor _utilDisplayProcessor;
+		[Inject] private LabelDisplayProcessor _utilDisplayProcessor;
 		
 		[SerializeField]
 		private TextMeshPro _displayText;

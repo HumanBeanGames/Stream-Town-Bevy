@@ -1,7 +1,6 @@
 using Character;
 using GameEventSystem;
 using Processors;
-using PlayerControls;
 using System;
 using Twitch.Utils;
 using UnityEngine;
@@ -17,45 +16,27 @@ namespace Twitch.Commands
     /// </summary>
 	public class RulerCommands
 	{
-        /// <summary>
-        /// The player processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private PlayerProcessor _playerProcessor;
+        private PlayerProcessor _playerProcessor;
+        private RoleProcessor _roleProcessor;
+        private TownResourceProcessor _townResourceProcessor;
+        private GameEventProcessor _gameEventProcessor;
+        private TradeProcessor _tradeProcessor;
+        private Processors.TwitchChatProcessor _twitchChatProcessor;
+        private GameMasterCommands _gameMasterCommands;
 
-        /// <summary>
-        /// The role processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private RoleProcessor _roleProcessor;
-
-        /// <summary>
-        /// The town resource processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private TownResourceProcessor _townResourceProcessor;
-
-        /// <summary>
-        /// The camera controller. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private CameraController _cameraController;
-
-        /// <summary>
-        /// The game event processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private GameEventProcessor _gameEventProcessor;
-
-        /// <summary>
-        /// The trade processor. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private TradeProcessor _tradeProcessor;
-
-        /// <summary>
-        /// The message sender. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private MessageSender _messageSender;
-
-        /// <summary>
-        /// The game master commands. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private GameMasterCommands _gameMasterCommands;
+        public RulerCommands(PlayerProcessor playerProcessor, RoleProcessor roleProcessor,
+			TownResourceProcessor townResourceProcessor,
+            GameEventProcessor gameEventProcessor, TradeProcessor tradeProcessor,
+            Processors.TwitchChatProcessor twitchChatProcessor, GameMasterCommands gameMasterCommands)
+        {
+            _playerProcessor = playerProcessor;
+            _roleProcessor = roleProcessor;
+            _townResourceProcessor = townResourceProcessor;
+            _gameEventProcessor = gameEventProcessor;
+            _tradeProcessor = tradeProcessor;
+            _twitchChatProcessor = twitchChatProcessor;
+            _gameMasterCommands = gameMasterCommands;
+        }
 
         /// <summary>
         /// Gets the player processor.
@@ -93,7 +74,7 @@ namespace Twitch.Commands
 
 				_tradeProcessor.SellResource(resource, amount, out string message);
 
-				_messageSender.SendMessage($"{player.TwitchUser.Username} : {message}");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} : {message}");
 			}
 		}
 
@@ -121,7 +102,7 @@ namespace Twitch.Commands
 			{
 				_tradeProcessor.BuyResource(resource, amount, out string message);
 
-				_messageSender.SendMessage($"{player.TwitchUser.Username} : {message}");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} : {message}");
 			}
 		}
 
@@ -170,7 +151,7 @@ namespace Twitch.Commands
 			if (_playerProcessor.GetRuler() != player && !_gameMasterCommands.IsGameMaster(player))
 				return;
 
-			_cameraController.ResetCamera();
+			_twitchChatProcessor.EnqueueCameraRequest(Vector3.zero, 0, true);
 		}
 
         /// <summary>
@@ -219,8 +200,7 @@ namespace Twitch.Commands
 						break;
 				}
 			}
-			_cameraController.ZoomCamera(zoomFactor);
-			_cameraController.MoveCamera(moveVector);
+			_twitchChatProcessor.EnqueueCameraRequest(moveVector, zoomFactor, false);
 		}
 
         /// <summary>
@@ -231,7 +211,7 @@ namespace Twitch.Commands
 		{
 			if (_playerProcessor.GetRuler() != player && !_gameMasterCommands.IsGameMaster(player))
 				return;
-			_messageSender.SendMessage($"{player.TwitchUser.Username} The town has {_playerProcessor.RecruitCount()} recruits!");
+			_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} The town has {_playerProcessor.RecruitCount()} recruits!");
 		}
 
 		// show recruit ids
@@ -258,16 +238,16 @@ namespace Twitch.Commands
 			if (_playerProcessor.GetRuler() != player && !_gameMasterCommands.IsGameMaster(player))
 				return;
 			if (args.Length == 0)
-				_messageSender.SendMessage($"!rdismiss <id>");
+				_twitchChatProcessor.SendMessage($"!rdismiss <id>");
 			if (int.TryParse(args[0], out int id))
 			{
 				Player recruit = _playerProcessor.GetRecruitByIndex(id);
 
 				_playerProcessor.DismissRecruit(recruit);
-				_messageSender.SendMessage($"{player.TwitchUser.Username} Successfully Dismissed recruit {id}!");
+				_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} Successfully Dismissed recruit {id}!");
 			}
 			else
-				_messageSender.SendMessage($"{args[0]} is not a valid id");
+				_twitchChatProcessor.SendMessage($"{args[0]} is not a valid id");
 		}
 
 		// swap recruit role
@@ -282,7 +262,7 @@ namespace Twitch.Commands
 			if (_playerProcessor.GetRuler() != player && !_gameMasterCommands.IsGameMaster(player))
 				return;
 			if (args.Length == 0)
-				_messageSender.SendMessage("!rswap <id> <role>");
+				_twitchChatProcessor.SendMessage("!rswap <id> <role>");
 			if (args.Length > 0)
 			{
 				if (int.TryParse(args[0], out int id))
@@ -294,16 +274,16 @@ namespace Twitch.Commands
 						if (_roleProcessor.IsRoleAvailable(role))
 						{
 							_playerProcessor.SwapRecruitRole(recruit, role);
-							_messageSender.SendMessage($"{player.TwitchUser.Username} Successfully changed recruit {id} to {role}!");
+							_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} Successfully changed recruit {id} to {role}!");
 						}
 						else
-							_messageSender.SendMessage($"{role} is full");
+							_twitchChatProcessor.SendMessage($"{role} is full");
 					}
 					else
-						_messageSender.SendMessage($"{args[1]} is not a valid role");
+						_twitchChatProcessor.SendMessage($"{args[1]} is not a valid role");
 				}
 				else
-					_messageSender.SendMessage($"{args[0]} is not a valid id");
+					_twitchChatProcessor.SendMessage($"{args[0]} is not a valid id");
 			}
 		}
 
@@ -319,7 +299,7 @@ namespace Twitch.Commands
 			if (_playerProcessor.GetRuler() != player && !_gameMasterCommands.IsGameMaster(player))
 				return;
 			if (args.Length == 0)
-				_messageSender.SendMessage("!rinfo <id> ");
+				_twitchChatProcessor.SendMessage("!rinfo <id> ");
 			if (args.Length > 0)
 			{
 				if (int.TryParse(args[0], out int id))
@@ -332,10 +312,10 @@ namespace Twitch.Commands
 						$" Level: {recruit.RoleHandler.PlayerRoleData.CurrentLevel} / {RoleProcessor.MAX_ROLE_LEVEL} | " +
 						$" Experience: {recruit.RoleHandler.PlayerRoleData.CurrentExp} / {recruit.RoleHandler.PlayerRoleData.RequiredExp}";
 
-					_messageSender.SendMessage(info);
+					_twitchChatProcessor.SendMessage(info);
 				}
 				else
-					_messageSender.SendMessage($"{args[0]} is not a valid id");
+					_twitchChatProcessor.SendMessage($"{args[0]} is not a valid id");
 			}
 		}
 
@@ -351,7 +331,7 @@ namespace Twitch.Commands
 			_gameEventProcessor.StartNewRulerVote();
 			player.RoleHandler.TrySetRole(player.RoleHandler.PreviousRole);
 			_playerProcessor.SetRuler(null);
-			_messageSender.SendMessage($"{player.TwitchUser.Username} you have been succesfully resigned!");
+			_twitchChatProcessor.SendMessage($"{player.TwitchUser.Username} you have been succesfully resigned!");
 		}
 	}
 }

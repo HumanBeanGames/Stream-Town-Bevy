@@ -160,25 +160,25 @@ namespace Character
         /// Called when the character dies.
         /// </summary>
         /// <param name="attacked">Whether the character was attacked.</param>
-        /// <param name="messageSender">The message sender to send notifications.</param>
-		public void OnCharacterDied(bool attacked, MessageSender messageSender)
+        /// <param name="twitchChatProcessor">The Twitch chat processor to send notifications.</param>
+		public void OnCharacterDied(bool attacked, Processors.TwitchChatProcessor twitchChatProcessor)
 		{
 			if (IsNPC || !attacked)
 				return;
 
-			messageSender.SendPlayerMessage(this, "You died!");
+			twitchChatProcessor.SendPlayerMessage(this, "You died!");
 		}
 
         /// <summary>
         /// Called when the character respawns.
         /// </summary>
-        /// <param name="messageSender">The message sender to send notifications.</param>
-		public void OnCharacterRespawned(MessageSender messageSender)
+        /// <param name="twitchChatProcessor">The Twitch chat processor to send notifications.</param>
+		public void OnCharacterRespawned(Processors.TwitchChatProcessor twitchChatProcessor)
 		{
 			if (IsNPC)
 				return;
 
-			messageSender.SendPlayerMessage(this, "You have revived!");
+			twitchChatProcessor.SendPlayerMessage(this, "You have revived!");
 		}
 	}
 }

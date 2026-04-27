@@ -1,6 +1,5 @@
 using Character;
 using Processors;
-using Core;
 using System;
 using System.Collections.Generic;
 using TechTree;
@@ -41,7 +40,6 @@ namespace UserInterface.BottomBarMenu
 		[Inject] private RoleProcessor _roleProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
 		[Inject] private UIProcessor _uiProcessor;
-		[Inject] private Coordinator _gameProcessor;
 		[Inject] private PlayerInputProcessor _playerInputProcessor;
 
 		private Dictionary<BottomBarContext, BottomBarButton> _mainButtons = new Dictionary<BottomBarContext, BottomBarButton>();

@@ -1,4 +1,5 @@
 using SavingAndLoading.SavableObjects;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
@@ -20,15 +21,21 @@ namespace Processors
 	public partial class GUIDProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
 		/// <summary>
-		/// Runtime data ScriptableObject for GUID data.
-		/// Injected via Reflex dependency injection.
+		/// Runtime data for GUID data.
+		/// Assigned in InjectRuntimeData.
 		/// </summary>
-		[Inject] private GUIDRuntimeData _guidRuntimeData;
+		private GUIDRuntimeData _guidRuntimeData;
 
 		/// <summary>
 
 		public void Initialize()
 		{
+			if (_guidRuntimeData == null)
+				throw new InvalidOperationException("GUIDProcessor runtime data has not been installed.");
+
+			if (_guidRuntimeData.IsInitialized)
+				throw new InvalidOperationException("GUIDProcessor runtime data has already been initialized.");
+
 			// Only initialize if not already done
 			if (!_guidRuntimeData.IsInitialized)
 			{
@@ -143,8 +150,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			GUIDRuntimeData guidRuntimeData = ScriptableObject.CreateInstance<GUIDRuntimeData>();
-			containerBuilder.AddSingleton(guidRuntimeData);
+			if (_guidRuntimeData != null)
+				throw new InvalidOperationException("GUIDProcessor runtime data has already been installed.");
+
+			_guidRuntimeData = new GUIDRuntimeData();
+			containerBuilder.AddSingleton(_guidRuntimeData);
 		}
 
 		/// <summary>
@@ -155,6 +165,15 @@ namespace Processors
 		public void Process()
 		{
 			// GUIDProcessor does not require per-frame updates
+		}
+
+		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// GUIDProcessor does not have scene-specific settings to refresh
 		}
 
 		/// <summary>
@@ -172,7 +191,7 @@ namespace Processors
 			while (!newGUIDFound)
 			{
 				// Generate a random uint as a potential GUID
-				gUID = (uint)Random.Range(uint.MinValue, uint.MaxValue);
+				gUID = (uint)UnityEngine.Random.Range(uint.MinValue, uint.MaxValue);
 
 				// Check if this GUID is not already in use and is not zero
 				if (!_guidRuntimeData.WorldObjects[type].ContainsKey(gUID) && gUID != 0)

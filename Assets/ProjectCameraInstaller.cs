@@ -1,13 +1,17 @@
 using Reflex.Core;
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
+
 public class ProjectCameraInstaller : MonoBehaviour, IInstaller
 {
-    [SerializeField] private Camera _initialCamera;
-    [SerializeField] UniversalAdditionalCameraData _initialCameraData;
+    [SerializeField]
+    private GameObject _cameraPrefab;
 
     public void InstallBindings(ContainerBuilder containerBuilder)
     {
-        containerBuilder.AddSingleton(c => new ProjectCamera(_initialCamera, _initialCameraData));
+        GameObject cameraInstance = Instantiate(_cameraPrefab);
+        Camera camera = cameraInstance.GetComponent<Camera>();
+        UniversalAdditionalCameraData cameraData = cameraInstance.GetComponent<UniversalAdditionalCameraData>();
+        containerBuilder.AddSingleton(c => new ProjectCamera(camera, cameraData));
     }
 }

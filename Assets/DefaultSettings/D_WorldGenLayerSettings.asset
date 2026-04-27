@@ -17,4 +17,4 @@ MonoBehaviour:
     m_Bits: 449
   _terrainMask:
     serializedVersion: 2
-    m_Bits: 528
+    m_Bits: 0

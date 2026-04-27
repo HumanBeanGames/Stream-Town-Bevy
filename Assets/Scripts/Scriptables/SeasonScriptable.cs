@@ -7,7 +7,7 @@ namespace ScriptablesProcessorInfrastructure
 	/// <summary>
 	/// ScriptableObject that stores configuration data for a specific season.
 	/// Contains color palettes, visual effects, and particle settings for seasonal changes.
-	/// Not standalone - always part of AllSeasonsSettings.
+	/// Not standalone - always part of ScriptablesProcessorInfrastructure.AllSeasonSettings.
 	/// </summary>
     public class SeasonDataSettings : ScriptableObject 
 	{

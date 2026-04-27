@@ -70,8 +70,10 @@ namespace World.Generation
 		/// <param name="islandMultiplier"></param>
 		/// <param name="islandAddition"></param>
 		/// <param name="quantizationFactor"></param>
+		/// <param name="cellSize"></param>
+		/// <param name="topFaceProportion"></param>
 		/// <returns></returns>
-		public static MeshData GenerateTerrainMeshData(GenerationSettings settings, float meshHeightMultiplier, AnimationCurve meshHeightCurve, bool enableIslandBias = false, AnimationCurve islandBiasCurve = null, float islandSize = 150f, float islandMultiplier = 1f, float islandAddition = 0f, float quantizationFactor = 0.1f, float topFaceProportion = 1f)
+		public static MeshData GenerateTerrainMeshData(GenerationSettings settings, float meshHeightMultiplier, AnimationCurve meshHeightCurve, bool enableIslandBias = false, AnimationCurve islandBiasCurve = null, float islandSize = 150f, float islandMultiplier = 1f, float islandAddition = 0f, float quantizationFactor = 0.1f, float cellSize = 1f, float topFaceProportion = 1f)
 		{
 			float[,] noiseMap = Noise.GenerateNoiseMap(settings);
 
@@ -88,8 +90,8 @@ namespace World.Generation
 
 			MathExtended.Set2DArrayValues<float>(ref noiseMap, floatValueSetter);
 
-			float topLeftX = (settings.Size - 1) / -2f;
-			float topLeftZ = (settings.Size - 1) / 2f;
+			float topLeftX = (settings.Size - 1) * cellSize / -2f;
+			float topLeftZ = (settings.Size - 1) * cellSize / 2f;
 
 			int meshSimplificationIncrement = (settings.LevelOfDetail == 0) ? 1 : settings.LevelOfDetail * 2;
 
@@ -105,7 +107,7 @@ namespace World.Generation
 					// Apply island bias if enabled
 					if (enableIslandBias && islandBiasCurve != null)
 					{
-						Vector3 vertexPosition = new Vector3(topLeftX + x, 0, topLeftZ - y);
+						Vector3 vertexPosition = new Vector3(topLeftX + x * cellSize, 0, topLeftZ - y * cellSize);
 						float distanceFromOrigin = vertexPosition.magnitude;
 						float normalizedDistance = Mathf.Clamp01(distanceFromOrigin / islandSize);
 						float bias = islandBiasCurve.Evaluate(normalizedDistance);
@@ -118,20 +120,20 @@ namespace World.Generation
 					settings.HeightMap[x, y] = height;
 
 					// Generate voxel-style terrain
-					GenerateVoxelPixel(meshData, topFaces, x, y, height, settings, meshHeightMultiplier, topLeftX, topLeftZ, topFaceProportion);
+					GenerateVoxelPixel(meshData, topFaces, x, y, height, settings, meshHeightMultiplier, topLeftX, topLeftZ, cellSize, topFaceProportion);
 				}
 			}
 
 			return meshData;
 		}
 
-		private static void GenerateVoxelPixel(MeshData meshData, TopFace[,] topFaces, int x, int y, float height, GenerationSettings settings, float meshHeightMultiplier, float topLeftX, float topLeftZ, float topFaceProportion)
+		private static void GenerateVoxelPixel(MeshData meshData, TopFace[,] topFaces, int x, int y, float height, GenerationSettings settings, float meshHeightMultiplier, float topLeftX, float topLeftZ, float cellSize, float topFaceProportion)
 		{
-			float worldX = topLeftX + x;
-			float worldZ = topLeftZ - y;
+			float worldX = topLeftX + x * cellSize;
+			float worldZ = topLeftZ - y * cellSize;
 			float worldHeight = height * meshHeightMultiplier;
-			float halfSize = 0.5f * topFaceProportion;
-			
+			float halfSize = 0.5f * cellSize * topFaceProportion;
+
 			// UV coordinates for this pixel
 			Vector2 uv = new Vector2(x / (float)settings.Size, y / (float)settings.Size);
 
@@ -223,7 +225,7 @@ namespace World.Generation
 			meshData.AddTriangle(i2, i4, i3);
 		}
 
-		public static IEnumerator GenerateTerrainMeshDataCoroutine(GenerationSettings settings, float meshHeightMultiplier, AnimationCurve meshHeightCurve, float frameBudgetSeconds, Action<MeshData> onComplete, bool enableIslandBias = false, AnimationCurve islandBiasCurve = null, float islandSize = 150f, float islandMultiplier = 1f, float islandAddition = 0f, float quantizationFactor = 0.1f, float topFaceProportion = 1f)
+		public static IEnumerator GenerateTerrainMeshDataCoroutine(GenerationSettings settings, float meshHeightMultiplier, AnimationCurve meshHeightCurve, float frameBudgetSeconds, Action<MeshData> onComplete, bool enableIslandBias = false, AnimationCurve islandBiasCurve = null, float islandSize = 150f, float islandMultiplier = 1f, float islandAddition = 0f, float quantizationFactor = 0.1f, float cellSize = 1f, float topFaceProportion = 1f)
 		{
 			float[,] noiseMap = null;
 			yield return Noise.GenerateNoiseMapCoroutine(settings, frameBudgetSeconds, result => noiseMap = result);
@@ -248,8 +250,8 @@ namespace World.Generation
 				}
 			}
 
-			float topLeftX = (settings.Size - 1) / -2f;
-			float topLeftZ = (settings.Size - 1) / 2f;
+			float topLeftX = (settings.Size - 1) * cellSize / -2f;
+			float topLeftZ = (settings.Size - 1) * cellSize / 2f;
 
 			int meshSimplificationIncrement = (settings.LevelOfDetail == 0) ? 1 : settings.LevelOfDetail * 2;
 
@@ -265,7 +267,7 @@ namespace World.Generation
 					// Apply island bias if enabled
 					if (enableIslandBias && islandBiasCurve != null)
 					{
-						Vector3 vertexPosition = new Vector3(topLeftX + x, 0, topLeftZ - y);
+						Vector3 vertexPosition = new Vector3(topLeftX + x * cellSize, 0, topLeftZ - y * cellSize);
 						float distanceFromOrigin = vertexPosition.magnitude;
 						float normalizedDistance = Mathf.Clamp01(distanceFromOrigin / islandSize);
 						float bias = islandBiasCurve.Evaluate(normalizedDistance);
@@ -278,7 +280,7 @@ namespace World.Generation
 					settings.HeightMap[x, y] = height;
 
 					// Generate voxel-style terrain
-					GenerateVoxelPixel(meshData, topFaces, x, y, height, settings, meshHeightMultiplier, topLeftX, topLeftZ, topFaceProportion);
+					GenerateVoxelPixel(meshData, topFaces, x, y, height, settings, meshHeightMultiplier, topLeftX, topLeftZ, cellSize, topFaceProportion);
 
 					if (Time.realtimeSinceStartup - frameStartTime >= frameBudgetSeconds)
 					{
@@ -316,6 +318,11 @@ namespace World.Generation
 			}
 			filter.sharedMesh = mesh;
 
+			if (!terrainObject.TryGetComponent<MeshRenderer>(out _))
+			{
+				terrainObject.AddComponent<MeshRenderer>();
+			}
+
 			MeshCollider collider;
 
 			if (!terrainObject.TryGetComponent(out collider))
@@ -323,6 +330,7 @@ namespace World.Generation
 				collider = terrainObject.AddComponent<MeshCollider>();
 			}
 
+			collider.sharedMesh = null;
 			collider.sharedMesh = mesh;
 			return mesh;
 		}

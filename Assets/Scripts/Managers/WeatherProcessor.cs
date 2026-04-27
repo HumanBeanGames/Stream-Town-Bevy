@@ -1,10 +1,10 @@
 using ScriptablesProcessorInfrastructure;
+using System;
 using UnityEngine;
 using UnityEngine.VFX;
-using Utils;
-using Reflex.Attributes;
 using Reflex.Core;
-using Data.Containers;
+using Reflex.Attributes;
+using Utils;
 
 namespace Processors
 {
@@ -12,37 +12,29 @@ namespace Processors
     /// Processor that manages weather system for the game.
     /// Handles weather effects, transitions, and visual effects.
     /// </summary>
-	public partial class WeatherProcessor : MonoBehaviour, IInstaller, IProcessor
+	public partial class WeatherProcessor : MonoBehaviour, IInstaller, IProcessor, IMainThreadInitializableProcessor
 	{
         /// <summary>
         /// Container for season data definitions.
         /// Injected via Reflex dependency injection.
         /// </summary>
-		[Inject] private SeasonDataContainer _seasonDataContainer;
-
+		[Inject] private SeasonProcessor _seasonProcessor;
         /// <summary>
-        /// ScriptableObject containing season settings.
-        /// Injected via Reflex dependency injection.
+        /// The season data container. Injected via Reflex dependency injection.
         /// </summary>
-		[Inject] private SeasonSettings _seasonSettings;
+		[Inject] private AllSeasonSettings _seasonDataContainer;
 
         /// <summary>
         /// Runtime data ScriptableObject for weather data.
-        /// Injected via Reflex dependency injection.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-		[Inject] private WeatherRuntimeData _weatherRuntimeData;
+		private WeatherRuntimeData _weatherRuntimeData;
 
         /// <summary>
         /// ScriptableObject containing weather settings.
         /// Injected via Reflex dependency injection.
         /// </summary>
 		[Inject] private WeatherSettings _weatherSettings;
-
-        /// <summary>
-        /// Processor that manages season logic for the game.
-        /// Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private SeasonProcessor _seasonProcessor;
 
         /// <summary>
         /// Starts the weather VFX for a specific season.
@@ -58,7 +50,7 @@ namespace Processors
 
 			_weatherRuntimeData.ActiveSeasonData = seasonData;
 			_weatherRuntimeData.CurrentVFX = seasonData.VFX;
-			_weatherRuntimeData.RemainingRunTime = Random.Range(seasonData.MinRunTime, seasonData.MaxRunTime);
+			_weatherRuntimeData.RemainingRunTime = UnityEngine.Random.Range(seasonData.MinRunTime, seasonData.MaxRunTime);
 			_weatherRuntimeData.ParticleLerpValue = 0f;
 			_weatherRuntimeData.WeatherRunning = true;
 
@@ -94,10 +86,14 @@ namespace Processors
 
         /// <summary>
         /// Initializes the weather processor.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// Sets up VFX references for each season.
         /// </summary>
 		public void Initialize()
 		{
+			if (_weatherRuntimeData == null)
+				throw new InvalidOperationException("WeatherProcessor: WeatherRuntimeData has not been installed.");
+
 			SetDataVFX();
 		}
 
@@ -118,8 +114,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			WeatherRuntimeData weatherRuntimeData = ScriptableObject.CreateInstance<WeatherRuntimeData>();
-			containerBuilder.AddSingleton(weatherRuntimeData);
+			if (_weatherRuntimeData != null)
+				throw new InvalidOperationException("WeatherProcessor: WeatherRuntimeData has already been installed.");
+
+			_weatherRuntimeData = new WeatherRuntimeData();
+			containerBuilder.AddSingleton(_weatherRuntimeData);
 		}
 
         /// <summary>
@@ -149,6 +148,15 @@ namespace Processors
             _weatherRuntimeData.RemainingRunTime -= Time.deltaTime;
             if (_weatherRuntimeData.RemainingRunTime <= 0f)
                 StopWeather();
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // WeatherProcessor does not have scene-specific settings to refresh
         }
     }
 }

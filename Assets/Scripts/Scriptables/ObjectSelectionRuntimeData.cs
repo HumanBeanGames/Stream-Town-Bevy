@@ -1,72 +1,80 @@
-using UnityEngine;
 using UnityEngine.Events;
-using Character;
-using System.Collections.Generic;
-using Utils;
 
-namespace ScriptablesProcessorInfrastructure
+using ScriptablesProcessorInfrastructure;
+using System;
+using System.Collections.Generic;
+using Units;
+using Utils;
+using UnityEngine;
+using Character;
+
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for ObjectSelectionProcessor.
 	/// Manages single object selection, group selection, and selection events.
 	/// </summary>
-	public class ObjectSelectionRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class ObjectSelectionRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// Event fired when an object is selected.
 		/// Passes the selected object and associated data.
 		/// </summary>
-		[SerializeField]
-		private UnityEvent<SelectableObject, object> _onObjectSelected = new UnityEvent<SelectableObject, object>();
+		private UnityEvent<SelectableObject, object> _onObjectSelected;
 
 		/// <summary>
 		/// Whether a group selection operation is in progress.
 		/// Set to true when group selection starts, false when it ends.
 		/// </summary>
-		[SerializeField]
-		private bool _startedGroupSelection = false;
+		private bool _startedGroupSelection;
 
 		/// <summary>
 		/// World position where group selection started.
 		/// Used to calculate the selection box area.
 		/// </summary>
-		[SerializeField]
-		private Vector3 _startedSelectionPosition = Vector3.zero;
+		private Vector3 _startedSelectionPosition;
 
 		/// <summary>
 		/// World position where group selection ended.
 		/// Used to calculate the selection box area.
 		/// </summary>
-		[SerializeField]
-		private Vector3 _endedSelectionPosition = Vector3.zero;
+		private Vector3 _endedSelectionPosition;
 
 		/// <summary>
 		/// The currently selected object and its associated data.
 		/// Tuple containing the selectable object and associated data.
 		/// </summary>
-		[SerializeField]
 		private (SelectableObject, object) _selectedObject;
 
 		/// <summary>
 		/// Whether an object is currently selected.
 		/// Set to true when an object is selected, false when deselected.
 		/// </summary>
-		[SerializeField]
-		private bool _objectSelected = false;
+		private bool _objectSelected;
 
 		/// <summary>
 		/// List of selected player characters in the group.
 		/// Contains all RoleHandlers that were selected in the group selection.
 		/// </summary>
-		[SerializeField]
 		private List<RoleHandler> _selectedPlayerGroup;
 
 		/// <summary>
 		/// Whether a group of players is currently selected.
 		/// Set to true when group selection completes, false when cleared.
 		/// </summary>
-		[SerializeField]
-		private bool _groupSelected = false;
+		private bool _groupSelected;
+
+		/// <summary>
+		/// UI RectTransform for the group selection box.
+		/// Used to display the selection rectangle during group selection.
+		/// </summary>
+		private RectTransform _groupSelectionRect;
+
+		/// <summary>
+		/// Screen position where group selection started.
+		/// Used to calculate the selection box area.
+		/// </summary>
+		private Vector3 _groupSelectionStartPos;
 
 		/// <summary>
 		/// Gets or sets the event fired when an object is selected.
@@ -137,11 +145,38 @@ namespace ScriptablesProcessorInfrastructure
 		}
 
 		/// <summary>
+		/// Gets or sets the UI RectTransform for the group selection box.
+		/// </summary>
+		public RectTransform GroupSelectionRect
+		{
+			get { return _groupSelectionRect; }
+			set { _groupSelectionRect = value; }
+		}
+
+		/// <summary>
+		/// Gets or sets the screen position where group selection started.
+		/// </summary>
+		public Vector3 GroupSelectionStartPos
+		{
+			get { return _groupSelectionStartPos; }
+			set { _groupSelectionStartPos = value; }
+		}
+
+		/// <summary>
 		/// Initializes the object selection runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public ObjectSelectionRuntimeData()
 		{
-			// Initialize with default values if needed
+			_onObjectSelected = new UnityEvent<SelectableObject, object>();
+			_startedGroupSelection = false;
+			_startedSelectionPosition = Vector3.zero;
+			_endedSelectionPosition = Vector3.zero;
+			_selectedObject = (null, null);
+			_objectSelected = false;
+			_selectedPlayerGroup = new List<RoleHandler>();
+			_groupSelected = false;
+			_groupSelectionRect = null;
+			_groupSelectionStartPos = Vector3.zero;
 		}
 	}
 }

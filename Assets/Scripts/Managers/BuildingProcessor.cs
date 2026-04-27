@@ -1,3 +1,4 @@
+using System;
 using Buildings;
 using Reflex.Attributes;
 using Reflex.Core;
@@ -52,9 +53,9 @@ namespace Processors
 
         /// <summary>
         /// Runtime building data ScriptableObject.
-        /// Injected via Reflex dependency injection.
+        /// Created and bound in InjectRuntimeData().
         /// </summary>
-        [Inject] private BuildingRuntimeData _buildingRuntimeData;
+        private BuildingRuntimeData _buildingRuntimeData;
 
         #endregion
 
@@ -71,12 +72,6 @@ namespace Processors
         /// Injected via Reflex dependency injection.
         /// </summary>
         [Inject] private ObjectPoolingProcessor _poolingProcessor;
-
-        /// <summary>
-        /// Util display processor for accessing util display data.
-        /// Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private UtilDisplayProcessor _utilDisplayProcessor;
 
         #endregion
 
@@ -110,16 +105,22 @@ namespace Processors
             set => _buildingRuntimeData.LastBuildingType = value;
         }
 
+		public bool BuildingsCostResourcesEnabled => _buildingSettings.BuildingsCostResourcesEnabled;
+
         #endregion
 
         #region IProcessor
 
         /// <summary>
         /// Initializes the building processor.
+        /// Creates RuntimeData after all processors are confirmed ready.
         /// Sets up runtime state dictionaries and building data.
         /// </summary>
         public void Initialize()
         {
+            if (_buildingRuntimeData == null)
+                throw new InvalidOperationException("BuildingProcessor: BuildingRuntimeData has not been installed.");
+
             InitializeRuntimeState();
         }
 
@@ -131,6 +132,15 @@ namespace Processors
         public void Process()
         {
             // BuildingProcessor does not require per-frame updates
+        }
+
+        /// <summary>
+        /// Refreshes scene-specific data when a new scene loads.
+        /// Called by the Coordinator after scene container is available.
+        /// </summary>
+        public void RefreshSceneData(Container sceneContainer)
+        {
+            // BuildingProcessor does not have scene-specific settings to refresh
         }
 
         #endregion
@@ -154,9 +164,11 @@ namespace Processors
 
         public void InjectRuntimeData(ContainerBuilder containerBuilder)
         {
-            // Instantiate and register BuildingRuntimeData ScriptableObject
-            BuildingRuntimeData buildingRuntimeData = ScriptableObject.CreateInstance<BuildingRuntimeData>();
-            containerBuilder.AddSingleton(buildingRuntimeData);
+            if (_buildingRuntimeData != null)
+                throw new InvalidOperationException("BuildingProcessor: BuildingRuntimeData has already been installed.");
+
+            _buildingRuntimeData = new BuildingRuntimeData();
+            containerBuilder.AddSingleton(_buildingRuntimeData);
         }
 
         #endregion
@@ -169,6 +181,13 @@ namespace Processors
         /// </summary>
         /// <param name="type">The building type to check.</param>
         /// <returns>True if the building can be afforded, false otherwise.</returns>
+		public bool ToggleBuildingsCostResourcesEnabled()
+		{
+			bool enabled = !_buildingSettings.BuildingsCostResourcesEnabled;
+			_buildingSettings.SetBuildingsCostResourcesEnabled(enabled);
+			return enabled;
+		}
+
         public bool CanAffordToBuild(BuildingType type)
         {
             // Buildings are always affordable if resource costs are disabled

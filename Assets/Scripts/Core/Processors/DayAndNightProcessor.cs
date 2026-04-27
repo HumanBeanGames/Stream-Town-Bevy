@@ -14,7 +14,7 @@ namespace Processors
 	/// Processor that manages the day/night cycle for the game.
 	/// Controls lighting transitions, material emissions, and day/night events.
 	/// </summary>
-	public partial class DayAndNightProcessor : MonoBehaviour, IInstaller, IProcessor
+	public partial class DayAndNightProcessor : MonoBehaviour, IInstaller, IProcessor, IPostInitializeProcessor
 	{
 		/// <summary>
 		/// Time processor for accessing time data.
@@ -30,9 +30,9 @@ namespace Processors
 
 		/// <summary>
 		/// Runtime data ScriptableObject for day/night data.
-		/// Injected via Reflex dependency injection.
+		/// Created and bound in InjectRuntimeData().
 		/// </summary>
-		[Inject] private DayAndNightRuntimeData _dayAndNightRuntimeData;
+		private DayAndNightRuntimeData _dayAndNightRuntimeData;
 
 		/// <summary>
 		/// Gets whether it is currently daytime.
@@ -61,14 +61,13 @@ namespace Processors
 
 		/// <summary>
 		/// Initializes the day/night processor.
+		/// Creates RuntimeData after all processors are confirmed ready.
 		/// Resets visual settings to daytime defaults and calculates day/night durations.
 		/// </summary>
 		public void Initialize()
 		{
-			// Reset building emission to zero (no glow at start)
-			_dayAndNightSettings.BuildingMaterial.SetFloat("_EmissionStrength", 0);
-			// Reset post-processing volume to zero (no effects at start)
-			_dayAndNightSettings.PostProcessVolume.weight = 0;
+			if (_dayAndNightRuntimeData == null)
+				throw new InvalidOperationException("DayAndNightProcessor runtime data has not been installed.");
 
 			// Calculate day length: total day time * day percentage minus transition time
 			_dayAndNightRuntimeData.DayLength = _timeProcessor.SecondsPerDay * _dayAndNightSettings.DayPercentage - _dayAndNightSettings.TransitionLength;
@@ -76,6 +75,16 @@ namespace Processors
 			_dayAndNightRuntimeData.NightLength = _timeProcessor.SecondsPerDay * (1 - _dayAndNightSettings.DayPercentage) - _dayAndNightSettings.TransitionLength;
 			
 			_dayAndNightRuntimeData.TransitionLength = _dayAndNightSettings.TransitionLength;
+		}
+
+		/// <summary>
+		/// Activates the day/night processor on the main thread after initialization.
+		/// Applies initial visual state to materials and post-processing.
+		/// </summary>
+		public void Activate()
+		{
+			SetBuildingEmission(0f);
+			SetPostProcessWeight(0f);
 		}
 
 		/// <summary>
@@ -105,6 +114,15 @@ namespace Processors
 		}
 
 		/// <summary>
+		/// Refreshes scene-specific data when a new scene loads.
+		/// Called by the Coordinator after scene container is available.
+		/// </summary>
+		public void RefreshSceneData(Container sceneContainer)
+		{
+			// DayAndNightProcessor does not have scene-specific settings to refresh
+		}
+
+		/// <summary>
 		/// Registers this processor as a singleton in the dependency injection container.
 		/// Called by Reflex during container initialization.
 		/// </summary>
@@ -121,8 +139,11 @@ namespace Processors
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InjectRuntimeData(ContainerBuilder containerBuilder)
 		{
-			DayAndNightRuntimeData dayAndNightRuntimeData = ScriptableObject.CreateInstance<DayAndNightRuntimeData>();
-			containerBuilder.AddSingleton(dayAndNightRuntimeData);
+			if (_dayAndNightRuntimeData != null)
+				throw new InvalidOperationException("DayAndNightProcessor runtime data has already been installed.");
+
+			_dayAndNightRuntimeData = new DayAndNightRuntimeData();
+			containerBuilder.AddSingleton(_dayAndNightRuntimeData);
 		}
 
 		private void BeginTransition(bool transitionToDay)
@@ -148,17 +169,15 @@ namespace Processors
 
 			if (_dayAndNightRuntimeData.TransitionToDay)
 			{
-				_dayAndNightSettings.MainLightSource.intensity = Mathf.Lerp(_dayAndNightSettings.NightLightIntensity, _dayAndNightSettings.DayLightIntensity, t);
-				_dayAndNightSettings.MainLightSource.transform.parent.eulerAngles = new Vector3(0, Mathf.Lerp(-120, 0, t), 0);
-				_dayAndNightSettings.BuildingMaterial.SetFloat("_EmissionStrength", Mathf.Lerp(_dayAndNightSettings.MaxEmissionStrength, 0, t));
-				_dayAndNightSettings.PostProcessVolume.weight = Mathf.Lerp(1.0f, 0.0f, t);
+				SetMainLightState(Mathf.Lerp(_dayAndNightSettings.NightLightIntensity, _dayAndNightSettings.DayLightIntensity, t), Mathf.Lerp(-120, 0, t));
+				SetBuildingEmission(Mathf.Lerp(_dayAndNightSettings.MaxEmissionStrength, 0, t));
+				SetPostProcessWeight(Mathf.Lerp(1.0f, 0.0f, t));
 			}
 			else
 			{
-				_dayAndNightSettings.MainLightSource.intensity = Mathf.Lerp(_dayAndNightSettings.DayLightIntensity, _dayAndNightSettings.NightLightIntensity, t);
-				_dayAndNightSettings.MainLightSource.transform.parent.eulerAngles = new Vector3(0, Mathf.Lerp(0, -120, t), 0);
-				_dayAndNightSettings.BuildingMaterial.SetFloat("_EmissionStrength", Mathf.Lerp(0, _dayAndNightSettings.MaxEmissionStrength, t));
-				_dayAndNightSettings.PostProcessVolume.weight = Mathf.Lerp(0.0f, 1.0f, t);
+				SetMainLightState(Mathf.Lerp(_dayAndNightSettings.DayLightIntensity, _dayAndNightSettings.NightLightIntensity, t), Mathf.Lerp(0, -120, t));
+				SetBuildingEmission(Mathf.Lerp(0, _dayAndNightSettings.MaxEmissionStrength, t));
+				SetPostProcessWeight(Mathf.Lerp(0.0f, 1.0f, t));
 			}
 
 			if (progress >= 1f)
@@ -180,6 +199,34 @@ namespace Processors
 				_dayAndNightRuntimeData.InvokeDayStarted();
 			else
 				_dayAndNightRuntimeData.InvokeNightStarted();
+		}
+
+		private void SetBuildingEmission(float emissionStrength)
+		{
+			if (_dayAndNightSettings?.BuildingMaterial == null)
+				return;
+
+			_dayAndNightSettings.BuildingMaterial.SetFloat("_EmissionStrength", emissionStrength);
+		}
+
+		private void SetPostProcessWeight(float weight)
+		{
+			if (_dayAndNightSettings?.PostProcessVolume == null)
+				return;
+
+			_dayAndNightSettings.PostProcessVolume.weight = weight;
+		}
+
+		private void SetMainLightState(float intensity, float rotationY)
+		{
+			if (_dayAndNightSettings?.MainLightSource == null)
+				return;
+
+			_dayAndNightSettings.MainLightSource.intensity = intensity;
+
+			Transform parentTransform = _dayAndNightSettings.MainLightSource.transform.parent;
+			if (parentTransform != null)
+				parentTransform.eulerAngles = new Vector3(0, rotationY, 0);
 		}
 
 		/// <summary>

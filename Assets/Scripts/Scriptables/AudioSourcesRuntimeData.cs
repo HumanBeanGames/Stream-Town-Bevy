@@ -1,16 +1,22 @@
 using System.Collections.Generic;
-using Audio;
-using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+using Audio;
+using ScriptablesProcessorInfrastructure;
+
+namespace Processors
 {
 	/// <summary>
-	/// ScriptableObject that stores runtime audio sources state for the game.
+	/// Runtime data class that stores audio sources state for the game.
 	/// </summary>
-	public class AudioSourcesRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class AudioSourcesRuntimeData : IRuntimeDataScriptable
 	{
-		private Queue<AudioHandler> _audioHandlers = new Queue<AudioHandler>();
+		private Queue<AudioHandler> _audioHandlers;
 
 		public Queue<AudioHandler> AudioHandlers => _audioHandlers;
+
+		public AudioSourcesRuntimeData()
+		{
+			_audioHandlers = new Queue<AudioHandler>();
+		}
 	}
 }

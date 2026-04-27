@@ -1,7 +1,6 @@
 using Animation;
 using Behaviours;
 using Processors;
-using Core;
 using Pathfinding;
 using Sensors;
 using System;
@@ -79,7 +78,6 @@ namespace Character
         /// <summary>
         /// Game coordinator. Injected via Reflex dependency injection.
         /// </summary>
-		[Inject] private Coordinator _gameProcessor;
 
         /// <summary>
         /// Player processor for player management. Injected via Reflex dependency injection.

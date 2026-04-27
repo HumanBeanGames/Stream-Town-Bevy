@@ -1,181 +1,155 @@
 using System.Collections.Generic;
+
+using ScriptablesProcessorInfrastructure;
 using UnityEngine;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for ResourceProcessor.
 	/// Stores all runtime state for the ResourceProcessor including caches and tracking dictionaries.
 	/// </summary>
-	public class ResourceRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class ResourceRuntimeData : IRuntimeDataScriptable
 	{
 		/// <summary>
 		/// List of wood resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _woodResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _woodResources;
 
 		/// <summary>
 		/// List of ore resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _oreResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _oreResources;
 
 		/// <summary>
 		/// List of food resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _foodResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _foodResources;
 
 		/// <summary>
 		/// List of gold resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _goldResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _goldResources;
 
 		/// <summary>
 		/// List of recruit resources.
 		/// </summary>
-		[SerializeField]
-		private List<GameResources.ResourceData> _recruitResources = new List<GameResources.ResourceData>();
+		private List<GameResources.ResourceData> _recruitResources;
 
 		/// <summary>
 		/// List of wood meshes.
 		/// </summary>
-		[SerializeField]
-		private List<Mesh> _woodMeshes = new List<Mesh>();
+		private List<Mesh> _woodMeshes;
 
 		/// <summary>
 		/// List of wood materials.
 		/// </summary>
-		[SerializeField]
-		private List<Material> _woodMaterials = new List<Material>();
+		private List<Material> _woodMaterials;
 
 		/// <summary>
 		/// List of ore meshes.
 		/// </summary>
-		[SerializeField]
-		private List<Mesh> _oreMeshes = new List<Mesh>();
+		private List<Mesh> _oreMeshes;
 
 		/// <summary>
 		/// List of ore materials.
 		/// </summary>
-		[SerializeField]
-		private List<Material> _oreMaterials = new List<Material>();
+		private List<Material> _oreMaterials;
 
 		/// <summary>
 		/// List of food meshes.
 		/// </summary>
-		[SerializeField]
-		private List<Mesh> _foodMeshes = new List<Mesh>();
+		private List<Mesh> _foodMeshes;
 
 		/// <summary>
 		/// List of food materials.
 		/// </summary>
-		[SerializeField]
-		private List<Material> _foodMaterials = new List<Material>();
+		private List<Material> _foodMaterials;
 
 		/// <summary>
 		/// List of gold meshes.
 		/// </summary>
-		[SerializeField]
-		private List<Mesh> _goldMeshes = new List<Mesh>();
+		private List<Mesh> _goldMeshes;
 
 		/// <summary>
 		/// List of gold materials.
 		/// </summary>
-		[SerializeField]
-		private List<Material> _goldMaterials = new List<Material>();
+		private List<Material> _goldMaterials;
 
 		/// <summary>
 		/// List of recruit meshes.
 		/// </summary>
-		[SerializeField]
-		private List<Mesh> _recruitMeshes = new List<Mesh>();
+		private List<Mesh> _recruitMeshes;
 
 		/// <summary>
 		/// List of recruit materials.
 		/// </summary>
-		[SerializeField]
-		private List<Material> _recruitMaterials = new List<Material>();
+		private List<Material> _recruitMaterials;
 
 		/// <summary>
 		/// Dictionary tracking assignment counts for each resource GUID.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<uint, int> _resourceAssignmentCounts = new Dictionary<uint, int>();
+		private Dictionary<uint, int> _resourceAssignmentCounts;
 
 		/// <summary>
 		/// Dictionary tracking current amounts for each resource GUID.
 		/// </summary>
-		[SerializeField]
-		private Dictionary<uint, int> _resourceCurrentAmounts = new Dictionary<uint, int>();
+		private Dictionary<uint, int> _resourceCurrentAmounts;
 
 		/// <summary>
 		/// Cache of wood resources grouped by mesh and material indices.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _woodResourcesCache;
 
 		/// <summary>
 		/// Cache of ore resources grouped by mesh and material indices.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _oreResourcesCache;
 
 		/// <summary>
 		/// Cache of food resources grouped by mesh and material indices.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _foodResourcesCache;
 
 		/// <summary>
 		/// Cache of gold resources grouped by mesh and material indices.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _goldResourcesCache;
 
 		/// <summary>
 		/// Cache of recruit resources grouped by mesh and material indices.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _recruitResourcesCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for wood resources.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> _woodMatricesCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for ore resources.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> _oreMatricesCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for food resources.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> _foodMatricesCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for gold resources.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> _goldMatricesCache;
 
 		/// <summary>
 		/// Cache of transformation matrices for recruit resources.
 		/// </summary>
-		[SerializeField]
 		private Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> _recruitMatricesCache;
 
 		/// <summary>
 		/// Size of resources for targeting calculations.
 		/// </summary>
-		[SerializeField]
-		private float _resourceSize = 1f;
+		private float _resourceSize;
 
 		// Properties for resource lists
 		public List<GameResources.ResourceData> WoodResources
@@ -347,6 +321,41 @@ namespace ScriptablesProcessorInfrastructure
 		}
 
 		/// <summary>
+		/// Initializes the resource runtime data with default values.
+		/// </summary>
+		public ResourceRuntimeData()
+		{
+			_woodResources = new List<GameResources.ResourceData>();
+			_oreResources = new List<GameResources.ResourceData>();
+			_foodResources = new List<GameResources.ResourceData>();
+			_goldResources = new List<GameResources.ResourceData>();
+			_recruitResources = new List<GameResources.ResourceData>();
+			_woodMeshes = new List<Mesh>();
+			_woodMaterials = new List<Material>();
+			_oreMeshes = new List<Mesh>();
+			_oreMaterials = new List<Material>();
+			_foodMeshes = new List<Mesh>();
+			_foodMaterials = new List<Material>();
+			_goldMeshes = new List<Mesh>();
+			_goldMaterials = new List<Material>();
+			_recruitMeshes = new List<Mesh>();
+			_recruitMaterials = new List<Material>();
+			_resourceAssignmentCounts = new Dictionary<uint, int>();
+			_resourceCurrentAmounts = new Dictionary<uint, int>();
+			_woodResourcesCache = new Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]>();
+			_oreResourcesCache = new Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]>();
+			_foodResourcesCache = new Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]>();
+			_goldResourcesCache = new Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]>();
+			_recruitResourcesCache = new Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]>();
+			_woodMatricesCache = new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+			_oreMatricesCache = new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+			_foodMatricesCache = new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+			_goldMatricesCache = new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+			_recruitMatricesCache = new Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]>();
+			_resourceSize = 1f;
+		}
+
+		/// <summary>
 		/// Gets the meshes and materials for wood resources.
 		/// </summary>
 		/// <returns>Tuple of meshes and materials lists.</returns>
@@ -389,14 +398,6 @@ namespace ScriptablesProcessorInfrastructure
 		public (List<Mesh> meshes, List<Material> materials) GetRecruitMeshMaterials()
 		{
 			return (_recruitMeshes, _recruitMaterials);
-		}
-
-		/// <summary>
-		/// Initializes the resource runtime data with default values.
-		/// </summary>
-		public void Initialize()
-		{
-			// Initialize with default values if needed
 		}
 	}
 }

@@ -1,26 +1,26 @@
 using System.Collections.Generic;
+
+using ScriptablesProcessorInfrastructure;
 using Target;
-using UnityEngine;
 using Utils;
 
-namespace ScriptablesProcessorInfrastructure
+namespace Processors
 {
 	/// <summary>
 	/// Runtime data for TargetProcessor.
 	/// </summary>
-	public class TargetRuntimeData : ScriptableObject, IRuntimeDataScriptable
+	public class TargetRuntimeData : IRuntimeDataScriptable
 	{
-		[SerializeField]
-		private Dictionary<TargetMask, List<Targetable>> _targetDictionary = new Dictionary<TargetMask, List<Targetable>>();
+		private Dictionary<TargetMask, List<Targetable>> _targetDictionary;
 
 		public Dictionary<TargetMask, List<Targetable>> TargetDictionary => _targetDictionary;
 
 		/// <summary>
 		/// Initializes the target runtime data with default values.
 		/// </summary>
-		public void Initialize()
+		public TargetRuntimeData()
 		{
-			// Initialize with default values if needed
+			_targetDictionary = new Dictionary<TargetMask, List<Targetable>>();
 		}
 	}
 }
