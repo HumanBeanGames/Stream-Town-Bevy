@@ -92,6 +92,8 @@ namespace Character
 				_resources.Add(Utils.Resource.Food, new ResourceInventory(0, 10));
 				_resources.Add(Utils.Resource.Ore, new ResourceInventory(0, 10));
 				_resources.Add(Utils.Resource.Wood, new ResourceInventory(0, 10));
+				_resources.Add(Utils.Resource.Gold, new ResourceInventory(0, 10));
+				_resources.Add(Utils.Resource.Recruit, new ResourceInventory(0, 10));
 			}
 		}
 

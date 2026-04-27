@@ -213,10 +213,16 @@ namespace Processors
 					{
 						Debug.Log("[WorldGen] GeneratingObjects state - calling GeneratePooledObjectsExceptTownhallSync");
 						GeneratePooledObjectsExceptTownhallSync();
-						CompleteWorldGeneration(GetActiveTownhallObject());
 						_objectsGenerated = true;
-						_runtimeData.State = GenerationState.Complete;
+						_runtimeData.State = GenerationState.GeneratingNavmesh;
 					}
+					break;
+
+				case GenerationState.GeneratingNavmesh:
+					Debug.Log("[WorldGen] GeneratingNavmesh state");
+					GenerateNavmesh();
+					CompleteWorldGeneration(GetActiveTownhallObject());
+					_runtimeData.State = GenerationState.Complete;
 					break;
 
 				case GenerationState.Complete:
@@ -305,6 +311,212 @@ namespace Processors
 
 			GameObject terrainHost = GetOrCreateTerrainHost();
 			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(ProceduralMeshGenerator.GenerateTerrainMeshData(meshSettings, _terrainGenerationSettings.MeshHeightMultiplier, _terrainGenerationSettings.MeshHeightCurve, _terrainGenerationSettings.EnableIslandBias, _terrainGenerationSettings.IslandBiasCurve, _terrainGenerationSettings.IslandSize, _terrainGenerationSettings.IslandMultiplier, _terrainGenerationSettings.IslandAddition, _terrainGenerationSettings.QuantizationFactor, _terrainGenerationSettings.CellSize, _terrainGenerationSettings.TopFaceProportion), terrainHost);
+		}
+
+		/// <summary>
+		/// Generates the A* pathfinding navigation graph.
+		/// Creates a GridGraph with 8-point node size, configures collision detection,
+		/// marks resource positions as unwalkable, and scans the graph.
+		/// </summary>
+		private void GenerateNavmesh()
+		{
+			// Get AstarPath component from scene
+			AstarPath astarPath = GameObject.FindObjectOfType<AstarPath>();
+			if (astarPath == null)
+			{
+				Debug.LogError("[WorldGen] AstarPath component not found in scene. Cannot generate navmesh.");
+				return;
+			}
+
+			// Get or create GridGraph
+			GridGraph gridGraph = astarPath.data.FindGraphOfType(typeof(GridGraph)) as GridGraph;
+			if (gridGraph == null)
+			{
+				gridGraph = astarPath.data.AddGraph(typeof(GridGraph)) as GridGraph;
+				if (gridGraph == null)
+				{
+					Debug.LogError("[WorldGen] Failed to create GridGraph.");
+					return;
+				}
+				gridGraph.name = "WorldGridGraph";
+			}
+
+			// Configure graph dimensions based on terrain scale
+			float xSize = _scaleSettings.XScale * _terrainGenerationSettings.GenerationSettings.Size;
+			float zSize = _scaleSettings.YScale * _terrainGenerationSettings.GenerationSettings.Size;
+			float nodeSize = 2f; // 2-point node size as specified
+
+			// Force 170x170 dimensions as specified
+			int gridWidth = 170;
+			int gridDepth = 170;
+			gridGraph.SetDimensions(gridWidth, gridDepth, nodeSize);
+
+			Debug.Log($"[WorldGen] GridGraph configured: {gridWidth}x{gridDepth} nodes, nodeSize={nodeSize}, calculated worldSize={xSize}x{zSize}");
+
+			// Center the graph on the terrain
+			gridGraph.center = Vector3.zero;
+
+			// Configure collision detection
+			// Disable raycast collision - mark all nodes as walkable by default
+			// We'll manually mark unwalkable nodes based on terrain height and resources
+			gridGraph.collision.use2D = false;
+			gridGraph.collision.mask = 0; // No collision detection
+			gridGraph.collision.height = 2f;
+			gridGraph.collision.diameter = 0.5f;
+
+			// Set max climb to quantization factor + 0.05
+			float maxClimb = _terrainGenerationSettings.QuantizationFactor + 0.05f;
+			gridGraph.maxClimb = maxClimb;
+
+			Debug.Log($"[WorldGen] Collision disabled - will use manual walkability detection, maxClimb={maxClimb}");
+
+			// Scan the graph to generate nodes
+			Debug.Log("[WorldGen] Scanning A* GridGraph...");
+			astarPath.Scan(gridGraph);
+
+			// Check if graph has walkable nodes after scan
+			int walkableCount = 0;
+			int totalNodes = 0;
+			gridGraph.GetNodes(node =>
+			{
+				totalNodes++;
+				if (node.Walkable)
+					walkableCount++;
+			});
+			Debug.Log($"[WorldGen] After scan: {walkableCount}/{totalNodes} nodes walkable");
+
+			// Mark nodes as unwalkable based on terrain height
+			// Nodes below terrain threshold should be unwalkable
+			MarkTerrainUnwalkableNodes(gridGraph);
+
+			// Mark resource positions as unwalkable
+			// Resources don't have colliders, so we manually mark nodes
+			MarkResourceNodesUnwalkable(gridGraph);
+
+			Debug.Log("[WorldGen] A* GridGraph generation complete.");
+		}
+
+		/// <summary>
+		/// Marks grid nodes as walkable only if they are on the ground layer.
+		/// All other nodes are marked as unwalkable.
+		/// Also blocks nodes where terrain drops below gradation factor.
+		/// </summary>
+		private void MarkTerrainUnwalkableNodes(GridGraph gridGraph)
+		{
+			int groundWalkableCount = 0;
+			int gradationBlockedCount = 0;
+			int terrainMask = GetTerrainMask();
+			float gradationFactor = _terrainGenerationSettings.QuantizationFactor;
+
+			gridGraph.GetNodes(node =>
+			{
+				Vector3 worldPos = (Vector3)node.position;
+
+				// Start with unwalkable
+				node.Walkable = false;
+
+				// Raycast down to find ground
+				if (Physics.Raycast(new Vector3(worldPos.x, 100, worldPos.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
+				{
+					// If node is at ground surface (within tolerance), mark as walkable
+					if (Mathf.Abs(worldPos.y - hit.point.y) < 0.5f)
+					{
+						// Check if terrain height is below gradation factor
+						if (hit.point.y < (gradationFactor - 0.05f))
+						{
+							// Terrain drops below gradation factor, keep unwalkable
+							gradationBlockedCount++;
+						}
+						else
+						{
+							node.Walkable = true;
+							groundWalkableCount++;
+						}
+					}
+				}
+			});
+
+			Debug.Log($"[WorldGen] Marked {groundWalkableCount} nodes as walkable on ground layer, {gradationBlockedCount} blocked by gradation factor");
+		}
+
+		/// <summary>
+		/// Marks grid nodes at resource positions as unwalkable.
+		/// Resources use GPU instancing without colliders, so we manually block nodes.
+		/// </summary>
+		private void MarkResourceNodesUnwalkable(GridGraph gridGraph)
+		{
+			if (_resourceProcessor == null)
+			{
+				Debug.LogWarning("[WorldGen] ResourceProcessor not available for node blocking.");
+				return;
+			}
+
+			int blockedCount = 0;
+			int totalResources = 0;
+
+			// Block wood resources
+			BlockResourcesInDictionary(_resourceProcessor.GetWoodResources(), gridGraph, ref blockedCount, ref totalResources);
+			// Block ore resources
+			BlockResourcesInDictionary(_resourceProcessor.GetOreResources(), gridGraph, ref blockedCount, ref totalResources);
+			// Block food resources
+			BlockResourcesInDictionary(_resourceProcessor.GetFoodResources(), gridGraph, ref blockedCount, ref totalResources);
+			// Block gold resources
+			BlockResourcesInDictionary(_resourceProcessor.GetGoldResources(), gridGraph, ref blockedCount, ref totalResources);
+			// Block recruit resources
+			BlockResourcesInDictionary(_resourceProcessor.GetRecruitResources(), gridGraph, ref blockedCount, ref totalResources);
+
+			Debug.Log($"[WorldGen] Blocked {blockedCount} grid nodes at resource positions (total resources checked: {totalResources}).");
+		}
+
+		/// <summary>
+		/// Blocks grid nodes at positions specified in a resource dictionary.
+		/// </summary>
+		private void BlockResourcesInDictionary(
+			System.Collections.Generic.Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> resourceDict,
+			GridGraph gridGraph,
+			ref int blockedCount,
+			ref int totalResources)
+		{
+			if (resourceDict == null)
+			{
+				Debug.LogWarning("[WorldGen] Resource dictionary is null.");
+				return;
+			}
+
+			int dictResourceCount = 0;
+			foreach (var kvp in resourceDict)
+			{
+				GameResources.ResourceData[] resources = kvp.Value;
+				if (resources == null)
+					continue;
+
+				dictResourceCount += resources.Length;
+				foreach (var resource in resources)
+				{
+					totalResources++;
+					Vector3 position = resource.Position;
+					GraphNode node = gridGraph.GetNearest(position, NNConstraint.Default).node;
+
+					if (node == null)
+					{
+						Debug.LogWarning($"[WorldGen] No node found near resource position {position}");
+					}
+					else if (!node.Walkable)
+					{
+						// Node already unwalkable, likely from collision detection
+					}
+					else
+					{
+						node.Walkable = false;
+						blockedCount++;
+					}
+				}
+			}
+
+			if (dictResourceCount > 0)
+			{
+				Debug.Log($"[WorldGen] Checked {dictResourceCount} resources in dictionary");
+			}
 		}
 
 		private int GetScaledTerrainSize()

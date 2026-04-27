@@ -27,11 +27,14 @@ namespace Sensors
 		/// <param name="sensor"></param>
 		public void AddSensor(SensorBase sensor)
 		{
+			if (_sensorRuntimeData == null)
+				return;
+
 			if (_sensorRuntimeData.Sensors.Contains(sensor))
 				return;
 
 			_sensorRuntimeData.Sensors.Add(sensor);
-		}	
+		}
 
 		/// <summary>
 		/// Removes a sensor from a unit.
@@ -39,6 +42,9 @@ namespace Sensors
 		/// <param name="sensor"></param>
 		public void RemoveSensor(SensorBase sensor)
 		{
+			if (_sensorRuntimeData == null)
+				return;
+
 			if (!_sensorRuntimeData.Sensors.Contains(sensor))
 				return;
 

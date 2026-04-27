@@ -454,7 +454,12 @@ namespace Processors
         /// </summary>
         public void RefreshSceneData(Container sceneContainer)
         {
-            // PlayerProcessor does not have scene-specific settings to refresh
+            // Find and assign player spawn position from scene
+            var spawnPoint = GameObject.Find("PlayerSpawnPoint");
+            if (spawnPoint != null)
+            {
+                _playerRuntimeData.PlayerSpawnPosition = spawnPoint.transform;
+            }
         }
     }
 }

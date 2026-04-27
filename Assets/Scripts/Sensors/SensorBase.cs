@@ -1,17 +1,17 @@
 using UnityEngine;
+using Reflex.Attributes;
 
 namespace Sensors
 {
 	/// <summary>
 	/// Base class for all Sensors.
 	/// </summary>
-	[RequireComponent(typeof(SensorProcessor))]
 	public class SensorBase : MonoBehaviour
 	{
         /// <summary>
-        /// The sensor processor.
+        /// The sensor processor. Injected via Reflex dependency injection.
         /// </summary>
-		private SensorProcessor _processor;
+		[Inject] private SensorProcessor _processor;
 
         /// <summary>
         /// Called every frame by the sensor processor.
@@ -31,12 +31,13 @@ namespace Sensors
 
 		// Unity Functions.
         /// <summary>
-        /// Initializes the sensor processor and adds this sensor.
+        /// Adds this sensor to the processor after injection is complete.
         /// </summary>
 		private void Awake()
 		{
-			_processor = GetComponent<SensorProcessor>();
-			_processor.AddSensor(this);
+			// Processor will be injected by Reflex before this runs
+			if (_processor != null)
+				_processor.AddSensor(this);
 			Init();
 		}
 

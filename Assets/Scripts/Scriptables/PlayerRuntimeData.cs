@@ -111,9 +111,13 @@ namespace Processors
 		public int PlayerCount => _players.Count;
 
 		/// <summary>
-		/// Gets the player spawn position transform.
+		/// Gets or sets the player spawn position transform.
 		/// </summary>
-		public Transform PlayerSpawnPosition => _playerSpawnPosition;
+		public Transform PlayerSpawnPosition
+		{
+			get => _playerSpawnPosition;
+			set => _playerSpawnPosition = value;
+		}
 
 		/// <summary>
 		/// Gets the global stat modifier.

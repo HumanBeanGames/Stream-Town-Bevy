@@ -15,7 +15,7 @@ MonoBehaviour:
   Role: 15
   RoleFlags: 1
   TargetFlags: 8192
-  Resource: 6
+  Resource: 1
   ActionAnimationName: 5
   ActionAnimationVariants: 1
   StationFlags: 32

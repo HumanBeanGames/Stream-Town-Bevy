@@ -20,6 +20,7 @@ namespace Processors
 		GeneratingTerrain,
 		SpawningTownhall,
 		GeneratingObjects,
+		GeneratingNavmesh,
 		Complete,
 		// Async generation states
 		GeneratingResources,

@@ -146,8 +146,74 @@ namespace UserInterface
 		{
 			PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
 			obj.gameObject.SetActive(true);
-			obj.transform.position = _playerProcessor.PlayerSpawnPosition.position;
+			
+			// Find townhall and spawn randomly within 5 units
+			Vector3 spawnPosition = GetRandomSpawnPositionNearTownhall();
+			obj.transform.position = spawnPosition;
+			
 			obj.GetComponent<RoleHandler>().SetStarterRole((PlayerRole)_roleDropdownDebug.value);
+		}
+
+		/// <summary>
+		/// Gets a random spawn position within 5 units of the townhall, avoiding overlap with existing players.
+		/// </summary>
+		private Vector3 GetRandomSpawnPositionNearTownhall()
+		{
+			// Find townhall specifically by BuildingType
+			Buildings.BuildingBase[] allBuildings = GameObject.FindObjectsOfType<Buildings.BuildingBase>();
+			Buildings.BuildingBase townhall = null;
+			
+			foreach (var building in allBuildings)
+			{
+				if (building.BuildingType == Utils.BuildingType.Townhall)
+				{
+					townhall = building;
+					break;
+				}
+			}
+
+			if (townhall == null)
+			{
+				// Fallback to PlayerSpawnPosition if no townhall found
+				return _playerProcessor.PlayerSpawnPosition != null 
+					? _playerProcessor.PlayerSpawnPosition.position 
+					: Vector3.zero;
+			}
+
+			Vector3 center = townhall.transform.position;
+			float spawnRadius = 5f;
+			float overlapRadius = 1f; // Minimum distance between players
+			int maxAttempts = 10;
+
+			for (int attempt = 0; attempt < maxAttempts; attempt++)
+			{
+				// Generate random position within spawnRadius
+				Vector2 randomOffset = UnityEngine.Random.insideUnitCircle * spawnRadius;
+				Vector3 candidatePosition = center + new Vector3(randomOffset.x, 0, randomOffset.y);
+
+				// Check for overlap with existing players
+				bool hasOverlap = false;
+				foreach (var player in _playerProcessor.Players)
+				{
+					if (player.Character != null && player.Character.activeInHierarchy)
+					{
+						float distance = Vector3.Distance(candidatePosition, player.Character.transform.position);
+						if (distance < overlapRadius)
+						{
+							hasOverlap = true;
+							break;
+						}
+					}
+				}
+
+				if (!hasOverlap)
+				{
+					return candidatePosition;
+				}
+			}
+
+			// If we couldn't find a non-overlapping position, return the center
+			return center;
 		}
 
 		/// <summary>
