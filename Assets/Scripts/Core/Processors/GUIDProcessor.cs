@@ -199,5 +199,29 @@ namespace Processors
 			}
 			return gUID;
 		}
+
+		/// <summary>
+		/// Generates a new unique GUID for data-driven resources (non-GameObject).
+		/// Uses random number generation and collision detection against existing GUIDs.
+		/// </summary>
+		/// <param name="existingGUIDs">Set of existing GUIDs to check for collisions.</param>
+		/// <returns>A unique GUID that doesn't conflict with existing GUIDs.</returns>
+		public uint GenerateResourceGUID(HashSet<uint> existingGUIDs)
+		{
+			uint gUID = 0;
+			bool newGUIDFound = false;
+
+			// Keep generating random GUIDs until we find one that's not already in use
+			while (!newGUIDFound)
+			{
+				// Generate a random uint as a potential GUID
+				gUID = (uint)UnityEngine.Random.Range(uint.MinValue, uint.MaxValue);
+
+				// Check if this GUID is not already in use and is not zero
+				if (!existingGUIDs.Contains(gUID) && gUID != 0)
+					newGUIDFound = true;
+			}
+			return gUID;
+		}
 	}
 }

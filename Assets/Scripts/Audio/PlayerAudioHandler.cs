@@ -16,7 +16,7 @@ namespace Audio
 		{
 			PlayerRoleData roleData = _roleHandler.PlayerRoleData;
 
-			if (roleData.ActionClips == null)
+			if (roleData.ActionClips == null || roleData.ActionClips.Length == 0)
 			{
 				Debug.LogWarning($"Missing action audio clip for {_roleHandler.CurrentRole}");
 				return;

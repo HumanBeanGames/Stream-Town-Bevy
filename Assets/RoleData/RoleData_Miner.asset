@@ -21,7 +21,7 @@ MonoBehaviour:
   StationFlags: 2
   BaseActionAmount: 1
   BaseActionSpeed: 1
-  BaseActionRange: 1
+  BaseActionRange: 1.8
   BaseRoleLevel: 1
   BaseFoodUpkeep: 0.25
   BaseGoldUpkeep: 0

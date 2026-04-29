@@ -45,6 +45,7 @@ namespace Processors
 		[Inject] private FoliageProcessor _foliageProcessor;
 		[Inject] private GameStateProcessor _gameStateProcessor;
 		[Inject] private ProjectCamera _projectCamera;
+		[Inject] private GUIDProcessor _guidProcessor;
 
 		private const int MAX_GENERATION_ATTEMPTS = 10;
 		private Task _poolingInitializationTask = null;
@@ -344,7 +345,7 @@ namespace Processors
 			// Configure graph dimensions based on terrain scale
 			float xSize = _scaleSettings.XScale * _terrainGenerationSettings.GenerationSettings.Size;
 			float zSize = _scaleSettings.YScale * _terrainGenerationSettings.GenerationSettings.Size;
-			float nodeSize = 2f; // 2-point node size as specified
+			float nodeSize = 1f; // Match terrain grid cell size (1 unit) for proper alignment
 
 			// Force 170x170 dimensions as specified
 			int gridWidth = 170;
@@ -994,6 +995,19 @@ namespace Processors
 		/// </summary>
 		private void GenerateResourceData(ResourceGenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, HashSet<(int, int)> occupiedCells, bool isWaterGeneration = false)
 		{
+			// Track existing GUIDs to prevent collisions
+			HashSet<uint> existingGUIDs = new HashSet<uint>();
+			foreach (var resource in _runtimeData.WoodResources)
+				existingGUIDs.Add(resource.GUID);
+			foreach (var resource in _runtimeData.OreResources)
+				existingGUIDs.Add(resource.GUID);
+			foreach (var resource in _runtimeData.FoodResources)
+				existingGUIDs.Add(resource.GUID);
+			foreach (var resource in _runtimeData.GoldResources)
+				existingGUIDs.Add(resource.GUID);
+			foreach (var resource in _runtimeData.RecruitResources)
+				existingGUIDs.Add(resource.GUID);
+
 			int size = settings.Size;
 			int actualSeed = seed;
 			Vector2 offset = GetPositiveNoiseOffset(actualSeed, size);
@@ -1098,10 +1112,17 @@ namespace Processors
 								amount = (int)MathExtended.RemapValue(eval, 0, 1, settings.MinAmount, settings.MaxAmount);
 							}
 
+							// Offset resource position by 0.5 to align with navmesh node centers
+							// Resources are at cell junctions (half-integer positions), so we offset
+							// to align with integer node positions for proper pathfinding
+							Vector3 resourcePosition = position + new Vector3(0.5f, 0, 0.5f);
+
 							// Create resource data for GPU instancing
 							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
 							Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
-							GameResources.ResourceData resourceData = new GameResources.ResourceData(position, resourceType, amount, false, Matrix4x4.TRS(position, rotation, Vector3.one), 0, meshIndex, materialIndex);
+							uint guid = _guidProcessor.GenerateResourceGUID(existingGUIDs);
+							existingGUIDs.Add(guid);
+							GameResources.ResourceData resourceData = new GameResources.ResourceData(resourcePosition, resourceType, amount, false, Matrix4x4.TRS(resourcePosition, rotation, Vector3.one), guid, meshIndex, materialIndex);
 
 							// Add to appropriate resource list
 							switch (resourceType)
@@ -1485,6 +1506,7 @@ namespace Processors
 			List<GameResources.FoliageData> underWaterFoliage = new List<GameResources.FoliageData>();
 
 			HashSet<(int, int)> occupiedCells = new HashSet<(int, int)>();
+			HashSet<uint> existingGUIDs = new HashSet<uint>();
 
 			void ReportSpawnProgress(float settingProgress, string status)
 			{
@@ -1506,7 +1528,7 @@ namespace Processors
 					before = DateTime.Now;
 					seed++;
 					GenerateFromSettings(settings, seed, WorldUtils.OnGroundCheckHeight, true, p =>
-						ReportSpawnProgress(p, $"Spawning resources: {label} ({completedSettings + 1}/{totalSettings})..."), woodResources, oreResources, foodResources, goldResources, recruitResources, occupiedCells);
+						ReportSpawnProgress(p, $"Spawning resources: {label} ({completedSettings + 1}/{totalSettings})..."), woodResources, oreResources, foodResources, goldResources, recruitResources, occupiedCells, null, null, existingGUIDs);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugSettings.DebugGenerationTiming)
@@ -1524,7 +1546,7 @@ namespace Processors
 					before = DateTime.Now;
 					seed++;
 					GenerateFromSettings(settings, seed, WorldUtils.OnShoreLineCheckHeight, true, p =>
-						ReportSpawnProgress(p, $"Spawning shoreline resources: {label} ({completedSettings + 1}/{totalSettings})..."), woodResources, oreResources, foodResources, goldResources, recruitResources, occupiedCells);
+						ReportSpawnProgress(p, $"Spawning shoreline resources: {label} ({completedSettings + 1}/{totalSettings})..."), woodResources, oreResources, foodResources, goldResources, recruitResources, occupiedCells, null, null, existingGUIDs);
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugSettings.DebugGenerationTiming)
@@ -1787,7 +1809,7 @@ namespace Processors
 			Debug.Log($"[WorldGen] Spawn summary for {settings.GetPoolName()}: PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
 		}
 
-		private void GenerateFromSettings(GenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision, Action<float> progressReporter, List<GameResources.ResourceData> woodResources = null, List<GameResources.ResourceData> oreResources = null, List<GameResources.ResourceData> foodResources = null, List<GameResources.ResourceData> goldResources = null, List<GameResources.ResourceData> recruitResources = null, HashSet<(int, int)> occupiedCells = null, List<GameResources.FoliageData> onLandFoliage = null, List<GameResources.FoliageData> underWaterFoliage = null)
+		private void GenerateFromSettings(GenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision, Action<float> progressReporter, List<GameResources.ResourceData> woodResources = null, List<GameResources.ResourceData> oreResources = null, List<GameResources.ResourceData> foodResources = null, List<GameResources.ResourceData> goldResources = null, List<GameResources.ResourceData> recruitResources = null, HashSet<(int, int)> occupiedCells = null, List<GameResources.FoliageData> onLandFoliage = null, List<GameResources.FoliageData> underWaterFoliage = null, HashSet<uint> existingGUIDs = null)
 		{
 			settings.Size = GetScaledTerrainSize();
 			settings.Seed = seed;
@@ -1932,7 +1954,9 @@ namespace Processors
 								}
 
 								// Collect resource data with correct constructor signature
-								GameResources.ResourceData resourceData = new GameResources.ResourceData(position, resourceType, amount, false, Matrix4x4.TRS(position, rotation, Vector3.one), 0, meshIndex, materialIndex);
+								uint guid = _guidProcessor.GenerateResourceGUID(existingGUIDs);
+								existingGUIDs.Add(guid);
+								GameResources.ResourceData resourceData = new GameResources.ResourceData(position, resourceType, amount, false, Matrix4x4.TRS(position, rotation, Vector3.one), guid, meshIndex, materialIndex);
 								switch (resourceType)
 								{
 									case global::Utils.Resource.Wood:

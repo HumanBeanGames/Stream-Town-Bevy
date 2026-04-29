@@ -129,7 +129,7 @@ namespace Character
         /// <summary>
         /// Dictionary of character global passives.
         /// </summary>
-		private Dictionary<StatType, float> _characterGlobalPassives;
+		private Dictionary<StatType, float> _characterGlobalPassives = new Dictionary<StatType, float>();
 
 		/// <summary>
 		/// Gets the current role of the character.
@@ -181,6 +181,11 @@ namespace Character
 		}
 
         /// <summary>
+        /// Gets whether this character is an NPC (no Player object assigned).
+        /// </summary>
+		public bool IsNPC => _player == null;
+
+        /// <summary>
         /// Event fired when the role changes.
         /// </summary>
 		public event Action<RoleHandler> OnRoleChanged;
@@ -194,19 +199,23 @@ namespace Character
 		public bool TrySetRole(PlayerRole role, bool decrement = true)
 		{
 			if (!_roleProcessor.TryChangeRole(_currentRole, role, decrement))
+			{
+				Debug.LogWarning($"[ResourceGathering] TryChangeRole failed for {role}");
 				return false;
+			}
 
-			_onRoleChanged.Invoke(_currentRole, role, _equipmentHandler.CurrentBodyType);
 			_currentRoleData_SO = _roleProcessor.GetRoleData(role);
 			_targetSensor.TargetMask = _currentRoleData_SO.TargetFlags;
 			_stationSensor.StationMask = _currentRoleData_SO.StationFlags;
 			_roleType = _currentRoleData_SO.RoleFlags;
 
-			_prevRole = (CurrentRole == PlayerRole.Ruler ? role : _currentRole); 
+			_prevRole = (CurrentRole == PlayerRole.Ruler ? role : _currentRole);
 
 			_currentRole = role;
 			_currentPlayerRoleData = _playerRoleData[(int)_currentRole];
 			_aiPath.maxSpeed = _currentPlayerRoleData.MoveSpeed;
+
+			_onRoleChanged.Invoke(_currentRole, role, _equipmentHandler.CurrentBodyType);
 			OnRoleChanged?.Invoke(this);
 			return true;
 		}
@@ -218,7 +227,10 @@ namespace Character
 		public void SetStarterRole(PlayerRole role)
 		{
 			if (_roleProcessor.SlotsFull(role) && _roleProcessor.PlayerRoleLimits)
+			{
+				Debug.LogWarning($"[ResourceGathering] {role} slots full, keeping default {_starterRole}");
 				return;
+			}
 
 			_starterRole = role;
 		}

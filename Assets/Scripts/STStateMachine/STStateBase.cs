@@ -8,13 +8,18 @@ namespace STStateMachine
 	public class STStateBase : MonoBehaviour
 	{
 		protected StateMachine _stateMachine;
+		private bool _initialized = false;
 
 		/// <summary>
 		/// Called when a state is entered.
 		/// </summary>
 		public virtual void OnEnter()
 		{
-
+			if (!_initialized)
+			{
+				OnInit();
+				_initialized = true;
+			}
 		}
 
 		/// <summary>
@@ -44,7 +49,9 @@ namespace STStateMachine
 		private void Awake()
 		{
 			_stateMachine = GetComponent<StateMachine>();
+			// Initialize immediately in Awake to ensure all derived classes are initialized
 			OnInit();
+			_initialized = true;
 		}
 	}
 }

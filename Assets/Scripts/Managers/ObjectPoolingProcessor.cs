@@ -69,12 +69,11 @@ namespace Processors
         public void AddToPool(string poolName, PoolableObject go)
         {
             if (string.IsNullOrEmpty(poolName))
-                throw new InvalidOperationException("ObjectPoolingProcessor: Tried to return a pooled object before its pool name was initialized.");
-
-            if (!_objectPoolingRuntimeData.PooledObjects.ContainsKey(poolName))
-                throw new KeyNotFoundException($"ObjectPoolingProcessor: Tried to return object to unregistered pool '{poolName}'.");
-
-			_objectPoolingRuntimeData.PooledObjects[poolName].Enqueue(go);
+                Debug.LogWarning($"ObjectPoolingProcessor: Tried to return pooled object without initialized pool name. Object: {go?.name}");
+            else if (!_objectPoolingRuntimeData.PooledObjects.ContainsKey(poolName))
+                Debug.LogWarning($"ObjectPoolingProcessor: Tried to return object to unregistered pool '{poolName}'. Object: {go?.name}");
+            else
+                _objectPoolingRuntimeData.PooledObjects[poolName].Enqueue(go);
 		}
 
 		/// <summary>

@@ -88,17 +88,16 @@ namespace Utils.Pooling
 
 		private void OnEnable()
 		{
-			if (_guidProcessor != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
+			if (_saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
 				_guidProcessor.CreateGUIDandAddToDictionary(this);
 		}
 
 		private void OnDisable()
 		{
-			if (_guidProcessor != null && _saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
+			if (_saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
 				_guidProcessor.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
 
-			if (_poolingProcessor != null)
-				_poolingProcessor.AddToPool(_poolName, this);
+			_poolingProcessor.AddToPool(_poolName, this);
 		}
 	}
 }

@@ -47,7 +47,25 @@ namespace STStateMachine.Helpers
 				// If the unit has a station, set the location target to the station.
 				if (_stationSensor.HasStation)
 				{
-					_goToState.SetTarget(_stationSensor.CurrentStation.transform);
+					// Target the building center with a small offset
+					// The previous edge calculation using SizeSqr was incorrect
+					Vector3 buildingCenter = _stationSensor.CurrentStation.transform.position;
+					Vector3 toPlayer = transform.position - buildingCenter;
+					toPlayer.y = 0; // Keep it horizontal
+					
+					if (toPlayer.magnitude > 0)
+					{
+						toPlayer.Normalize();
+						// Use a small fixed offset from building center (2 units)
+						Vector3 dropoffPoint = buildingCenter + toPlayer * 2f;
+						_goToState.SetTargetPosition(dropoffPoint);
+						_goToState.UsePosition = true;
+					}
+					else
+					{
+						// If player is at center, use center
+						_goToState.SetTarget(_stationSensor.CurrentStation.transform);
+					}
 				}
 				// Otherwise return to world center.
 				else

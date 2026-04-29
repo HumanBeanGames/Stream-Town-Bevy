@@ -80,8 +80,8 @@ namespace STStateMachine.States
 			base.OnInit();
 			_targetSensor = GetComponent<TargetSensor>();
 			_aiPath = GetComponent<AIPath>();
-			_goToState = (STSM_GoToLocation)_stateMachine.GetStateByName("GoTo");
 			_stationSensor = GetComponent<StationSensor>();
+			_goToState = (STSM_GoToLocation)_stateMachine.GetStateByName("GoTo");
 			NewPositionOnEnter = true;
 		}
 
@@ -95,6 +95,9 @@ namespace STStateMachine.States
 		/// </summary>
 		protected virtual void OnNewIdleLocation()
 		{
+			if (_goToState == null)
+				return;
+
 			//TODO:: Implement height when terrain is added
 			if (_targetSensor.UseStationTargets)
 			{

@@ -13,19 +13,18 @@ MonoBehaviour:
   m_Name: MainMenu_AllRoleDataSettings
   m_EditorClassIdentifier: 
   RoleData:
-  - {fileID: 11400000, guid: 56a52d0eb0914cd38f4477779f876bd5, type: 2}
+  - {fileID: 11400000, guid: fa4b9c3dd5614f34a283c9efe03881b1, type: 2}
   - {fileID: 11400000, guid: 7ad68748cc23457a882d0f70562e2097, type: 2}
   - {fileID: 11400000, guid: 37ed8e333559467ab636e9bb620c2714, type: 2}
-  - {fileID: 11400000, guid: 64b8d57d8d7144dfbae47cb0c6ee9ba2, type: 2}
   - {fileID: 11400000, guid: eeeed605b9444dd58cb525e649e2ec98, type: 2}
-  - {fileID: 11400000, guid: 788de9d4ee1248e68a5f8254a92eb9cb, type: 2}
-  - {fileID: 11400000, guid: cc7860de18eb4565bbdb4ff7b0f7d9db, type: 2}
-  - {fileID: 11400000, guid: fa4b9c3dd5614f34a283c9efe03881b1, type: 2}
+  - {fileID: 11400000, guid: 8769ad3d56a944438412d50d05c25828, type: 2}
   - {fileID: 11400000, guid: d001f6d722c14b9e9e110c4a6f343303, type: 2}
+  - {fileID: 11400000, guid: ef2841bc600b4b4a8580031e415903c9, type: 2}
+  - {fileID: 11400000, guid: 64b8d57d8d7144dfbae47cb0c6ee9ba2, type: 2}
+  - {fileID: 11400000, guid: 128a43267fad40b4a3304a1d9115c629, type: 2}
+  - {fileID: 11400000, guid: cc7860de18eb4565bbdb4ff7b0f7d9db, type: 2}
+  - {fileID: 11400000, guid: f7105a3ab92d420f9c2c43a6f944cfaa, type: 2}
+  - {fileID: 11400000, guid: 6e7617425234424f928bc86cef57a4b3, type: 2}
   - {fileID: 11400000, guid: 299d9d50217f4cd1aac2e768ce4fbb91, type: 2}
   - {fileID: 11400000, guid: d516a6bed3d74c9495fb479c48c4200a, type: 2}
-  - {fileID: 11400000, guid: f7105a3ab92d420f9c2c43a6f944cfaa, type: 2}
-  - {fileID: 11400000, guid: ef2841bc600b4b4a8580031e415903c9, type: 2}
-  - {fileID: 11400000, guid: 8769ad3d56a944438412d50d05c25828, type: 2}
-  - {fileID: 11400000, guid: 128a43267fad40b4a3304a1d9115c629, type: 2}
-  - {fileID: 11400000, guid: 6e7617425234424f928bc86cef57a4b3, type: 2}
+  - {fileID: 11400000, guid: 56a52d0eb0914cd38f4477779f876bd5, type: 2}

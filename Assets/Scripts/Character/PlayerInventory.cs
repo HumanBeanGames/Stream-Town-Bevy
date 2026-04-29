@@ -2,6 +2,7 @@ using GameResources;
 using System.Collections.Generic;
 using UnityEngine;
 using Utils;
+using Sirenix.OdinInspector;
 
 namespace Character
 {
@@ -15,6 +16,8 @@ namespace Character
 		/// Resource Table that holds the current resources the player has.
 		/// </summary>
 		private Dictionary<Resource, ResourceInventory> _resources = new Dictionary<Resource, ResourceInventory>();
+
+		[ShowInInspector, ReadOnly]
 		public Dictionary<Resource, ResourceInventory> Resources => _resources;
 
 		/// <summary>

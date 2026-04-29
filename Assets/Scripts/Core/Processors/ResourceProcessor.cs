@@ -800,6 +800,41 @@ namespace Processors
 		}
 
 		/// <summary>
+		/// Gets the top N resources by distance for a given type.
+		/// Returns resources ordered by distance (closest first).
+		/// </summary>
+		/// <param name="position">Position to calculate distance from.</param>
+		/// <param name="count">Number of resources to return.</param>
+		/// <param name="resourceType">Type of resource to get.</param>
+		/// <returns>List of resources ordered by distance (closest first).</returns>
+		public List<ResourceTarget> GetClosestResources(Vector3 position, int count, global::Utils.Resource resourceType)
+		{
+			List<ResourceTarget> allResources = new List<ResourceTarget>();
+			GameResources.ResourceData[] resources = GetResourcesByType(resourceType);
+
+			if (resources == null)
+				return allResources;
+
+			// Get all resources with their distances
+			foreach (GameResources.ResourceData resource in resources)
+			{
+				float distance = Vector3.Distance(position, resource.Position);
+				int assignedCount = _resourceData.ResourceAssignmentCounts.ContainsKey(resource.GUID) ? _resourceData.ResourceAssignmentCounts[resource.GUID] : 0;
+				int currentAmount = _resourceData.ResourceCurrentAmounts.ContainsKey(resource.GUID) ? _resourceData.ResourceCurrentAmounts[resource.GUID] : resource.CurrentAmount;
+				
+				ResourceTarget target = new ResourceTarget(resource.GUID, resource.Position, resource.ResourceType, currentAmount, _resourceData.ResourceSize * _resourceData.ResourceSize);
+				allResources.Add(target);
+			}
+
+			// Sort by distance
+			allResources.Sort((a, b) => Vector3.SqrMagnitude(a.Position - position).CompareTo(Vector3.SqrMagnitude(b.Position - position)));
+
+			// Return top N
+			int returnCount = Mathf.Min(count, allResources.Count);
+			return allResources.GetRange(0, returnCount);
+		}
+
+		/// <summary>
 		/// Gets a ResourceTarget by GUID.
 		/// </summary>
 		/// <param name="guid">GUID of resource to get target for.</param>
@@ -830,7 +865,7 @@ namespace Processors
 		/// <param name="distancePenaltyMod">Multiplier for distance penalty.</param>
 		/// <param name="assignmentPenaltyMod">Multiplier for assignment penalty.</param>
 		/// <returns>Targeting score (lower is better).</returns>
-		public float CalculateTargetScore(uint guid, Vector3 fromPosition, float distancePenaltyMod = 0.5f, float assignmentPenaltyMod = 15f)
+		public float CalculateTargetScore(uint guid, Vector3 fromPosition, float distancePenaltyMod = 0.5f, float assignmentPenaltyMod = 1000000f)
 		{
 			ResourceTarget? target = GetResourceTarget(guid);
 			if (!target.HasValue)
@@ -841,7 +876,13 @@ namespace Processors
 			int assignedCount = _resourceData.ResourceAssignmentCounts.ContainsKey(t.GUID) ? _resourceData.ResourceAssignmentCounts[t.GUID] : 0;
 
 			// Score combines distance and assignment count
-			return (distance * distancePenaltyMod) + (assignedCount * assignmentPenaltyMod);
+			float distanceScore = distance * distancePenaltyMod;
+			float assignmentScore = assignedCount * assignmentPenaltyMod;
+			float totalScore = distanceScore + assignmentScore;
+
+			Debug.Log($"[ResourceProcessor] CalculateTargetScore - GUID: {guid}, Distance: {distance:F2}, AssignedCount: {assignedCount}, DistanceScore: {distanceScore:F2}, AssignmentScore: {assignmentScore:F2}, TotalScore: {totalScore:F2}");
+
+			return totalScore;
 		}
 
 		/// <summary>
@@ -855,6 +896,18 @@ namespace Processors
 				_resourceData.ResourceAssignmentCounts[guid]++;
 			else
 				_resourceData.ResourceAssignmentCounts[guid] = 1;
+
+			Debug.Log($"[ResourceProcessor] AssignToTarget - GUID: {guid}, New count: {_resourceData.ResourceAssignmentCounts[guid]}");
+		}
+
+		/// <summary>
+		/// Gets the current assignment count for a resource.
+		/// </summary>
+		/// <param name="guid">GUID of resource to get assignment count for.</param>
+		/// <returns>Current assignment count, or 0 if not assigned.</returns>
+		public int GetAssignmentCount(uint guid)
+		{
+			return _resourceData.ResourceAssignmentCounts.ContainsKey(guid) ? _resourceData.ResourceAssignmentCounts[guid] : 0;
 		}
 
 		/// <summary>
@@ -866,10 +919,17 @@ namespace Processors
 		{
 			if (_resourceData.ResourceAssignmentCounts.ContainsKey(guid))
 			{
+				int oldCount = _resourceData.ResourceAssignmentCounts[guid];
 				_resourceData.ResourceAssignmentCounts[guid]--;
 				// Remove entry if count reaches zero
 				if (_resourceData.ResourceAssignmentCounts[guid] <= 0)
 					_resourceData.ResourceAssignmentCounts.Remove(guid);
+
+				Debug.Log($"[ResourceProcessor] UnassignFromTarget - GUID: {guid}, Old count: {oldCount}, New count: {(_resourceData.ResourceAssignmentCounts.ContainsKey(guid) ? _resourceData.ResourceAssignmentCounts[guid].ToString() : "removed")}");
+			}
+			else
+			{
+				Debug.LogWarning($"[ResourceProcessor] UnassignFromTarget - GUID: {guid} not found in assignment counts");
 			}
 		}
 
