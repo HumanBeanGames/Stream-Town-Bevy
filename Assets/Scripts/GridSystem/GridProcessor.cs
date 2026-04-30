@@ -24,6 +24,11 @@ namespace GridSystem
 		[Inject] private GridSettings _gridSettings;
 
 		/// <summary>
+		/// Cell space partitioning component for spatial queries.
+		/// </summary>
+		private CellSpacePartitioning _cellSpacePartitioning;
+
+		/// <summary>
 		/// Runtime data for grid data.
 		/// Assigned in InjectRuntimeData.
 		/// </summary>
@@ -80,6 +85,20 @@ namespace GridSystem
 		}
 
 		/// <summary>
+		/// Repopulates spatial partitioning indices after cells are created.
+		/// Call this after world generation when resources/foliage are available.
+		/// </summary>
+		public void RepopulateSpatialIndices(Processors.ResourceProcessor resourceProcessor, Processors.FoliageProcessor foliageProcessor)
+		{
+			if (_cellSpacePartitioning == null)
+				return;
+
+			Debug.Log("[GridProcessor] Repopulating spatial partitioning indices");
+			_cellSpacePartitioning.PopulateResourceIndices(resourceProcessor);
+			_cellSpacePartitioning.PopulateFoliageIndices(foliageProcessor);
+		}
+
+		/// <summary>
 		/// Processes grid logic every frame.
 		/// Called every frame by the Coordinator.
 		/// GridProcessor does not require per-frame updates.
@@ -108,6 +127,12 @@ namespace GridSystem
 			var cellSpacePartitioning = GetComponent<CellSpacePartitioning>();
 			if (cellSpacePartitioning == null)
 				throw new InvalidOperationException("GridProcessor requires a CellSpacePartitioning component on the same GameObject.");
+
+			// Initialize cell space partitioning (runs on main thread during container construction)
+			cellSpacePartitioning.GeneratePartitions();
+
+			// Store reference for later repopulation after world generation
+			_cellSpacePartitioning = cellSpacePartitioning;
 
 			containerBuilder.AddSingleton(this);
 			containerBuilder.AddSingleton(cellSpacePartitioning);

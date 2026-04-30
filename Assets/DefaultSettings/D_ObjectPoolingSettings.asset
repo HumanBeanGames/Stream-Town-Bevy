@@ -148,4 +148,7 @@ MonoBehaviour:
   - Name: UI_Selection_Outline
     PoolAmount: 30
     Prefab: {fileID: 1314162302918982799, guid: e8446605cd5bdd34c99c667242d67efc, type: 3}
+  - Name: BuildingPlacer
+    PoolAmount: 300
+    Prefab: {fileID: 4398971005381191997, guid: 440d7b6b8564c284988225d587495f15, type: 3}
   _debugPooling: 0

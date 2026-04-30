@@ -108,5 +108,13 @@ namespace ScriptablesProcessorInfrastructure
 			else
 				_buildingsMaxLevel.Add(buildingType, 1);
 		}
+
+		/// <summary>
+		/// Unlocks all buildings for debug/testing purposes.
+		/// </summary>
+		public void UnlockAllBuildings()
+		{
+			_ignoreTechUnlocks = true;
+		}
 	}
 }

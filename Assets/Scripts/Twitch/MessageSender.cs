@@ -91,6 +91,9 @@ namespace Twitch
 		/// <param name="message">The message.</param>
 		public void SendMessage(string message)
 		{
+			// Always log to Unity Console
+			UnityEngine.Debug.Log($"[Twitch Message] {message}");
+
 			if (_twitchChatRuntimeData == null || !_twitchChatRuntimeData.MessagesAllowed)
 				return;
 

@@ -180,6 +180,10 @@ namespace Buildings
 					// Loop through all targets in the list.
 					for (int j = 0; j < keyTargets.Count; j++)
 					{
+						// Skip targets with null CachedTransform
+						if (keyTargets[j] == null || keyTargets[j].CachedTransform == null)
+							continue;
+
 						distance = Vector3.SqrMagnitude(keyTargets[j].CachedTransform.position - _transform.position);
 
 						// Find the closest target.

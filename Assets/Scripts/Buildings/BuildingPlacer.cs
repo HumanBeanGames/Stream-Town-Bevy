@@ -116,6 +116,20 @@ namespace Buildings
         [Inject] private PlayerProcessor _playerProcessor;
 
         /// <summary>
+        /// Foliage processor for foliage management.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.FoliageProcessor _foliageProcessor;
+
+        /// <summary>
+        /// Resource processor for resource management.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.ResourceProcessor _resourceProcessor;
+
+        private string _rejectionReason = "";
+
+        /// <summary>
         /// Called when gameobject has been pooled.
         /// </summary>
         /// <param name="player">The player that owns this building placer.</param>
@@ -126,19 +140,25 @@ namespace Buildings
             //TODO:: Fix this
             if (_textDisplay != null && player.TwitchUser.Username != "")
             {
-                if (player.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username)
+                if (_playerProcessor.UserPlayer != null && player.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username)
                     _textDisplay.SetDisplayText("");
                 else
                     _textDisplay.SetDisplayText(player.TwitchUser.Username);
             }
 
-            if (player.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username)
+            // Enable snap movement for UserPlayer or debug player (Debugger)
+            bool isUserPlayer = _playerProcessor.UserPlayer != null && player.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username;
+            bool isDebugPlayer = player.TwitchUser.Username == "Debugger";
+
+            if (isUserPlayer || isDebugPlayer)
             {
                 _snapMovement.enabled = true;
                 _snapMovement.OnPositionChanged += UpdateCollision;
             }
             else
+            {
                 _snapMovement.enabled = false;
+            }
 
             _simpleCallTimer.SetPlayer(player);
         }
@@ -266,7 +286,22 @@ namespace Buildings
             // Check if building is colliding with an obstalce, if so, return out.
             if (_colliding)
             {
-                errorMessage = "Invalid Location!";
+                errorMessage = _rejectionReason;
+                return false;
+            }
+
+            // Check for resource collision
+            if (CheckResourceCollision())
+            {
+                errorMessage = _rejectionReason;
+                return false;
+            }
+
+            // Check ground height consistency
+            int terrainMask = _terrainMask.value == 0 ? LayerMask.GetMask("Ground") : _terrainMask;
+            if (!CheckGroundHeightConsistency(terrainMask))
+            {
+                errorMessage = _rejectionReason;
                 return false;
             }
 
@@ -276,8 +311,6 @@ namespace Buildings
             //    errorMessage = "Can't Afford!";
             //    return false;
             //}
-
-            int terrainMask = _terrainMask.value == 0 ? LayerMask.GetMask("Ground") : _terrainMask;
 
             Vector3 alignedPosition = transform.position;
             if (Physics.Raycast(new Vector3(alignedPosition.x, 100, alignedPosition.z), Vector3.down, out RaycastHit terrainHit, 200, terrainMask))
@@ -301,8 +334,6 @@ namespace Buildings
             // Set player's last placement position to building's position
             placementPos = obj.transform.position;
 
-            gameObject.SetActive(false);
-
             errorMessage = "";
             BoxCollider collider = obj.GetComponent<BoxCollider>();
             Vector3 center = obj.transform.position;
@@ -311,17 +342,69 @@ namespace Buildings
             BuildingBase buildingBase = obj.GetComponent<BuildingBase>();
             buildingBase.FoliageRemoved = new List<PoolableObject>();
 
-            // Removes foliage
-            for (int i = 0; i < (int)FoliageType.Count; i++)
+            // Remove foliage within building area using FoliageProcessor
+            RemoveFoliageInArea(collider, center);
+
+            // Return building placer to pool via pooling processor instead of SetActive
+            if (_poolingProcessor != null)
             {
-                List<PoolableObject> foliageObjects = _poolingProcessor.GetAllActiveObjectsOfTypeWithinBoxCollider(collider, center, ((FoliageType)i).ToString());
-                for (int j = 0; j < foliageObjects.Count; j++)
+                _poolingProcessor.AddToPool("BuildingPlacer", GetComponent<PoolableObject>());
+            }
+            else
+            {
+                gameObject.SetActive(false);
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Removes foliage within the specified area when a building is placed.
+        /// Uses FoliageProcessor spatial partitioning for efficient removal.
+        /// </summary>
+        /// <param name="collider">The building's collider defining the area to clear.</param>
+        /// <param name="center">The center position of the building.</param>
+        private void RemoveFoliageInArea(BoxCollider collider, Vector3 center)
+        {
+            try
+            {
+                // Use building footprint size instead of collider bounds for accurate foliage removal
+                Vector2 buildingSize = _currentBuilding.BuildingSize;
+                Vector3 size = new Vector3(buildingSize.x, 10, buildingSize.y);
+                Bounds bounds = new Bounds(center, size);
+
+                // Use FoliageProcessor's efficient spatial partitioning method
+                _foliageProcessor.RemoveFoliageInBounds(bounds);
+            }
+            catch (System.Exception ex)
+            {
+                // Silently fail if foliage removal fails
+            }
+        }
+
+        /// <summary>
+        /// Updates the building placer each frame.
+        /// Handles left-click confirm for debug player.
+        /// </summary>
+        private void Update()
+        {
+            // Allow left-click confirm for debug player only
+            if (_owner != null && _owner.TwitchUser.Username == "Debugger")
+            {
+                if (Input.GetMouseButtonDown(0))
                 {
-                    foliageObjects[j].gameObject.SetActive(false);
-                    buildingBase.FoliageRemoved.Add(((SaveablFoliage)foliageObjects[j].SaveableObject).PoolableObject);
+                    // Check if placer is still active in the processor
+                    if (_buildingProcessor != null)
+                    {
+                        if (_buildingProcessor.TryPlaceBuilding(_owner, out string errorMessage))
+                        {
+                            // Placement succeeded - the placer should be returned to pool by TryPlaceBuilding
+                            // Disable this component to prevent further input processing
+                            this.enabled = false;
+                        }
+                    }
                 }
             }
-            return true;
         }
 
         /// <summary>
@@ -355,28 +438,50 @@ namespace Buildings
             // If we aren't colliding with anything, also check that the building's probes passed their check.
             if (!_colliding && !_currentBuilding.ProbeProcessor.AllProbesPassedCheck())
                 _colliding = true;
-            // Check that the building doesn't block pathing to the world borders.
-            if (!_colliding)
+
+            // Check for resources within building footprint
+            if (!_colliding && _resourceProcessor != null)
             {
-                bool canPath = true;
-
-                //TODO:: REIMPLEMENT BECAUSE IT SUCKS CURRENTLY - ALSO NEED TO PATH TO TOWNHALL
-                //GraphNode here = AstarPath.active.GetNearest(transform.position, NNConstraint.Default).node;
-                //// As soon as one path is valid, we can continue.
-                //for (int i = 0; i < Coordinator.Instance.PathProbes.Count; i++)
-                //{
-                //    if (Coordinator.Instance.PathProbes[i].CanPathTo(here))
-                //    {
-                //        _colliding = false;
-                //        canPath = true;
-
-                //        break;
-                //    }
-                //}
-
-                if (!canPath)
+                if (CheckResourceCollision())
                     _colliding = true;
             }
+
+            // Check ground height consistency across building footprint
+            if (!_colliding)
+            {
+                if (!CheckGroundHeightConsistency(terrainMask))
+                    _colliding = true;
+            }
+
+            // Check for collisions with objects
+            if (Physics.CheckBox(transform.position, _currentBuilding.BuildingSize / 2, transform.rotation, _collisionMask))
+            {
+                _colliding = true;
+                if (string.IsNullOrEmpty(_rejectionReason))
+                    _rejectionReason = "Obstacle in the way";
+            }
+
+            // Update text display with rejection reason if colliding
+            if (_colliding && !string.IsNullOrEmpty(_rejectionReason) && _textDisplay != null)
+            {
+                _textDisplay.SetDisplayText(_rejectionReason);
+            }
+            else if (_textDisplay != null)
+            {
+                // Show player username when not colliding
+                if (_owner != null && _owner.TwitchUser.Username != "")
+                {
+                    if (_playerProcessor.UserPlayer != null && _owner.TwitchUser.Username == _playerProcessor.UserPlayer.TwitchUser.Username)
+                        _textDisplay.SetDisplayText("");
+                    else
+                        _textDisplay.SetDisplayText(_owner.TwitchUser.Username);
+                }
+                else
+                {
+                    _textDisplay.SetDisplayText("");
+                }
+            }
+
             // Set colour of the visualizer and buiding to show if there is a collision or not.
             _boundsVisualizer.OnCollisionChange(_colliding, _failColor, _successColor);
             SetBuildingRenderer(_colliding);
@@ -391,6 +496,84 @@ namespace Buildings
         {
             // Get all renderers
             _currentBuilding.Renderer.material.SetColor("_boundsVisColor", _colliding ? _failColor : _successColor);
+        }
+
+        /// <summary>
+        /// Checks if any resources are within the building footprint.
+        /// </summary>
+        /// <returns>True if resources are within bounds, false otherwise.</returns>
+        private bool CheckResourceCollision()
+        {
+            // Get building footprint bounds
+            Vector2 buildingSize = _currentBuilding.BuildingSize;
+            Vector3 center = transform.position;
+            center.y = 0;
+            Vector3 size = new Vector3(buildingSize.x, 10, buildingSize.y);
+            Bounds bounds = new Bounds(center, size);
+
+            // Use ResourceProcessor API to get resources in bounds
+            string blockingResources = _resourceProcessor.GetResourcesInBounds(bounds);
+
+            if (!string.IsNullOrEmpty(blockingResources))
+            {
+                _rejectionReason = $"Blocked by: {blockingResources}";
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Checks if ground height is consistent across the building footprint.
+        /// </summary>
+        /// <param name="terrainMask">Layer mask for terrain.</param>
+        /// <returns>True if height variance is within threshold, false otherwise.</returns>
+        private bool CheckGroundHeightConsistency(int terrainMask)
+        {
+            Vector2 buildingSize = _currentBuilding.BuildingSize;
+            Vector3 center = transform.position;
+
+            // Raycast at corners and center of building footprint
+            var testPoints = new[]
+            {
+                center,
+                center + new Vector3(buildingSize.x / 2, 0, buildingSize.y / 2),
+                center + new Vector3(buildingSize.x / 2, 0, -buildingSize.y / 2),
+                center + new Vector3(-buildingSize.x / 2, 0, buildingSize.y / 2),
+                center + new Vector3(-buildingSize.x / 2, 0, -buildingSize.y / 2)
+            };
+
+            float? firstHeight = null;
+            const float heightThreshold = 0.05f;
+
+            foreach (var point in testPoints)
+            {
+                Vector3 rayOrigin = new Vector3(point.x, 100, point.z);
+                if (Physics.Raycast(rayOrigin, Vector3.down, out RaycastHit hit, 200, terrainMask))
+                {
+                    if (!firstHeight.HasValue)
+                    {
+                        firstHeight = hit.point.y;
+                    }
+                    else
+                    {
+                        float heightDiff = Mathf.Abs(hit.point.y - firstHeight.Value);
+                        if (heightDiff > heightThreshold)
+                        {
+                            _rejectionReason = "Uneven ground";
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    // If raycast fails (no ground), consider it invalid
+                    _rejectionReason = "No ground";
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>

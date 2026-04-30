@@ -291,9 +291,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 6f6b7072e588e434d8931f3b4abb87ed, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _originOffset: {x: 0, y: 0}
-  _width: 100
-  _length: 100
+  _originOffset: {x: -200, y: -200}
+  _width: 400
+  _length: 400
   _cellWidth: 10
   _cellLength: 10
   _cells: []

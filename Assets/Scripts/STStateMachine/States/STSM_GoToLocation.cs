@@ -153,7 +153,7 @@ namespace STStateMachine.States
 			// Use default satisfaction of 1f if actionRange is 0 (for idle wandering)
 			_distanceSatisfaction = actionRange == 0 ? 1f : actionRange * actionRange; // Squared for distance check
 
-			Debug.Log($"[GoToLocation] SetTargetPosition - targetPos: {targetPosition}, actionRange: {actionRange}, selectedNode: {closestNodePosition}, distanceSatisfaction: {_distanceSatisfaction}");
+			// Debug.Log($"[GoToLocation] SetTargetPosition - targetPos: {targetPosition}, actionRange: {actionRange}, selectedNode: {closestNodePosition}, distanceSatisfaction: {_distanceSatisfaction}");
 		}
 
 		/// <summary>
@@ -254,9 +254,9 @@ namespace STStateMachine.States
 			
 			// Restore slowdown distance to allow precise stopping (prevents overshooting)
 			_aiPath.slowdownDistance = _prevSlowDownDistance;
-			
-			Debug.Log($"[GoToLocation] OnEnter - endReachedDistance: {_aiPath.endReachedDistance}, slowdownDistance: {_aiPath.slowdownDistance}, distanceSatisfaction: {_distanceSatisfaction}");
-			
+
+			// Debug.Log($"[GoToLocation] OnEnter - endReachedDistance: {_aiPath.endReachedDistance}, slowdownDistance: {_aiPath.slowdownDistance}, distanceSatisfaction: {_distanceSatisfaction}");
+
 			_stuckCheckTimer = 0;
 			_lastStuckCheckPos = transform.position;
 

@@ -34,6 +34,8 @@ namespace Utils.Pooling
 		[SerializeField]
 		private PoolType _poolType;
 
+		private bool _isReturningToPool = false;
+
 		public PoolType PoolType => _poolType;
 		public object SaveableObject
 		{
@@ -46,6 +48,11 @@ namespace Utils.Pooling
 			set { _poolName = value; }
 		}
 
+		public void SetReturningToPool(bool returning)
+		{
+			_isReturningToPool = returning;
+		}
+
 		public void Initialize(string name)
 		{
 			_poolName = name;
@@ -54,7 +61,8 @@ namespace Utils.Pooling
 
 		public void OnReset()
 		{
-			// Default implementation does nothing
+			// Reset the returning to pool flag when the object is reused
+			_isReturningToPool = false;
 		}
 
 		public void SetupSaveableObject()
@@ -94,10 +102,12 @@ namespace Utils.Pooling
 
 		private void OnDisable()
 		{
-			if (_saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null)
+			if (_saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null && _guidProcessor != null)
 				_guidProcessor.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
 
-			_poolingProcessor.AddToPool(_poolName, this);
+			// Only return to pool if not already being returned (prevents double-adding when AddToPool disables the object)
+			if (_poolingProcessor != null && !_isReturningToPool)
+				_poolingProcessor.AddToPool(_poolName, this);
 		}
 	}
 }

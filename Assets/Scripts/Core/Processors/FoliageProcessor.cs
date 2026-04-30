@@ -11,47 +11,29 @@ namespace Processors
 {
 	/// <summary>
 	/// Data-driven foliage processor for managing world foliage.
+	/// Replaces object-based foliage with GPU instancing via FoliageRenderer.
 	/// All runtime state is stored in FoliageRuntimeData.
 	/// </summary>
 	public partial class FoliageProcessor : MonoBehaviour, IInstaller, IProcessor
 	{
 		/// <summary>
-		/// Nested runtime data class for foliage data.
+		/// Runtime data for foliage data.
+		/// Assigned in InjectRuntimeData.
 		/// </summary>
-		public class RuntimeData
-		{
-			/// <summary>
-			/// List of on-land foliage data.
-			/// </summary>
-			public List<FoliageData> OnLandFoliage { get; set; } = new List<FoliageData>();
+		private FoliageRuntimeData _foliageRuntimeData;
 
-			/// <summary>
-			/// List of underwater foliage data.
-			/// </summary>
-			public List<FoliageData> UnderWaterFoliage { get; set; } = new List<FoliageData>();
+		/// <summary>
+		/// Cell space partitioning for efficient spatial foliage queries.
+		/// Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
 
-			/// <summary>
-			/// Cached on-land foliage data grouped by mesh and material.
-			/// </summary>
-			public Dictionary<(Mesh mesh, Material material), FoliageData[]> OnLandFoliageCache { get; set; }
-
-			/// <summary>
-			/// Cached underwater foliage data grouped by mesh and material.
-			/// </summary>
-			public Dictionary<(Mesh mesh, Material material), FoliageData[]> UnderWaterFoliageCache { get; set; }
-
-			/// <summary>
-			/// Cached transformation matrices for on-land foliage.
-			/// </summary>
-			public Dictionary<(Mesh mesh, Material material), Matrix4x4[]> OnLandMatricesCache { get; set; }
-
-			/// <summary>
-			/// Cached transformation matrices for underwater foliage.
-			/// </summary>
-			public Dictionary<(Mesh mesh, Material material), Matrix4x4[]> UnderWaterMatricesCache { get; set; }
-		}
-
-		private RuntimeData _foliageRuntimeData;
+		/// <summary>
+		/// Set of foliage indices that have been removed.
+		/// Used for efficient on-the-fly removal without rebuilding lists.
+		/// </summary>
+		private HashSet<int> _removedOnLandFoliageIndices = new HashSet<int>();
+		private HashSet<int> _removedUnderWaterFoliageIndices = new HashSet<int>();
 
 		/// <summary>
 		/// Registers this processor as a singleton in the dependency injection container.
@@ -233,8 +215,133 @@ namespace Processors
 			if (_foliageRuntimeData != null)
 				throw new InvalidOperationException("FoliageProcessor: RuntimeData has already been installed.");
 
-			_foliageRuntimeData = new RuntimeData();
+			_foliageRuntimeData = new FoliageRuntimeData();
 			containerBuilder.AddSingleton(_foliageRuntimeData);
+		}
+
+		/// <summary>
+		/// Checks if any foliage exists within the specified bounds.
+		/// Uses CellSpacePartitioning for efficient spatial queries.
+		/// </summary>
+		/// <param name="bounds">The bounds to check for foliage.</param>
+		/// <returns>True if any foliage is within the bounds, false otherwise.</returns>
+		public bool HasFoliageInBounds(Bounds bounds)
+		{
+			if (_cellSpacePartitioning == null)
+				return false;
+
+			// Calculate radius from bounds (use max extent)
+			float radius = Mathf.Max(bounds.extents.x, bounds.extents.z);
+			Vector3 center = bounds.center;
+
+			// Check both on-land and underwater foliage using spatial partitioning
+			var foliageTypes = new[] { false, true }; // false = on-land, true = underwater
+
+			foreach (var isUnderwater in foliageTypes)
+			{
+				List<GameResources.FoliageData> foliageInRange = new List<GameResources.FoliageData>();
+				_cellSpacePartitioning.GetFoliageInRange(center, radius, isUnderwater, ref foliageInRange);
+
+				foreach (var foliage in foliageInRange)
+				{
+					if (bounds.Contains(foliage.Position))
+						return true;
+				}
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		/// Removes foliage within the specified bounds.
+		/// Uses CellSpacePartitioning for efficient spatial queries.
+		/// Marks foliage as removed without rebuilding lists for on-the-fly performance.
+		/// </summary>
+		/// <param name="bounds">The bounds to remove foliage from.</param>
+		public void RemoveFoliageInBounds(Bounds bounds)
+		{
+			Debug.Log($"[FoliageProcessor] RemoveFoliageInBounds called, center={bounds.center}, size={bounds.size}");
+			if (_cellSpacePartitioning == null)
+			{
+				Debug.LogWarning("[FoliageProcessor] CellSpacePartitioning is null, cannot remove foliage");
+				return;
+			}
+
+			// Get cells that overlap the bounds
+			List<GridSystem.Partitioning.BSPCell> overlappingCells = new List<GridSystem.Partitioning.BSPCell>();
+			float radius = Mathf.Max(bounds.extents.x, bounds.extents.z);
+			_cellSpacePartitioning.GetCellsInRange(bounds.center, radius, ref overlappingCells);
+
+			// Mark foliage as removed from overlapping cells (O(k) where k is foliage in range)
+			int onLandRemoved = 0;
+			int underWaterRemoved = 0;
+
+			foreach (var cell in overlappingCells)
+			{
+				// Mark on-land foliage in this cell
+				if (cell.OnLandFoliageIndices != null)
+				{
+					foreach (var index in cell.OnLandFoliageIndices)
+					{
+						if (index >= 0 && index < _foliageRuntimeData.OnLandFoliage.Count)
+						{
+							var foliage = _foliageRuntimeData.OnLandFoliage[index];
+							if (bounds.Contains(foliage.Position))
+							{
+								_removedOnLandFoliageIndices.Add(index);
+								onLandRemoved++;
+							}
+						}
+					}
+				}
+
+				// Mark underwater foliage in this cell
+				if (cell.UnderWaterFoliageIndices != null)
+				{
+					foreach (var index in cell.UnderWaterFoliageIndices)
+					{
+						if (index >= 0 && index < _foliageRuntimeData.UnderWaterFoliage.Count)
+						{
+							var foliage = _foliageRuntimeData.UnderWaterFoliage[index];
+							if (bounds.Contains(foliage.Position))
+							{
+								_removedUnderWaterFoliageIndices.Add(index);
+								underWaterRemoved++;
+							}
+						}
+					}
+				}
+			}
+
+			// Rebuild GPU instancing matrices with removed foliage filtered out
+			RebuildMatricesWithRemovedFoliage();
+		}
+
+		/// <summary>
+		/// Rebuilds GPU instancing matrices with removed foliage filtered out.
+		/// Filters complete lists but uses HashSet for O(1) removal checks.
+		/// </summary>
+		private void RebuildMatricesWithRemovedFoliage()
+		{
+			// Filter on-land foliage (O(N) but with O(1) HashSet lookup)
+			var filteredOnLand = new List<GameResources.FoliageData>();
+			for (int i = 0; i < _foliageRuntimeData.OnLandFoliage.Count; i++)
+			{
+				if (!_removedOnLandFoliageIndices.Contains(i))
+					filteredOnLand.Add(_foliageRuntimeData.OnLandFoliage[i]);
+			}
+			_foliageRuntimeData.OnLandFoliageCache = GroupByMeshAndMaterial(filteredOnLand.ToArray());
+			_foliageRuntimeData.OnLandMatricesCache = BuildMatricesDictionary(_foliageRuntimeData.OnLandFoliageCache);
+
+			// Filter underwater foliage (O(N) but with O(1) HashSet lookup)
+			var filteredUnderWater = new List<GameResources.FoliageData>();
+			for (int i = 0; i < _foliageRuntimeData.UnderWaterFoliage.Count; i++)
+			{
+				if (!_removedUnderWaterFoliageIndices.Contains(i))
+					filteredUnderWater.Add(_foliageRuntimeData.UnderWaterFoliage[i]);
+			}
+			_foliageRuntimeData.UnderWaterFoliageCache = GroupByMeshAndMaterial(filteredUnderWater.ToArray());
+			_foliageRuntimeData.UnderWaterMatricesCache = BuildMatricesDictionary(_foliageRuntimeData.UnderWaterFoliageCache);
 		}
 	}
 }

@@ -514,6 +514,15 @@ namespace Processors
 		}
 
 		/// <summary>
+		/// Unlocks all buildings for debug/testing purposes.
+		/// Bypasses tech tree requirements.
+		/// </summary>
+		public void UnlockAllBuildingsForDebug()
+		{
+			_buildingSettings.UnlockAllBuildings();
+		}
+
+		/// <summary>
 		/// Attempts to level up a building.
 		/// Checks if the building can be leveled, if not at max level, and if affordable.
 		/// </summary>

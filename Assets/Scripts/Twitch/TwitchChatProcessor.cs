@@ -3,6 +3,7 @@ using Character.Enumerations;
 using Processors;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Twitch.Commands;
 using Twitch.Utils;
 using Twitch;
@@ -199,6 +200,57 @@ namespace Processors
 			// Check for event
 			if (_eventCommands.EventMessage(e))
 				return;
+		}
+
+		/// <summary>
+		/// Processes a debug command from the debug UI input field.
+		/// Bypasses MessagesAllowed check and user type restrictions.
+		/// </summary>
+		/// <param name="commandText">The raw command text (e.g., "build House" or "confirm")</param>
+		/// <param name="player">The player to execute the command as</param>
+		public void ProcessDebugCommand(string commandText, Player player)
+		{
+			RequireCommandInfrastructure();
+
+			if (string.IsNullOrWhiteSpace(commandText))
+				return;
+
+			// Parse command and arguments
+			string[] parts = commandText.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+			if (parts.Length == 0)
+				return;
+
+			string command = parts[0].ToLower();
+			string[] args = parts.Length > 1 ? parts.Skip(1).ToArray() : new string[0];
+
+			// Route to appropriate command handler
+			if (_commandDictionary.SimpleCommands.ContainsKey(command))
+			{
+				_commandDictionary.SimpleCommands[command].Invoke();
+				Debug.Log($"[Debug Command] Executed: {command}");
+				return;
+			}
+
+			if (player == null)
+			{
+				Debug.LogError($"[Debug Command] Error: No player selected for command: {command}");
+				return;
+			}
+
+			if (args.Length > 0 && _commandDictionary.CommandsWithArgs.ContainsKey(command))
+			{
+				_commandDictionary.CommandsWithArgs[command].Invoke(player, command, args);
+				Debug.Log($"[Debug Command] Executed: {command} {string.Join(" ", args)}");
+			}
+			else if (_commandDictionary.CommandsNoArgs.ContainsKey(command))
+			{
+				_commandDictionary.CommandsNoArgs[command].Invoke(player);
+				Debug.Log($"[Debug Command] Executed: {command}");
+			}
+			else
+			{
+				Debug.LogError($"[Debug Command] Error: Unknown command: {command}");
+			}
 		}
 
 		private void UpdateUserType(Player player, OnChatCommandReceivedArgs e)

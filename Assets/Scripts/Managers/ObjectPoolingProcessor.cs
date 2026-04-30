@@ -73,7 +73,13 @@ namespace Processors
             else if (!_objectPoolingRuntimeData.PooledObjects.ContainsKey(poolName))
                 Debug.LogWarning($"ObjectPoolingProcessor: Tried to return object to unregistered pool '{poolName}'. Object: {go?.name}");
             else
+            {
+                // Set flag to prevent OnDisable from calling AddToPool again
+                go.SetReturningToPool(true);
+                go.gameObject.SetActive(false);
                 _objectPoolingRuntimeData.PooledObjects[poolName].Enqueue(go);
+                go.SetReturningToPool(false);
+            }
 		}
 
 		/// <summary>
@@ -140,13 +146,17 @@ namespace Processors
 				return null;
 			}
 
-			if (_objectPoolingRuntimeData.PooledObjects[name].Count > 0)
+			// Search through the queue for an inactive object
+			int maxAttempts = _objectPoolingRuntimeData.PooledObjects[name].Count;
+			for (int i = 0; i < maxAttempts; i++)
 			{
-				PoolableObject go = _objectPoolingRuntimeData.PooledObjects[name].Peek();
+				if (_objectPoolingRuntimeData.PooledObjects[name].Count == 0)
+					break;
+
+				PoolableObject go = _objectPoolingRuntimeData.PooledObjects[name].Dequeue();
 
 				if (!go.gameObject.activeInHierarchy)
 				{
-					_objectPoolingRuntimeData.PooledObjects[name].Dequeue();
 					go.gameObject.SetActive(true);
 
 					if (go is Utils.Pooling.IPooledObjectReset resettable)
@@ -154,6 +164,8 @@ namespace Processors
 
 					return go;
 				}
+				// Object is still active, re-queue it to the back and continue searching
+				_objectPoolingRuntimeData.PooledObjects[name].Enqueue(go);
 			}
 
 			// If we got to this point we ran out of pooled objects, perhaps need more
@@ -276,6 +288,7 @@ namespace Processors
 					allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName);
 					obj.SetActive(false);
+					pooledObjects[objName].Enqueue(poolObj);
 				}
 			}
 
@@ -527,6 +540,7 @@ namespace Processors
 					poolObj.Initialize(objName);
 
 					obj.SetActive(false);
+					pooledObjects[objName].Enqueue(poolObj);
 
 					float typeProgress = poolAmount > 0 ? (j + 1f) / poolAmount : 1f;
 					float overallProgress = (i + typeProgress) / objectTypeCount;

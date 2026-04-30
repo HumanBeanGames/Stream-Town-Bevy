@@ -77,6 +77,12 @@ namespace Processors
 		private ResourceRuntimeData _resourceData;
 
 		/// <summary>
+		/// Cell space partitioning for efficient spatial resource queries.
+		/// Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
+
+		/// <summary>
 		/// Gets the list of wood resources.
 		/// </summary>
 		public List<GameResources.ResourceData> WoodResources => _resourceData.WoodResources;
@@ -832,6 +838,61 @@ namespace Processors
 			// Return top N
 			int returnCount = Mathf.Min(count, allResources.Count);
 			return allResources.GetRange(0, returnCount);
+		}
+
+		/// <summary>
+		/// Checks if any resources exist within the specified bounds.
+		/// Uses CellSpacePartitioning for efficient spatial queries.
+		/// </summary>
+		/// <param name="bounds">The bounds to check for resources.</param>
+		/// <returns>True if any resource is within the bounds, false otherwise.</returns>
+		public string GetResourcesInBounds(Bounds bounds)
+		{
+			if (_cellSpacePartitioning == null)
+			{
+				return "";
+			}
+
+			List<string> blockingResources = new List<string>();
+
+			// Check each resource type using spatial partitioning
+			var resourceTypes = new[] { global::Utils.Resource.Wood, global::Utils.Resource.Ore, global::Utils.Resource.Food, global::Utils.Resource.Gold, global::Utils.Resource.Recruit };
+
+			foreach (var resourceType in resourceTypes)
+			{
+				// Get all cells that overlap with the rectangular bounds
+				List<GridSystem.Partitioning.BSPCell> cells = new List<GridSystem.Partitioning.BSPCell>();
+				Vector2 topLeft = new Vector2(bounds.min.x, bounds.min.z);
+				Vector2 bottomRight = new Vector2(bounds.max.x, bounds.max.z);
+				_cellSpacePartitioning.GetCellsInRect(topLeft, bottomRight, ref cells);
+
+				// Check resources in those cells
+				foreach (var cell in cells)
+				{
+					List<int> indices = _cellSpacePartitioning.GetResourceIndicesForCell(cell, resourceType);
+					if (indices == null)
+						continue;
+
+					List<GameResources.ResourceData> resourceList = _cellSpacePartitioning.GetResourceListForType(resourceType);
+					if (resourceList == null)
+						continue;
+
+					foreach (int index in indices)
+					{
+						if (index >= 0 && index < resourceList.Count)
+						{
+							GameResources.ResourceData resource = resourceList[index];
+							if (bounds.Contains(resource.Position))
+							{
+								string resourceName = resourceType.ToString();
+								blockingResources.Add($"{resourceName} at ({resource.Position.x:F1}, {resource.Position.z:F1})");
+							}
+						}
+					}
+				}
+			}
+
+			return string.Join(", ", blockingResources);
 		}
 
 		/// <summary>

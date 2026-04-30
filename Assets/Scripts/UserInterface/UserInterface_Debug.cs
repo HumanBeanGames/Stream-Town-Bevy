@@ -8,6 +8,8 @@ using System.Collections.Generic;
 using Processors;
 using Utils.Pooling;
 using Reflex.Attributes;
+using Twitch;
+using Sensors;
 
 namespace UserInterface
 {
@@ -27,6 +29,10 @@ namespace UserInterface
 		[Header("Debug Context Data")]
 		[SerializeField]
 		private TMP_Dropdown _roleDropdownDebug;
+		[SerializeField]
+		private TMP_InputField _commandInputField;
+		[SerializeField]
+		private TMP_Dropdown _playerDropdown;
 
 		[Header("Character Context Data")]
 		[SerializeField]
@@ -49,6 +55,11 @@ namespace UserInterface
 		[Inject] private ObjectPoolingProcessor _poolingProcessor;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
+		[Inject] private Processors.TwitchChatProcessor _twitchChatProcessor;
+		[Inject] private Processors.BuildingProcessor _buildingProcessor;
+		[Inject] private Processors.WorldGenProcessor _worldGenProcessor;
+
+		private Player _debugPlayer;
 
 		/// <summary>
 		/// Enables the Character Debug Menu.
@@ -330,6 +341,177 @@ namespace UserInterface
 
 			_roleDropdownDebug.AddOptions(options);
 			_roleDropdownCharacter.AddOptions(options);
+
+			// Initialize command input field
+			if (_commandInputField != null)
+			{
+				_commandInputField.onEndEdit.AddListener(OnCommandSubmitted);
+			}
+
+			// Initialize player dropdown
+			PopulatePlayerDropdown();
+
+			// Unlock all buildings for debug testing
+			if (_buildingProcessor != null)
+			{
+				_buildingProcessor.UnlockAllBuildingsForDebug();
+				Debug.Log("[Debug] All buildings unlocked for testing");
+			}
+
+			// Spawn debug player if it doesn't exist (waits for WorldGen completion)
+			StartCoroutine(EnsureDebugPlayerExistsCoroutine());
+		}
+
+		/// <summary>
+		/// Coroutine that waits for WorldGen to complete before spawning the debug player.
+		/// </summary>
+		private System.Collections.IEnumerator EnsureDebugPlayerExistsCoroutine()
+		{
+			// Wait until WorldGen is complete
+			if (_worldGenProcessor != null)
+			{
+				yield return new WaitUntil(() => _worldGenProcessor.IsWorldGenerated);
+			}
+
+			Debug.Log("[Debug] WorldGen complete, waiting for navigation graphs");
+
+			// Wait for navigation graphs to be scanned and ready
+			yield return new WaitUntil(() => AstarPath.active != null
+				&& !AstarPath.active.isScanning
+				&& AstarPath.active.data.graphs != null
+				&& AstarPath.active.data.graphs.Length > 0);
+
+			Debug.Log("[Debug] Navigation graphs ready, spawning debug player");
+
+			// Check if debug player already exists in player list
+			foreach (var player in _playerProcessor.Players)
+			{
+				if (player != null && player.TwitchUser != null && player.TwitchUser.Username == "Debugger")
+				{
+					Debug.Log("[Debug] Debug player already exists");
+					_debugPlayer = player;
+					yield break;
+				}
+			}
+
+			Debug.Log("[Debug] Debug player not found, spawning new one");
+
+			// Create the Player data object
+			TwitchUser debugUser = new TwitchUser("debug_id", "Debugger");
+			_debugPlayer = new Player(debugUser, true);
+			Debug.Log("[Debug] Created Player data object");
+
+			// Spawn a new debug player character
+			PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
+			if (obj != null)
+			{
+				obj.gameObject.SetActive(true);
+
+				// Find townhall and spawn randomly within 5 units
+				Vector3 spawnPosition = GetRandomSpawnPositionNearTownhall();
+				obj.transform.position = spawnPosition;
+
+				Debug.Log("[Debug] Spawned player object at " + spawnPosition);
+
+				// Set up as debug player
+				RoleHandler roleHandler = obj.GetComponent<RoleHandler>();
+				roleHandler.SetStarterRole(PlayerRole.Builder);
+
+				// Link the Player data to the character
+				_debugPlayer.Character = obj.gameObject;
+				_debugPlayer.RoleHandler = roleHandler;
+				_debugPlayer.StationSensor = obj.GetComponentInChildren<StationSensor>();
+
+				Debug.Log("[Debug] Linked Player data to character");
+
+				// Add the player to the PlayerProcessor
+				Player addedPlayer = _playerProcessor.AddExistingPlayer(_debugPlayer, PlayerRole.Builder);
+				if (addedPlayer != null)
+				{
+					Debug.Log("[Debug] Added debug player to PlayerProcessor");
+					_debugPlayer = addedPlayer;
+				}
+				else
+				{
+					Debug.LogError("[Debug] Failed to add debug player to PlayerProcessor");
+				}
+
+				Debug.Log("[Debug] Player count after spawn: " + _playerProcessor.Players.Count);
+
+				// Refresh dropdown to show the new debug player
+				PopulatePlayerDropdown();
+			}
+			else
+			{
+				Debug.LogError("[Debug] Failed to get Player from object pool");
+			}
+		}
+
+		/// <summary>
+		/// Populates the player dropdown with active players.
+		/// </summary>
+		private void PopulatePlayerDropdown()
+		{
+			if (_playerDropdown == null || _playerProcessor == null)
+				return;
+
+			_playerDropdown.ClearOptions();
+
+			List<string> playerNames = new List<string>();
+
+			foreach (var player in _playerProcessor.Players)
+			{
+				if (player != null && player.TwitchUser != null)
+				{
+					playerNames.Add(player.TwitchUser.Username);
+				}
+			}
+
+			if (playerNames.Count > 0)
+			{
+				_playerDropdown.AddOptions(playerNames);
+			}
+			else
+			{
+				_playerDropdown.AddOptions(new List<string> { "No Players" });
+			}
+		}
+
+		/// <summary>
+		/// Called when the user submits a command in the debug input field.
+		/// </summary>
+		/// <param name="commandText">The command text entered.</param>
+		private void OnCommandSubmitted(string commandText)
+		{
+			if (string.IsNullOrWhiteSpace(commandText))
+				return;
+
+			// Get selected player
+			Player selectedPlayer = null;
+			if (_playerDropdown != null && _playerProcessor != null)
+			{
+				int selectedIndex = _playerDropdown.value;
+				if (selectedIndex >= 0 && selectedIndex < _playerDropdown.options.Count)
+				{
+					string selectedName = _playerDropdown.options[selectedIndex].text;
+
+					// Find the player by name
+					foreach (var player in _playerProcessor.Players)
+					{
+						if (player != null && player.TwitchUser != null && player.TwitchUser.Username == selectedName)
+						{
+							selectedPlayer = player;
+							break;
+						}
+					}
+				}
+			}
+
+			// Process the command
+			_twitchChatProcessor.ProcessDebugCommand(commandText, selectedPlayer);
+
+			// Clear the input field
+			_commandInputField.text = string.Empty;
 		}
 
 		private void Awake()

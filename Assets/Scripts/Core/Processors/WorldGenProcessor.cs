@@ -46,6 +46,8 @@ namespace Processors
 		[Inject] private GameStateProcessor _gameStateProcessor;
 		[Inject] private ProjectCamera _projectCamera;
 		[Inject] private GUIDProcessor _guidProcessor;
+		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
+		[Inject] private GridSystem.GridProcessor _gridProcessor;
 
 		private const int MAX_GENERATION_ATTEMPTS = 10;
 		private Task _poolingInitializationTask = null;
@@ -103,6 +105,19 @@ namespace Processors
 		private void CompleteWorldGeneration(GameObject townhallObject)
 		{
 			FocusProjectCameraOnTownhall(townhallObject);
+
+			// Populate spatial partitioning indices for efficient queries
+			// Call through GridProcessor to ensure cells are created first
+			if (_gridProcessor != null)
+			{
+				Debug.Log("[WorldGenProcessor] Repopulating spatial partitioning indices via GridProcessor");
+				_gridProcessor.RepopulateSpatialIndices(_resourceProcessor, _foliageProcessor);
+			}
+			else
+			{
+				Debug.LogWarning("[WorldGenProcessor] GridProcessor is null, cannot repopulate indices");
+			}
+
 			_runtimeData.WorldGenerated = true;
 			_gameStateProcessor.NotifyWorldLoaded();
 		}
@@ -156,7 +171,7 @@ namespace Processors
 		/// </summary>
 		public void Process()
 		{
-			Debug.Log($"[WorldGen] Process called: State={_runtimeData.State}");
+			// Debug.Log($"[WorldGen] Process called: State={_runtimeData.State}");
 			switch (_runtimeData.State)
 			{
 				case GenerationState.Idle:

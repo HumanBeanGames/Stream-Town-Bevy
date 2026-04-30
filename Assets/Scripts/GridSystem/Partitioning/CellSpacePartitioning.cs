@@ -17,19 +17,19 @@ namespace GridSystem.Partitioning
         /// The origin offset.
         /// </summary>
         [SerializeField]
-        private Vector2 _originOffset;
+        private Vector2 _originOffset = new Vector2(-50, -50);
 
         /// <summary>
         /// The width of the partitioned area.
         /// </summary>
         [SerializeField]
-        private float _width = 100;
+        private float _width = 300;
 
         /// <summary>
         /// The length of the partitioned area.
         /// </summary>
         [SerializeField]
-        private float _length = 100;
+        private float _length = 300;
 
         /// <summary>
         /// The width of each cell.
@@ -80,8 +80,9 @@ namespace GridSystem.Partitioning
             _numCellsX = (int)(_width / _cellWidth);
             _numCellsZ = (int)(_length / _cellLength);
 
-            _offSetX = _numCellsX * _cellWidth / 2 + _originOffset.x - transform.position.x;
-            _offSetZ = _numCellsZ * _cellLength / 2 + _originOffset.y - transform.position.z;
+            _offSetX = -_originOffset.x + transform.position.x;
+            _offSetZ = -_originOffset.y + transform.position.z;
+
 
             // Create the Cells.
             for (int z = 0; z < _numCellsZ; z++)
@@ -96,6 +97,7 @@ namespace GridSystem.Partitioning
                     _cells.Add(new BSPCell(new Vector2(left, top), new Vector2(right, bottom)));
                 }
             }
+
         }
 
         /// <summary>
@@ -120,6 +122,11 @@ namespace GridSystem.Partitioning
             int index = (int)(_numCellsX * position.x / _width);
             index += (int)(_numCellsZ * position.y / _length) * _numCellsX;
 
+            if (index < 0 || index >= _cells.Count)
+            {
+                Debug.LogWarning($"[CellSpacePartitioning] PositionToIndex: input=({position.x}, {position.y}), calculated index={index} is out of bounds [0, {_cells.Count})");
+            }
+
             if (index > _cells.Count - 1)
                 index = _cells.Count - 1;
 
@@ -134,13 +141,14 @@ namespace GridSystem.Partitioning
         /// <param name="cells">The list to populate with cells.</param>
         public void GetCellsInRange(Vector3 position, float radius, ref List<BSPCell> cells)
         {
-            GetCellsInRange(new Vector2(position.x, position.z), radius, ref cells);
+            Vector2 localPosition = new Vector2(position.x, position.z);
+            GetCellsInRange(localPosition, radius, ref cells);
         }
 
         /// <summary>
         /// Gets all cells in a radius around a position as a reference.
         /// </summary>
-        /// <param name="position">The position.</param>
+        /// <param name="position">The position (in local space).</param>
         /// <param name="radius">The radius.</param>
         /// <param name="cells">The list to populate with cells.</param>
         public void GetCellsInRange(Vector2 position, float radius, ref List<BSPCell> cells)
@@ -151,7 +159,28 @@ namespace GridSystem.Partitioning
 
             for (int i = 0; i < _cells.Count; i++)
             {
-                if (_cells[i].IsOverlapping(topLeft, bottomRight))
+                bool overlaps = _cells[i].IsOverlapping(topLeft, bottomRight);
+                if (overlaps)
+                {
+                    cells.Add(_cells[i]);
+                }
+            }
+            Profiler.EndSample();
+        }
+
+        /// <summary>
+        /// Gets all cells that overlap with a rectangular area.
+        /// </summary>
+        /// <param name="topLeft">The top-left corner of the rectangle.</param>
+        /// <param name="bottomRight">The bottom-right corner of the rectangle.</param>
+        /// <param name="cells">The list to populate with cells.</param>
+        public void GetCellsInRect(Vector2 topLeft, Vector2 bottomRight, ref List<BSPCell> cells)
+        {
+            Profiler.BeginSample("Get Cells In Rect");
+            for (int i = 0; i < _cells.Count; i++)
+            {
+                bool overlaps = _cells[i].IsOverlapping(topLeft, bottomRight);
+                if (overlaps)
                 {
                     cells.Add(_cells[i]);
                 }
@@ -219,15 +248,27 @@ namespace GridSystem.Partitioning
         private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _goldResources;
         private Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> _recruitResources;
 
+        private List<GameResources.FoliageData> _onLandFoliage;
+        private List<GameResources.FoliageData> _underWaterFoliage;
+
+        // Cached flattened lists for queries (must match indices stored during population)
+        private List<GameResources.ResourceData> _cachedWoodResources;
+        private List<GameResources.ResourceData> _cachedOreResources;
+        private List<GameResources.ResourceData> _cachedFoodResources;
+        private List<GameResources.ResourceData> _cachedGoldResources;
+        private List<GameResources.ResourceData> _cachedRecruitResources;
+
         /// <summary>
-        /// Populates cell indices from ResourceProcessor resource arrays.
+        /// Populates cell indices from ResourceProcessor resource dictionaries.
         /// Call this after world generation to enable efficient resource lookups.
         /// </summary>
         /// <param name="resourceProcessor">The resource processor.</param>
         public void PopulateResourceIndices(ResourceProcessor resourceProcessor)
         {
             if (resourceProcessor == null)
+            {
                 return;
+            }
 
             // Clear existing resource indices.
             for (int i = 0; i < _cells.Count; i++)
@@ -239,16 +280,23 @@ namespace GridSystem.Partitioning
                 _cells[i].RecruitResourceIndices = new List<int>();
             }
 
+            // Cache resource dictionaries
+            _woodResources = resourceProcessor.GetWoodResources();
+            _oreResources = resourceProcessor.GetOreResources();
+            _foodResources = resourceProcessor.GetFoodResources();
+            _goldResources = resourceProcessor.GetGoldResources();
+            _recruitResources = resourceProcessor.GetRecruitResources();
+
+
             // Populate wood resource indices.
-            var woodResourcesDict = resourceProcessor.GetWoodResources();
-            List<GameResources.ResourceData> woodResources = new List<GameResources.ResourceData>();
-            foreach (var kvp in woodResourcesDict)
+            _cachedWoodResources = new List<GameResources.ResourceData>();
+            foreach (var kvp in _woodResources)
             {
-                woodResources.AddRange(kvp.Value);
+                _cachedWoodResources.AddRange(kvp.Value);
             }
-            for (int i = 0; i < woodResources.Count; i++)
+            for (int i = 0; i < _cachedWoodResources.Count; i++)
             {
-                int cellIndex = PositionToIndex(woodResources[i].Position);
+                int cellIndex = PositionToIndex(_cachedWoodResources[i].Position);
                 if (cellIndex >= 0 && cellIndex < _cells.Count)
                 {
                     _cells[cellIndex].WoodResourceIndices.Add(i);
@@ -256,15 +304,14 @@ namespace GridSystem.Partitioning
             }
 
             // Populate ore resource indices.
-            var oreResourcesDict = resourceProcessor.GetOreResources();
-            List<GameResources.ResourceData> oreResources = new List<GameResources.ResourceData>();
-            foreach (var kvp in oreResourcesDict)
+            _cachedOreResources = new List<GameResources.ResourceData>();
+            foreach (var kvp in _oreResources)
             {
-                oreResources.AddRange(kvp.Value);
+                _cachedOreResources.AddRange(kvp.Value);
             }
-            for (int i = 0; i < oreResources.Count; i++)
+            for (int i = 0; i < _cachedOreResources.Count; i++)
             {
-                int cellIndex = PositionToIndex(oreResources[i].Position);
+                int cellIndex = PositionToIndex(_cachedOreResources[i].Position);
                 if (cellIndex >= 0 && cellIndex < _cells.Count)
                 {
                     _cells[cellIndex].OreResourceIndices.Add(i);
@@ -272,15 +319,14 @@ namespace GridSystem.Partitioning
             }
 
             // Populate food resource indices.
-            var foodResourcesDict = resourceProcessor.GetFoodResources();
-            List<GameResources.ResourceData> foodResources = new List<GameResources.ResourceData>();
-            foreach (var kvp in foodResourcesDict)
+            _cachedFoodResources = new List<GameResources.ResourceData>();
+            foreach (var kvp in _foodResources)
             {
-                foodResources.AddRange(kvp.Value);
+                _cachedFoodResources.AddRange(kvp.Value);
             }
-            for (int i = 0; i < foodResources.Count; i++)
+            for (int i = 0; i < _cachedFoodResources.Count; i++)
             {
-                int cellIndex = PositionToIndex(foodResources[i].Position);
+                int cellIndex = PositionToIndex(_cachedFoodResources[i].Position);
                 if (cellIndex >= 0 && cellIndex < _cells.Count)
                 {
                     _cells[cellIndex].FoodResourceIndices.Add(i);
@@ -288,15 +334,14 @@ namespace GridSystem.Partitioning
             }
 
             // Populate gold resource indices.
-            var goldResourcesDict = resourceProcessor.GetGoldResources();
-            List<GameResources.ResourceData> goldResources = new List<GameResources.ResourceData>();
-            foreach (var kvp in goldResourcesDict)
+            _cachedGoldResources = new List<GameResources.ResourceData>();
+            foreach (var kvp in _goldResources)
             {
-                goldResources.AddRange(kvp.Value);
+                _cachedGoldResources.AddRange(kvp.Value);
             }
-            for (int i = 0; i < goldResources.Count; i++)
+            for (int i = 0; i < _cachedGoldResources.Count; i++)
             {
-                int cellIndex = PositionToIndex(goldResources[i].Position);
+                int cellIndex = PositionToIndex(_cachedGoldResources[i].Position);
                 if (cellIndex >= 0 && cellIndex < _cells.Count)
                 {
                     _cells[cellIndex].GoldResourceIndices.Add(i);
@@ -304,18 +349,103 @@ namespace GridSystem.Partitioning
             }
 
             // Populate recruit resource indices.
-            var recruitResourcesDict = resourceProcessor.GetRecruitResources();
-            List<GameResources.ResourceData> recruitResources = new List<GameResources.ResourceData>();
-            foreach (var kvp in recruitResourcesDict)
+            _cachedRecruitResources = new List<GameResources.ResourceData>();
+            foreach (var kvp in _recruitResources)
             {
-                recruitResources.AddRange(kvp.Value);
+                _cachedRecruitResources.AddRange(kvp.Value);
             }
-            for (int i = 0; i < recruitResources.Count; i++)
+            for (int i = 0; i < _cachedRecruitResources.Count; i++)
             {
-                int cellIndex = PositionToIndex(recruitResources[i].Position);
+                int cellIndex = PositionToIndex(_cachedRecruitResources[i].Position);
                 if (cellIndex >= 0 && cellIndex < _cells.Count)
                 {
                     _cells[cellIndex].RecruitResourceIndices.Add(i);
+                }
+            }
+
+        }
+
+        /// <summary>
+        /// Populates cell indices from FoliageProcessor foliage arrays.
+        /// Call this after world generation to enable efficient foliage lookups.
+        /// </summary>
+        /// <param name="foliageProcessor">The foliage processor.</param>
+        public void PopulateFoliageIndices(Processors.FoliageProcessor foliageProcessor)
+        {
+            if (foliageProcessor == null)
+            {
+                return;
+            }
+
+            // Clear existing foliage indices.
+            for (int i = 0; i < _cells.Count; i++)
+            {
+                _cells[i].OnLandFoliageIndices = new List<int>();
+                _cells[i].UnderWaterFoliageIndices = new List<int>();
+            }
+
+            // Cache foliage arrays
+            _onLandFoliage = foliageProcessor.GetOnLandFoliage();
+            _underWaterFoliage = foliageProcessor.GetUnderWaterFoliage();
+
+
+            // Populate on-land foliage indices.
+            for (int i = 0; i < _onLandFoliage.Count; i++)
+            {
+                int cellIndex = PositionToIndex(_onLandFoliage[i].Position);
+                if (cellIndex >= 0 && cellIndex < _cells.Count)
+                {
+                    _cells[cellIndex].OnLandFoliageIndices.Add(i);
+                }
+            }
+
+            // Populate underwater foliage indices.
+            for (int i = 0; i < _underWaterFoliage.Count; i++)
+            {
+                int cellIndex = PositionToIndex(_underWaterFoliage[i].Position);
+                if (cellIndex >= 0 && cellIndex < _cells.Count)
+                {
+                    _cells[cellIndex].UnderWaterFoliageIndices.Add(i);
+                }
+            }
+
+        }
+
+        /// <summary>
+        /// Gets all foliage within a radius of a position.
+        /// Uses cached foliage lists that match the indices stored during population.
+        /// </summary>
+        /// <param name="position">The center position.</param>
+        /// <param name="radius">The search radius.</param>
+        /// <param name="isUnderwater">Whether to get underwater foliage (false for on-land).</param>
+        /// <param name="foliage">The list to populate with foliage.</param>
+        public void GetFoliageInRange(Vector3 position, float radius, bool isUnderwater, ref List<GameResources.FoliageData> foliage)
+        {
+            List<BSPCell> cells = new List<BSPCell>();
+            GetCellsInRange(position, radius, ref cells);
+
+            List<GameResources.FoliageData> foliageList = isUnderwater ? _underWaterFoliage : _onLandFoliage;
+            if (foliageList == null)
+                return;
+
+            for (int i = 0; i < cells.Count; i++)
+            {
+                List<int> indices = isUnderwater ? cells[i].UnderWaterFoliageIndices : cells[i].OnLandFoliageIndices;
+                if (indices != null)
+                {
+                    for (int j = 0; j < indices.Count; j++)
+                    {
+                        int index = indices[j];
+                        if (index >= 0 && index < foliageList.Count)
+                        {
+                            GameResources.FoliageData f = foliageList[index];
+                            float distance = Vector3.Distance(position, f.Position);
+                            if (distance <= radius)
+                            {
+                                foliage.Add(f);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -323,62 +453,56 @@ namespace GridSystem.Partitioning
         /// <summary>
         /// Gets all resources of a specific type within a radius of a position.
         /// Returns the actual ResourceData objects, not just indices.
+        /// Uses cached flattened lists to ensure indices match those stored during population.
         /// </summary>
         /// <param name="resourceType">The resource type.</param>
         /// <param name="position">The position.</param>
         /// <param name="radius">The radius.</param>
         /// <param name="resourceProcessor">The resource processor.</param>
         /// <param name="resources">The list to populate with resources.</param>
-        public void GetResourcesInRange(global::Utils.Resource resourceType, Vector3 position, float radius, ResourceProcessor resourceProcessor, ref List<GameResources.ResourceData> resources)
+        public void GetResourcesInRange(global::Utils.Resource resourceType, Vector3 position, float radius, Processors.ResourceProcessor resourceProcessor, ref List<GameResources.ResourceData> resources)
         {
-            if (resourceProcessor == null)
-                return;
-
             List<BSPCell> cells = new List<BSPCell>();
             GetCellsInRange(position, radius, ref cells);
 
-            List<GameResources.ResourceData> resourceList = new List<GameResources.ResourceData>();
-            Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> resourceDict = null;
 
+            // Get the cached resource list for this type
+            List<GameResources.ResourceData> resourceList;
             switch (resourceType)
             {
                 case global::Utils.Resource.Wood:
-                    resourceDict = resourceProcessor.GetWoodResources();
+                    resourceList = _cachedWoodResources;
                     break;
                 case global::Utils.Resource.Ore:
-                    resourceDict = resourceProcessor.GetOreResources();
+                    resourceList = _cachedOreResources;
                     break;
                 case global::Utils.Resource.Food:
-                    resourceDict = resourceProcessor.GetFoodResources();
+                    resourceList = _cachedFoodResources;
                     break;
                 case global::Utils.Resource.Gold:
-                    resourceDict = resourceProcessor.GetGoldResources();
+                    resourceList = _cachedGoldResources;
                     break;
                 case global::Utils.Resource.Recruit:
-                    resourceDict = resourceProcessor.GetRecruitResources();
+                    resourceList = _cachedRecruitResources;
                     break;
                 default:
                     return;
             }
 
-            foreach (var kvp in resourceDict)
-            {
-                resourceList.AddRange(kvp.Value);
-            }
-
-            GameResources.ResourceData[] resourceArray = resourceList.ToArray();
+            if (resourceList == null)
+                return;
 
             for (int i = 0; i < cells.Count; i++)
             {
                 List<int> indices = GetResourceIndicesForCell(cells[i], resourceType);
-                if (indices != null && resourceArray != null)
+                if (indices != null)
                 {
                     for (int j = 0; j < indices.Count; j++)
                     {
                         int index = indices[j];
-                        if (index >= 0 && index < resourceArray.Length)
+                        if (index >= 0 && index < resourceList.Count)
                         {
-                            GameResources.ResourceData resource = resourceArray[index];
+                            GameResources.ResourceData resource = resourceList[index];
                             float distance = Vector3.Distance(position, resource.Position);
                             if (distance <= radius)
                             {
@@ -396,7 +520,7 @@ namespace GridSystem.Partitioning
         /// <param name="cell">The BSP cell.</param>
         /// <param name="resourceType">The resource type.</param>
         /// <returns>The list of resource indices.</returns>
-        private List<int> GetResourceIndicesForCell(BSPCell cell, global::Utils.Resource resourceType)
+        public List<int> GetResourceIndicesForCell(BSPCell cell, global::Utils.Resource resourceType)
         {
             switch (resourceType)
             {
@@ -415,16 +539,33 @@ namespace GridSystem.Partitioning
             }
         }
 
-        // Unity Functions.
         /// <summary>
-        /// Initializes the cell space partitioning.
+        /// Gets the cached resource list for a specific resource type.
         /// </summary>
-        private void Awake()
+        /// <param name="resourceType">The resource type.</param>
+        /// <returns>The cached resource list, or null if not found.</returns>
+        public List<GameResources.ResourceData> GetResourceListForType(global::Utils.Resource resourceType)
         {
-            //Call to initialize targetflags.
-            if (TargetFlagHelper.TargetFlags != null) { }
-            GeneratePartitions();
+            switch (resourceType)
+            {
+                case global::Utils.Resource.Wood:
+                    return _cachedWoodResources;
+                case global::Utils.Resource.Ore:
+                    return _cachedOreResources;
+                case global::Utils.Resource.Food:
+                    return _cachedFoodResources;
+                case global::Utils.Resource.Gold:
+                    return _cachedGoldResources;
+                case global::Utils.Resource.Recruit:
+                    return _cachedRecruitResources;
+                default:
+                    return null;
+            }
         }
+
+        // Unity Functions.
+        // Note: CellSpacePartitioning is ProjectScope, so Awake/Start are not called.
+        // GeneratePartitions is called from GridProcessor.InstallBindings during container construction.
 
         /// <summary>
         /// Draws gizmos when the object is selected.

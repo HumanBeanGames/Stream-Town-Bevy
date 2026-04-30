@@ -42,6 +42,16 @@ namespace GridSystem.Partitioning
 		public List<int> RecruitResourceIndices;
 
         /// <summary>
+        /// On-land foliage indices.
+        /// </summary>
+        public List<int> OnLandFoliageIndices;
+
+        /// <summary>
+        /// Underwater foliage indices.
+        /// </summary>
+        public List<int> UnderWaterFoliageIndices;
+
+        /// <summary>
         /// The top-left position of the cell.
         /// </summary>
 		public Vector2 TopLeft;
