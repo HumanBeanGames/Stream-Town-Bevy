@@ -151,4 +151,7 @@ MonoBehaviour:
   - Name: BuildingPlacer
     PoolAmount: 300
     Prefab: {fileID: 4398971005381191997, guid: 440d7b6b8564c284988225d587495f15, type: 3}
+  - Name: UnitDisplayText
+    PoolAmount: 300
+    Prefab: {fileID: 4634638438188153462, guid: d670ba1481369a54ea1a1833914c1d47, type: 3}
   _debugPooling: 0

@@ -146,7 +146,11 @@ namespace Target
 		{
 			RemoveThisTarget();
 			_targetType = type;
-			AddThisTargetToCell();
+
+			// Only add to cell if partition is available (not null and index is not -1)
+			// Pooled objects will add to cell in OnReset() after injection has occurred
+			if (_cellSpacePartition != null && _cellIndex != -1)
+				AddThisTargetToCell();
 		}
 
 		/// <summary>
@@ -186,8 +190,12 @@ namespace Target
 		protected void AddThisTargetToCell()
 		{
 			if (_cellSpacePartition == null || _cellIndex == -1)
+			{
+				Debug.Log($"[Targetable] Cannot add {name} to cell - partition null or index -1");
 				return;
+			}
 
+			Debug.Log($"[Targetable] Adding {name} (type={_targetType}) to cell {_cellIndex}, position={transform.position}");
 			_cellSpacePartition.GetCellAtIndex(_cellIndex).AddTarget(this);
 		}
 
@@ -231,6 +239,8 @@ namespace Target
 		{
 			int newCellIndex = _cellSpacePartition.PositionToIndex(transform.position);
 
+			Debug.Log($"[Targetable] UpdateIndex for {name}: oldIndex={_cellIndex}, newIndex={newCellIndex}, position={transform.position}");
+
 			if (newCellIndex != _cellIndex)
 			{
 				RemoveThisTarget();
@@ -267,11 +277,18 @@ namespace Target
 
         /// <summary>
         /// Adds this target to the cell and processor when enabled.
+        /// Note: Cell addition is deferred to OnReset() to ensure dependency injection has occurred.
         /// </summary>
 		protected void OnEnable()
 		{
+			Debug.Log($"[Targetable] OnEnable for {name}");
+
 			_wasPooled = true;
-			AddThisTargetToCell();
+
+			// Only add to cell if partition is already available (not a pooled object or injection already occurred)
+			// Pooled objects will add to cell in OnReset() after injection
+			if (_cellSpacePartition != null && _cellIndex != -1)
+				AddThisTargetToCell();
 
 			if (_targetProcessor != null)
 				_targetProcessor.AddTarget(this);
@@ -315,6 +332,9 @@ namespace Target
 		{
 			_transform = transform;
 			_cellIndex = _cellSpacePartition.PositionToIndex(transform.position);
+
+			Debug.Log($"[Targetable] OnReset for {name} - partition={(_cellSpacePartition != null)}, cellIndex={_cellIndex}, position={transform.position}, targetType={_targetType}");
+
 			AddThisTargetToCell();
 		}
 	}

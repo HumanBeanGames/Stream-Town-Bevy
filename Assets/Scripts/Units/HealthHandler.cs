@@ -186,7 +186,7 @@ namespace Units
 		private void Awake()
 		{
 			_baseMaxHealth = _maxHealth;
-			_health = _maxHealth;
+			// Don't set health here - let BuildingBase handle it based on construction state
 		}
 
 		private void Update()

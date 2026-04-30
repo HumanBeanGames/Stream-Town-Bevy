@@ -190,9 +190,9 @@ namespace Buildings
             {
                 // ...Else set building as a construction
                 OnHealthConstruction(0);
-                _healthHandler.SetHealth(1);
 
                 // Set it's target type to Construction
+                Debug.Log($"[BuildingBase] Setting building {name} to Construction state");
                 _targetable.SetTargetType(TargetMask.Construction);
 
                 // Disable station if it has one
@@ -389,10 +389,29 @@ namespace Buildings
         private void Awake()
         {
             Init();
+            
+            // Set construction state early
+            _buildingState = BuildingState.Construction;
+        }
+
+        private void Start()
+        {
+            // Set initial health based on construction state (after all Awake calls complete)
+            if (_buildingState == BuildingState.Construction)
+            {
+                _healthHandler.SetHealth(Mathf.CeilToInt(_healthHandler.MaxHealth * 0.1f));
+                Debug.Log($"[BuildingBase Start] Set {name} to 10% health ({_healthHandler.Health}/{_healthHandler.MaxHealth}) for construction");
+            }
+            else
+            {
+                _healthHandler.SetHealth(_healthHandler.MaxHealth);
+                Debug.Log($"[BuildingBase Start] Set {name} to full health ({_healthHandler.Health}/{_healthHandler.MaxHealth})");
+            }
         }
 
         private void OnEnable()
         {
+            Debug.Log($"[BuildingBase] OnEnable called for {name}");
             if (!_initialized)
                 Init();
             OnSpawn();

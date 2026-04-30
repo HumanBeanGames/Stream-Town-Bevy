@@ -260,7 +260,6 @@ namespace Processors
 		/// <param name="bounds">The bounds to remove foliage from.</param>
 		public void RemoveFoliageInBounds(Bounds bounds)
 		{
-			Debug.Log($"[FoliageProcessor] RemoveFoliageInBounds called, center={bounds.center}, size={bounds.size}");
 			if (_cellSpacePartitioning == null)
 			{
 				Debug.LogWarning("[FoliageProcessor] CellSpacePartitioning is null, cannot remove foliage");

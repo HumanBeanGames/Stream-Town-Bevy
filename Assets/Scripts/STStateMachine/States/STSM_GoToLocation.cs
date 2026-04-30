@@ -255,7 +255,7 @@ namespace STStateMachine.States
 			// Restore slowdown distance to allow precise stopping (prevents overshooting)
 			_aiPath.slowdownDistance = _prevSlowDownDistance;
 
-			// Debug.Log($"[GoToLocation] OnEnter - endReachedDistance: {_aiPath.endReachedDistance}, slowdownDistance: {_aiPath.slowdownDistance}, distanceSatisfaction: {_distanceSatisfaction}");
+			Debug.Log($"[GoToLocation] OnEnter - endReachedDistance: {_aiPath.endReachedDistance}, slowdownDistance: {_aiPath.slowdownDistance}, distanceSatisfaction: {_distanceSatisfaction}, nextState: {_nextState?.GetType().Name}");
 
 			_stuckCheckTimer = 0;
 			_lastStuckCheckPos = transform.position;
@@ -319,16 +319,20 @@ namespace STStateMachine.States
 			Vector3 horizontalDiff = _aiPath.destination - transform.position;
 			horizontalDiff.y = 0;
 			float sqr = Vector3.SqrMagnitude(horizontalDiff);
+			
 			if (sqr <= _distanceSatisfaction)
 			{
+				Debug.Log($"[GoToLocation] Distance satisfied - currentDist: {Mathf.Sqrt(sqr)}, required: {Mathf.Sqrt(_distanceSatisfaction)}, nextState: {_nextState?.GetType().Name}");
 				if (_nextState != null)
 				{
+					Debug.Log($"[GoToLocation] Transitioning to next state: {_nextState.GetType().Name}");
 					_stateMachine.RequestStateChange(_nextState, true);
 					_stuck = false;
 					return; // Exit early to prevent repeated checks
 				}
 				else
 				{
+					Debug.Log($"[GoToLocation] No next state, going to Idle");
 					_stateMachine.RequestStateChange("Idle");
 					return; // Exit early to prevent repeated checks
 				}
@@ -338,6 +342,7 @@ namespace STStateMachine.States
 			else if (!UsePosition && !_aiPath.pathPending && _aiPath.remainingDistance >= 0 && _aiPath.remainingDistance < 2f && _temporaryTarget == null)
 			{
 				// Pathfinding can't reach the target but we're within grid node distance (2 units)
+				Debug.Log($"[GoToLocation] Path unreachable but close, transitioning to next state");
 				if (_nextState != null)
 				{
 					_stateMachine.RequestStateChange(_nextState, true);

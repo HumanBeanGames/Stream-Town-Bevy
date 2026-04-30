@@ -44,16 +44,31 @@ namespace Buildings
 		/// </summary>
 		public void OnConstructionStart()
 		{
-			foreach (GameObject gameObject in OtherModels)
-				gameObject.SetActive(false);
-			
-			for(int i = 0; i < Upgrades.Count; i++)
-				Upgrades[i].SetActive(false);		
+			if (OtherModels != null)
+			{
+				foreach (GameObject gameObject in OtherModels)
+					gameObject.SetActive(false);
+			}
 
-			Stage1.gameObject.SetActive(true);
-			FullModel.gameObject.SetActive(false);
-			Stage3.gameObject.SetActive(false);
-			Stage2.gameObject.SetActive(false);
+			if (Upgrades != null)
+			{
+				for(int i = 0; i < Upgrades.Count; i++)
+					Upgrades[i].SetActive(false);
+			}
+
+			if (Stage1 != null)
+				Stage1.gameObject.SetActive(true);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage1 is null on {name}, cannot show construction stage 1");
+
+			if (FullModel != null)
+				FullModel.gameObject.SetActive(false);
+
+			if (Stage3 != null)
+				Stage3.gameObject.SetActive(false);
+
+			if (Stage2 != null)
+				Stage2.gameObject.SetActive(false);
 		}
 
 		/// <summary>
@@ -61,8 +76,15 @@ namespace Buildings
 		/// </summary>
 		public void OnStage2()
 		{
-			Stage1.SetActive(false);
-			Stage2.SetActive(true);
+			if (Stage1 != null)
+				Stage1.SetActive(false);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage1 is null on {name}, cannot hide construction stage 1");
+
+			if (Stage2 != null)
+				Stage2.SetActive(true);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage2 is null on {name}, cannot show construction stage 2");
 		}
 
 		/// <summary>
@@ -70,8 +92,15 @@ namespace Buildings
 		/// </summary>
 		public void OnStage3()
 		{
-			Stage2.SetActive(false);
-			Stage3.SetActive(true);
+			if (Stage2 != null)
+				Stage2.SetActive(false);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage2 is null on {name}, cannot hide construction stage 2");
+
+			if (Stage3 != null)
+				Stage3.SetActive(true);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage3 is null on {name}, cannot show construction stage 3");
 		}
 
 		/// <summary>
@@ -79,13 +108,31 @@ namespace Buildings
 		/// </summary>
 		public void OnFinishedConstruction()
 		{
-			Stage1.SetActive(false);
-			Stage2.SetActive(false);
-			Stage3.SetActive(false);
-			FullModel.SetActive(true);
+			if (Stage1 != null)
+				Stage1.SetActive(false);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage1 is null on {name}, cannot hide construction stage 1");
 
-			for(int i = 0;i < Upgrades.Count;i++)
-				Upgrades[i].SetActive(true);
+			if (Stage2 != null)
+				Stage2.SetActive(false);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage2 is null on {name}, cannot hide construction stage 2");
+
+			if (Stage3 != null)
+				Stage3.SetActive(false);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] Stage3 is null on {name}, cannot hide construction stage 3");
+
+			if (FullModel != null)
+				FullModel.SetActive(true);
+			else
+				Debug.LogWarning($"[BuildingModelHandler] FullModel is null, cannot activate finished building model on {name}");
+
+			if (Upgrades != null)
+			{
+				for(int i = 0;i < Upgrades.Count;i++)
+					Upgrades[i].SetActive(true);
+			}
 		}
 	}
 }

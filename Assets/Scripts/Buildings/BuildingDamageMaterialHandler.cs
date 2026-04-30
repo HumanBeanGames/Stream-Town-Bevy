@@ -62,9 +62,6 @@ namespace Buildings
 		/// <param name="obj">The health handler that changed.</param>
 		public void OnHealthChanged(HealthHandler obj)
 		{
-			if (_building.BuildingState == Utils.BuildingState.Construction)
-				return;
-
 			SetDamageByPercentage(obj.HealthPercentage);
 		}
 

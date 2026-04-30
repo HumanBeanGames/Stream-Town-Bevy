@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using Character;
+using GridSystem.Partitioning;
 using Processors;
 using Reflex.Attributes;
 using STStateMachine.Helpers;
+using Target;
 using UnityEngine;
 using Utils;
 
@@ -17,12 +19,15 @@ namespace STStateMachine.States
 		private PlayerInventory _inventory;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private ResourceProcessor _resourceProcessor;
+		[Inject] private CellSpacePartitioning _cellSpacePartition;
 
 		// State References.
 		private STSM_Action_GatherResource _gatherResourceAction;
 		private STSM_Action_PlayerAttack _attackAction;
 		private STSM_Action_Heal _healAction;
+		private STSM_Action_Build _buildAction;
 		private STSM_HelperDeposit _helperDeposit;
+		private STSM_Helper_Build _helperBuild;
 
 		// Data-driven resource targeting.
 		private uint _currentResourceGUID;
@@ -32,8 +37,6 @@ namespace STStateMachine.States
 
 		// Configuration.
 		[SerializeField] private float _resourceSearchRange = 100f;
-		[SerializeField] private float _resourceSearchInterval = 1f;
-		private float _resourceSearchTimer;
 
 		/// <summary>
 		/// Initialize all required data.
@@ -46,8 +49,20 @@ namespace STStateMachine.States
 			_gatherResourceAction = (STSM_Action_GatherResource)_stateMachine.GetStateByName("GatherResource");
 			_attackAction = (STSM_Action_PlayerAttack)_stateMachine.GetStateByName("Attack");
 			_healAction = (STSM_Action_Heal)_stateMachine.GetStateByName("Heal");
+			_buildAction = (STSM_Action_Build)_stateMachine.GetStateByName("Build");
 			_helperDeposit = (STSM_HelperDeposit)_stateMachine.GetHelperByName("Deposit");
+			_helperBuild = (STSM_Helper_Build)_stateMachine.GetHelperByName("Build");
 			_goToState = (STSM_GoToLocation)_stateMachine.GetStateByName("GoTo");
+
+			Debug.Log($"[STSM_Idle_Player OnInit] _buildAction is null: {_buildAction == null}, _goToState is null: {_goToState == null}");
+			if (_buildAction == null)
+			{
+				Debug.LogError($"[STSM_Idle_Player OnInit] Failed to get 'Build' state from StateMachine. Available states:");
+				foreach (var state in _stateMachine.States)
+				{
+					Debug.LogError($"  - {state.StateName} ({state.State?.GetType().Name})");
+				}
+			}
 		}
 
 		public override void OnEnter()
@@ -133,10 +148,100 @@ namespace STStateMachine.States
 
 		/// <summary>
 		/// Returns true after setting next state to heal action.
+		/// Builders check for construction targets first.
 		/// </summary>
 		/// <returns></returns>
 		protected bool HealerRole()
 		{
+			Debug.Log($"[HealerRole] Start - CurrentRole: {_roleHandler.CurrentRole}");
+			
+			// Builders should prioritize construction targets
+			if (_roleHandler.CurrentRole == PlayerRole.Builder)
+			{
+				Debug.Log($"[HealerRole] Builder role detected, searching for construction targets");
+				List<Targetable> constructionTargets = new List<Targetable>();
+				_cellSpacePartition.GetTargetablesInRange(TargetMask.Construction, transform.position, _resourceSearchRange, ref constructionTargets);
+
+				Debug.Log($"[HealerRole] Found {constructionTargets.Count} construction targets in range");
+				
+				if (constructionTargets.Count > 0)
+				{
+					float closestDistSqr = float.MaxValue;
+					Targetable closestTarget = null;
+
+					for (int i = 0; i < constructionTargets.Count; i++)
+					{
+						if (!constructionTargets[i].gameObject.activeInHierarchy)
+							continue;
+
+						float distSqr = Vector3.SqrMagnitude(constructionTargets[i].transform.position - transform.position);
+						if (distSqr < closestDistSqr)
+						{
+							closestDistSqr = distSqr;
+							closestTarget = constructionTargets[i];
+						}
+					}
+
+					if (closestTarget != null)
+					{
+						Debug.Log($"[HealerRole] Selected construction target: {closestTarget.name}, distance={Mathf.Sqrt(closestDistSqr)}");
+						Debug.Log($"[HealerRole] _buildAction is null: {_buildAction == null}, _goToState is null: {_goToState == null}");
+						
+						// Set the target using TrySetTarget (bypasses mask check in the overload without Player parameter)
+						_targetSensor.TrySetTarget(closestTarget);
+
+						// Calculate position on the outside of the building (like deposit logic)
+						Vector3 buildingCenter = closestTarget.transform.position;
+						Vector3 toPlayer = transform.position - buildingCenter;
+						toPlayer.y = 0; // Keep it horizontal
+
+						if (toPlayer.magnitude > 0)
+						{
+							toPlayer.Normalize();
+							// Use a small fixed offset from building center (2 units)
+							Vector3 constructionPoint = buildingCenter + toPlayer * 2f;
+							_goToState.SetTargetPosition(constructionPoint, _roleHandler.PlayerRoleData.ActionRange);
+							_goToState.UsePosition = true;
+							Debug.Log($"[HealerRole] Set GoTo position: {constructionPoint}, actionRange={_roleHandler.PlayerRoleData.ActionRange}");
+						}
+						else
+						{
+							// If player is at center, use center
+							_goToState.SetTarget(closestTarget.transform, _roleHandler.PlayerRoleData.ActionRange);
+							Debug.Log($"[HealerRole] Set GoTo transform: {closestTarget.name}, actionRange={_roleHandler.PlayerRoleData.ActionRange}");
+						}
+
+						Debug.Log($"[HealerRole] Checking _buildAction null status before setting next state");
+						if (_buildAction == null)
+						{
+							Debug.LogError("[HealerRole] _buildAction is null! Cannot set next state.");
+							return false;
+						}
+
+						Debug.Log($"[HealerRole] _buildAction is valid, setting as next state");
+						_goToState.SetNextState(_buildAction);
+						Debug.Log($"[HealerRole] Set next state to Build action, requesting GoTo state");
+						_stateMachine.RequestStateChange(_goToState);
+						Debug.Log($"[HealerRole] State change requested, returning false to prevent OnHasTarget override");
+						return false; // Return false to prevent OnHasTarget from overriding GoTo configuration
+					}
+					else
+					{
+						Debug.Log($"[HealerRole] No active construction target found (all inactive in hierarchy)");
+					}
+				}
+				else
+				{
+					Debug.Log("[HealerRole] No construction targets found");
+				}
+			}
+			else
+			{
+				Debug.Log($"[HealerRole] Not a builder, skipping construction target search");
+			}
+
+			// Default healer role behavior (heal injured players)
+			Debug.Log($"[HealerRole] Using default healer behavior (heal)");
 			_goToState.SetNextState(_healAction);
 			return true;
 		}
@@ -257,6 +362,110 @@ namespace STStateMachine.States
 			if (_hasDataDrivenResourceTarget)
 				return;
 
+			// Search for targets before wandering
+			if (_roleHandler.RoleData_SO != null)
+			{
+				// If we're a builder, search for construction targets
+				if (_roleHandler.CurrentRole == PlayerRole.Builder)
+				{
+					Debug.Log($"[Builder Search] Checking for construction targets, role={_roleHandler.CurrentRole}");
+
+					List<Targetable> constructionTargets = new List<Targetable>();
+					_cellSpacePartition.GetTargetablesInRange(TargetMask.Construction, transform.position, _resourceSearchRange, ref constructionTargets);
+
+					Debug.Log($"[Builder Search] Found {constructionTargets.Count} construction targets in range {_resourceSearchRange}");
+
+					if (constructionTargets.Count > 0)
+					{
+						// Find closest construction target
+						float closestDistSqr = float.MaxValue;
+						Targetable closestTarget = null;
+
+						for (int i = 0; i < constructionTargets.Count; i++)
+						{
+							if (!constructionTargets[i].gameObject.activeInHierarchy)
+								continue;
+
+							float distSqr = Vector3.SqrMagnitude(constructionTargets[i].transform.position - transform.position);
+							if (distSqr < closestDistSqr)
+							{
+								closestDistSqr = distSqr;
+								closestTarget = constructionTargets[i];
+							}
+						}
+
+						if (closestTarget != null)
+						{
+							Debug.Log($"[Builder Search] Found closest construction target at {closestTarget.transform.position}, distance={Mathf.Sqrt(closestDistSqr)}");
+							_targetSensor.TrySetTarget(closestTarget);
+
+							// Calculate position on the outside of the building (like deposit logic)
+							Vector3 buildingCenter = closestTarget.transform.position;
+							Vector3 toPlayer = transform.position - buildingCenter;
+							toPlayer.y = 0; // Keep it horizontal
+
+							if (toPlayer.magnitude > 0)
+							{
+								toPlayer.Normalize();
+								// Use a small fixed offset from building center (2 units)
+								Vector3 constructionPoint = buildingCenter + toPlayer * 2f;
+								_goToState.SetTargetPosition(constructionPoint, _roleHandler.PlayerRoleData.ActionRange);
+								_goToState.UsePosition = true;
+							}
+							else
+							{
+								// If player is at center, use center
+								_goToState.SetTarget(closestTarget.transform, _roleHandler.PlayerRoleData.ActionRange);
+							}
+
+							_goToState.SetNextState(_buildAction);
+							_stateMachine.RequestStateChange(_goToState);
+							return;
+						}
+						else
+						{
+							Debug.Log("[Builder Search] No active construction targets found (all inactive in hierarchy)");
+						}
+					}
+				}
+
+				// If we're a resource role, search for resources
+				if (_roleHandler.RoleData_SO.RoleFlags == Utils.PlayerRoleType.Resource)
+				{
+					if (!_hasDataDrivenResourceTarget && CanGatherResource())
+					{
+						if (FindResourceTarget())
+						{
+							_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
+							_goToState.UsePosition = false;
+							_goToState.SetNextState(_gatherResourceAction);
+							_stateMachine.RequestStateChange(_goToState);
+							return;
+						}
+					}
+					else if (_stateMachine.HasResourceTarget && _stateMachine.ResourceTargetGUID != 0)
+					{
+						var resourceTarget = _resourceProcessor.GetResourceTarget(_stateMachine.ResourceTargetGUID);
+						if (resourceTarget.HasValue)
+						{
+							_currentResourceGUID = _stateMachine.ResourceTargetGUID;
+							_currentResourcePosition = resourceTarget.Value.Position;
+							_currentResourceType = _stateMachine.ResourceTargetType;
+
+							_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
+							_goToState.UsePosition = false;
+							_goToState.SetNextState(_gatherResourceAction);
+							_stateMachine.RequestStateChange(_goToState);
+							return;
+						}
+						else
+						{
+							ClearResourceTarget();
+						}
+					}
+				}
+			}
+
 			base.OnNewIdleLocation();
 		}
 
@@ -273,73 +482,11 @@ namespace STStateMachine.States
 		}
 
 		/// <summary>
-		/// Called every frame. Updates resource search timer and finds targets when appropriate.
+		/// Called every frame.
 		/// </summary>
 		public override void OnUpdate()
 		{
 			base.OnUpdate();
-
-			// Return early if role hasn't been set yet
-			if (_roleHandler.RoleData_SO == null)
-				return;
-
-			_resourceSearchTimer += Time.deltaTime;
-
-			// If we have a GameObject target, let the base class handle it
-			if (_targetSensor.HasTarget)
-				return;
-
-			// If we're a resource role and don't have a target, try to find one
-			if (_roleHandler.RoleData_SO.RoleFlags == Utils.PlayerRoleType.Resource)
-			{
-				if (_resourceSearchTimer >= _resourceSearchInterval)
-				{
-					_resourceSearchTimer = 0f;
-
-					// Check if we should find a new resource target
-					if (!_hasDataDrivenResourceTarget)
-					{
-						if (CanGatherResource())
-						{
-							if (FindResourceTarget())
-							{
-								// Set up GoToLocation to go to the resource position, then gather
-								// Use SetTargetFromPosition for transform-based targeting with action range
-								_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
-								_goToState.UsePosition = false; // Using transform-based targeting now
-
-								_goToState.SetNextState(_gatherResourceAction);
-								_stateMachine.RequestStateChange(_goToState);
-							}
-						}
-					}
-					else if (_stateMachine.HasResourceTarget && _stateMachine.ResourceTargetGUID != 0)
-					{
-						// We have an existing resource target from StateMachine (after depositing)
-						// Reuse it to continue gathering from the same resource
-						var resourceTarget = _resourceProcessor.GetResourceTarget(_stateMachine.ResourceTargetGUID);
-						if (resourceTarget.HasValue)
-						{
-							// Update local fields from StateMachine
-							_currentResourceGUID = _stateMachine.ResourceTargetGUID;
-							_currentResourcePosition = resourceTarget.Value.Position;
-							_currentResourceType = _stateMachine.ResourceTargetType;
-
-							// Set up GoToLocation to go to the resource position, then gather
-							_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
-							_goToState.UsePosition = false;
-
-							_goToState.SetNextState(_gatherResourceAction);
-							_stateMachine.RequestStateChange(_goToState);
-						}
-						else
-						{
-							// Resource no longer exists, clear target and find new one
-							ClearResourceTarget();
-						}
-					}
-				}
-			}
 		}
 
 		/// <summary>

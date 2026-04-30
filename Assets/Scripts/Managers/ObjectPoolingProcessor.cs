@@ -159,8 +159,24 @@ namespace Processors
 				{
 					go.gameObject.SetActive(true);
 
+					Debug.Log($"[ObjectPoolingProcessor] Checking if {go.name} implements IPooledObjectReset");
 					if (go is Utils.Pooling.IPooledObjectReset resettable)
-						resettable.OnReset();
+					{
+						Debug.Log($"[ObjectPoolingProcessor] Calling OnReset for {go.name}");
+						try
+						{
+							resettable.OnReset();
+							Debug.Log($"[ObjectPoolingProcessor] OnReset completed for {go.name}");
+						}
+						catch (System.Exception ex)
+						{
+							Debug.LogError($"[ObjectPoolingProcessor] OnReset failed for {go.name}: {ex.Message}\n{ex.StackTrace}");
+						}
+					}
+					else
+					{
+						Debug.Log($"[ObjectPoolingProcessor] {go.name} does not implement IPooledObjectReset");
+					}
 
 					return go;
 				}
@@ -279,7 +295,7 @@ namespace Processors
 
 				for (int j = 0; j < _objectPoolingSettings.ObjectsToPool[i].PoolAmount; j++)
 				{
-					GameObject obj = UnityEngine.Object.Instantiate(_objectPoolingSettings.ObjectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
+					GameObject obj = UnityEngine.Object.Instantiate(_objectPoolingSettings.ObjectsToPool[i].Prefab, Vector3.zero, Quaternion.identity, parentObject.transform);
 					GameObjectInjector.InjectRecursive(obj, injectionContainer);
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
 					if (poolObj == null)
@@ -529,7 +545,7 @@ namespace Processors
 
 				for (int j = 0; j < objectsToPool[i].PoolAmount; j++)
 				{
-					GameObject obj = UnityEngine.Object.Instantiate(objectsToPool[i].Prefab, new Vector3(-500, 0, -500), Quaternion.identity, parentObject.transform);
+					GameObject obj = UnityEngine.Object.Instantiate(objectsToPool[i].Prefab, Vector3.zero, Quaternion.identity, parentObject.transform);
 					GameObjectInjector.InjectRecursive(obj, injectionContainer);
 
 					PoolableObject poolObj = obj.GetComponent<PoolableObject>();
@@ -538,19 +554,8 @@ namespace Processors
 					obj.name = objName + j;
 					allObjects[objName].Add(poolObj);
 					poolObj.Initialize(objName);
-
 					obj.SetActive(false);
 					pooledObjects[objName].Enqueue(poolObj);
-
-					float typeProgress = poolAmount > 0 ? (j + 1f) / poolAmount : 1f;
-					float overallProgress = (i + typeProgress) / objectTypeCount;
-					progressReporter?.Invoke(overallProgress, $"Pooling {objName} ({j + 1}/{poolAmount})");
-
-					if ((j + 1) % 30 == 0 && Time.realtimeSinceStartup - frameStartTime >= 0.01f)
-					{
-						frameStartTime = Time.realtimeSinceStartup;
-						await Task.Yield();
-					}
 				}
 
 				if (poolAmount == 0)

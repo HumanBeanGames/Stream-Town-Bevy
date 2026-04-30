@@ -63,6 +63,15 @@ namespace Utils.Pooling
 		{
 			// Reset the returning to pool flag when the object is reused
 			_isReturningToPool = false;
+
+			// Call OnReset on all IPooledObjectReset components on this GameObject
+			// This ensures components like TargetableBuilding also get their OnReset called
+			IPooledObjectReset[] resettables = GetComponents<IPooledObjectReset>();
+			foreach (var resettable in resettables)
+			{
+				if (resettable != this) // Don't call OnReset on ourselves again
+					resettable.OnReset();
+			}
 		}
 
 		public void SetupSaveableObject()

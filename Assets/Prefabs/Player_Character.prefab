@@ -29,11 +29,13 @@ GameObject:
   - component: {fileID: 8190014807955116601}
   - component: {fileID: 4297318372752560618}
   - component: {fileID: 1663623434117325580}
+  - component: {fileID: 3825143286850130290}
   - component: {fileID: 8444733496641021938}
   - component: {fileID: 6206431876674455829}
   - component: {fileID: 8524042000473611827}
   - component: {fileID: 7834492647329878108}
   - component: {fileID: 7942735372721111558}
+  - component: {fileID: 4949774700434074810}
   - component: {fileID: 5988875412377748106}
   - component: {fileID: 1137360890361750156}
   - component: {fileID: 2240970141336404593}
@@ -158,7 +160,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cda78e0366c6c794baaed019f89f8c94, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _updateRate: 1
 --- !u!114 &1765598635829304837
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -576,9 +577,12 @@ MonoBehaviour:
     State: {fileID: 4297318372752560618}
   - StateName: Heal
     State: {fileID: 1663623434117325580}
+  - StateName: Build
+    State: {fileID: 3825143286850130290}
   _helpers:
   - {fileID: 8190014807955116601}
   - {fileID: 7942735372721111558}
+  - {fileID: 4949774700434074810}
   _globalState: {fileID: 0}
   _startingState: {fileID: 0}
   _currentState: {fileID: 0}
@@ -643,6 +647,7 @@ MonoBehaviour:
   _idleRange: 10
   _checkRate: 0.5
   _useWorldCenterPos: 0
+  _resourceSearchRange: 100
 --- !u!114 &8190014807955116601
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -684,6 +689,24 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 3872bc33580af3749b6a596bceb3e9d2, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _actionRate: 0
+  _actionAmount: 0
+  _actionRange: 0
+  _useAnimation: 1
+  _actionAnimation: 0
+  _actionVariants: 0
+--- !u!114 &3825143286850130290
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2274655305257698699}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 04c7197be30c5ed428de63e51ec86db1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   _actionRate: 0
@@ -798,6 +821,25 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   HelperName: Attack
   Damage: 0
+  GoToState: {fileID: 0}
+  TargetSensor: {fileID: 0}
+  TargetHealth: {fileID: 0}
+  Target: {fileID: 0}
+  Owner: {fileID: 0}
+--- !u!114 &4949774700434074810
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2274655305257698699}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0682d7cfa4ebbdc4caa81e7cc60011ce, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  HelperName: Build
+  BuildAmount: 0
   GoToState: {fileID: 0}
   TargetSensor: {fileID: 0}
   TargetHealth: {fileID: 0}
