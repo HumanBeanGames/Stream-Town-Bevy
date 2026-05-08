@@ -18,6 +18,11 @@ namespace UserInterface.MainMenu
 		[Inject]
 		private GameStateProcessor _gameStateProcessor;
 
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
         /// <summary>
         /// Speed at which the loading bar progresses.
         /// Higher values make the loading bar fill faster.
@@ -83,7 +88,7 @@ namespace UserInterface.MainMenu
 
 		public async void LoadNonWorldScenes(int sceneIndex)
 		{
-			Debug.Log("Loading scene " + sceneIndex);
+			_debugProcessor.Log(DebugLogCategory.LoadingManager, "Loading scene " + sceneIndex);
 			await LoadSceneAsync(sceneIndex, false);
 		}
 
@@ -99,7 +104,7 @@ namespace UserInterface.MainMenu
 			{
 				if (_gameStateProcessor == null)
 				{
-					Debug.LogError("LoadingManager: GameStateProcessor was not injected before world loading initialization.");
+					_debugProcessor.LogError(DebugLogCategory.LoadingManager, "LoadingManager: GameStateProcessor was not injected before world loading initialization.");
 					return;
 				}
 
@@ -126,7 +131,7 @@ namespace UserInterface.MainMenu
 				await Task.Yield();
 			}
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Scene async load: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.LoadingManager, $"[LOAD TIME] Scene async load: {stopwatch.ElapsedMilliseconds}ms");
 
 			Scene scene = new Scene();
 
@@ -141,7 +146,7 @@ namespace UserInterface.MainMenu
 				await Task.Yield();
 			}
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Scene activation: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.LoadingManager, $"[LOAD TIME] Scene activation: {stopwatch.ElapsedMilliseconds}ms");
 
 			await Task.Delay((int)(_waitTime * 1000));
 

@@ -24,6 +24,11 @@ namespace Processors
         [Inject] private AllSeasonSettings _seasonDataContainer;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Nested runtime data class for season data.
         /// Created and bound in InjectRuntimeData().
         /// </summary>
@@ -109,7 +114,7 @@ namespace Processors
 		/// <param name="_transitionTime">Optional override for transition time.</param>
 		private void NextSeason(float _transitionTime = -1)
 		{
-			Debug.Log("Next Season Called");
+			_debugProcessor.Log(DebugLogCategory.SeasonProcessor, "Next Season Called");
 			Season nextSeason = _seasonRuntimeData.CurrentSeason + 1;
 
 			if (nextSeason == Season.Count)

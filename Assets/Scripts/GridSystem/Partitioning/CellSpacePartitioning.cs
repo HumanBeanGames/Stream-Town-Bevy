@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Processors;
+using Reflex.Attributes;
 using UnityEngine;
 using Utils;
 using GameResources;
@@ -70,6 +71,11 @@ namespace GridSystem.Partitioning
         private float _offSetZ = 0;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Generates the cells to partition the world.
         /// </summary>
         public void GeneratePartitions()
@@ -109,7 +115,8 @@ namespace GridSystem.Partitioning
         {
             Vector2 v2Pos = new Vector2(position.x + _offSetX, position.z + _offSetZ);
 
-            Debug.Log($"[CellSpacePartitioning] PositionToIndex: input=({position.x}, {position.z}), adjusted=({v2Pos.x}, {v2Pos.y}), _numCellsX={_numCellsX}, _numCellsZ={_numCellsZ}, _width={_width}, _length={_length}, _offSetX={_offSetX}, _offSetZ={_offSetZ}");
+            if (_debugProcessor != null)
+                _debugProcessor.Log(DebugLogCategory.CellSpacePartitioning, $"PositionToIndex: input=({position.x}, {position.z}), adjusted=({v2Pos.x}, {v2Pos.y}), _numCellsX={_numCellsX}, _numCellsZ={_numCellsZ}, _width={_width}, _length={_length}, _offSetX={_offSetX}, _offSetZ={_offSetZ}");
 
             return PositionToIndex(v2Pos);
         }
@@ -126,7 +133,8 @@ namespace GridSystem.Partitioning
 
             if (index < 0 || index >= _cells.Count)
             {
-                Debug.LogWarning($"[CellSpacePartitioning] PositionToIndex: input=({position.x}, {position.y}), calculated index={index} is out of bounds [0, {_cells.Count})");
+                if (_debugProcessor != null)
+                    _debugProcessor.LogWarning(DebugLogCategory.CellSpacePartitioning, $"PositionToIndex: input=({position.x}, {position.y}), calculated index={index} is out of bounds [0, {_cells.Count})");
             }
 
             if (index > _cells.Count - 1)
@@ -199,21 +207,21 @@ namespace GridSystem.Partitioning
         /// <param name="targetables">The list to populate with targetables.</param>
         public void GetTargetablesInRange(TargetMask flag, Vector3 position, float radius, ref List<Targetable> targetables)
         {
-            if (flag == TargetMask.Construction)
-                Debug.Log($"[CellSpacePartitioning] GetTargetablesInRange for Construction flag at {position}, radius={radius}");
+            if (flag == TargetMask.Construction && _debugProcessor != null)
+                _debugProcessor.Log(DebugLogCategory.CellSpacePartitioning, $"GetTargetablesInRange for Construction flag at {position}, radius={radius}");
 
             List<BSPCell> cells = new List<BSPCell>(1500);
             Profiler.BeginSample("Get Targetables In Range");
             GetCellsInRange(position, radius, ref cells);
 
-            if (flag == TargetMask.Construction)
-                Debug.Log($"[CellSpacePartitioning] Found {cells.Count} cells in range");
+            if (flag == TargetMask.Construction && _debugProcessor != null)
+                _debugProcessor.Log(DebugLogCategory.CellSpacePartitioning, $"Found {cells.Count} cells in range");
 
             Profiler.EndSample();
             GetTargetablesInCells(flag, ref cells, ref targetables);
 
-            if (flag == TargetMask.Construction)
-                Debug.Log($"[CellSpacePartitioning] Returning {targetables.Count} construction targets");
+            if (flag == TargetMask.Construction && _debugProcessor != null)
+                _debugProcessor.Log(DebugLogCategory.CellSpacePartitioning, $"Returning {targetables.Count} construction targets");
         }
 
         /// <summary>

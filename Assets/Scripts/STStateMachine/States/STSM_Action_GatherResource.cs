@@ -2,6 +2,7 @@ using Behaviours;
 using Character;
 using GameResources;
 using Pets.Enumerations;
+using Processors;
 using Reflex.Attributes;
 using STStateMachine.Helpers;
 using Twitch;
@@ -17,6 +18,7 @@ namespace STStateMachine.States
 	{
 		[Inject] private Processors.TwitchChatProcessor _twitchChatProcessor;
 		[Inject] private Processors.ResourceProcessor _resourceProcessor;
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 		protected CollectResource _collectResource;
 		protected PlayerInventory _playerInventory;
 		protected STSM_HelperDeposit _helperDeposit;
@@ -35,7 +37,7 @@ namespace STStateMachine.States
 			// Validate data-driven target from StateMachine (per-character, not shared state)
 			if (!_stateMachine.HasResourceTarget || _stateMachine.ResourceTargetGUID == 0 || _stateMachine.ResourceTargetType == Utils.Resource.None)
 			{
-				Debug.LogWarning($"[ResourceGathering] Invalid resource target - GUID: {_stateMachine.ResourceTargetGUID}, Type: {_stateMachine.ResourceTargetType}");
+				_debugProcessor.LogWarning(DebugLogCategory.ResourceGathering, $"Invalid resource target - GUID: {_stateMachine.ResourceTargetGUID}, Type: {_stateMachine.ResourceTargetType}");
 				_stateMachine.RequestStateChange("Idle");
 				return;
 			}
@@ -44,7 +46,7 @@ namespace STStateMachine.States
 			if (_actionAmount == 0)
 			{
 				_actionAmount = 10; // Default to gathering 10 resources per action
-				Debug.Log($"[ResourceGathering] ActionAmount was 0, using default: {_actionAmount}");
+				_debugProcessor.Log(DebugLogCategory.ResourceGathering, $"ActionAmount was 0, using default: {_actionAmount}");
 			}
 
 			// Disable AIPath to prevent pathfinding while gathering
@@ -124,7 +126,7 @@ namespace STStateMachine.States
 			var resourceTarget = _resourceProcessor.GetResourceTarget(_stateMachine.ResourceTargetGUID);
 			if (!resourceTarget.HasValue)
 			{
-				Debug.LogWarning($"[ResourceGathering] Resource GUID {_stateMachine.ResourceTargetGUID} not found in ResourceProcessor");
+				_debugProcessor.LogWarning(DebugLogCategory.ResourceGathering, $"Resource GUID {_stateMachine.ResourceTargetGUID} not found in ResourceProcessor");
 				_stateMachine.RequestStateChange("Idle");
 				CleanupDataDrivenTarget();
 				return false;

@@ -339,10 +339,10 @@ namespace UserInterface.BottomBarMenu
 					buttonList[i].interactable = false;
 
 			RoleProcessor rm = _roleProcessor;
-			if (rm.SlotsFull(role) || _townResourceProcessor.ResourceFull(Resource.Recruit))
+			if (rm.SlotsFull(role))
 				return;
 
-			Player recruit = new Player(new TwitchUser($"{-UnityEngine.Random.Range(int.MinValue, 0)}", $""), true);
+			Player recruit = new Player(new TwitchUser(UnityEngine.Random.Range(int.MinValue, 0).ToString(), ""), true);
 			_playerProcessor.AddNewPlayer(recruit, role);
 
 			if (_townResourceProcessor.ResourceFull(Resource.Recruit))

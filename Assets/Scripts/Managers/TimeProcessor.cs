@@ -31,6 +31,11 @@ namespace Processors
         [Inject] private TwitchChatProcessor _twitchChatProcessor;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Gets or sets the world time passed in seconds.
         /// </summary>
         public float WorldTimePassed
@@ -76,7 +81,7 @@ namespace Processors
 
 			if (prevDayCount < _timeRuntimeData.DayCount)
 			{
-				Debug.Log("Day Passed");
+				_debugProcessor.Log(DebugLogCategory.General, "Day Passed");
 				_timeRuntimeData.InvokeDayPassed();
 			}
 		}

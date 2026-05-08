@@ -42,6 +42,11 @@ namespace Processors
 		[Inject] private StationProcessor _stationProcessor;
 		[Inject] private TradeProcessor _tradeProcessor;
 
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
 		private TwitchChatRuntimeData _twitchChatRuntimeData;
 		private MessageSender _messageSender;
 		private EventCommands _eventCommands;
@@ -227,29 +232,29 @@ namespace Processors
 			if (_commandDictionary.SimpleCommands.ContainsKey(command))
 			{
 				_commandDictionary.SimpleCommands[command].Invoke();
-				Debug.Log($"[Debug Command] Executed: {command}");
+				_debugProcessor.Log(DebugLogCategory.TwitchClient, $"[Debug Command] Executed: {command}");
 				return;
 			}
 
 			if (player == null)
 			{
-				Debug.LogError($"[Debug Command] Error: No player selected for command: {command}");
+				_debugProcessor.LogError(DebugLogCategory.TwitchClient, $"[Debug Command] Error: No player selected for command: {command}");
 				return;
 			}
 
 			if (args.Length > 0 && _commandDictionary.CommandsWithArgs.ContainsKey(command))
 			{
 				_commandDictionary.CommandsWithArgs[command].Invoke(player, command, args);
-				Debug.Log($"[Debug Command] Executed: {command} {string.Join(" ", args)}");
+				_debugProcessor.Log(DebugLogCategory.TwitchClient, $"[Debug Command] Executed: {command} {string.Join(" ", args)}");
 			}
 			else if (_commandDictionary.CommandsNoArgs.ContainsKey(command))
 			{
 				_commandDictionary.CommandsNoArgs[command].Invoke(player);
-				Debug.Log($"[Debug Command] Executed: {command}");
+				_debugProcessor.Log(DebugLogCategory.TwitchClient, $"[Debug Command] Executed: {command}");
 			}
 			else
 			{
-				Debug.LogError($"[Debug Command] Error: Unknown command: {command}");
+				_debugProcessor.LogError(DebugLogCategory.TwitchClient, $"[Debug Command] Error: Unknown command: {command}");
 			}
 		}
 

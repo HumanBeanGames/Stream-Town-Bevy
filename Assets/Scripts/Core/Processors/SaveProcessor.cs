@@ -56,6 +56,11 @@ namespace Processors
 		[Inject] private SaveSettings _saveSettings;
 		[Inject] private TimeSettings _timeProcessorScriptable;
 
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
 		private const float _frameBudgetSeconds = 0.0035f;
 
 		private void EscapePressed()
@@ -86,7 +91,7 @@ namespace Processors
 		/// </summary>
 		public void SaveGame()
 		{
-			Debug.Log("Saving Game");
+			_debugProcessor.Log(DebugLogCategory.GameIO, "Saving Game");
 			WorldGenSaveData worldGenSave = GetWorldGenerationData();
 			List<BuildingSaveData> buildings = GetBuildingsData();
 			List<EnemySaveData> enemySaveData = GetEnemySaveData();
@@ -349,7 +354,7 @@ namespace Processors
 			SaveGameData gameData = gameDataTask.Result;
 			SavePlayersData playersData = playersDataTask.Result;
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] File I/O and JSON deserialization: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] File I/O and JSON deserialization: {stopwatch.ElapsedMilliseconds}ms");
 			progressReporter?.Invoke(0.08f, "Applying terrain mesh...");
 
 			WorldGenSaveData genData = gameData.WorldGenData;
@@ -364,10 +369,10 @@ namespace Processors
 			Mesh meshData = genData.MapMesh.GetMeshFromData();
 			_worldGenProcessor.SetMesh(meshData);
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Mesh reconstruction and application: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Mesh reconstruction and application: {stopwatch.ElapsedMilliseconds}ms");
 
 			// Parallel resource and foliage spawning
-			Debug.Log("[SAVE LOAD] Starting parallel resource and foliage spawning");
+			_debugProcessor.Log(DebugLogCategory.GameIO, "[SAVE LOAD] Starting parallel resource and foliage spawning");
 			UserInterface.MainMenu.ParallelProgressReporter.Reset();
 			UserInterface.MainMenu.ParallelProgressReporter.RegisterTrack("Resources", 0.5f);
 			UserInterface.MainMenu.ParallelProgressReporter.RegisterTrack("Foliage", 0.5f);
@@ -380,14 +385,14 @@ namespace Processors
 			await Task.WhenAll(resourceTask, foliageTask);
 
 			resourceFoliageStopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Parallel resource and foliage spawning: {resourceFoliageStopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Parallel resource and foliage spawning: {resourceFoliageStopwatch.ElapsedMilliseconds}ms");
 
 			// Enemy camps
 			progressReporter?.Invoke(0.42f, "Spawning enemy camps...");
 			stopwatch.Restart();
 			await SpawnEnemyCampsAsync(genData);
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Enemy camp spawning ({genData.EnemyCamps.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Enemy camp spawning ({genData.EnemyCamps.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Buildings
 			stopwatch.Restart();
@@ -395,21 +400,21 @@ namespace Processors
 			List<UpdateGraphBounds> buildingsToUpdate = new List<UpdateGraphBounds>();
 			await SpawnBuildingsAsync(buildings, progressReporter, buildingsToUpdate);
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Building spawning ({buildings.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Building spawning ({buildings.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Enemies
 			stopwatch.Restart();
 			progressReporter?.Invoke(0.64f, "Spawning enemies...");
 			await SpawnEnemiesAsync(enemies, progressReporter);
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Enemy spawning ({enemies.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Enemy spawning ({enemies.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Players
 			stopwatch.Restart();
 			progressReporter?.Invoke(0.72f, "Spawning players...");
 			await SpawnPlayersAsync(playerSaveDatas);
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Player spawning ({playerSaveDatas.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Player spawning ({playerSaveDatas.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 
 			// Apply world state
 			progressReporter?.Invoke(0.82f, "Applying world state...");
@@ -443,14 +448,14 @@ namespace Processors
 				_gameEventProcessor.TimeTillRulerVote = _gameEventProcessor.RulerVoteMinTime;
 			}
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] World data application: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] World data application: {stopwatch.ElapsedMilliseconds}ms");
 
 			// Finalize building graph bounds
 			progressReporter?.Invoke(0.92f, "Finalizing world graph...");
 			stopwatch.Restart();
 			await FinalizeGraphBoundsAsync(buildingsToUpdate, progressReporter);
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Graph bounds update ({buildingsToUpdate.Count} buildings): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Graph bounds update ({buildingsToUpdate.Count} buildings): {stopwatch.ElapsedMilliseconds}ms");
 
 			progressReporter?.Invoke(1f, "Save load complete");
 		}
@@ -576,7 +581,7 @@ namespace Processors
 			}
 
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Resource spawning ({genData.Resources.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Resource spawning ({genData.Resources.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 			UserInterface.MainMenu.ParallelProgressReporter.UpdateTrack("Resources", 1f, "Complete");
 		}
 
@@ -603,7 +608,7 @@ namespace Processors
 			}
 
 			stopwatch.Stop();
-			Debug.Log($"[LOAD TIME] Foliage spawning ({genData.Foliage.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.GameIO, $"[LOAD TIME] Foliage spawning ({genData.Foliage.Count} objects): {stopwatch.ElapsedMilliseconds}ms");
 			UserInterface.MainMenu.ParallelProgressReporter.UpdateTrack("Foliage", 1f, "Complete");
 		}
 

@@ -62,6 +62,9 @@ namespace UserInterface
 				OnRoleSlotsChanged((PlayerRole)i);
 				Character.RoleData rds = _roleProcessor.GetRoleData((PlayerRole)i);
 
+				if (rds == null)
+					continue;
+
 				if (rds.RoleFlags == PlayerRoleType.Damage || rds.RoleFlags == PlayerRoleType.Healer)
 				{
 					if (rds.Role == PlayerRole.Ruler)

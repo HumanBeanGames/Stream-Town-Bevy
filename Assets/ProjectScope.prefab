@@ -473,6 +473,63 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f3666f09d1148c04387d222ab76e96fc, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _enableTargetableLogs: 0
+  _enableObjectPoolingLogs: 0
+  _enableCellSpacePartitioningLogs: 0
+  _enableGridProcessorLogs: 0
+  _enableCoordinatorLogs: 0
+  _enableGameIOLogs: 0
+  _enableWorldGenLogs: 0
+  _enableWorldGenProcessorLogs: 0
+  _enableFoliageProcessorLogs: 0
+  _enableStateMachineLogs: 0
+  _enableGoToLocationLogs: 0
+  _enableResourceGatheringLogs: 0
+  _enableSTSM_Action_BuildLogs: 0
+  _enableSTSM_Action_GatherResourceLogs: 0
+  _enableSTSM_Helper_BuildLogs: 0
+  _enableSTSM_Idle_PlayerLogs: 0
+  _enableHealerRoleLogs: 0
+  _enableBuilderSearchLogs: 0
+  _enableBuildingLogs: 0
+  _enableBuildingModelHandlerLogs: 0
+  _enableBuildingPlacerLogs: 0
+  _enablePlacementProbeLogs: 0
+  _enablePlacementProbeHandlerLogs: 0
+  _enableCombatLogs: 0
+  _enablePathfindingLogs: 0
+  _enableRoleHandlerLogs: 0
+  _enableRoleProcessorLogs: 0
+  _enableRoleSlotLogs: 0
+  _enableRoleDataContainerLogs: 0
+  _enableGlobalAudioControllerLogs: 0
+  _enablePlayerAudioHandlerLogs: 0
+  _enableDebugUILogs: 1
+  _enableMainMenuManagerLogs: 0
+  _enableLoadingManagerLogs: 0
+  _enableUserInterface_TownVoteLogs: 0
+  _enableUserInterface_TownGoalLogs: 0
+  _enableObjectSelectionProcessorLogs: 0
+  _enableTwitchClientLogs: 0
+  _enableTwitchMessageLogs: 0
+  _enableDebugCommandLogs: 0
+  _enableTL_SecretsLogs: 0
+  _enableTechTreeProcessorLogs: 0
+  _enableTechnologyTreeLogs: 0
+  _enableTownGoalProcessorLogs: 0
+  _enableObjectiveLogs: 0
+  _enableGoalLogs: 0
+  _enableSeasonProcessorLogs: 0
+  _enableSeasonDataContainerLogs: 0
+  _enableVoteEventLogs: 0
+  _enablePlayerInputProcessorLogs: 0
+  _enableCameraControllerLogs: 0
+  _enableVfxAnimationControllerLogs: 0
+  _enableSimpleScreenShotLogs: 0
+  _enableSaveableResourceLogs: 0
+  _enableScriptablesEditorLogs: 0
+  _enableBuildingDataContainerLogs: 0
+  _enableGeneralLogs: 0
 --- !u!1 &1326999861109692770
 GameObject:
   m_ObjectHideFlags: 0
@@ -518,6 +575,50 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _audioMixer: {fileID: 24100000, guid: e28dfda413a20c443a163fee05801a53, type: 2}
+--- !u!1 &1353714469693522285
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3601112804691514196}
+  - component: {fileID: 1502074849537308002}
+  m_Layer: 0
+  m_Name: ObjectSelectionProcessor
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3601112804691514196
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1353714469693522285}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 298034072652745184}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1502074849537308002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1353714469693522285}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 120599d09a0fa8c478d7b55a761d1040, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &1562219385826265860
 GameObject:
   m_ObjectHideFlags: 0
@@ -592,6 +693,7 @@ Transform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
+  - {fileID: 6866128871335208403}
   - {fileID: 4477896899063615660}
   - {fileID: 2299850368403592941}
   - {fileID: 1517411929458295690}
@@ -605,7 +707,6 @@ Transform:
   - {fileID: 1985352485837534600}
   - {fileID: 2634089977121392409}
   - {fileID: 4887923236799306209}
-  - {fileID: 6866128871335208403}
   - {fileID: 7930512795359190416}
   - {fileID: 7444686488997387563}
   - {fileID: 3295946445194349995}
@@ -625,6 +726,7 @@ Transform:
   - {fileID: 4286265283455545919}
   - {fileID: 3021174793940260221}
   - {fileID: 8855103919877288489}
+  - {fileID: 3601112804691514196}
   m_Father: {fileID: 2318173867771375550}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2097692201216905038

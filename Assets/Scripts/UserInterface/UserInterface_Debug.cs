@@ -4,6 +4,7 @@ using UnityEngine;
 using TMPro;
 using Utils;
 using Level;
+using System.Collections;
 using System.Collections.Generic;
 using Processors;
 using Utils.Pooling;
@@ -58,6 +59,12 @@ namespace UserInterface
 		[Inject] private Processors.TwitchChatProcessor _twitchChatProcessor;
 		[Inject] private Processors.BuildingProcessor _buildingProcessor;
 		[Inject] private Processors.WorldGenProcessor _worldGenProcessor;
+		[Inject] private Processors.GameStateProcessor _gameStateProcessor;
+
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		private Player _debugPlayer;
 
@@ -155,14 +162,9 @@ namespace UserInterface
 		/// </summary>
 		public void SpawnCharacter()
 		{
-			PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
-			obj.gameObject.SetActive(true);
-			
-			// Find townhall and spawn randomly within 5 units
-			Vector3 spawnPosition = GetRandomSpawnPositionNearTownhall();
-			obj.transform.position = spawnPosition;
-			
-			obj.GetComponent<RoleHandler>().SetStarterRole((PlayerRole)_roleDropdownDebug.value);
+			PlayerRole role = (PlayerRole)_roleDropdownDebug.value;
+			Player recruit = new Player(new TwitchUser(UnityEngine.Random.Range(int.MinValue, 0).ToString(), ""), true);
+			_playerProcessor.AddNewPlayer(recruit, role);
 		}
 
 		/// <summary>
@@ -324,13 +326,28 @@ namespace UserInterface
 		/// <summary>
 		/// Initializes the debug user interface.
 		/// </summary>
-		private void InitializeInterface()
+		private IEnumerator InitializeInterface()
 		{
 			HideBuildingContext();
 			HideCharacterContext();
 
-			_roleDropdownDebug.ClearOptions();
-			_roleDropdownCharacter.ClearOptions();
+			if (_roleDropdownDebug == null)
+			{
+				_debugProcessor.LogError(DebugLogCategory.DebugUI, "_roleDropdownDebug is null");
+			}
+			else
+			{
+				_roleDropdownDebug.ClearOptions();
+			}
+
+			if (_roleDropdownCharacter == null)
+			{
+				_debugProcessor.LogError(DebugLogCategory.DebugUI, "_roleDropdownCharacter is null");
+			}
+			else
+			{
+				_roleDropdownCharacter.ClearOptions();
+			}
 
 			List<string> options = new List<string>();
 
@@ -339,8 +356,33 @@ namespace UserInterface
 				options.Add(((PlayerRole)i).ToString());
 			}
 
-			_roleDropdownDebug.AddOptions(options);
-			_roleDropdownCharacter.AddOptions(options);
+			_debugProcessor.Log(DebugLogCategory.DebugUI, $"Populating role dropdowns with {options.Count} options");
+
+			List<TMP_Dropdown.OptionData> roleOptions = new List<TMP_Dropdown.OptionData>();
+			foreach (string option in options)
+			{
+				roleOptions.Add(new TMP_Dropdown.OptionData(option));
+			}
+
+			if (_roleDropdownDebug != null)
+			{
+				_roleDropdownDebug.options = roleOptions;
+				_roleDropdownDebug.value = 0;
+				if (_roleDropdownDebug.captionText != null)
+					_roleDropdownDebug.captionText.text = roleOptions.Count > 0 ? roleOptions[0].text : "";
+				else
+					_debugProcessor.LogError(DebugLogCategory.DebugUI, "_roleDropdownDebug.captionText is null");
+			}
+
+			if (_roleDropdownCharacter != null)
+			{
+				_roleDropdownCharacter.options = roleOptions;
+				_roleDropdownCharacter.value = 0;
+				if (_roleDropdownCharacter.captionText != null)
+					_roleDropdownCharacter.captionText.text = roleOptions.Count > 0 ? roleOptions[0].text : "";
+				else
+					_debugProcessor.LogError(DebugLogCategory.DebugUI, "_roleDropdownCharacter.captionText is null");
+			}
 
 			// Initialize command input field
 			if (_commandInputField != null)
@@ -351,55 +393,47 @@ namespace UserInterface
 			// Initialize player dropdown
 			PopulatePlayerDropdown();
 
-			// Unlock all buildings for debug testing
-			if (_buildingProcessor != null)
-			{
-				_buildingProcessor.UnlockAllBuildingsForDebug();
-				Debug.Log("[Debug] All buildings unlocked for testing");
-			}
+			// Unlock all buildings for debug purposes
+			_buildingProcessor.UnlockAllBuildings();
 
-			// Spawn debug player if it doesn't exist (waits for WorldGen completion)
-			StartCoroutine(EnsureDebugPlayerExistsCoroutine());
+			// Debug player spawning will be handled later when systems are ready
+			// Don't spawn during Awake as pooling may not be initialized yet
+			_debugProcessor.Log(DebugLogCategory.DebugUI, "Debug UI initialized. Debug player will spawn when systems are ready.");
+
+			yield break;
 		}
 
 		/// <summary>
-		/// Coroutine that waits for WorldGen to complete before spawning the debug player.
+		/// Spawns the debug player when systems are ready.
+		/// Should be called after object pooling is initialized.
 		/// </summary>
-		private System.Collections.IEnumerator EnsureDebugPlayerExistsCoroutine()
+		public void SpawnDebugPlayerWhenReady()
 		{
-			// Wait until WorldGen is complete
-			if (_worldGenProcessor != null)
-			{
-				yield return new WaitUntil(() => _worldGenProcessor.IsWorldGenerated);
-			}
+			StartCoroutine(SpawnDebugPlayerCoroutine());
+		}
 
-			Debug.Log("[Debug] WorldGen complete, waiting for navigation graphs");
-
-			// Wait for navigation graphs to be scanned and ready
-			yield return new WaitUntil(() => AstarPath.active != null
-				&& !AstarPath.active.isScanning
-				&& AstarPath.active.data.graphs != null
-				&& AstarPath.active.data.graphs.Length > 0);
-
-			Debug.Log("[Debug] Navigation graphs ready, spawning debug player");
+		private IEnumerator SpawnDebugPlayerCoroutine()
+		{
+			_debugProcessor.Log(DebugLogCategory.DebugUI, "Navigation graphs ready, spawning debug player");
 
 			// Check if debug player already exists in player list
 			foreach (var player in _playerProcessor.Players)
 			{
 				if (player != null && player.TwitchUser != null && player.TwitchUser.Username == "Debugger")
 				{
-					Debug.Log("[Debug] Debug player already exists");
+						_debugProcessor.Log(DebugLogCategory.DebugUI, "Debug player already exists");
 					_debugPlayer = player;
+					PopulatePlayerDropdown();
 					yield break;
 				}
 			}
 
-			Debug.Log("[Debug] Debug player not found, spawning new one");
+			_debugProcessor.Log(DebugLogCategory.DebugUI, "Debug player not found, spawning new one");
 
 			// Create the Player data object
 			TwitchUser debugUser = new TwitchUser("debug_id", "Debugger");
 			_debugPlayer = new Player(debugUser, true);
-			Debug.Log("[Debug] Created Player data object");
+			_debugProcessor.Log(DebugLogCategory.DebugUI, "Created Player data object");
 
 			// Spawn a new debug player character
 			PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
@@ -411,7 +445,7 @@ namespace UserInterface
 				Vector3 spawnPosition = GetRandomSpawnPositionNearTownhall();
 				obj.transform.position = spawnPosition;
 
-				Debug.Log("[Debug] Spawned player object at " + spawnPosition);
+					_debugProcessor.Log(DebugLogCategory.DebugUI, "Spawned player object at " + spawnPosition);
 
 				// Set up as debug player
 				RoleHandler roleHandler = obj.GetComponent<RoleHandler>();
@@ -422,58 +456,64 @@ namespace UserInterface
 				_debugPlayer.RoleHandler = roleHandler;
 				_debugPlayer.StationSensor = obj.GetComponentInChildren<StationSensor>();
 
-				Debug.Log("[Debug] Linked Player data to character");
+					_debugProcessor.Log(DebugLogCategory.DebugUI, "Linked Player data to character");
 
 				// Add the player to the PlayerProcessor
 				Player addedPlayer = _playerProcessor.AddExistingPlayer(_debugPlayer, PlayerRole.Builder);
 				if (addedPlayer != null)
 				{
-					Debug.Log("[Debug] Added debug player to PlayerProcessor");
+						_debugProcessor.Log(DebugLogCategory.DebugUI, "Added debug player to PlayerProcessor");
 					_debugPlayer = addedPlayer;
 				}
 				else
 				{
-					Debug.LogError("[Debug] Failed to add debug player to PlayerProcessor");
+					_debugProcessor.LogError(DebugLogCategory.DebugUI, "Failed to add debug player to PlayerProcessor");
 				}
 
-				Debug.Log("[Debug] Player count after spawn: " + _playerProcessor.Players.Count);
+					_debugProcessor.Log(DebugLogCategory.DebugUI, "Player count after spawn: " + _playerProcessor.Players.Count);
 
 				// Refresh dropdown to show the new debug player
 				PopulatePlayerDropdown();
 			}
 			else
 			{
-				Debug.LogError("[Debug] Failed to get Player from object pool");
+				_debugProcessor.LogError(DebugLogCategory.DebugUI, "Failed to get Player from object pool");
 			}
 		}
-
-		/// <summary>
-		/// Populates the player dropdown with active players.
-		/// </summary>
 		private void PopulatePlayerDropdown()
 		{
-			if (_playerDropdown == null || _playerProcessor == null)
+			if (_playerDropdown == null)
 				return;
 
 			_playerDropdown.ClearOptions();
 
-			List<string> playerNames = new List<string>();
+			List<TMP_Dropdown.OptionData> playerOptions = new List<TMP_Dropdown.OptionData>();
+
+			_debugProcessor.Log(DebugLogCategory.DebugUI, $"Populating player dropdown. Total players: {_playerProcessor.Players.Count}");
 
 			foreach (var player in _playerProcessor.Players)
 			{
 				if (player != null && player.TwitchUser != null)
 				{
-					playerNames.Add(player.TwitchUser.Username);
+					playerOptions.Add(new TMP_Dropdown.OptionData(player.TwitchUser.Username));
+						_debugProcessor.Log(DebugLogCategory.DebugUI, $"Added player to dropdown: {player.TwitchUser.Username}");
 				}
 			}
 
-			if (playerNames.Count > 0)
+			if (playerOptions.Count > 0)
 			{
-				_playerDropdown.AddOptions(playerNames);
+				_playerDropdown.options = playerOptions;
+				_playerDropdown.value = 0;
+				if (_playerDropdown.captionText != null)
+					_playerDropdown.captionText.text = playerOptions[0].text;
+					_debugProcessor.Log(DebugLogCategory.DebugUI, $"Player dropdown populated with {playerOptions.Count} options");
 			}
 			else
 			{
-				_playerDropdown.AddOptions(new List<string> { "No Players" });
+				_playerDropdown.options = new List<TMP_Dropdown.OptionData> { new TMP_Dropdown.OptionData("No Players") };
+				_playerDropdown.value = 0;
+				_playerDropdown.captionText.text = "No Players";
+					_debugProcessor.LogWarning(DebugLogCategory.DebugUI, "No players found for dropdown");
 			}
 		}
 
@@ -488,7 +528,7 @@ namespace UserInterface
 
 			// Get selected player
 			Player selectedPlayer = null;
-			if (_playerDropdown != null && _playerProcessor != null)
+			if (_playerDropdown != null)
 			{
 				int selectedIndex = _playerDropdown.value;
 				if (selectedIndex >= 0 && selectedIndex < _playerDropdown.options.Count)
@@ -514,9 +554,30 @@ namespace UserInterface
 			_commandInputField.text = string.Empty;
 		}
 
+		private bool _debugPlayerSpawnAttempted = false;
+
 		private void Awake()
 		{
-			InitializeInterface();
+			StartCoroutine(InitializeInterface());
+		}
+
+		private void OnEnable()
+		{
+			_gameStateProcessor.GeneratedWorld += OnWorldGenerated;
+		}
+
+		private void OnDisable()
+		{
+			_gameStateProcessor.GeneratedWorld -= OnWorldGenerated;
+		}
+
+		private void OnWorldGenerated()
+		{
+			if (!_debugPlayerSpawnAttempted)
+			{
+				_debugPlayerSpawnAttempted = true;
+				SpawnDebugPlayerWhenReady();
+			}
 		}
 	}
 }

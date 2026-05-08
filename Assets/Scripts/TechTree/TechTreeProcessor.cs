@@ -35,6 +35,11 @@ namespace Processors
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
 
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
 		public Action<Resource> OnStorageBoostUnlocked;
 		public Action<PlayerRole, StatType> OnStatBoostUnlocked;
 		public Action<BuildingType> OnBuildingUnlocked;
@@ -194,7 +199,7 @@ namespace Processors
 			var availableNodes = _techTreeRuntimeData.TechTree.AvailableNodes;
 
 			for (int i = 0; i < availableNodes.Count; i++)
-				Debug.Log(availableNodes[i].TechName);
+				_debugProcessor.Log(DebugLogCategory.TechTreeProcessor, availableNodes[i].TechName);
 		}
 
 		public TechNodeData[] GetRandomAvailableTechsData(int count = 3)

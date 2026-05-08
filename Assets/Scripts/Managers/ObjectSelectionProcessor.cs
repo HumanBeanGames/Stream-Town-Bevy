@@ -50,6 +50,11 @@ namespace Processors
         [Inject] private PlayerInputProcessor _playerInputProcessor;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Runtime data ScriptableObject for object selection data.
         /// Created and bound in InjectRuntimeData().
         /// </summary>
@@ -183,7 +188,7 @@ namespace Processors
 				if (RayTraceFromCamera(Camera.main, _playerInputProcessor.MousePosition, out Vector3 hitPos))
 					_objectSelectionRuntimeData.EndedSelectionPosition = hitPos;
 				else
-					Debug.LogError("This should not be happening");
+					_debugProcessor.LogError(DebugLogCategory.ObjectSelectionProcessor, "This should not be happening");
 
 				Vector3 selectionMin = Vector3.Min(_objectSelectionRuntimeData.StartedSelectionPosition, _objectSelectionRuntimeData.EndedSelectionPosition);
 				Vector3 selectionMax = Vector3.Max(_objectSelectionRuntimeData.StartedSelectionPosition, _objectSelectionRuntimeData.EndedSelectionPosition);
@@ -215,7 +220,7 @@ namespace Processors
 					_objectSelectionRuntimeData.ObjectSelected = false;
 					_objectSelectionRuntimeData.GroupSelected = false;
 				}
-				Debug.Log("Ended selections");
+				_debugProcessor.Log(DebugLogCategory.ObjectSelectionProcessor, "Ended selections");
 				_objectSelectionRuntimeData.StartedGroupSelection = false;
 
 			}

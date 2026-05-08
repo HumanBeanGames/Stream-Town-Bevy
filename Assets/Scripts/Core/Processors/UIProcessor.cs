@@ -106,20 +106,22 @@ namespace Processors
             set => _uiRuntimeData.EventInterface = value;
         }
 
-        public void RegisterResourceDisplay(TextMeshProUGUI woodDisplayText, TextMeshProUGUI foodDisplayText, TextMeshProUGUI oreDisplayText, TextMeshProUGUI goldDisplayText)
+        public void RegisterResourceDisplay(TextMeshProUGUI woodDisplayText, TextMeshProUGUI foodDisplayText, TextMeshProUGUI oreDisplayText, TextMeshProUGUI goldDisplayText, TextMeshProUGUI recruitDisplayText = null)
         {
             _uiRuntimeData.WoodDisplayText = woodDisplayText;
             _uiRuntimeData.FoodDisplayText = foodDisplayText;
             _uiRuntimeData.OreDisplayText = oreDisplayText;
             _uiRuntimeData.GoldDisplayText = goldDisplayText;
+            _uiRuntimeData.RecruitDisplayText = recruitDisplayText;
         }
 
-        public void RegisterResourceRateOfChangeDisplay(TextMeshProUGUI woodRateOfChangeText, TextMeshProUGUI foodRateOfChangeText, TextMeshProUGUI oreRateOfChangeText, TextMeshProUGUI goldRateOfChangeText)
+        public void RegisterResourceRateOfChangeDisplay(TextMeshProUGUI woodRateOfChangeText, TextMeshProUGUI foodRateOfChangeText, TextMeshProUGUI oreRateOfChangeText, TextMeshProUGUI goldRateOfChangeText, TextMeshProUGUI recruitRateOfChangeText = null)
         {
             _uiRuntimeData.WoodRateOfChangeText = woodRateOfChangeText;
             _uiRuntimeData.FoodRateOfChangeText = foodRateOfChangeText;
             _uiRuntimeData.OreRateOfChangeText = oreRateOfChangeText;
             _uiRuntimeData.GoldRateOfChangeText = goldRateOfChangeText;
+            _uiRuntimeData.RecruitRateOfChangeText = recruitRateOfChangeText;
         }
 
         public void RegisterHudCounters(TextMeshProUGUI playerCountText, TextMeshProUGUI buildingCountText, TextMeshProUGUI timeDisplayText, Slider seasonalSlider)
@@ -140,6 +142,11 @@ namespace Processors
             _uiRuntimeData.FoodDisplayText.text = FormattedResourceString(_townResourceProcessor.CurrentResourceAmount(Resource.Food), _townResourceProcessor.MaxResourceAmount(Resource.Food));
             _uiRuntimeData.OreDisplayText.text = FormattedResourceString(_townResourceProcessor.CurrentResourceAmount(Resource.Ore), _townResourceProcessor.MaxResourceAmount(Resource.Ore));
             _uiRuntimeData.GoldDisplayText.text = FormattedResourceString(_townResourceProcessor.CurrentResourceAmount(Resource.Gold));
+
+            if (_uiRuntimeData.RecruitDisplayText != null)
+            {
+                _uiRuntimeData.RecruitDisplayText.text = FormattedResourceString(_townResourceProcessor.CurrentResourceAmount(Resource.Recruit), _townResourceProcessor.MaxResourceAmount(Resource.Recruit));
+            }
         }
 
         // Updates resource rate of change texts.
@@ -152,6 +159,11 @@ namespace Processors
             _uiRuntimeData.FoodRateOfChangeText.text = FormattedRateOfChangeString(_townResourceProcessor.RateOfChangeForResource(Resource.Food));
             _uiRuntimeData.OreRateOfChangeText.text = FormattedRateOfChangeString(_townResourceProcessor.RateOfChangeForResource(Resource.Ore));
             _uiRuntimeData.GoldRateOfChangeText.text = FormattedRateOfChangeString(rateOfChange: _townResourceProcessor.RateOfChangeForResource(Resource.Gold));
+
+            if (_uiRuntimeData.RecruitRateOfChangeText != null)
+            {
+                _uiRuntimeData.RecruitRateOfChangeText.text = FormattedRateOfChangeString(_townResourceProcessor.RateOfChangeForResource(Resource.Recruit));
+            }
         }
 
         // Updates building and player count texts.
@@ -160,8 +172,27 @@ namespace Processors
             if (_uiRuntimeData.BuildingCountText == null || _uiRuntimeData.PlayerCountText == null)
                 return;
 
-            _uiRuntimeData.BuildingCountText.text = _buildingProcessor.NumberOfBuildings.ToString();
-            _uiRuntimeData.PlayerCountText.text = _playerProcessor.PlayerCount().ToString();
+            int buildingCount = _buildingProcessor.NumberOfBuildings;
+            int playerCount = _playerProcessor.PlayerCount();
+            int recruitCount = _playerProcessor.RecruitCount();
+
+            // Exclude debugger from player count (debugger is a special case)
+            foreach (var player in _playerProcessor.Players)
+            {
+                if (player != null && player.TwitchUser != null && player.TwitchUser.Username == "Debugger")
+                {
+                    playerCount--;
+                    break;
+                }
+            }
+
+            _uiRuntimeData.BuildingCountText.text = buildingCount.ToString();
+            _uiRuntimeData.PlayerCountText.text = playerCount.ToString();
+
+            if (_uiRuntimeData.RecruitCountText != null)
+            {
+                _uiRuntimeData.RecruitCountText.text = recruitCount.ToString();
+            }
         }
 
         // Updates the season slider based on time passed.
@@ -224,7 +255,7 @@ namespace Processors
             string newString = $"<size=48>{StringUtils.GetShortenedNumberAsString(currentAmount)}</size>";
 
             if (maxAmount != -1)
-                newString += $"<size=32><color=#958450> / {StringUtils.GetShortenedNumberAsString(maxAmount)}</color></size>";
+	            newString += $" <size=32><color=#958450>/ {StringUtils.GetShortenedNumberAsString(maxAmount)}</color></size>";
 
             return newString;
         }
@@ -266,6 +297,7 @@ namespace Processors
             UpdateResourcesRateOfChange();
             UpdateCountTexts();
             UpdateSeasonSlider();
+            UpdateTimeOfDay();
         }
 
         /// <summary>

@@ -83,6 +83,11 @@ namespace Processors
 		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
 
 		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+		/// <summary>
 		/// Gets the list of wood resources.
 		/// </summary>
 		public List<GameResources.ResourceData> WoodResources => _resourceData.WoodResources;
@@ -941,8 +946,6 @@ namespace Processors
 			float assignmentScore = assignedCount * assignmentPenaltyMod;
 			float totalScore = distanceScore + assignmentScore;
 
-			Debug.Log($"[ResourceProcessor] CalculateTargetScore - GUID: {guid}, Distance: {distance:F2}, AssignedCount: {assignedCount}, DistanceScore: {distanceScore:F2}, AssignmentScore: {assignmentScore:F2}, TotalScore: {totalScore:F2}");
-
 			return totalScore;
 		}
 
@@ -958,7 +961,7 @@ namespace Processors
 			else
 				_resourceData.ResourceAssignmentCounts[guid] = 1;
 
-			Debug.Log($"[ResourceProcessor] AssignToTarget - GUID: {guid}, New count: {_resourceData.ResourceAssignmentCounts[guid]}");
+			_debugProcessor.Log(DebugLogCategory.ResourceGathering, $"AssignToTarget - GUID: {guid}, New count: {_resourceData.ResourceAssignmentCounts[guid]}");
 		}
 
 		/// <summary>
@@ -986,11 +989,11 @@ namespace Processors
 				if (_resourceData.ResourceAssignmentCounts[guid] <= 0)
 					_resourceData.ResourceAssignmentCounts.Remove(guid);
 
-				Debug.Log($"[ResourceProcessor] UnassignFromTarget - GUID: {guid}, Old count: {oldCount}, New count: {(_resourceData.ResourceAssignmentCounts.ContainsKey(guid) ? _resourceData.ResourceAssignmentCounts[guid].ToString() : "removed")}");
+				_debugProcessor.Log(DebugLogCategory.ResourceGathering, $"UnassignFromTarget - GUID: {guid}, Old count: {oldCount}, New count: {(_resourceData.ResourceAssignmentCounts.ContainsKey(guid) ? _resourceData.ResourceAssignmentCounts[guid].ToString() : "removed")}");
 			}
 			else
 			{
-				Debug.LogWarning($"[ResourceProcessor] UnassignFromTarget - GUID: {guid} not found in assignment counts");
+				_debugProcessor.LogWarning(DebugLogCategory.ResourceGathering, $"UnassignFromTarget - GUID: {guid} not found in assignment counts");
 			}
 		}
 

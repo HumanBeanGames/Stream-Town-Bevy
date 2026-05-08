@@ -48,6 +48,7 @@ namespace Processors
 		[Inject] private GUIDProcessor _guidProcessor;
 		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
 		[Inject] private GridSystem.GridProcessor _gridProcessor;
+		[Inject] private BuildingProcessor _buildingProcessor;
 
 		private const int MAX_GENERATION_ATTEMPTS = 10;
 		private Task _poolingInitializationTask = null;
@@ -58,6 +59,8 @@ namespace Processors
 		[Inject] private WorldGenDebugSettings _debugSettings;
 
 		[Inject] private WorldGenLayerSettings _layerSettings;
+
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		private const string ENEMY_CAMP_POOL_NAME = "EnemyCamp_Goblin";
 
@@ -110,12 +113,12 @@ namespace Processors
 			// Call through GridProcessor to ensure cells are created first
 			if (_gridProcessor != null)
 			{
-				Debug.Log("[WorldGenProcessor] Repopulating spatial partitioning indices via GridProcessor");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Repopulating spatial partitioning indices via GridProcessor");
 				_gridProcessor.RepopulateSpatialIndices(_resourceProcessor, _foliageProcessor);
 			}
 			else
 			{
-				Debug.LogWarning("[WorldGenProcessor] GridProcessor is null, cannot repopulate indices");
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "GridProcessor is null, cannot repopulate indices");
 			}
 
 			_runtimeData.WorldGenerated = true;
@@ -182,7 +185,7 @@ namespace Processors
 					// Start pooling initialization if not already started
 					if (_poolingInitializationTask == null)
 					{
-						Debug.Log("[WorldGenProcessor] Starting pooling initialization");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Starting pooling initialization");
 						_objectPoolingProcessor.ResetPoolingInitialization();
 						_poolingInitializationTask = _objectPoolingProcessor.InitializePooling(null);
 					}
@@ -190,14 +193,14 @@ namespace Processors
 					// Check if pooling initialization is complete
 					if (_poolingInitializationTask != null && _poolingInitializationTask.IsCompleted)
 					{
-						Debug.Log("[WorldGenProcessor] Pooling initialization complete");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Pooling initialization complete");
 						_poolingInitializationTask = null;
 						_runtimeData.State = GenerationState.GeneratingTerrain;
 					}
 					break;
 
 				case GenerationState.GeneratingTerrain:
-					Debug.Log("[WorldGen] GeneratingTerrain state");
+					_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "GeneratingTerrain state");
 					if (_behaviorSettings.RandomizeSeed)
 						_terrainGenerationSettings.GenerationSettings.Seed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
 
@@ -206,7 +209,7 @@ namespace Processors
 					break;
 
 				case GenerationState.SpawningTownhall:
-					Debug.Log("[WorldGen] SpawningTownhall state");
+					_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "SpawningTownhall state");
 					if (SpawnTownhall())
 						_runtimeData.State = GenerationState.GeneratingObjects;
 					else
@@ -214,7 +217,7 @@ namespace Processors
 						_runtimeData.GenerationAttempts++;
 						if (_runtimeData.GenerationAttempts >= MAX_GENERATION_ATTEMPTS)
 						{
-							Debug.LogError($"WorldGenProcessor: Failed to spawn townhall after {MAX_GENERATION_ATTEMPTS} attempts.");
+							_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, $"Failed to spawn townhall after {MAX_GENERATION_ATTEMPTS} attempts.");
 							_runtimeData.State = GenerationState.Complete;
 						}
 						else
@@ -227,7 +230,7 @@ namespace Processors
 				case GenerationState.GeneratingObjects:
 					if (!_objectsGenerated)
 					{
-						Debug.Log("[WorldGen] GeneratingObjects state - calling GeneratePooledObjectsExceptTownhallSync");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "GeneratingObjects state - calling GeneratePooledObjectsExceptTownhallSync");
 						GeneratePooledObjectsExceptTownhallSync();
 						_objectsGenerated = true;
 						_runtimeData.State = GenerationState.GeneratingNavmesh;
@@ -235,7 +238,7 @@ namespace Processors
 					break;
 
 				case GenerationState.GeneratingNavmesh:
-					Debug.Log("[WorldGen] GeneratingNavmesh state");
+					_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "GeneratingNavmesh state");
 					GenerateNavmesh();
 					CompleteWorldGeneration(GetActiveTownhallObject());
 					_runtimeData.State = GenerationState.Complete;
@@ -340,7 +343,7 @@ namespace Processors
 			AstarPath astarPath = GameObject.FindObjectOfType<AstarPath>();
 			if (astarPath == null)
 			{
-				Debug.LogError("[WorldGen] AstarPath component not found in scene. Cannot generate navmesh.");
+				_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, "AstarPath component not found in scene. Cannot generate navmesh.");
 				return;
 			}
 
@@ -351,7 +354,7 @@ namespace Processors
 				gridGraph = astarPath.data.AddGraph(typeof(GridGraph)) as GridGraph;
 				if (gridGraph == null)
 				{
-					Debug.LogError("[WorldGen] Failed to create GridGraph.");
+					_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, "Failed to create GridGraph.");
 					return;
 				}
 				gridGraph.name = "WorldGridGraph";
@@ -367,7 +370,7 @@ namespace Processors
 			int gridDepth = 170;
 			gridGraph.SetDimensions(gridWidth, gridDepth, nodeSize);
 
-			Debug.Log($"[WorldGen] GridGraph configured: {gridWidth}x{gridDepth} nodes, nodeSize={nodeSize}, calculated worldSize={xSize}x{zSize}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"GridGraph configured: {gridWidth}x{gridDepth} nodes, nodeSize={nodeSize}, calculated worldSize={xSize}x{zSize}");
 
 			// Center the graph on the terrain
 			gridGraph.center = Vector3.zero;
@@ -384,10 +387,10 @@ namespace Processors
 			float maxClimb = _terrainGenerationSettings.QuantizationFactor + 0.05f;
 			gridGraph.maxClimb = maxClimb;
 
-			Debug.Log($"[WorldGen] Collision disabled - will use manual walkability detection, maxClimb={maxClimb}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Collision disabled - will use manual walkability detection, maxClimb={maxClimb}");
 
 			// Scan the graph to generate nodes
-			Debug.Log("[WorldGen] Scanning A* GridGraph...");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Scanning A* GridGraph...");
 			astarPath.Scan(gridGraph);
 
 			// Check if graph has walkable nodes after scan
@@ -399,7 +402,7 @@ namespace Processors
 				if (node.Walkable)
 					walkableCount++;
 			});
-			Debug.Log($"[WorldGen] After scan: {walkableCount}/{totalNodes} nodes walkable");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"After scan: {walkableCount}/{totalNodes} nodes walkable");
 
 			// Mark nodes as unwalkable based on terrain height
 			// Nodes below terrain threshold should be unwalkable
@@ -409,7 +412,7 @@ namespace Processors
 			// Resources don't have colliders, so we manually mark nodes
 			MarkResourceNodesUnwalkable(gridGraph);
 
-			Debug.Log("[WorldGen] A* GridGraph generation complete.");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "A* GridGraph generation complete.");
 		}
 
 		/// <summary>
@@ -452,7 +455,7 @@ namespace Processors
 				}
 			});
 
-			Debug.Log($"[WorldGen] Marked {groundWalkableCount} nodes as walkable on ground layer, {gradationBlockedCount} blocked by gradation factor");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Marked {groundWalkableCount} nodes as walkable on ground layer, {gradationBlockedCount} blocked by gradation factor");
 		}
 
 		/// <summary>
@@ -463,7 +466,7 @@ namespace Processors
 		{
 			if (_resourceProcessor == null)
 			{
-				Debug.LogWarning("[WorldGen] ResourceProcessor not available for node blocking.");
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "ResourceProcessor not available for node blocking.");
 				return;
 			}
 
@@ -481,7 +484,7 @@ namespace Processors
 			// Block recruit resources
 			BlockResourcesInDictionary(_resourceProcessor.GetRecruitResources(), gridGraph, ref blockedCount, ref totalResources);
 
-			Debug.Log($"[WorldGen] Blocked {blockedCount} grid nodes at resource positions (total resources checked: {totalResources}).");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Blocked {blockedCount} grid nodes at resource positions (total resources checked: {totalResources}).");
 		}
 
 		/// <summary>
@@ -495,7 +498,7 @@ namespace Processors
 		{
 			if (resourceDict == null)
 			{
-				Debug.LogWarning("[WorldGen] Resource dictionary is null.");
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "Resource dictionary is null.");
 				return;
 			}
 
@@ -515,7 +518,7 @@ namespace Processors
 
 					if (node == null)
 					{
-						Debug.LogWarning($"[WorldGen] No node found near resource position {position}");
+						_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, $"No node found near resource position {position}");
 					}
 					else if (!node.Walkable)
 					{
@@ -531,7 +534,7 @@ namespace Processors
 
 			if (dictResourceCount > 0)
 			{
-				Debug.Log($"[WorldGen] Checked {dictResourceCount} resources in dictionary");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Checked {dictResourceCount} resources in dictionary");
 			}
 		}
 
@@ -885,6 +888,9 @@ namespace Processors
 			if (!_runtimeData.Buildings.ContainsKey(townhallBuilding.BuildingType))
 				_runtimeData.Buildings[townhallBuilding.BuildingType] = new List<Buildings.BuildingBase>();
 			_runtimeData.Buildings[townhallBuilding.BuildingType].Add(townhallBuilding);
+
+			// Register with BuildingProcessor so it counts towards NumberOfBuildings
+			_buildingProcessor.AddLoadedBuilding(townhallBuilding);
 		}
 
 		/// <summary>
@@ -1002,7 +1008,7 @@ namespace Processors
 			// Update FoliageProcessor with generated foliage
 			_foliageProcessor.SetGeneratedFoliage(_runtimeData.OnLandFoliage, _runtimeData.UnderWaterFoliage);
 
-			Debug.Log("[WorldGen] Transferred generated data to processors for rendering");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Transferred generated data to processors for rendering");
 		}
 
 		/// <summary>
@@ -1127,10 +1133,9 @@ namespace Processors
 								amount = (int)MathExtended.RemapValue(eval, 0, 1, settings.MinAmount, settings.MaxAmount);
 							}
 
-							// Offset resource position by 0.5 to align with navmesh node centers
-							// Resources are at cell junctions (half-integer positions), so we offset
-							// to align with integer node positions for proper pathfinding
-							Vector3 resourcePosition = position + new Vector3(0.5f, 0, 0.5f);
+							Vector3 resourcePosition = resourceType == global::Utils.Resource.Wood
+								? position + new Vector3(0.5f, 0, 0.5f)
+								: position;
 
 							// Create resource data for GPU instancing
 							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
@@ -1167,7 +1172,7 @@ namespace Processors
 				}
 			}
 
-			Debug.Log($"[WorldGen] Resource generation summary: ResourceType={resourceType}, PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, OverlapSkips={overlapSkips}, Spawns={spawns}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Resource generation summary: ResourceType={resourceType}, PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, OverlapSkips={overlapSkips}, Spawns={spawns}");
 		}
 
 		/// <summary>
@@ -1275,7 +1280,7 @@ namespace Processors
 				}
 			}
 
-			Debug.Log($"[WorldGen] Foliage generation summary: PoolName={settings.PoolName}, PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, OverlapSkips={overlapSkips}, Spawns={spawns}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Foliage generation summary: PoolName={settings.PoolName}, PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, OverlapSkips={overlapSkips}, Spawns={spawns}");
 		}
 
 		/// <summary>
@@ -1321,20 +1326,20 @@ namespace Processors
 			PoolableObject townhallPoolObject = GetPooledObject("Townhall");
 			if (townhallPoolObject == null)
 			{
-				Debug.LogError("WorldGenProcessor: Failed to spawn townhall - Townhall pool object is null or pool 'Townhall' does not exist.");
+				_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, "Failed to spawn townhall - Townhall pool object is null or pool 'Townhall' does not exist.");
 				return false;
 			}
 
 			SaveableBuilding saveableTownhall = townhallPoolObject.SaveableObject as SaveableBuilding;
 			if (saveableTownhall == null)
 			{
-				Debug.LogError("WorldGenProcessor: Failed to spawn townhall - Pool object does not have a SaveableBuilding component.");
+				_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, "Failed to spawn townhall - Pool object does not have a SaveableBuilding component.");
 				return false;
 			}
 
 			if (saveableTownhall.BuildingBase == null)
 			{
-				Debug.LogError("WorldGenProcessor: Failed to spawn townhall - SaveableBuilding does not have a BuildingBase.");
+				_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, "Failed to spawn townhall - SaveableBuilding does not have a BuildingBase.");
 				return false;
 			}
 
@@ -1464,7 +1469,7 @@ namespace Processors
 		/// </summary>
 		private void GeneratePooledObjects(Action<float, string> progressReporter = null)
 		{
-			Debug.Log("[WorldGen] GeneratePooledObjects called");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "GeneratePooledObjects called");
 			PoolableObject th = GetPooledObject("Townhall");
 			SaveableBuilding saveableTownhall = (SaveableBuilding)th.SaveableObject;
 			GameObject thObj = saveableTownhall.BuildingBase.gameObject;
@@ -1473,7 +1478,7 @@ namespace Processors
 			if (TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 townhallPlacement))
 				thObj.transform.position = townhallPlacement;
 			else
-				Debug.LogWarning("ProceduralWorldGenerator: No valid flat townhall position found during ScanWorld; using origin fallback.", this);
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "No valid flat townhall position found during ScanWorld; using origin fallback.");
 
 			thObj.SetActive(true);
 			EnsureTownhallRegistered(saveableTownhall.BuildingBase);
@@ -1486,11 +1491,11 @@ namespace Processors
 		/// </summary>
 		private void GeneratePooledObjectsExceptTownhall(Action<float, string> progressReporter = null)
 		{
-			Debug.Log("[WorldGen] GeneratePooledObjectsExceptTownhall called");
-			Debug.Log($"[WorldGen] _resourceGenerationSettings is null: {_resourceGenerationSettings == null}");
-			Debug.Log($"[WorldGen] _waterResourceGenerationSettings is null: {_waterResourceGenerationSettings == null}");
-			Debug.Log($"[WorldGen] _foliageGenerationSettings is null: {_foliageGenerationSettings == null}");
-			Debug.Log($"[WorldGen] _waterFoliageGenerationSettings is null: {_waterFoliageGenerationSettings == null}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "GeneratePooledObjectsExceptTownhall called");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"_resourceGenerationSettings is null: {_resourceGenerationSettings == null}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"_waterResourceGenerationSettings is null: {_waterResourceGenerationSettings == null}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"_foliageGenerationSettings is null: {_foliageGenerationSettings == null}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"_waterFoliageGenerationSettings is null: {_waterFoliageGenerationSettings == null}");
 
 			int seed = _terrainGenerationSettings.GenerationSettings.Seed;
 			DateTime before = DateTime.Now;
@@ -1506,7 +1511,7 @@ namespace Processors
 			if (_waterFoliageGenerationSettings != null)
 				totalSettings += _waterFoliageGenerationSettings.WaterFoliageGenerationSettings.Count;
 
-			Debug.Log($"[WorldGen] Total settings to process: {totalSettings}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Total settings to process: {totalSettings}");
 
 			int completedSettings = 0;
 
@@ -1547,7 +1552,7 @@ namespace Processors
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugSettings.DebugGenerationTiming)
-						Debug.Log($"Generating {label} took {duration.TotalMilliseconds}ms");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Generating {label} took {duration.TotalMilliseconds}ms");
 					completedSettings++;
 					ReportSpawnProgress(0f, $"Completed resources: {label} ({completedSettings}/{totalSettings})");
 				}
@@ -1565,7 +1570,7 @@ namespace Processors
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugSettings.DebugGenerationTiming)
-						Debug.Log($"Generating {label} took {duration.TotalMilliseconds}ms");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Generating {label} took {duration.TotalMilliseconds}ms");
 					completedSettings++;
 					ReportSpawnProgress(0f, $"Completed shoreline resources: {label} ({completedSettings}/{totalSettings})");
 				}
@@ -1580,7 +1585,7 @@ namespace Processors
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugSettings.DebugGenerationTiming)
-						Debug.Log($"Generating foliage took {duration.TotalMilliseconds}ms");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Generating foliage took {duration.TotalMilliseconds}ms");
 					completedSettings++;
 					ReportSpawnProgress(0f, $"Completed foliage ({completedSettings}/{totalSettings})");
 				}
@@ -1594,7 +1599,7 @@ namespace Processors
 					after = DateTime.Now;
 					duration = after.Subtract(before);
 					if (_debugSettings.DebugGenerationTiming)
-						Debug.Log($"Generating underwater foliage took {duration.TotalMilliseconds}ms");
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Generating underwater foliage took {duration.TotalMilliseconds}ms");
 					completedSettings++;
 					ReportSpawnProgress(0f, $"Completed underwater foliage ({completedSettings}/{totalSettings})");
 				}
@@ -1629,7 +1634,7 @@ namespace Processors
 						CollectMeshMaterials(settings);
 
 				// Parallel resource spawning
-				Debug.Log("[WORLD GEN] Starting parallel resource spawning");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Starting parallel resource spawning");
 				UserInterface.MainMenu.ParallelProgressReporter.Reset();
 				UserInterface.MainMenu.ParallelProgressReporter.RegisterTrack("Wood Resources", 0.2f);
 				UserInterface.MainMenu.ParallelProgressReporter.RegisterTrack("Ore Resources", 0.2f);
@@ -1647,7 +1652,7 @@ namespace Processors
 				SetResourceParallel("Recruit Resources", () => { SetGeneratedResources(global::Utils.Resource.Recruit, recruitResources, meshListsByType.ContainsKey(global::Utils.Resource.Recruit) ? meshListsByType[global::Utils.Resource.Recruit] : null, materialListsByType.ContainsKey(global::Utils.Resource.Recruit) ? materialListsByType[global::Utils.Resource.Recruit] : null); });
 
 				resourceStopwatch.Stop();
-				Debug.Log($"[LOAD TIME] Parallel resource spawning: {resourceStopwatch.ElapsedMilliseconds}ms");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Parallel resource spawning: {resourceStopwatch.ElapsedMilliseconds}ms");
 
 				// Clean up parallel progress tracks
 				UserInterface.MainMenu.ParallelProgressReporter.UnregisterTrack("Wood Resources");
@@ -1660,7 +1665,7 @@ namespace Processors
 				// This is intentionally left as a coordination point for future implementation
 
 				// Parallel foliage spawning
-				Debug.Log("[WORLD GEN] Starting parallel foliage spawning");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Starting parallel foliage spawning");
 				UserInterface.MainMenu.ParallelProgressReporter.Reset();
 				UserInterface.MainMenu.ParallelProgressReporter.RegisterTrack("OnLand Foliage", 0.5f);
 				UserInterface.MainMenu.ParallelProgressReporter.RegisterTrack("UnderWater Foliage", 0.5f);
@@ -1672,7 +1677,7 @@ namespace Processors
 				SetFoliageParallel("UnderWater Foliage", () => { _runtimeData.UnderWaterFoliage.Clear(); _runtimeData.UnderWaterFoliage.AddRange(underWaterFoliage); });
 
 				foliageStopwatch.Stop();
-				Debug.Log($"[LOAD TIME] Parallel foliage spawning: {foliageStopwatch.ElapsedMilliseconds}ms");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Parallel foliage spawning: {foliageStopwatch.ElapsedMilliseconds}ms");
 
 				// Clean up parallel progress tracks
 				UserInterface.MainMenu.ParallelProgressReporter.UnregisterTrack("OnLand Foliage");
@@ -1692,7 +1697,7 @@ namespace Processors
 			setResourceAction();
 			stopwatch.Stop();
 
-			Debug.Log($"[LOAD TIME] {trackName}: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"{trackName}: {stopwatch.ElapsedMilliseconds}ms");
 			UserInterface.MainMenu.ParallelProgressReporter.UpdateTrack(trackName, 1f, "Complete");
 		}
 
@@ -1704,7 +1709,7 @@ namespace Processors
 			setFoliageAction();
 			stopwatch.Stop();
 
-			Debug.Log($"[LOAD TIME] {trackName}: {stopwatch.ElapsedMilliseconds}ms");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"{trackName}: {stopwatch.ElapsedMilliseconds}ms");
 			UserInterface.MainMenu.ParallelProgressReporter.UpdateTrack(trackName, 1f, "Complete");
 		}
 
@@ -1752,7 +1757,7 @@ namespace Processors
 			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
 
 			int terrainMask = GetTerrainMask();
-			Debug.Log($"[WorldGen] GenerateFromSettings called: PoolName={settings.GetPoolName()}, Size={settings.Size}, Spacing={settings.Spacing}, TerrainMask={terrainMask}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"GenerateFromSettings called: PoolName={settings.GetPoolName()}, Size={settings.Size}, Spacing={settings.Spacing}, TerrainMask={terrainMask}");
 
 			int positionsChecked = 0;
 			int raycastFailures = 0;
@@ -1821,7 +1826,7 @@ namespace Processors
 				}
 			}
 
-			Debug.Log($"[WorldGen] Spawn summary for {settings.GetPoolName()}: PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Spawn summary for {settings.GetPoolName()}: PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
 		}
 
 		private void GenerateFromSettings(GenerationSettings settings, int seed, Func<Vector3, (bool, float)> comparisonLambda, bool useCollision, Action<float> progressReporter, List<GameResources.ResourceData> woodResources = null, List<GameResources.ResourceData> oreResources = null, List<GameResources.ResourceData> foodResources = null, List<GameResources.ResourceData> goldResources = null, List<GameResources.ResourceData> recruitResources = null, HashSet<(int, int)> occupiedCells = null, List<GameResources.FoliageData> onLandFoliage = null, List<GameResources.FoliageData> underWaterFoliage = null, HashSet<uint> existingGUIDs = null)
@@ -1847,7 +1852,7 @@ namespace Processors
 			Vector3 spawnBiasOrigin = GetSpawnBiasOrigin();
 
 			int terrainMask = GetTerrainMask();
-			Debug.Log($"[WorldGen] GenerateFromSettings (with progress) called: PoolName={settings.GetPoolName()}, Size={settings.Size}, Spacing={settings.Spacing}, TerrainMask={terrainMask}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"GenerateFromSettings (with progress) called: PoolName={settings.GetPoolName()}, Size={settings.Size}, Spacing={settings.Spacing}, TerrainMask={terrainMask}");
 
 			int positionsChecked = 0;
 			int raycastFailures = 0;
@@ -2032,7 +2037,7 @@ namespace Processors
 			}
 
 			progressReporter?.Invoke(1f);
-			Debug.Log($"[WorldGen] Spawn summary for {settings.GetPoolName()} (with progress): PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"Spawn summary for {settings.GetPoolName()} (with progress): PositionsChecked={positionsChecked}, SpawnAttempts={spawnAttempts}, RaycastFailures={raycastFailures}, Spawns={spawns}");
 		}
 
 		/// <summary>
@@ -2040,19 +2045,19 @@ namespace Processors
 		/// </summary>
 		public void TryGenerateWorld(Action<float, string> progressReporter = null)
 		{
-			Debug.Log("[WorldGen] TryGenerateWorld (public) called");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "TryGenerateWorld (public) called");
 			TryGenerateWorldInternal(false, progressReporter);
 		}
 
 		private void TryGenerateWorldInternal(bool forceGenerate, Action<float, string> progressReporter = null)
 		{
-			Debug.Log($"[WorldGen] TryGenerateWorldInternal called: forceGenerate={forceGenerate}, CurrentState={_runtimeData.State}");
+			_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, $"TryGenerateWorldInternal called: forceGenerate={forceGenerate}, CurrentState={_runtimeData.State}");
 			if (_runtimeData == null)
 				throw new InvalidOperationException("WorldGenProcessor: WorldGenRuntimeData has not been installed.");
 
 			if (_behaviorSettings.SuppressGeneration)
 			{
-				Debug.Log("[WorldGen] Generation suppressed by behavior settings");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Generation suppressed by behavior settings");
 				_runtimeData.State = GenerationState.Complete;
 				CompleteWorldGeneration(GetActiveTownhallObject());
 				progressReporter?.Invoke(1f, "World generation suppressed");
@@ -2087,7 +2092,7 @@ namespace Processors
 
 					if (!TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 townhallPlacement))
 					{
-						Debug.Log("ProceduralWorldGenerator: Could not find a valid flat townhall footprint, regenerating terrain.", this);
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Could not find a valid flat townhall footprint, regenerating terrain.");
 						continue;
 					}
 
@@ -2104,7 +2109,7 @@ namespace Processors
 
 				if (!terrainAcceptable)
 				{
-					Debug.LogError($"ProceduralWorldGenerator: Failed to generate acceptable terrain after {MAX_GENERATION_ATTEMPTS} attempts. Proceeding with current terrain.", this);
+					_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, $"Failed to generate acceptable terrain after {MAX_GENERATION_ATTEMPTS} attempts. Proceeding with current terrain.");
 					if (!TryFindTownhallPlacement(thObj, Vector3.zero, out Vector3 fallbackPlacement))
 					{
 						fallbackPlacement = Vector3.zero;
@@ -2135,7 +2140,7 @@ namespace Processors
 		{
 			if (!Application.isPlaying)
 			{
-				Debug.LogWarning("RegenerateTerrainAndWorldRuntime can only be called in play mode.", this);
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "RegenerateTerrainAndWorldRuntime can only be called in play mode.");
 				return;
 			}
 
@@ -2165,7 +2170,7 @@ namespace Processors
 		{
 			if (!Application.isPlaying)
 			{
-				Debug.LogWarning("RegenerateResourcesAndFoliageRuntime can only be called in play mode.", this);
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "RegenerateResourcesAndFoliageRuntime can only be called in play mode.");
 				return;
 			}
 
@@ -2181,7 +2186,7 @@ namespace Processors
 
 			if (!TryEnsureActiveTownhall(out _))
 			{
-				Debug.LogWarning("ProceduralWorldGenerator: Could not ensure active townhall before regenerating resources and foliage.", this);
+				_debugProcessor.LogWarning(DebugLogCategory.WorldGenProcessor, "Could not ensure active townhall before regenerating resources and foliage.");
 				_runtimeData.IsEditorRegenerating = false;
 				return;
 			}
@@ -2195,7 +2200,7 @@ namespace Processors
 			// Check Town Hall is not above water
 			if (!TownHallAboveGround())
 			{
-				Debug.Log("Town Hall Above Water, Regenerating Terrain");
+				_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Town Hall Above Water, Regenerating Terrain");
 				_runtimeData.TerrainCheckPassed = false;
 				return;
 			}

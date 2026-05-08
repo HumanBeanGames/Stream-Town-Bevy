@@ -48,6 +48,11 @@ namespace Sensors
 		[Inject] private StationProcessor _stationProcessor;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Gets the current station.
         /// </summary>
 		public Station CurrentStation => _currentStation;
@@ -118,12 +123,12 @@ namespace Sensors
 			if (station.Flags.HasFlag(player.StationSensor.StationMask))
 			{
 				_currentStation = station;
-				Debug.Log($"Set {player.RoleHandler.CurrentRole}'s station to {station.gameObject.name}");
+				_debugProcessor.Log(DebugLogCategory.Targetable, $"Set {player.RoleHandler.CurrentRole}'s station to {station.gameObject.name}");
 				_onStationChange.Invoke();
 				return true;
 			}
 
-			Debug.Log($"Can't set {player.RoleHandler.CurrentRole}'s station to {station.gameObject.name}");
+			_debugProcessor.Log(DebugLogCategory.Targetable, $"Can't set {player.RoleHandler.CurrentRole}'s station to {station.gameObject.name}");
 			return false;
 		}
 

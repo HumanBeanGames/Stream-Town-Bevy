@@ -1,3 +1,5 @@
+using Processors;
+using Reflex.Attributes;
 using Sensors;
 using STStateMachine.States;
 using Target;
@@ -18,6 +20,7 @@ namespace STStateMachine.Helpers
 		public HealthHandler TargetHealth;
 		public Targetable Target;
 		public Targetable Owner;
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		private void Awake()
 		{
@@ -37,7 +40,7 @@ namespace STStateMachine.Helpers
 			// If we don't have a target, swap back to idle.
 			if (Target == null || !Target.gameObject.activeInHierarchy)
 			{
-				Debug.LogWarning("[STSM_Helper_Build] Target is null or inactive");
+				_debugProcessor.LogWarning(DebugLogCategory.STSM_Helper_Build, "Target is null or inactive");
 				_stateMachine.RequestStateChange("Idle");
 				return;
 			}
@@ -48,13 +51,13 @@ namespace STStateMachine.Helpers
 
 			if (TargetHealth == null)
 			{
-				Debug.LogError($"[STSM_Helper_Build] Target {Target.name} has no HealthHandler component!");
+				_debugProcessor.LogError(DebugLogCategory.STSM_Helper_Build, $"Target {Target.name} has no HealthHandler component!");
 				_stateMachine.RequestStateChange("Idle");
 				return;
 			}
 
 			// Build the target by increasing its health (construct it).
-			Debug.Log($"[STSM_Helper_Build] Building {Target.name}, BuildAmount: {BuildAmount}, CurrentHealth: {TargetHealth.Health}, MaxHealth: {TargetHealth.MaxHealth}");
+			_debugProcessor.Log(DebugLogCategory.STSM_Helper_Build, $"Building {Target.name}, BuildAmount: {BuildAmount}, CurrentHealth: {TargetHealth.Health}, MaxHealth: {TargetHealth.MaxHealth}");
 			TargetHealth.ModHealth(BuildAmount);
 		}
 	}

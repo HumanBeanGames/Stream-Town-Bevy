@@ -26,10 +26,13 @@ namespace Processors
 		private TextMeshProUGUI _foodRateOfChangeText;
 		private TextMeshProUGUI _oreRateOfChangeText;
 		private TextMeshProUGUI _goldRateOfChangeText;
+		private TextMeshProUGUI _recruitDisplayText;
+		private TextMeshProUGUI _recruitRateOfChangeText;
 		private Slider _seasonalSlider;
 		private TextMeshProUGUI _playerCountText;
 		private TextMeshProUGUI _buildingCountText;
 		private TextMeshProUGUI _timeDisplayText;
+		private TextMeshProUGUI _recruitCountText;
 
 		public UserInterface_TownGoal TownGoalInterface
 		{
@@ -96,6 +99,16 @@ namespace Processors
 			get => _goldRateOfChangeText;
 			set => _goldRateOfChangeText = value;
 		}
+		public TextMeshProUGUI RecruitDisplayText
+		{
+			get => _recruitDisplayText;
+			set => _recruitDisplayText = value;
+		}
+		public TextMeshProUGUI RecruitRateOfChangeText
+		{
+			get => _recruitRateOfChangeText;
+			set => _recruitRateOfChangeText = value;
+		}
 		public Slider SeasonalSlider
 		{
 			get => _seasonalSlider;
@@ -116,6 +129,11 @@ namespace Processors
 			get => _timeDisplayText;
 			set => _timeDisplayText = value;
 		}
+		public TextMeshProUGUI RecruitCountText
+		{
+			get => _recruitCountText;
+			set => _recruitCountText = value;
+		}
 
 		/// <summary>
 		/// Initializes the UI runtime data with default values.
@@ -135,10 +153,13 @@ namespace Processors
 			_foodRateOfChangeText = null;
 			_oreRateOfChangeText = null;
 			_goldRateOfChangeText = null;
+			_recruitDisplayText = null;
+			_recruitRateOfChangeText = null;
 			_seasonalSlider = null;
 			_playerCountText = null;
 			_buildingCountText = null;
 			_timeDisplayText = null;
+			_recruitCountText = null;
 		}
 	}
 }

@@ -95,6 +95,7 @@ namespace Buildings
         [Inject] protected TechTreeProcessor _techTreeProcessor;
         [Inject] protected ObjectPoolingProcessor _poolingManager;
         [Inject] protected GameEventProcessor _gameEventProcessor;
+        [Inject] protected DebugProcessor _debugProcessor;
 
         public List<PoolableObject> FoliageRemoved { get; set; }
 
@@ -400,18 +401,21 @@ namespace Buildings
             if (_buildingState == BuildingState.Construction)
             {
                 _healthHandler.SetHealth(Mathf.CeilToInt(_healthHandler.MaxHealth * 0.1f));
-                Debug.Log($"[BuildingBase Start] Set {name} to 10% health ({_healthHandler.Health}/{_healthHandler.MaxHealth}) for construction");
+                if (_debugProcessor != null)
+                    _debugProcessor.Log(DebugLogCategory.Building, $"[BuildingBase Start] Set {name} to 10% health ({_healthHandler.Health}/{_healthHandler.MaxHealth}) for construction");
             }
             else
             {
                 _healthHandler.SetHealth(_healthHandler.MaxHealth);
-                Debug.Log($"[BuildingBase Start] Set {name} to full health ({_healthHandler.Health}/{_healthHandler.MaxHealth})");
+                if (_debugProcessor != null)
+                    _debugProcessor.Log(DebugLogCategory.Building, $"[BuildingBase Start] Set {name} to full health ({_healthHandler.Health}/{_healthHandler.MaxHealth})");
             }
         }
 
         private void OnEnable()
         {
-            Debug.Log($"[BuildingBase] OnEnable called for {name}");
+            if (_debugProcessor != null)
+                _debugProcessor.Log(DebugLogCategory.Building, $"[BuildingBase] OnEnable called for {name}");
             if (!_initialized)
                 Init();
             OnSpawn();

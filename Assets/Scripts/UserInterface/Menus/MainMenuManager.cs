@@ -34,6 +34,11 @@ namespace UserInterface.MainMenu
 		[Inject]
 		private SettingsProcessor _settingsProcessor;
 
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
 		[SerializeField]
 		private SettingsPanel _settingsPanel;
 
@@ -72,17 +77,17 @@ namespace UserInterface.MainMenu
 
 		public void ConfirmChannelName()
 		{
-			Debug.Log($"[MainMenuManager] ConfirmChannelName called. Input text: {_channelNameInput?.text}");
+			_debugProcessor.Log(DebugLogCategory.MainMenuManager, $"ConfirmChannelName called. Input text: {_channelNameInput?.text}");
 
 			// Get the channel name from the input field
 			string inputChannelName = _channelNameInput?.text ?? string.Empty;
 			SetChannelName(inputChannelName);
 
-			Debug.Log($"[MainMenuManager] ChannelName after SetChannelName: {_mainMenuRuntimeData.ChannelName}");
+			_debugProcessor.Log(DebugLogCategory.MainMenuManager, $"ChannelName after SetChannelName: {_mainMenuRuntimeData.ChannelName}");
 
 			if (_mainMenuRuntimeData.ChannelName != null && _mainMenuRuntimeData.ChannelName != "")
 			{
-				Debug.Log($"[MainMenuManager] Channel name is valid, proceeding to save and load");
+				_debugProcessor.Log(DebugLogCategory.MainMenuManager, "Channel name is valid, proceeding to save and load");
 				CurrentSettings.channelName = _mainMenuRuntimeData.ChannelName;
 				_settingsProcessor.SaveSettings();
 
@@ -93,7 +98,7 @@ namespace UserInterface.MainMenu
 			}
 			else
 			{
-				Debug.LogError($"[MainMenuManager] Channel name is null or empty. Cannot confirm.");
+				_debugProcessor.LogError(DebugLogCategory.MainMenuManager, "Channel name is null or empty. Cannot confirm.");
 			}
 		}
 
@@ -115,7 +120,7 @@ namespace UserInterface.MainMenu
 				{
 					_mainMenuRuntimeData.Loading = true;
 					_metaData.LoadType = LoadType.Generate;
-					Debug.Log("Generating World");
+					_debugProcessor.Log(DebugLogCategory.MainMenuManager, "Generating World");
 					_settingsProcessor.TogglingConnectionTab(false);
 					_loadingManager.LoadWorldScene(_sceneIndex);
 				}
@@ -135,7 +140,7 @@ namespace UserInterface.MainMenu
 				{
 					_mainMenuRuntimeData.Loading = true;
 					_metaData.LoadType = LoadType.Load;
-					Debug.Log("Loading World");
+					_debugProcessor.Log(DebugLogCategory.MainMenuManager, "Loading World");
 					_settingsProcessor.TogglingConnectionTab(false);
 					_loadingManager.LoadWorldScene(_sceneIndex);
 				}

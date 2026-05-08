@@ -33,6 +33,11 @@ namespace Processors
         [Inject] private RoleDataContainer _roleDataContainer;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Nested runtime data class for role data.
         /// Created and bound in InjectRuntimeData().
         /// </summary>
@@ -77,7 +82,7 @@ namespace Processors
         {
             if (!_roleRuntimeData.RoleDataContainer.RoleDataDictionary.ContainsKey(role))
             {
-                Debug.LogError($"Attempted to get role data for role {role} but it was not found!");
+                _debugProcessor.LogError(DebugLogCategory.RoleProcessor, $"Attempted to get role data for role {role} but it was not found!");
                 return null;
             }
 
@@ -184,7 +189,7 @@ namespace Processors
 
             if (!roleSlotsDictionary.ContainsKey(newRole))
             {
-                Debug.LogError($"Attempted to change to a role that is not stored: {newRole}");
+                _debugProcessor.LogError(DebugLogCategory.RoleProcessor, $"Attempted to change to a role that is not stored: {newRole}");
                 return false;
             }
 
@@ -315,7 +320,7 @@ namespace Processors
                 var role = (PlayerRole)i;
                 if (roleSlotsDictionary.ContainsKey(role))
                 {
-                    Debug.LogError($"Attempted to add the same role multiple times {role}.");
+                    _debugProcessor.LogError(DebugLogCategory.RoleProcessor, $"Attempted to add the same role multiple times {role}.");
                     continue;
                 }
                 var roleData = _roleDataContainer.RoleDataDictionary[role];

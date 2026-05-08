@@ -1,3 +1,5 @@
+using Processors;
+using Reflex.Attributes;
 using STStateMachine.Helpers;
 using STStateMachine.States;
 using System.Collections.Generic;
@@ -27,6 +29,8 @@ namespace STStateMachine
 
 		[SerializeField]
 		private bool _debugMessages = true;
+
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		// Per-character resource target data (to avoid sharing state data across characters)
 		private uint _resourceTargetGUID;
@@ -85,7 +89,7 @@ namespace STStateMachine
 				_currentState.OnExit();
 
 				if (_debugMessages)
-					Debug.Log($"{gameObject.name} exiting state: {_currentState.GetType().Name}");
+					_debugProcessor.Log(DebugLogCategory.StateMachine, $"{gameObject.name} exiting state: {_currentState.GetType().Name}");
 			}
 
 			// Set the previous state to the current state
@@ -97,7 +101,7 @@ namespace STStateMachine
 			_currentState.OnEnter();
 
 			if (_debugMessages)
-				Debug.Log($"[ResourceGathering] {gameObject.name} entering state: {_currentState.GetType().Name}");
+				_debugProcessor.Log(DebugLogCategory.ResourceGathering, $"{gameObject.name} entering state: {_currentState.GetType().Name}");
 		}
 
 		/// <summary>
@@ -121,7 +125,7 @@ namespace STStateMachine
 				if (_states[i].StateName == stateName)
 					return _states[i].State;
 			}
-			Debug.LogWarning($"[ResourceGathering] GetStateByName('{stateName}') not found!");
+			_debugProcessor.LogWarning(DebugLogCategory.ResourceGathering, $"GetStateByName('{stateName}') not found!");
 			return null;
 		}
 
@@ -173,12 +177,12 @@ namespace STStateMachine
 		{
 			if (_startingState != null)
 			{
-				Debug.Log($"[ResourceGathering] Starting state: {_startingState.GetType().Name}");
+				_debugProcessor.Log(DebugLogCategory.ResourceGathering, $"Starting state: {_startingState.GetType().Name}");
 				RequestStateChange(_startingState);
 			}
 			else
 			{
-				Debug.LogWarning($"[ResourceGathering] No starting state set!");
+				_debugProcessor.LogWarning(DebugLogCategory.ResourceGathering, "No starting state set!");
 			}
 		}
 

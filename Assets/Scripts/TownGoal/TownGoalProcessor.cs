@@ -17,6 +17,11 @@ namespace TownGoal
 		private TownGoalRuntimeData _townGoalRuntimeData;
 
 		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+		/// <summary>
 		/// Gets or sets the current goals list.
 		/// </summary>
 		public List<Goal> CurrentGoals
@@ -57,7 +62,7 @@ namespace TownGoal
 		{
 			if (ContainsGoal(goal))
 			{
-				Debug.LogWarning($"Attempted to start goal that was already started '{goal}'");
+				_debugProcessor.LogWarning(DebugLogCategory.TownGoalProcessor, $"Attempted to start goal that was already started '{goal}'");
 				return false;
 			}
 
@@ -93,7 +98,7 @@ namespace TownGoal
 			if (!ContainsGoal(goal))
 				return;
 
-			Debug.Log("GOAL COMPLETED!");
+			_debugProcessor.Log(DebugLogCategory.TownGoalProcessor, "GOAL COMPLETED!");
 
 			// Unsubscribe objectives from game events
 			foreach (var objective in goal.ObjectivesStatuses.Keys)

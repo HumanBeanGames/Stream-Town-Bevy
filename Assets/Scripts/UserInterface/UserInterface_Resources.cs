@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UI;
 using Processors;
 using TMPro;
 using Utils;
@@ -11,14 +12,23 @@ namespace UserInterface
 	/// </summary>
 	public class UserInterface_Resources : MonoBehaviour
 	{
-		[SerializeField]
+	[SerializeField]
 		private GameObject _resourcePanel;
-		[SerializeField]
+	[SerializeField]
 		private TextMeshProUGUI[] _resourceTMPs;
-		[SerializeField]
+	[SerializeField]
 		private Color _positiveColor = Color.green;
-		[SerializeField]
+	[SerializeField]
 		private Color _negativeColor = Color.red;
+	[SerializeField]
+		private TextMeshProUGUI _playerCountText;
+	[SerializeField]
+		private TextMeshProUGUI _buildingCountText;
+	[SerializeField]
+		private TextMeshProUGUI _timeDisplayText;
+	[SerializeField]
+		private Slider _seasonalSlider;
+
 		[Inject] private TownResourceProcessor _resourceProcessor;
 		[Inject] private UIProcessor _uiProcessor;
 
@@ -50,19 +60,34 @@ namespace UserInterface
 			{
 				OnResourceChange((Utils.Resource)i, 0, false);
 			}
+			OnResourceChange((Utils.Resource)8, 0, false);
+			if (_resourceTMPs.Length >= 10)
+				OnResourceChange((Utils.Resource)9, 0, false);
 		}
 
 		private void RegisterHud()
 		{
-			if (_uiProcessor == null || _resourceTMPs == null || _resourceTMPs.Length < 4)
-				return;
+			if (_uiProcessor == null)
+				throw new System.InvalidOperationException("UserInterface_Resources requires a UIProcessor reference.");
 
-			_uiProcessor.RegisterResourceDisplay(_resourceTMPs[0], _resourceTMPs[1], _resourceTMPs[2], _resourceTMPs[3]);
+			if (_resourceTMPs == null)
+				throw new System.InvalidOperationException("UserInterface_Resources requires resource text bindings.");
 
-			if (_resourceTMPs.Length >= 8)
+			if (_resourceTMPs.Length < 9)
+				throw new System.InvalidOperationException("UserInterface_Resources requires 9 resource text bindings for 5 resource displays and 4 rate-of-change texts.");
+
+			for (int i = 0; i < 9; i++)
 			{
-				_uiProcessor.RegisterResourceRateOfChangeDisplay(_resourceTMPs[4], _resourceTMPs[5], _resourceTMPs[6], _resourceTMPs[7]);
+				if (_resourceTMPs[i] == null)
+					throw new System.InvalidOperationException($"UserInterface_Resources is missing resource text binding at index {i}.");
 			}
+
+			_uiProcessor.RegisterResourceDisplay(_resourceTMPs[0], _resourceTMPs[1], _resourceTMPs[2], _resourceTMPs[3], _resourceTMPs[4]);
+
+			_uiProcessor.RegisterResourceRateOfChangeDisplay(_resourceTMPs[5], _resourceTMPs[6], _resourceTMPs[7], _resourceTMPs[8]);
+
+			// Register HUD counters if they are assigned
+			_uiProcessor.RegisterHudCounters(_playerCountText, _buildingCountText, _timeDisplayText, _seasonalSlider);
 		}
 	}
 }

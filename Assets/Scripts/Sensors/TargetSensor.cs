@@ -59,6 +59,11 @@ namespace Sensors
 		[Inject] private CellSpacePartitioning _cellSpacePartition;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Gets the current target.
         /// </summary>
 		public Targetable CurrentTarget => _currentTarget;
@@ -109,6 +114,11 @@ namespace Sensors
         /// </summary>
 		public GUIDComponent GUIDComponent => _gUIDComponent;
 
+        /// <summary>
+        /// Gets the target search range.
+        /// </summary>
+        public float TargetSearchRange => _targetSearchRange;
+
 		/// <summary>
 		/// Returns the Target Mask.
 		/// </summary>
@@ -133,7 +143,7 @@ namespace Sensors
 				GetTarget();
 
 			// Check if the current target is the wrong target type and get a new target.
-			else if (_currentTarget != null && !_currentTarget.TargetType.HasFlag(_targetMask))
+			else if (_currentTarget != null && !IsTargetTypeMatch(_currentTarget.TargetType))
 				GetTarget();
 
 			else if (_currentTarget == null)
@@ -175,6 +185,18 @@ namespace Sensors
 		}
 
         /// <summary>
+        /// Attempts to acquire the nearest target.
+        /// </summary>
+        /// <returns>True if successful.</returns>
+        public bool TryAcquireNearestTarget()
+        {
+            Targetable nearestTarget = GetNearestTarget();
+            _currentTarget = nearestTarget;
+            OnTargetChanged();
+            return nearestTarget != null;
+        }
+
+        /// <summary>
         /// Attempts to set the current target for a player.
         /// </summary>
         /// <param name="target">The target to set.</param>
@@ -182,16 +204,16 @@ namespace Sensors
         /// <returns>True if successful.</returns>
 		public bool TrySetTarget(Targetable target, Player player)
 		{
-			if(player.TargetSensor.TargetMask.HasFlag(target.TargetType))
+			if (player.TargetSensor.IsTargetTypeMatch(target.TargetType))
 			{
 				_currentTarget = target;
 				OnTargetChanged();
-				Debug.Log($" Set {player.RoleHandler.CurrentRole}'s target to {target.TargetType}");
+				_debugProcessor.Log(DebugLogCategory.Targetable, $"Set {player.RoleHandler.CurrentRole}'s target to {target.TargetType}");
 
 				return true;
 			}
 
-			Debug.Log($"Can't set {player.RoleHandler.CurrentRole}'s target to {target.TargetType}");
+			_debugProcessor.Log(DebugLogCategory.Targetable, $"Can't set {player.RoleHandler.CurrentRole}'s target to {target.TargetType}");
 			return false;
 		}
 
@@ -212,14 +234,18 @@ namespace Sensors
 		{
 			if (!CurrentTargetValid())
 			{
-				if (_useStationTargets)
+				if (ShouldUseNearestTargeting())
+				{
+					_currentTarget = GetNearestTarget();
+				}
+				else if (_useStationTargets)
 				{
 					if (_stationSensor.CurrentStation != null)
 						_stationSensor.CurrentStation.GetBestScoredTarget(transform.position, _targetMask, ref _currentTarget);
 				}
 				else
 				{
-					GetNearestTarget();
+					_currentTarget = GetNearestTarget();
 				}
 			}
 
@@ -229,11 +255,11 @@ namespace Sensors
         /// <summary>
         /// Gets the nearest target using cell space partitioning.
         /// </summary>
-		private void GetNearestTarget()
+		private Targetable GetNearestTarget()
 		{
 			List<Targetable> validTargets = new List<Targetable>();
 
-			_cellSpacePartition.GetTargetablesInRange(_targetMask, transform.position, _targetSearchRange, ref validTargets);
+			_cellSpacePartition.GetTargetablesInRange(GetExpandedTargetMask(), transform.position, _targetSearchRange, ref validTargets);
 
 			// Get closest target
 			float closestDistSqr = float.MaxValue;
@@ -256,8 +282,41 @@ namespace Sensors
 
 			if (closestTarget != null)
 			{
-				_currentTarget = closestTarget;
+				return closestTarget;
 			}
+
+			return null;
+		}
+
+		private bool ShouldUseNearestTargeting()
+		{
+			return _targetMask.HasFlag(TargetMask.Enemy)
+				|| _targetMask.HasFlag(TargetMask.Boss)
+				|| _targetMask.HasFlag(TargetMask.Player)
+				|| _targetMask.HasFlag(TargetMask.InjuredPlayer)
+				|| _targetMask.HasFlag(TargetMask.Building)
+				|| _targetMask.HasFlag(TargetMask.DamagedBuilding);
+		}
+
+		private TargetMask GetExpandedTargetMask()
+		{
+			TargetMask expandedMask = _targetMask;
+
+			if (_targetMask.HasFlag(TargetMask.Player))
+				expandedMask |= TargetMask.InjuredPlayer;
+
+			if (_targetMask.HasFlag(TargetMask.Building))
+				expandedMask |= TargetMask.DamagedBuilding;
+
+			if (_targetMask.HasFlag(TargetMask.Enemy))
+				expandedMask |= TargetMask.Boss;
+
+			return expandedMask;
+		}
+
+		public bool IsTargetTypeMatch(TargetMask targetType)
+		{
+			return GetExpandedTargetMask().HasFlag(targetType);
 		}
 
 		/// <summary>
@@ -267,7 +326,7 @@ namespace Sensors
 		private bool CurrentTargetValid()
 		{
 			// If the target is not null, enabled and the correct flag, then the target is valid.
-			if (_currentTarget != null && _currentTarget.gameObject.activeInHierarchy && _targetMask.HasFlag(_currentTarget.TargetType))
+			if (_currentTarget != null && _currentTarget.gameObject.activeInHierarchy && IsTargetTypeMatch(_currentTarget.TargetType))
 				return true;
 			else
 				return false;
@@ -312,7 +371,7 @@ namespace Sensors
 				return;
 
 			// If its a valid target for our target mask, focus it.
-			if (_targetMask.HasFlag(target.TargetType))
+			if (IsTargetTypeMatch(target.TargetType))
 				_currentTarget = target;
 		}
 

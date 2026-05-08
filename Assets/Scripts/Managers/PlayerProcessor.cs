@@ -2,6 +2,7 @@ using UnityEngine;
 using Character;
 using System.Collections.Generic;
 using Utils;
+using Buildings;
 using Units;
 using Sensors;
 using UserInterface;
@@ -10,6 +11,7 @@ using Pets;
 using GUIDSystem;
 using Utils.Pooling;
 using Target;
+using Pathfinding;
 using Reflex.Attributes;
 using Reflex.Core;
 using ScriptablesProcessorInfrastructure;
@@ -67,6 +69,12 @@ namespace Processors
         /// Injected via Reflex dependency injection.
         /// </summary>
         [Inject] private RoleProcessor _roleProcessor;
+
+        /// <summary>
+        /// Building processor for spawn fallback lookups.
+        /// Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private BuildingProcessor _buildingProcessor;
 
         /// <summary>
         /// Time processor for time-related data.
@@ -202,16 +210,13 @@ namespace Processors
         /// <param name="startingRole">The starting role for the player.</param>
         public void AddNewPlayer(Player data, PlayerRole startingRole = PlayerRole.Builder)
         {
-            if (_playerRuntimeData.Players.Contains(data))
-                return;
-
-            if (_playerRuntimeData.Recruits.Contains(data))
-                return;
-
             // TODO: Optimize this, store it when objects are pooled.
             PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
+
+            Vector3 spawnPosition = ResolveSpawnPosition();
+            obj.transform.position = spawnPosition;
             obj.gameObject.SetActive(true);
-            obj.transform.position = _playerRuntimeData.PlayerSpawnPosition.position;
+
             data.RoleHandler = obj.GetComponent<RoleHandler>();
             data.RoleHandler.Player = data;
             data.StationSensor = obj.GetComponent<StationSensor>();
@@ -239,18 +244,102 @@ namespace Processors
             _playerRuntimeData.PlayerUpdateQueue.Enqueue(data);
             data.Pet = pet;
 
-            if (data.TwitchUser.Username == "")
-                if (_playerRuntimeData.Recruits.Count < 200)
-                {
-                    _playerRuntimeData.Recruits.Add(data);
-                    _townResourceProcessor.AddResource(Resource.Recruit, 1);
-                    data.TwitchUser.GameUserType = Twitch.Utils.GameUserType.Normal;
-                }
-
-                else
-                    return;
+            // Always add to Recruits list if username is empty or null
+            if (string.IsNullOrEmpty(data.TwitchUser.Username))
+            {
+                _playerRuntimeData.Recruits.Add(data);
+                _townResourceProcessor.AddResource(Resource.Recruit, 1);
+                data.TwitchUser.GameUserType = Twitch.Utils.GameUserType.Normal;
+            }
             else
+            {
+                if (_playerRuntimeData.Players.Contains(data))
+                    return;
                 _playerRuntimeData.Players.Add(data);
+            }
+        }
+
+        private Vector3 ResolveSpawnPosition()
+        {
+            if (_playerRuntimeData.PlayerSpawnPosition != null)
+                return _playerRuntimeData.PlayerSpawnPosition.position;
+
+            if (TryGetTownhallSpawnPosition(out Vector3 townhallSpawnPosition))
+                return townhallSpawnPosition;
+
+            if (AstarPath.active != null)
+            {
+                GraphNode fallbackNode = AstarPath.active.GetNearest(Vector3.zero, NNConstraint.Default).node;
+                if (fallbackNode != null && fallbackNode.Walkable)
+                {
+                    Vector3 fallbackPosition = (Vector3)fallbackNode.position;
+                    return new Vector3(fallbackPosition.x, fallbackPosition.y, fallbackPosition.z);
+                }
+            }
+
+            return Vector3.zero;
+        }
+
+        private bool TryGetTownhallSpawnPosition(out Vector3 spawnPosition)
+        {
+            spawnPosition = Vector3.zero;
+
+            if (_buildingProcessor == null)
+                return false;
+
+            List<BuildingBase> townhalls = _buildingProcessor.GetBuildingsByType(BuildingType.Townhall);
+            if (townhalls == null || townhalls.Count == 0)
+                return false;
+
+            BuildingBase townhall = null;
+            for (int i = 0; i < townhalls.Count; i++)
+            {
+                if (townhalls[i] != null && townhalls[i].gameObject.activeInHierarchy)
+                {
+                    townhall = townhalls[i];
+                    break;
+                }
+            }
+
+            if (townhall == null)
+                return false;
+
+            Vector3 center = townhall.transform.position;
+            AstarPath astarPath = AstarPath.active;
+            if (astarPath == null)
+            {
+                spawnPosition = center;
+                return true;
+            }
+
+            const float minRadius = 3f;
+            const float maxRadius = 5f;
+            const int maxAttempts = 24;
+
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                Vector2 direction = UnityEngine.Random.insideUnitCircle.normalized;
+                if (direction == Vector2.zero)
+                    direction = Vector2.right;
+
+                float radius = UnityEngine.Random.Range(minRadius, maxRadius);
+                Vector3 candidate = center + new Vector3(direction.x * radius, 0f, direction.y * radius);
+                GraphNode node = astarPath.GetNearest(candidate, NNConstraint.Default).node;
+                if (node == null || !node.Walkable)
+                    continue;
+
+                Vector3 nodePosition = (Vector3)node.position;
+                spawnPosition = new Vector3(nodePosition.x, nodePosition.y, nodePosition.z);
+                return true;
+            }
+
+            GraphNode fallbackNode = astarPath.GetNearest(center, NNConstraint.Default).node;
+            if (fallbackNode == null || !fallbackNode.Walkable)
+                return false;
+
+            Vector3 fallbackPosition = (Vector3)fallbackNode.position;
+            spawnPosition = new Vector3(fallbackPosition.x, fallbackPosition.y, fallbackPosition.z);
+            return true;
         }
 
         /// <summary>

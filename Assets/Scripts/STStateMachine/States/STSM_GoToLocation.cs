@@ -1,4 +1,6 @@
 using Pathfinding;
+using Processors;
+using Reflex.Attributes;
 using Sensors;
 using UnityEngine;
 
@@ -10,14 +12,16 @@ namespace STStateMachine.States
 	public class STSM_GoToLocation : STStateBase
 	{
 		/// <summary>
-		/// Minimum distance a unit has to move within the check rate time to be considered NOT stuck
+		/// Minimum distance a unit has to move within the check window to count as meaningful motion.
 		/// </summary>
-		private const float MINIMUM_STUCK_DISTANCE_CHECK_SQR = 1.0f;
+		private const float MINIMUM_STUCK_MOVEMENT_CHECK_SQR = 0.04f;
+
+		private const float MINIMUM_STUCK_PROGRESS_DISTANCE = 0.35f;
 
 		/// <summary>
 		/// Max Number of consecutive stuck true checks until the unit is dealt with
 		/// </summary>
-		private const int MAX_CONSECUTIVE_COUNT = 8;
+		private const int MAX_CONSECUTIVE_COUNT = 5;
 
 		/// <summary>
 		/// How often the unit will poll a stuck check
@@ -45,6 +49,10 @@ namespace STStateMachine.States
 		private int _stuckConsecutiveCount = 0;
 		private float _prevSlowDownDistance = 0;
 		private Vector3 _onEnabledLocation = Vector3.zero;
+		private float _lastRemainingDistance = float.PositiveInfinity;
+		private Vector3 _lastDestination = Vector3.zero;
+
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		public bool UsePosition { get; set; }
 
@@ -82,7 +90,7 @@ namespace STStateMachine.States
 		/// <param name="actionRange">Desired distance from target object</param>
 		public void SetTargetFromPosition(Vector3 position, float actionRange)
 		{
-			Debug.Log($"[GoToLocation] SetTargetFromPosition called - position: {position}, actionRange: {actionRange}");
+			_debugProcessor.Log(DebugLogCategory.GoToLocation, $"SetTargetFromPosition called - position: {position}, actionRange: {actionRange}");
 
 			// Clean up previous temporary target if exists
 			if (_temporaryTarget != null)
@@ -176,7 +184,7 @@ namespace STStateMachine.States
 		{
 			_targetTransform = target;
 
-			Debug.Log($"[GoToLocation] SetTarget called - targetPos: {target.position}, actionRange: {actionRange}");
+			_debugProcessor.Log(DebugLogCategory.GoToLocation, $"SetTarget called - targetPos: {target.position}, actionRange: {actionRange}");
 
 			// Get the node at the target position
 			var targetNode = AstarPath.active.GetNearest(target.position, NNConstraint.Default).node;
@@ -186,7 +194,7 @@ namespace STStateMachine.States
 				Vector3 nearestPosition = AstarPath.active.GetNearest(target.position, NNConstraint.Default).position;
 				_aiPath.destination = nearestPosition;
 				_distanceSatisfaction = actionRange * actionRange;
-				Debug.Log($"[GoToLocation] SetTarget fallback - distanceSatisfaction: {_distanceSatisfaction}");
+				_debugProcessor.Log(DebugLogCategory.GoToLocation, $"SetTarget fallback - distanceSatisfaction: {_distanceSatisfaction}");
 				return;
 			}
 
@@ -230,7 +238,7 @@ namespace STStateMachine.States
 			_aiPath.destination = closestPointInNode;
 			_distanceSatisfaction = actionRange * actionRange; // Squared for distance check
 
-			Debug.Log($"[GoToLocation] SetTarget - targetPos: {target.position}, actionRange: {actionRange}, selectedNode: {closestNodePosition}, closestPointInNode: {closestPointInNode}, distanceSatisfaction: {_distanceSatisfaction}");
+			_debugProcessor.Log(DebugLogCategory.GoToLocation, $"SetTarget - targetPos: {target.position}, actionRange: {actionRange}, selectedNode: {closestNodePosition}, closestPointInNode: {closestPointInNode}, distanceSatisfaction: {_distanceSatisfaction}");
 		}
 
 		protected override void OnInit()
@@ -255,10 +263,9 @@ namespace STStateMachine.States
 			// Restore slowdown distance to allow precise stopping (prevents overshooting)
 			_aiPath.slowdownDistance = _prevSlowDownDistance;
 
-			Debug.Log($"[GoToLocation] OnEnter - endReachedDistance: {_aiPath.endReachedDistance}, slowdownDistance: {_aiPath.slowdownDistance}, distanceSatisfaction: {_distanceSatisfaction}, nextState: {_nextState?.GetType().Name}");
+			_debugProcessor.Log(DebugLogCategory.GoToLocation, $"OnEnter - endReachedDistance: {_aiPath.endReachedDistance}, slowdownDistance: {_aiPath.slowdownDistance}, distanceSatisfaction: {_distanceSatisfaction}, nextState: {_nextState?.GetType().Name}");
 
-			_stuckCheckTimer = 0;
-			_lastStuckCheckPos = transform.position;
+			ResetStuckTracking();
 
 			//Check path is possible to point otherwise mark it as bad
 			if (!UsePosition)
@@ -268,7 +275,7 @@ namespace STStateMachine.States
 
 				if (!PathUtilities.IsPathPossible(a, b) || a == null || b == null)
 				{
-					Debug.Log($"Path wasn't possible from {transform.gameObject.name} to {_targetTransform.gameObject.name}");
+					_debugProcessor.Log(DebugLogCategory.GoToLocation, $"Path wasn't possible from {transform.gameObject.name} to {_targetTransform.gameObject.name}");
 					_targetSensor.MarkCurrentTargetBad();
 
 					b = AstarPath.active.GetNearest(Vector3.zero, NNConstraint.Default).node;
@@ -286,22 +293,6 @@ namespace STStateMachine.States
 		{
 			base.OnUpdate();
 
-			// If the unit is stuck, try to find a new position.
-			if (_stuck)
-			{
-				if (_stuckCheckTimer >= STUCK_DISTANCE_CHECK_RATE)
-				{
-					_stuckCheckTimer = 0;
-					Vector3 newDestination = transform.position + (Random.insideUnitSphere * 5);
-					newDestination.y = transform.position.y;
-					_aiPath.destination = newDestination;
-				}
-				else
-				{
-					_stuckCheckTimer += Time.deltaTime;
-				}
-			}
-
 			// If we are using the target's position and the target is null, go to the idle state.
 			if (!UsePosition && _targetTransform == null)
 			{
@@ -314,6 +305,12 @@ namespace STStateMachine.States
 			_destination = UsePosition ? _targetPosition : _targetTransform.position;
 			_aiPath.destination = _destination;
 
+			if (_nextState is STSM_Idle && _targetSensor != null && _targetSensor.CurrentTarget != null)
+			{
+				_stateMachine.RequestStateChange(_nextState, true);
+				return;
+			}
+
 			// Check if the unit is within range of the target location, and switch to the next state.
 			// Ignore Y component in distance check to account for height differences
 			Vector3 horizontalDiff = _aiPath.destination - transform.position;
@@ -322,17 +319,17 @@ namespace STStateMachine.States
 			
 			if (sqr <= _distanceSatisfaction)
 			{
-				Debug.Log($"[GoToLocation] Distance satisfied - currentDist: {Mathf.Sqrt(sqr)}, required: {Mathf.Sqrt(_distanceSatisfaction)}, nextState: {_nextState?.GetType().Name}");
+				_debugProcessor.Log(DebugLogCategory.GoToLocation, $"Distance satisfied - currentDist: {Mathf.Sqrt(sqr)}, required: {Mathf.Sqrt(_distanceSatisfaction)}, nextState: {_nextState?.GetType().Name}");
 				if (_nextState != null)
 				{
-					Debug.Log($"[GoToLocation] Transitioning to next state: {_nextState.GetType().Name}");
+					_debugProcessor.Log(DebugLogCategory.GoToLocation, $"Transitioning to next state: {_nextState.GetType().Name}");
 					_stateMachine.RequestStateChange(_nextState, true);
-					_stuck = false;
+					ResetStuckTracking();
 					return; // Exit early to prevent repeated checks
 				}
 				else
 				{
-					Debug.Log($"[GoToLocation] No next state, going to Idle");
+					_debugProcessor.Log(DebugLogCategory.GoToLocation, $"No next state, going to Idle");
 					_stateMachine.RequestStateChange("Idle");
 					return; // Exit early to prevent repeated checks
 				}
@@ -342,11 +339,11 @@ namespace STStateMachine.States
 			else if (!UsePosition && !_aiPath.pathPending && _aiPath.remainingDistance >= 0 && _aiPath.remainingDistance < 2f && _temporaryTarget == null)
 			{
 				// Pathfinding can't reach the target but we're within grid node distance (2 units)
-				Debug.Log($"[GoToLocation] Path unreachable but close, transitioning to next state");
+				_debugProcessor.Log(DebugLogCategory.GoToLocation, $"Path unreachable but close, transitioning to next state");
 				if (_nextState != null)
 				{
 					_stateMachine.RequestStateChange(_nextState, true);
-					_stuck = false;
+					ResetStuckTracking();
 					return; // Exit early to prevent repeated bail-out checks
 				}
 				else
@@ -382,6 +379,55 @@ namespace STStateMachine.States
 		// TODO:: Fix the detection and resolution. Not working correctly.
 		private void StuckCheck()
 		{
+			if (_aiPath == null)
+				return;
+
+			if (_aiPath.pathPending)
+			{
+				ResetStuckTracking();
+				return;
+			}
+
+			Vector3 horizontalToDestination = _aiPath.destination - transform.position;
+			horizontalToDestination.y = 0f;
+			if (Vector3.SqrMagnitude(horizontalToDestination) <= _distanceSatisfaction)
+			{
+				ResetStuckTracking();
+				return;
+			}
+
+			if ((_aiPath.destination - _lastDestination).sqrMagnitude > 0.25f)
+			{
+				ResetStuckTracking();
+				return;
+			}
+
+			_stuckCheckTimer += Time.deltaTime;
+			if (_stuckCheckTimer < STUCK_DISTANCE_CHECK_RATE)
+				return;
+
+			float remainingDistance = GetRemainingDistance();
+			Vector3 moved = transform.position - _lastStuckCheckPos;
+			moved.y = 0f;
+			float progressDistance = _lastRemainingDistance - remainingDistance;
+			bool madeProgress = moved.sqrMagnitude >= MINIMUM_STUCK_MOVEMENT_CHECK_SQR || progressDistance >= MINIMUM_STUCK_PROGRESS_DISTANCE;
+
+			if (madeProgress)
+			{
+				_stuckConsecutiveCount = 0;
+				_stuck = false;
+			}
+			else
+			{
+				_stuck = true;
+				_stuckConsecutiveCount++;
+			}
+
+			_stuckCheckTimer = 0f;
+			_lastStuckCheckPos = transform.position;
+			_lastRemainingDistance = remainingDistance;
+			_lastDestination = _aiPath.destination;
+
 			// Check if the unit has been stuck through multiple checks and reset their position.
 			if (_stuckConsecutiveCount > MAX_CONSECUTIVE_COUNT)
 			{
@@ -395,31 +441,29 @@ namespace STStateMachine.States
 					teleportPos.y = hit.point.y;
 				}
 				transform.position = teleportPos;
-				_stuckConsecutiveCount = 0;
-				_stuck = false;
+				ResetStuckTracking();
 				_stateMachine.RequestStateChange("Idle");
 			}
+		}
 
-			_stuckCheckTimer += Time.deltaTime;
+		private float GetRemainingDistance()
+		{
+			if (_aiPath != null && !_aiPath.pathPending && _aiPath.remainingDistance >= 0f)
+				return _aiPath.remainingDistance;
 
-			// If enough time has elapsed, check if the unit might be stuck.
-			if (_stuckCheckTimer >= STUCK_DISTANCE_CHECK_RATE)
-			{
-				// If the unit has not moved enough over the check duration, it might be stuck.
-				if (Vector3.SqrMagnitude(_lastStuckCheckPos - transform.position) < MINIMUM_STUCK_DISTANCE_CHECK_SQR)
-				{
-					_stuck = true;
-					_stuckConsecutiveCount++;
-				}
-				else
-				{
-					_stuckConsecutiveCount = 0;
-					_stuck = false;
-				}
+			Vector3 horizontalToDestination = _aiPath.destination - transform.position;
+			horizontalToDestination.y = 0f;
+			return horizontalToDestination.magnitude;
+		}
 
-				_stuckCheckTimer -= STUCK_DISTANCE_CHECK_RATE;
-				_lastStuckCheckPos = transform.position;
-			}
+		private void ResetStuckTracking()
+		{
+			_stuckCheckTimer = 0f;
+			_lastStuckCheckPos = transform.position;
+			_lastRemainingDistance = _aiPath != null ? GetRemainingDistance() : 0f;
+			_lastDestination = _aiPath != null ? _aiPath.destination : Vector3.zero;
+			_stuckConsecutiveCount = 0;
+			_stuck = false;
 		}
 
 		// Unity Functions.

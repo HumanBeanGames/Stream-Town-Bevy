@@ -20,6 +20,7 @@ namespace STStateMachine.States
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private ResourceProcessor _resourceProcessor;
 		[Inject] private CellSpacePartitioning _cellSpacePartition;
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		// State References.
 		private STSM_Action_GatherResource _gatherResourceAction;
@@ -54,13 +55,13 @@ namespace STStateMachine.States
 			_helperBuild = (STSM_Helper_Build)_stateMachine.GetHelperByName("Build");
 			_goToState = (STSM_GoToLocation)_stateMachine.GetStateByName("GoTo");
 
-			Debug.Log($"[STSM_Idle_Player OnInit] _buildAction is null: {_buildAction == null}, _goToState is null: {_goToState == null}");
+			_debugProcessor.Log(DebugLogCategory.STSM_Idle_Player, $"_buildAction is null: {_buildAction == null}, _goToState is null: {_goToState == null}");
 			if (_buildAction == null)
 			{
-				Debug.LogError($"[STSM_Idle_Player OnInit] Failed to get 'Build' state from StateMachine. Available states:");
+				_debugProcessor.LogError(DebugLogCategory.STSM_Idle_Player, $"Failed to get 'Build' state from StateMachine. Available states:");
 				foreach (var state in _stateMachine.States)
 				{
-					Debug.LogError($"  - {state.StateName} ({state.State?.GetType().Name})");
+					_debugProcessor.LogError(DebugLogCategory.STSM_Idle_Player, $"  - {state.StateName} ({state.State?.GetType().Name})");
 				}
 			}
 		}
@@ -85,31 +86,21 @@ namespace STStateMachine.States
 		{
 			base.OnHasTarget();
 
-			bool success = false;
-
 			// Set next state based on role type.
 			switch (_roleHandler.RoleData_SO.RoleFlags)
 			{
 				case PlayerRoleType.Resource:
-					success = ResourceRole();
+					ResourceRole();
 					break;
 				case PlayerRoleType.Damage:
-					success = DamageRole();
+					DamageRole();
 					break;
 				case PlayerRoleType.Healer:
-					success = HealerRole();
+					HealerRole();
 					break;
 				case PlayerRoleType.Other:
-					success = OtherRole();
+					OtherRole();
 					break;
-			}
-
-			if (success)
-			{
-				// Use data-driven resource targeting (position-based)
-				_goToState.UsePosition = true;
-				_goToState.SetTargetPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
-				_stateMachine.RequestStateChange(_goToState);
 			}
 		}
 
@@ -142,8 +133,14 @@ namespace STStateMachine.States
 		/// <returns></returns>
 		protected bool DamageRole()
 		{
+			if (!_targetSensor.TryAcquireNearestTarget() || _targetSensor.CurrentTarget == null)
+				return false;
+
+			_goToState.UsePosition = false;
 			_goToState.SetNextState(_attackAction);
-			return true;
+			_goToState.SetTarget(_targetSensor.CurrentTarget.transform, _roleHandler.PlayerRoleData.ActionRange);
+			_stateMachine.RequestStateChange(_goToState);
+			return false;
 		}
 
 		/// <summary>
@@ -153,16 +150,16 @@ namespace STStateMachine.States
 		/// <returns></returns>
 		protected bool HealerRole()
 		{
-			Debug.Log($"[HealerRole] Start - CurrentRole: {_roleHandler.CurrentRole}");
+			_debugProcessor.Log(DebugLogCategory.HealerRole, $"Start - CurrentRole: {_roleHandler.CurrentRole}");
 			
 			// Builders should prioritize construction targets
 			if (_roleHandler.CurrentRole == PlayerRole.Builder)
 			{
-				Debug.Log($"[HealerRole] Builder role detected, searching for construction targets");
+				_debugProcessor.Log(DebugLogCategory.HealerRole, $"Builder role detected, searching for construction targets");
 				List<Targetable> constructionTargets = new List<Targetable>();
 				_cellSpacePartition.GetTargetablesInRange(TargetMask.Construction, transform.position, _resourceSearchRange, ref constructionTargets);
 
-				Debug.Log($"[HealerRole] Found {constructionTargets.Count} construction targets in range");
+				_debugProcessor.Log(DebugLogCategory.HealerRole, $"Found {constructionTargets.Count} construction targets in range");
 				
 				if (constructionTargets.Count > 0)
 				{
@@ -184,8 +181,8 @@ namespace STStateMachine.States
 
 					if (closestTarget != null)
 					{
-						Debug.Log($"[HealerRole] Selected construction target: {closestTarget.name}, distance={Mathf.Sqrt(closestDistSqr)}");
-						Debug.Log($"[HealerRole] _buildAction is null: {_buildAction == null}, _goToState is null: {_goToState == null}");
+						_debugProcessor.Log(DebugLogCategory.HealerRole, $"Selected construction target: {closestTarget.name}, distance={Mathf.Sqrt(closestDistSqr)}");
+						_debugProcessor.Log(DebugLogCategory.HealerRole, $"_buildAction is null: {_buildAction == null}, _goToState is null: {_goToState == null}");
 						
 						// Set the target using TrySetTarget (bypasses mask check in the overload without Player parameter)
 						_targetSensor.TrySetTarget(closestTarget);
@@ -202,48 +199,54 @@ namespace STStateMachine.States
 							Vector3 constructionPoint = buildingCenter + toPlayer * 2f;
 							_goToState.SetTargetPosition(constructionPoint, _roleHandler.PlayerRoleData.ActionRange);
 							_goToState.UsePosition = true;
-							Debug.Log($"[HealerRole] Set GoTo position: {constructionPoint}, actionRange={_roleHandler.PlayerRoleData.ActionRange}");
+							_debugProcessor.Log(DebugLogCategory.HealerRole, $"Set GoTo position: {constructionPoint}, actionRange={_roleHandler.PlayerRoleData.ActionRange}");
 						}
 						else
 						{
 							// If player is at center, use center
 							_goToState.SetTarget(closestTarget.transform, _roleHandler.PlayerRoleData.ActionRange);
-							Debug.Log($"[HealerRole] Set GoTo transform: {closestTarget.name}, actionRange={_roleHandler.PlayerRoleData.ActionRange}");
+							_debugProcessor.Log(DebugLogCategory.HealerRole, $"Set GoTo transform: {closestTarget.name}, actionRange={_roleHandler.PlayerRoleData.ActionRange}");
 						}
 
-						Debug.Log($"[HealerRole] Checking _buildAction null status before setting next state");
+						_debugProcessor.Log(DebugLogCategory.HealerRole, $"Checking _buildAction null status before setting next state");
 						if (_buildAction == null)
 						{
-							Debug.LogError("[HealerRole] _buildAction is null! Cannot set next state.");
+							_debugProcessor.LogError(DebugLogCategory.HealerRole, "_buildAction is null! Cannot set next state.");
 							return false;
 						}
 
-						Debug.Log($"[HealerRole] _buildAction is valid, setting as next state");
+						_debugProcessor.Log(DebugLogCategory.HealerRole, $"_buildAction is valid, setting as next state");
 						_goToState.SetNextState(_buildAction);
-						Debug.Log($"[HealerRole] Set next state to Build action, requesting GoTo state");
+						_debugProcessor.Log(DebugLogCategory.HealerRole, $"Set next state to Build action, requesting GoTo state");
 						_stateMachine.RequestStateChange(_goToState);
-						Debug.Log($"[HealerRole] State change requested, returning false to prevent OnHasTarget override");
+						_debugProcessor.Log(DebugLogCategory.HealerRole, $"State change requested, returning false to prevent OnHasTarget override");
 						return false; // Return false to prevent OnHasTarget from overriding GoTo configuration
 					}
 					else
 					{
-						Debug.Log($"[HealerRole] No active construction target found (all inactive in hierarchy)");
+						_debugProcessor.Log(DebugLogCategory.BuilderSearch, $"No active construction target found (all inactive in hierarchy)");
 					}
 				}
 				else
 				{
-					Debug.Log("[HealerRole] No construction targets found");
+					_debugProcessor.Log(DebugLogCategory.HealerRole, $"No construction targets found");
 				}
 			}
 			else
 			{
-				Debug.Log($"[HealerRole] Not a builder, skipping construction target search");
+				_debugProcessor.Log(DebugLogCategory.HealerRole, $"Not a builder, skipping construction target search");
 			}
 
 			// Default healer role behavior (heal injured players)
-			Debug.Log($"[HealerRole] Using default healer behavior (heal)");
+			_debugProcessor.Log(DebugLogCategory.HealerRole, $"Using default healer behavior (heal)");
+			if (_targetSensor.CurrentTarget == null)
+				return false;
+
+			_goToState.UsePosition = false;
 			_goToState.SetNextState(_healAction);
-			return true;
+			_goToState.SetTarget(_targetSensor.CurrentTarget.transform, _roleHandler.PlayerRoleData.ActionRange);
+			_stateMachine.RequestStateChange(_goToState);
+			return false;
 		}
 
 		/// <summary>
@@ -252,7 +255,7 @@ namespace STStateMachine.States
 		/// <returns></returns>
 		protected bool OtherRole()
 		{
-			Debug.LogWarning($"Role type behaviour not handlded.");
+			_debugProcessor.LogWarning(DebugLogCategory.HealerRole, $"Role type behaviour not handlded.");
 			return false;
 		}
 
@@ -368,12 +371,12 @@ namespace STStateMachine.States
 				// If we're a builder, search for construction targets
 				if (_roleHandler.CurrentRole == PlayerRole.Builder)
 				{
-					Debug.Log($"[Builder Search] Checking for construction targets, role={_roleHandler.CurrentRole}");
+					_debugProcessor.Log(DebugLogCategory.BuilderSearch, $"Checking for construction targets, role={_roleHandler.CurrentRole}");
 
 					List<Targetable> constructionTargets = new List<Targetable>();
 					_cellSpacePartition.GetTargetablesInRange(TargetMask.Construction, transform.position, _resourceSearchRange, ref constructionTargets);
 
-					Debug.Log($"[Builder Search] Found {constructionTargets.Count} construction targets in range {_resourceSearchRange}");
+					_debugProcessor.Log(DebugLogCategory.BuilderSearch, $"Found {constructionTargets.Count} construction targets in range {_resourceSearchRange}");
 
 					if (constructionTargets.Count > 0)
 					{
@@ -396,7 +399,7 @@ namespace STStateMachine.States
 
 						if (closestTarget != null)
 						{
-							Debug.Log($"[Builder Search] Found closest construction target at {closestTarget.transform.position}, distance={Mathf.Sqrt(closestDistSqr)}");
+							_debugProcessor.Log(DebugLogCategory.BuilderSearch, $"Found closest construction target at {closestTarget.transform.position}, distance={Mathf.Sqrt(closestDistSqr)}");
 							_targetSensor.TrySetTarget(closestTarget);
 
 							// Calculate position on the outside of the building (like deposit logic)
@@ -424,7 +427,7 @@ namespace STStateMachine.States
 						}
 						else
 						{
-							Debug.Log("[Builder Search] No active construction targets found (all inactive in hierarchy)");
+							_debugProcessor.Log(DebugLogCategory.BuilderSearch, $"No active construction targets found (all inactive in hierarchy)");
 						}
 					}
 				}

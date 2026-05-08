@@ -30,6 +30,11 @@ namespace UserInterface
 		[Inject] private GameEventProcessor _gameEventProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
 
+		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
 		private bool _canOpenVoteContainer = false;
 
 		public void ActivateVoteContainer()
@@ -100,7 +105,7 @@ namespace UserInterface
 			uiTech.TechButton.gameObject.SetActive(true);
 			string modPath = nodeData.IconPath.Remove(0, 17);
 			modPath = modPath.Remove(modPath.Length - 4, 4);
-			Debug.Log(modPath);
+			_debugProcessor.Log(DebugLogCategory.UserInterface_TownVote, modPath);
 			uiTech.TechIcon.sprite = Resources.Load<Sprite>(modPath) as Sprite;
 			_techOptions.Add(uiTech);
 			return uiTech;

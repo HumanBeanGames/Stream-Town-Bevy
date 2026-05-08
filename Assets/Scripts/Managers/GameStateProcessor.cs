@@ -26,6 +26,11 @@ namespace Processors
         /// </summary>
         [Inject] private TwitchChatProcessor _twitchChatProcessor;
 
+        /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
 		/// <summary>
 		/// Player control is active and ready.
 		/// </summary>
@@ -159,7 +164,7 @@ namespace Processors
 			PlayerReady = true;
 
 			if (_gameStateRuntimeData.EventLogging)
-				Debug.Log("Player Ready");
+				_debugProcessor.Log(DebugLogCategory.General, "Player Ready");
 		}
 
 		/// <summary>
@@ -170,7 +175,7 @@ namespace Processors
 			WorldGenerated = true;
 
 			if (_gameStateRuntimeData.EventLogging)
-				Debug.Log("World Loaded");
+				_debugProcessor.Log(DebugLogCategory.General, "World Loaded");
 		}
 
 		/// <summary>
@@ -181,7 +186,7 @@ namespace Processors
 			ObjectsPooled = true;
 
 			if (_gameStateRuntimeData.EventLogging)
-				Debug.Log("Pooling Finished");
+				_debugProcessor.Log(DebugLogCategory.General, "Pooling Finished");
 		}
 
 		/// <summary>
@@ -192,7 +197,7 @@ namespace Processors
 			ResetStateFlags();
 
 			if (_gameStateRuntimeData.EventLogging)
-				Debug.Log("Loading New World");
+				_debugProcessor.Log(DebugLogCategory.General, "Loading New World");
 		}
 
 		/// <summary>

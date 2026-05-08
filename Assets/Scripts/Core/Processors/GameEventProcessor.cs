@@ -43,6 +43,11 @@ namespace Processors
         [Inject] private TimeProcessor _timeProcessor;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+        [Inject] private Processors.DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// Runtime game event data.
         /// Assigned in InjectRuntimeData.
         /// </summary>
@@ -214,7 +219,7 @@ namespace Processors
 
             // Log the event addition if logging is enabled
             if (_gameEventSettings.LogEvents)
-                UnityEngine.Debug.Log($"Game Event Added: '{gameEvent.Event}'");
+                _debugProcessor.Log(DebugLogCategory.General, $"Game Event Added: '{gameEvent.Event}'");
 
             return true;
         }
@@ -238,7 +243,7 @@ namespace Processors
             _gameEventRuntimeData.EventQueue.Add(new GameEvent(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout));
 
             if (_gameEventSettings.LogEvents)
-                UnityEngine.Debug.Log($"Game Event Added: '{eventType}'");
+                _debugProcessor.Log(DebugLogCategory.General, $"Game Event Added: '{eventType}'");
 
             return true;
         }
@@ -252,7 +257,7 @@ namespace Processors
             _gameEventRuntimeData.EventQueue.Clear();
             // Log the queue disposal if logging is enabled
             if (_gameEventSettings.LogEvents)
-                UnityEngine.Debug.Log("Game Event Queue Disposed.");
+                _debugProcessor.Log(DebugLogCategory.General, "Game Event Queue Disposed.");
         }
 
         /// <summary>
@@ -337,7 +342,7 @@ namespace Processors
                     else if (nextEvent.Timeout + nextEvent.StartTime <= currentTime)
                     {
                         _gameEventRuntimeData.EventQueue.Remove(nextEvent);
-                        UnityEngine.Debug.Log($"Event Timed Out: '{nextEvent.Event}', removed from queue.");
+                        _debugProcessor.Log(DebugLogCategory.General, $"Event Timed Out: '{nextEvent.Event}', removed from queue.");
                     }
                     // Check if the event is still within its valid window
                     else if (nextEvent.Timeout + nextEvent.StartTime >= currentTime)
@@ -362,7 +367,7 @@ namespace Processors
 
             // Log the event stop if logging is enabled
             if (_gameEventSettings.LogEvents)
-                UnityEngine.Debug.Log($"Event Stopped: '{_gameEventRuntimeData.CurrentEvent.Event}'.");
+                _debugProcessor.Log(DebugLogCategory.General, $"Event Stopped: '{_gameEventRuntimeData.CurrentEvent.Event}'.");
 
             // Call the event's stop function
             _gameEventRuntimeData.CurrentEvent.Stop();
@@ -391,7 +396,7 @@ namespace Processors
 
             // Log the event start if logging is enabled
             if (_gameEventSettings.LogEvents)
-                UnityEngine.Debug.Log($"Event Started: '{_gameEventRuntimeData.CurrentEvent.Event}'.");
+                _debugProcessor.Log(DebugLogCategory.General, $"Event Started: '{_gameEventRuntimeData.CurrentEvent.Event}'.");
 
             // Subscribe to the event's ended callback
             _gameEventRuntimeData.CurrentEvent.EventEnded += OnCurrentEventEnded;
@@ -437,7 +442,7 @@ namespace Processors
         /// </summary>
         public void StartKeepRulerVote()
         {
-            Debug.Log("Keep ruler vote");
+            _debugProcessor.Log(DebugLogCategory.General, "Keep ruler vote");
             // Create a new keep ruler vote event with 1 minute duration and 1 hour timeout
             KeepKingVote keepKingVote = new KeepKingVote(1, 120, timeout: 3600);
 
@@ -470,7 +475,7 @@ namespace Processors
             // Check if no votes were cast
             if (data == null)
             {
-                Debug.Log("No Votes Were Cast");
+                _debugProcessor.Log(DebugLogCategory.General, "No Votes Were Cast");
                 return;
             }
 
@@ -502,7 +507,7 @@ namespace Processors
             // Check if no votes were cast
             if (data == null)
             {
-                Debug.Log("No Votes Were Cast");
+                _debugProcessor.Log(DebugLogCategory.General, "No Votes Were Cast");
                 return;
             }
 
@@ -514,10 +519,10 @@ namespace Processors
             {
                 // Set the winning player as the new ruler
                 _playerProcessor.SetRuler(_playerProcessor.GetPlayer(index));
-                Debug.Log($"Winner Was {option.OptionName}");
+                _debugProcessor.Log(DebugLogCategory.General, $"Winner Was {option.OptionName}");
             }
             else
-                Debug.Log("No Player Found");
+                _debugProcessor.Log(DebugLogCategory.General, "No Player Found");
         }
 
         /// <summary>

@@ -1,4 +1,6 @@
 using Behaviours;
+using Processors;
+using Reflex.Attributes;
 using STStateMachine.Helpers;
 using STStateMachine.States;
 using Units;
@@ -14,11 +16,12 @@ namespace STStateMachine.States
 	public class STSM_Action_Build : STSM_Action_PlayerBase
 	{
 		protected STSM_Helper_Build _buildHelper;
+		[Inject] private Processors.DebugProcessor _debugProcessor;
 
 		public override void OnEnter()
 		{
 			base.OnEnter();
-			Debug.Log($"[STSM_Action_Build] OnEnter - target: {_target?.name}, targetType: {_target?.TargetType}");
+			_debugProcessor.Log(DebugLogCategory.STSM_Action_Build, $"OnEnter - target: {_target?.name}, targetType: {_target?.TargetType}");
 		}
 
 		public override void OnUpdate()
@@ -28,7 +31,7 @@ namespace STStateMachine.States
 
 		public override void OnExit()
 		{
-			Debug.Log($"[STSM_Action_Build] OnExit - target: {_target?.name}, targetType: {_target?.TargetType}");
+			_debugProcessor.Log(DebugLogCategory.STSM_Action_Build, $"OnExit - target: {_target?.name}, targetType: {_target?.TargetType}");
 			base.OnExit();
 			// Only force new position search if construction is complete, not after each build action
 			if (_target != null && (_target.TargetType & TargetMask.Construction) != 0)
@@ -45,11 +48,11 @@ namespace STStateMachine.States
 			
 			if (_buildHelper == null)
 			{
-				Debug.LogError("[STSM_Action_Build OnInit] Failed to get Build helper from StateMachine!");
+				_debugProcessor.LogError(DebugLogCategory.STSM_Action_Build, "Failed to get Build helper from StateMachine!");
 			}
 			else
 			{
-				Debug.Log("[STSM_Action_Build OnInit] Successfully got Build helper");
+				_debugProcessor.Log(DebugLogCategory.STSM_Action_Build, "Successfully got Build helper");
 			}
 		}
 
@@ -58,7 +61,7 @@ namespace STStateMachine.States
 			// Check if target is still valid and active
 			if (_target == null || !_target.gameObject.activeInHierarchy)
 			{
-				Debug.LogWarning("[STSM_Action_Build] Target is null or inactive, exiting to Idle");
+				_debugProcessor.LogWarning(DebugLogCategory.STSM_Action_Build, "Target is null or inactive, exiting to Idle");
 				_stateMachine.RequestStateChange("Idle");
 				return false;
 			}
@@ -66,7 +69,7 @@ namespace STStateMachine.States
 			// Check if building is still under construction (has Construction target type)
 			if ((_target.TargetType & TargetMask.Construction) == 0)
 			{
-				Debug.Log($"[STSM_Action_Build] Building { _target.name} is complete (no Construction flag), exiting to Idle");
+				_debugProcessor.Log(DebugLogCategory.STSM_Action_Build, $"Building { _target.name} is complete (no Construction flag), exiting to Idle");
 				// Building is complete, go back to idle
 				_stateMachine.RequestStateChange("Idle");
 				return false;
@@ -77,12 +80,12 @@ namespace STStateMachine.States
 			float distanceSqr = Vector3.SqrMagnitude(_target.transform.position - transform.position);
 			if (distanceSqr > maxBuildRange * maxBuildRange)
 			{
-				Debug.LogWarning($"[STSM_Action_Build] Out of build range - distance: {Mathf.Sqrt(distanceSqr)}, maxRange: {maxBuildRange}, actionRange: {_actionRange}");
+				_debugProcessor.LogWarning(DebugLogCategory.STSM_Action_Build, $"Out of build range - distance: {Mathf.Sqrt(distanceSqr)}, maxRange: {maxBuildRange}, actionRange: {_actionRange}");
 				_stateMachine.RequestStateChange("Idle");
 				return false;
 			}
 
-			Debug.Log($"[STSM_Action_Build] In range, executing build action - actionAmount: {_actionAmount}");
+			_debugProcessor.Log(DebugLogCategory.STSM_Action_Build, $"In range, executing build action - actionAmount: {_actionAmount}");
 			_buildHelper.BuildAmount = _actionAmount;
 			_buildHelper.Target = _target;
 			_buildHelper.InvokeHelper();

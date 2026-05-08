@@ -27,6 +27,11 @@ namespace Processors
 		private GUIDRuntimeData _guidRuntimeData;
 
 		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+		/// <summary>
 
 		public void Initialize()
 		{
@@ -52,7 +57,7 @@ namespace Processors
 				_guidRuntimeData.InitializeWorldObjects(worldObjects);
 			}
 			else
-				Debug.Log("GUIDProcessor: Is already initialized");
+				_debugProcessor.Log(DebugLogCategory.General, "GUIDProcessor: Is already initialized");
 
 			// Mark as initialized regardless of whether we just initialized or it was already done
 			_guidRuntimeData.IsInitialized = true;
@@ -111,10 +116,10 @@ namespace Processors
 				_guidRuntimeData.WorldObjects[comp.PoolType.ToString()].Add(((SaveableObject)comp.SaveableObject).GUIDComponent.GUID, comp);
 			// Log warning if GUID is zero (uninitialized)
 			else if (((SaveableObject)comp.SaveableObject).GUIDComponent.GUID == 0)
-				Debug.Log("GUID == 0");
+				_debugProcessor.Log(DebugLogCategory.General, "GUID == 0");
 			// Log warning if GUID is already in use (duplicate)
 			else
-				Debug.Log("Duplicate GUID detected");
+				_debugProcessor.Log(DebugLogCategory.General, "Duplicate GUID detected");
 		}
 
 		/// <summary>

@@ -48,6 +48,11 @@ namespace Target
 		[Inject] protected TargetProcessor _targetProcessor;
 
         /// <summary>
+        /// The debug processor. Injected via Reflex dependency injection.
+        /// </summary>
+		[Inject] protected DebugProcessor _debugProcessor;
+
+        /// <summary>
         /// The cell index.
         /// </summary>
 		protected int _cellIndex = -1;
@@ -191,11 +196,11 @@ namespace Target
 		{
 			if (_cellSpacePartition == null || _cellIndex == -1)
 			{
-				Debug.Log($"[Targetable] Cannot add {name} to cell - partition null or index -1");
+				_debugProcessor.Log(DebugLogCategory.Targetable, $"Cannot add {name} to cell - partition null or index -1");
 				return;
 			}
 
-			Debug.Log($"[Targetable] Adding {name} (type={_targetType}) to cell {_cellIndex}, position={transform.position}");
+			_debugProcessor.Log(DebugLogCategory.Targetable, $"Adding {name} (type={_targetType}) to cell {_cellIndex}, position={transform.position}");
 			_cellSpacePartition.GetCellAtIndex(_cellIndex).AddTarget(this);
 		}
 
@@ -239,8 +244,6 @@ namespace Target
 		{
 			int newCellIndex = _cellSpacePartition.PositionToIndex(transform.position);
 
-			Debug.Log($"[Targetable] UpdateIndex for {name}: oldIndex={_cellIndex}, newIndex={newCellIndex}, position={transform.position}");
-
 			if (newCellIndex != _cellIndex)
 			{
 				RemoveThisTarget();
@@ -281,7 +284,7 @@ namespace Target
         /// </summary>
 		protected void OnEnable()
 		{
-			Debug.Log($"[Targetable] OnEnable for {name}");
+			_debugProcessor.Log(DebugLogCategory.Targetable, $"OnEnable for {name}");
 
 			_wasPooled = true;
 
@@ -333,7 +336,7 @@ namespace Target
 			_transform = transform;
 			_cellIndex = _cellSpacePartition.PositionToIndex(transform.position);
 
-			Debug.Log($"[Targetable] OnReset for {name} - partition={(_cellSpacePartition != null)}, cellIndex={_cellIndex}, position={transform.position}, targetType={_targetType}");
+			_debugProcessor.Log(DebugLogCategory.Targetable, $"OnReset for {name} - partition={(_cellSpacePartition != null)}, cellIndex={_cellIndex}, position={transform.position}, targetType={_targetType}");
 
 			AddThisTargetToCell();
 		}

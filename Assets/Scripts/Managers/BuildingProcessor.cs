@@ -894,6 +894,15 @@ namespace Processors
 			_buildingRuntimeData.BuildingCounts[type] = 0;
 		}
 
+		/// <summary>
+		/// Unlocks all buildings for debug purposes.
+		/// Sets the IgnoreTechUnlocks flag to true to bypass tech unlock checks.
+		/// </summary>
+		public void UnlockAllBuildings()
+		{
+			_buildingSettings.UnlockAllBuildings();
+		}
+
 		#endregion
 
 		/// <summary>

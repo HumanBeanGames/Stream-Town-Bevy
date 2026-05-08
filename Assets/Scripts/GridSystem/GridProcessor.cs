@@ -24,6 +24,11 @@ namespace GridSystem
 		[Inject] private GridSettings _gridSettings;
 
 		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+		/// <summary>
 		/// Cell space partitioning component for spatial queries.
 		/// </summary>
 		private CellSpacePartitioning _cellSpacePartitioning;
@@ -93,7 +98,7 @@ namespace GridSystem
 			if (_cellSpacePartitioning == null)
 				return;
 
-			Debug.Log("[GridProcessor] Repopulating spatial partitioning indices");
+			_debugProcessor.Log(DebugLogCategory.GridProcessor, "Repopulating spatial partitioning indices");
 			_cellSpacePartitioning.PopulateResourceIndices(resourceProcessor);
 			_cellSpacePartitioning.PopulateFoliageIndices(foliageProcessor);
 		}

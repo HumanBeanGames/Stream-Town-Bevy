@@ -87,40 +87,24 @@ namespace GameResources
 			_timestampData.Enqueue(new ChangeTimeStamp(now, _changeDuringPeriod));
 			_changeDuringPeriod = 0;
 
-			List<float> medianAmounts = new List<float>();
-
-			// Loop through all timestamps and calculate the rate of change.
-			for (int i = _timestampData.Count - 1; i >= 0; i--)
+			while (_timestampData.Count > 0)
 			{
-				ChangeTimeStamp cts = _timestampData.Dequeue();
-				double timeDifference = (now - cts.TimeStamp).TotalSeconds;
+				ChangeTimeStamp oldest = _timestampData.Peek();
+				double timeDifference = (now - oldest.TimeStamp).TotalSeconds;
 
-				if (timeDifference < _timePeriod)
-				{
-					medianAmounts.Add(cts.Change);
-					_timestampData.Enqueue(cts);
-				}
+				if (timeDifference <= _timePeriod)
+					break;
+
+				_timestampData.Dequeue();
 			}
 
-			if (medianAmounts.Count < 10)
-				return;
-
-			List<float> plottedPoints = new List<float>();
-			for (int i = 2; i < medianAmounts.Count - 3; i++)
+			int totalChange = 0;
+			foreach (ChangeTimeStamp cts in _timestampData)
 			{
-				plottedPoints.Add((medianAmounts[i - 2] + medianAmounts[i - 1] + medianAmounts[i] + medianAmounts[i + 1] + medianAmounts[i + 2]) / 5.0f);
+				totalChange += cts.Change;
 			}
 
-			float movingMean = 0;
-
-			for (int i = 0; i < plottedPoints.Count; i++)
-			{
-				movingMean += plottedPoints[i];
-			}
-
-			movingMean /= plottedPoints.Count;
-
-			_averageOverTime = (int)(movingMean * 60 * 60);
+			_averageOverTime = Mathf.RoundToInt((totalChange / _timePeriod) * 60f * 60f);
 		}
 
         /// <summary>

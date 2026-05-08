@@ -29,6 +29,11 @@ namespace Processors
 		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
 
 		/// <summary>
+		/// The debug processor. Injected via Reflex dependency injection.
+		/// </summary>
+		[Inject] private Processors.DebugProcessor _debugProcessor;
+
+		/// <summary>
 		/// Set of foliage indices that have been removed.
 		/// Used for efficient on-the-fly removal without rebuilding lists.
 		/// </summary>
@@ -262,7 +267,7 @@ namespace Processors
 		{
 			if (_cellSpacePartitioning == null)
 			{
-				Debug.LogWarning("[FoliageProcessor] CellSpacePartitioning is null, cannot remove foliage");
+				_debugProcessor.LogWarning(DebugLogCategory.FoliageProcessor, "CellSpacePartitioning is null, cannot remove foliage");
 				return;
 			}
 
