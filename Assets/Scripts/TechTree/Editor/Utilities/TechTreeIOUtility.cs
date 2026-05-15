@@ -33,9 +33,12 @@ namespace TechTree.Utilities
 		private static List<TechTreeNode> _nodes;
 		private static Dictionary<string, NodeGroup_SO> _createdTechGroups;
 		private static Dictionary<string, Node_SO> _createdTechs;
+		private static HashSet<UnityEngine.Object> _dirtyAssets;
 
 		private static Dictionary<string, TechnologyTreeGroup> _loadedGroups;
 		private static Dictionary<string, TechTreeNode> _loadedNodes;
+
+		public static bool IsSaving { get; private set; }
 
 		/// <summary>
 		/// Initializes the saving and loading.
@@ -53,6 +56,7 @@ namespace TechTree.Utilities
 
 			_createdTechGroups = new Dictionary<string, NodeGroup_SO>();
 			_createdTechs = new Dictionary<string, Node_SO>();
+			_dirtyAssets = new HashSet<UnityEngine.Object>();
 
 			_loadedGroups = new Dictionary<string, TechnologyTreeGroup>();
 			_loadedNodes = new Dictionary<string, TechTreeNode>();
@@ -63,23 +67,35 @@ namespace TechTree.Utilities
 		/// </summary>
 		public static void Save()
 		{
-			CreateStaticFolders();
+			if (IsSaving)
+				return;
 
-			GetElementsFromGraphView();
+			IsSaving = true;
 
-			TechTreeSaveData_SO graphData = CreateAsset<TechTreeSaveData_SO>(EDITOR_GRAPHS_FOLDER, $"{_graphFileName}Graph");
+			try
+			{
+				CreateStaticFolders();
 
-			graphData.Initialize(_graphFileName);
+				GetElementsFromGraphView();
 
-			TechTree_SO technologyContainer = CreateAsset<TechTree_SO>(_containerFolderPath, _graphFileName);
+				TechTreeSaveData_SO graphData = CreateAsset<TechTreeSaveData_SO>(EDITOR_GRAPHS_FOLDER, $"{_graphFileName}Graph");
 
-			technologyContainer.Initialize(_graphFileName);
+				graphData.Initialize(_graphFileName);
 
-			SaveGroups(graphData, technologyContainer);
-			SaveNodes(graphData, technologyContainer);
-			SaveAsset(graphData);
+				TechTree_SO technologyContainer = CreateAsset<TechTree_SO>(_containerFolderPath, _graphFileName);
 
-			SaveAsset(technologyContainer);
+				technologyContainer.Initialize(_graphFileName);
+
+				SaveGroups(graphData, technologyContainer);
+				SaveNodes(graphData, technologyContainer);
+				SaveAsset(graphData);
+				SaveAsset(technologyContainer);
+				FlushDirtyAssets();
+			}
+			finally
+			{
+				IsSaving = false;
+			}
 		}
 
 		/// <summary>
@@ -208,6 +224,7 @@ namespace TechTree.Utilities
 			foreach (TechTreeNode node in _nodes)
 			{
 				Node_SO technology = _createdTechs[node.ID];
+				bool hasChanges = false;
 
 				for (int childIndex = 0; childIndex < node.ChildTech.Count; childIndex++)
 				{
@@ -216,10 +233,19 @@ namespace TechTree.Utilities
 					if (string.IsNullOrEmpty(techChild.NodeID))
 						continue;
 
-					technology.Children[childIndex].NextTech = _createdTechs[techChild.NodeID];
+					NodeChildrenTechData childData = technology.Children[childIndex];
+					Node_SO nextTech = _createdTechs[techChild.NodeID];
 
-					SaveAsset(technology);
+					if (childData.NodeID != techChild.NodeID || childData.NextTech != nextTech)
+					{
+						childData.NodeID = techChild.NodeID;
+						childData.NextTech = nextTech;
+						hasChanges = true;
+					}
 				}
+
+				if (hasChanges)
+					SaveAsset(technology);
 			}
 		}
 
@@ -288,13 +314,15 @@ namespace TechTree.Utilities
 
 			NodeGroup_SO techGroup = CreateAsset<NodeGroup_SO>($"{_containerFolderPath}/Groups/{groupName}", groupName);
 
-			techGroup.Initialize(groupName);
+			if (techGroup.GroupName != groupName)
+			{
+				techGroup.Initialize(groupName);
+				SaveAsset(techGroup);
+			}
 
 			_createdTechGroups.Add(group.ID, techGroup);
 
 			technologyContainer.NodeGroups.Add(techGroup, new List<Node_SO>());
-
-			SaveAsset(techGroup);
 		}
 
 		/// <summary>
@@ -319,12 +347,13 @@ namespace TechTree.Utilities
 				technologyContainer.UngroupedNodes.Add(technology);
 			}
 
-			//TODO: UPDATE THE AUTO FALSE HERE.
-			technology.Initialize(node.TechName,node.NodeTitle, node.Description, ConvertNodeChildrenToTechChildren(node.ChildTech), ConvertNodeUnlocksToTechUnlock(node.Unlocks), ConvertNodeObjectivesToTechObjectives(node.Objectives), node.Unlocked, node.Age, node.Tier, node.IconPath, node.Unavailable);
+			if (NodeAssetNeedsUpdate(technology, node))
+			{
+				technology.Initialize(node.TechName,node.NodeTitle, node.Description, ConvertNodeChildrenToTechChildren(node.ChildTech), ConvertNodeUnlocksToTechUnlock(node.Unlocks), ConvertNodeObjectivesToTechObjectives(node.Objectives), node.Unlocked, node.Age, node.Tier, node.IconPath, node.Unavailable);
+				SaveAsset(technology);
+			}
 
 			_createdTechs.Add(node.ID, technology);
-
-			SaveAsset(technology);
 		}
 
 		// LOADING
@@ -600,9 +629,138 @@ namespace TechTree.Utilities
 		/// <param name="asset"></param>
 		private static void SaveAsset(UnityEngine.Object asset)
 		{
-			EditorUtility.SetDirty(asset);
+			if (asset == null)
+				return;
+
+			_dirtyAssets.Add(asset);
+		}
+
+		private static void FlushDirtyAssets()
+		{
+			if (_dirtyAssets == null || _dirtyAssets.Count == 0)
+				return;
+
+			foreach (UnityEngine.Object asset in _dirtyAssets)
+			{
+				EditorUtility.SetDirty(asset);
+			}
+
 			AssetDatabase.SaveAssets();
 			AssetDatabase.Refresh();
+			_dirtyAssets.Clear();
+		}
+
+		private static bool NodeAssetNeedsUpdate(Node_SO technology, TechTreeNode node)
+		{
+			if (technology == null)
+				return true;
+
+			if (technology.TechName != node.TechName
+				|| technology.NodeTitle != node.NodeTitle
+				|| technology.Description != node.Description
+				|| technology.IsUnlocked != node.Unlocked
+				|| technology.Age != node.Age
+				|| technology.Tier != node.Tier
+				|| technology.IconPath != node.IconPath
+				|| technology.Unavailable != node.Unavailable)
+			{
+				return true;
+			}
+
+			if (!ChildrenMatch(technology.Children, node.ChildTech))
+				return true;
+
+			if (!UnlocksMatch(technology.Unlocks, node.Unlocks))
+				return true;
+
+			if (!ObjectivesMatch(technology.Objectives, node.Objectives))
+				return true;
+
+			return false;
+		}
+
+		private static bool ChildrenMatch(List<NodeChildrenTechData> existingChildren, List<ChildrenSaveData> nodeChildren)
+		{
+			if (existingChildren == null || nodeChildren == null)
+				return existingChildren == null && nodeChildren == null;
+
+			if (existingChildren.Count != nodeChildren.Count)
+				return false;
+
+			for (int i = 0; i < existingChildren.Count; i++)
+			{
+				if (existingChildren[i] == null)
+					return false;
+
+				if (existingChildren[i].NodeID != nodeChildren[i].NodeID)
+					return false;
+			}
+
+			return true;
+		}
+
+		private static bool UnlocksMatch(List<NodeUnlockData> existingUnlocks, List<NodeUnlockSaveData> nodeUnlocks)
+		{
+			if (existingUnlocks == null || nodeUnlocks == null)
+				return existingUnlocks == null && nodeUnlocks == null;
+
+			if (existingUnlocks.Count != nodeUnlocks.Count)
+				return false;
+
+			for (int i = 0; i < existingUnlocks.Count; i++)
+			{
+				NodeUnlockData existingUnlock = existingUnlocks[i];
+				NodeUnlockSaveData nodeUnlock = nodeUnlocks[i];
+
+				if (existingUnlock == null || nodeUnlock == null)
+					return false;
+
+				if (existingUnlock.TechType != nodeUnlock.TechType
+					|| existingUnlock.IntValue != nodeUnlock.IntValue
+					|| existingUnlock.FloatValue != nodeUnlock.FloatValue
+					|| existingUnlock.StringValue != nodeUnlock.StringValue
+					|| existingUnlock.CharValue != nodeUnlock.CharValue
+					|| existingUnlock.BoolValue != nodeUnlock.BoolValue
+					|| existingUnlock.PlayerRole != nodeUnlock.PlayerRole
+					|| existingUnlock.BuildingType != nodeUnlock.BuildingType
+					|| existingUnlock.StatType != nodeUnlock.StatType
+					|| existingUnlock.ResourceType != nodeUnlock.ResourceType)
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		private static bool ObjectivesMatch(List<ObjectiveData> existingObjectives, List<ObjectiveSaveData> nodeObjectives)
+		{
+			if (existingObjectives == null || nodeObjectives == null)
+				return existingObjectives == null && nodeObjectives == null;
+
+			if (existingObjectives.Count != nodeObjectives.Count)
+				return false;
+
+			for (int i = 0; i < existingObjectives.Count; i++)
+			{
+				ObjectiveData existingObjective = existingObjectives[i];
+				ObjectiveSaveData nodeObjective = nodeObjectives[i];
+
+				if (existingObjective == null || nodeObjective == null)
+					return false;
+
+				if (existingObjective.ObjectiveType != nodeObjective.ObjectiveType
+					|| existingObjective.IntValue != nodeObjective.IntValue
+					|| existingObjective.FloatValue != nodeObjective.FloatValue
+					|| existingObjective.BuildingType != nodeObjective.BuildingType
+					|| existingObjective.ResourceType != nodeObjective.ResourceType
+					|| existingObjective.EnemyType != nodeObjective.EnemyType)
+				{
+					return false;
+				}
+			}
+
+			return true;
 		}
 
 		/// <summary>

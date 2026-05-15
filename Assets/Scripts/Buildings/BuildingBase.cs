@@ -193,7 +193,7 @@ namespace Buildings
                 OnHealthConstruction(0);
 
                 // Set it's target type to Construction
-                Debug.Log($"[BuildingBase] Setting building {name} to Construction state");
+                Debug.Log($"Setting building {name} to Construction state");
                 _targetable.SetTargetType(TargetMask.Construction);
 
                 // Disable station if it has one
@@ -402,20 +402,20 @@ namespace Buildings
             {
                 _healthHandler.SetHealth(Mathf.CeilToInt(_healthHandler.MaxHealth * 0.1f));
                 if (_debugProcessor != null)
-                    _debugProcessor.Log(DebugLogCategory.Building, $"[BuildingBase Start] Set {name} to 10% health ({_healthHandler.Health}/{_healthHandler.MaxHealth}) for construction");
+                    _debugProcessor.Log(DebugLogCategory.Building, $"Set {name} to 10% health ({_healthHandler.Health}/{_healthHandler.MaxHealth}) for construction");
             }
             else
             {
                 _healthHandler.SetHealth(_healthHandler.MaxHealth);
                 if (_debugProcessor != null)
-                    _debugProcessor.Log(DebugLogCategory.Building, $"[BuildingBase Start] Set {name} to full health ({_healthHandler.Health}/{_healthHandler.MaxHealth})");
+                    _debugProcessor.Log(DebugLogCategory.Building, $"Set {name} to full health ({_healthHandler.Health}/{_healthHandler.MaxHealth})");
             }
         }
 
         private void OnEnable()
         {
             if (_debugProcessor != null)
-                _debugProcessor.Log(DebugLogCategory.Building, $"[BuildingBase] OnEnable called for {name}");
+                _debugProcessor.Log(DebugLogCategory.Building, $"OnEnable called for {name}");
             if (!_initialized)
                 Init();
             OnSpawn();

@@ -28,6 +28,8 @@ namespace UserInterface
 		private TextMeshProUGUI _timeDisplayText;
 	[SerializeField]
 		private Slider _seasonalSlider;
+	[SerializeField]
+		private TextMeshProUGUI _activeObjectiveText;
 
 		[Inject] private TownResourceProcessor _resourceProcessor;
 		[Inject] private UIProcessor _uiProcessor;
@@ -87,7 +89,7 @@ namespace UserInterface
 			_uiProcessor.RegisterResourceRateOfChangeDisplay(_resourceTMPs[5], _resourceTMPs[6], _resourceTMPs[7], _resourceTMPs[8]);
 
 			// Register HUD counters if they are assigned
-			_uiProcessor.RegisterHudCounters(_playerCountText, _buildingCountText, _timeDisplayText, _seasonalSlider);
+			_uiProcessor.RegisterHudCounters(_playerCountText, _buildingCountText, _timeDisplayText, _seasonalSlider, _activeObjectiveText);
 		}
 	}
 }

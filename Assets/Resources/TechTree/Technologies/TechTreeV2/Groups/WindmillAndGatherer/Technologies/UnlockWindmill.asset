@@ -33,7 +33,7 @@ MonoBehaviour:
     <ResourceType>k__BackingField: 0
   <Objectives>k__BackingField:
   - <ObjectiveType>k__BackingField: 2
-    <IntValue>k__BackingField: 250
+    <IntValue>k__BackingField: 10
     <FloatValue>k__BackingField: 0
     <BuildingType>k__BackingField: 0
     <ResourceType>k__BackingField: 3

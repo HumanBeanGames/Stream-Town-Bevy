@@ -485,6 +485,9 @@ namespace UserInterface.BottomBarMenu
 
 		private void OnTechTreeKey()
 		{
+			if (_uiProcessor == null || _uiProcessor.TownVoteInterface == null)
+				return;
+
 			_uiProcessor.TownVoteInterface.ToggleVotingMenu();
 		}
 

@@ -56,6 +56,7 @@ namespace UserInterface
 		[Inject] private ObjectPoolingProcessor _poolingProcessor;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
+		[Inject] private PlayerInputProcessor _playerInputProcessor;
 		[Inject] private Processors.TwitchChatProcessor _twitchChatProcessor;
 		[Inject] private Processors.BuildingProcessor _buildingProcessor;
 		[Inject] private Processors.WorldGenProcessor _worldGenProcessor;
@@ -388,13 +389,15 @@ namespace UserInterface
 			if (_commandInputField != null)
 			{
 				_commandInputField.onEndEdit.AddListener(OnCommandSubmitted);
+				_commandInputField.onSelect.AddListener(OnCommandInputSelected);
+				_commandInputField.onDeselect.AddListener(OnCommandInputDeselected);
 			}
 
 			// Initialize player dropdown
 			PopulatePlayerDropdown();
 
 			// Unlock all buildings for debug purposes
-			_buildingProcessor.UnlockAllBuildings();
+			// _buildingProcessor.UnlockAllBuildings();
 
 			// Debug player spawning will be handled later when systems are ready
 			// Don't spawn during Awake as pooling may not be initialized yet
@@ -423,6 +426,7 @@ namespace UserInterface
 				{
 						_debugProcessor.Log(DebugLogCategory.DebugUI, "Debug player already exists");
 					_debugPlayer = player;
+					_playerProcessor.SetUserPlayer(_debugPlayer);
 					PopulatePlayerDropdown();
 					yield break;
 				}
@@ -464,6 +468,7 @@ namespace UserInterface
 				{
 						_debugProcessor.Log(DebugLogCategory.DebugUI, "Added debug player to PlayerProcessor");
 					_debugPlayer = addedPlayer;
+					_playerProcessor.SetUserPlayer(_debugPlayer);
 				}
 				else
 				{
@@ -523,6 +528,8 @@ namespace UserInterface
 		/// <param name="commandText">The command text entered.</param>
 		private void OnCommandSubmitted(string commandText)
 		{
+			OnCommandInputDeselected(commandText);
+
 			if (string.IsNullOrWhiteSpace(commandText))
 				return;
 
@@ -552,6 +559,16 @@ namespace UserInterface
 
 			// Clear the input field
 			_commandInputField.text = string.Empty;
+		}
+
+		private void OnCommandInputSelected(string _)
+		{
+			_playerInputProcessor.SuppressGameplayInput = true;
+		}
+
+		private void OnCommandInputDeselected(string _)
+		{
+			_playerInputProcessor.SuppressGameplayInput = false;
 		}
 
 		private bool _debugPlayerSpawnAttempted = false;

@@ -81,7 +81,9 @@ namespace STStateMachine.States
 			_targetSensor = GetComponent<TargetSensor>();
 			_aiPath = GetComponent<AIPath>();
 			_stationSensor = GetComponent<StationSensor>();
-			_goToState = (STSM_GoToLocation)_stateMachine.GetStateByName("GoTo");
+			_goToState = _stateMachine.GetStateByName("GoTo") as STSM_GoToLocation;
+			if (_goToState == null)
+				throw new System.InvalidOperationException($"{GetType().Name} on '{gameObject.name}' requires a StateMachine state named 'GoTo' of type {nameof(STSM_GoToLocation)}. Check the {_stateMachine.GetType().Name} state list on '{_stateMachine.gameObject.name}'.");
 			NewPositionOnEnter = true;
 		}
 

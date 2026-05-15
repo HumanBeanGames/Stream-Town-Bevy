@@ -73,6 +73,18 @@ namespace Processors
 			return height > 0f;
 		}
 
+		private static (Mesh mesh, Vector3 scale) SelectFoliageMeshAndScale(FoliageGenerationSettings settings)
+		{
+			if (settings.MeshSettings == null || settings.MeshSettings.Count == 0)
+				throw new InvalidOperationException($"WorldGenProcessor: Foliage settings '{settings.PoolName}' must define at least one mesh setting.");
+
+			FoliageMeshSettings meshSettings = settings.MeshSettings[UnityEngine.Random.Range(0, settings.MeshSettings.Count)];
+			if (meshSettings.Mesh == null)
+				throw new InvalidOperationException($"WorldGenProcessor: Foliage settings '{settings.PoolName}' contains a mesh setting with no Mesh assigned.");
+
+			return (meshSettings.Mesh, meshSettings.BaseScale);
+		}
+
 		private void RebindProjectCameraToActiveSceneMainCamera()
 		{
 			if (_projectCamera == null)
@@ -1259,17 +1271,12 @@ namespace Processors
 								continue;
 							}
 
-							// Select mesh
-							Mesh selectedMesh = null;
-							if (settings.Meshes != null && settings.Meshes.Count > 0)
-							{
-								selectedMesh = settings.Meshes[UnityEngine.Random.Range(0, settings.Meshes.Count)];
-							}
+							(Mesh selectedMesh, Vector3 selectedScale) = SelectFoliageMeshAndScale(settings);
 
 							// Create foliage data for GPU instancing
 							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
 							Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
-							GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, Vector3.one, selectedMesh, settings.Material);
+							GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, selectedScale, selectedMesh, settings.Material);
 							foliageList.Add(foliageData);
 
 							// Mark this cell as occupied
@@ -1793,10 +1800,7 @@ namespace Processors
 							}
 							else if (settings is FoliageGenerationSettings foliageSettings)
 							{
-								if (foliageSettings.Meshes != null && foliageSettings.Meshes.Count > 0)
-								{
-									selectedMesh = foliageSettings.Meshes[UnityEngine.Random.Range(0, foliageSettings.Meshes.Count)];
-								}
+								(selectedMesh, _) = SelectFoliageMeshAndScale(foliageSettings);
 							}
 
 							// Get terrain height at spawn position using raycast
@@ -2002,13 +2006,9 @@ namespace Processors
 								// Handle foliage data collection
 								float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
 								Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
-								Mesh selectedMesh = null;
-								if (foliageSettings.Meshes != null && foliageSettings.Meshes.Count > 0)
-								{
-									selectedMesh = foliageSettings.Meshes[UnityEngine.Random.Range(0, foliageSettings.Meshes.Count)];
-								}
+								(Mesh selectedMesh, Vector3 selectedScale) = SelectFoliageMeshAndScale(foliageSettings);
 
-								GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, Vector3.one, selectedMesh, foliageSettings.Material);
+								GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, selectedScale, selectedMesh, foliageSettings.Material);
 
 								if (onLandFoliage != null)
 									onLandFoliage.Add(foliageData);

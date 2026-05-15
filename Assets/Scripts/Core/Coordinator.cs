@@ -35,7 +35,13 @@ using Processors;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine.SceneManagement;
+using TMPro;
+using System.Diagnostics;
+using static UnityEngine.Rendering.GPUSort;
+using TwitchLib.Api.Core.Enums;
+using LogType = UnityEngine.LogType;
 
+using Debug = UnityEngine.Debug;
 namespace Core
 {
 	[DefaultExecutionOrder(-1000)]
@@ -49,6 +55,7 @@ namespace Core
 			WaitingForDependencies,
 			Initializing,
 			Activating,
+			BootstrappingWorld,
 			Ready,
 			Failed
 		}
@@ -60,6 +67,7 @@ namespace Core
 		private int _frameCounter = 0;
 		private const int WARNING_FRAME_INTERVAL = 120;
 		private bool _initializationComplete = false;
+		private bool _processingLoopEnabled = false;
 		private CancellationTokenSource _startupCancellationTokenSource;
 		private Task _startupTask;
 		private int _loadedStartupSceneBuildIndex = -1;
@@ -79,6 +87,10 @@ namespace Core
 				throw new System.InvalidOperationException("Duplicate Coordinator detected. Ensure only one Coordinator exists across the loader scene and persistent prefabs.");
 			}
 
+#if UNITY_EDITOR
+			Debug.unityLogger.logHandler = new CustomLogHandler();
+#endif
+
 			_instance = this;
 			_processors = new List<IProcessor>();
 			_dataScriptables = new List<IDataScriptable>();
@@ -88,7 +100,135 @@ namespace Core
 			_loadingScreen = GameObject.Find("UI_LoadingScreen");
 		}
 
-		[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+#if UNITY_EDITOR
+        internal class CustomLogHandler : ILogHandler
+        {
+			private readonly ILogHandler _default;
+			[ThreadStatic] private static DebugLogCategory? _nextCategory;
+			[ThreadStatic] private static string _nextCallerFilePath;
+			[ThreadStatic] private static string _nextCallerMemberName;
+
+			public CustomLogHandler()
+			{
+				_default = UnityEngine.Debug.unityLogger.logHandler;
+			}
+
+			public static void SetNextCategory(DebugLogCategory category, string callerFilePath, string callerMemberName)
+			{
+				_nextCategory = category;
+				_nextCallerFilePath = callerFilePath;
+				_nextCallerMemberName = callerMemberName;
+			}
+
+			[HideInCallstack]
+            void ILogHandler.LogException(Exception exception, UnityEngine.Object context)
+            {
+                _default.LogException(exception, context);
+            }
+
+			[HideInCallstack]
+            void ILogHandler.LogFormat(LogType logType, UnityEngine.Object context, string format, params object[] args)
+            {
+				DebugLogCategory category = ConsumeCategory();
+				string caller = ConsumeCaller(context);
+				DebugSettings settings = DebugSettings.ActiveInstance;
+				settings?.RegisterCategory(category);
+				if (settings != null && !settings.ShouldPublish(category))
+					return;
+
+				var callerColor = GetColor(caller);
+				var categoryColor = GetColor(category.ToString());
+				_default.LogFormat(logType, context, $"<color=#{callerColor}><b>[{caller}]</b></color> <color=#{categoryColor}><b>[{category}]</b></color> {format}", args);
+            }
+
+			private static DebugLogCategory ConsumeCategory()
+			{
+				DebugLogCategory category = _nextCategory ?? DebugLogCategory.General;
+				_nextCategory = null;
+				return category;
+			}
+
+			private static string ConsumeCaller(UnityEngine.Object context)
+			{
+				string caller = GetCallerFromMetadata();
+				if (!string.IsNullOrEmpty(caller))
+					return caller;
+
+				caller = GetCallerFromContext(context);
+				if (!string.IsNullOrEmpty(caller))
+					return caller;
+
+				return GetCaller();
+			}
+
+			private static string GetCallerFromContext(UnityEngine.Object context)
+			{
+				return context == null ? null : context.GetType().Name;
+			}
+
+			private static string GetCallerFromMetadata()
+			{
+				string callerFilePath = _nextCallerFilePath;
+				string callerMemberName = _nextCallerMemberName;
+				_nextCallerFilePath = null;
+				_nextCallerMemberName = null;
+
+				if (string.IsNullOrWhiteSpace(callerFilePath))
+					return null;
+
+				string callerTypeName = System.IO.Path.GetFileNameWithoutExtension(callerFilePath);
+				if (string.IsNullOrWhiteSpace(callerTypeName))
+					return null;
+
+				if (string.IsNullOrWhiteSpace(callerMemberName))
+					return callerTypeName;
+
+				return $"{callerTypeName}.{callerMemberName}";
+			}
+
+            public static string GetColor(string name)
+            {
+                var hue = (uint)name.GetHashCode() / (float)uint.MaxValue;
+                var color = Color.HSVToRGB(hue, 0.6f, 1.0f);
+                return ColorUtility.ToHtmlStringRGB(color);
+            }
+
+			private static string GetCaller()
+			{
+				var stack = new StackTrace(2, false);
+				for (int i = 0; i < stack.FrameCount; i++)
+				{
+					var type = stack.GetFrame(i)?.GetMethod()?.DeclaringType;
+
+					if (type is not null && !ShouldSkipCallerType(type))
+					{
+						return type.Name;
+					}
+				}
+
+				return "Default";
+			}
+
+			private static bool ShouldSkipCallerType(Type type)
+			{
+				if (type == typeof(CustomLogHandler))
+					return true;
+
+				if (type == typeof(DebugProcessor))
+					return true;
+
+				if (type.Namespace?.StartsWith("UnityEngine") == true)
+					return true;
+
+				if (type.Namespace?.StartsWith("System") == true)
+					return true;
+
+				return false;
+			}
+        }
+#endif
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
 		private static void RegisterSceneLoadHook()
 		{
 			SceneManager.sceneLoaded -= HandleSceneLoadedStatic;
@@ -102,14 +242,14 @@ namespace Core
 
 		private void Start()
 		{
-			Debug.Log("[COORDINATOR] Startup sequence started");
+			Debug.Log("Startup sequence started");
 			StartCoroutine(StartupSequence());
 		}
 
 		private IEnumerator StartupSequence()
 		{
 			CurrentStartupState = StartupState.WaitingForDependencies;
-			Debug.Log("[COORDINATOR] Stage: Waiting for dependencies");
+			Debug.Log("Stage: Waiting for dependencies");
 
 			while (!AllProcessorsAvailable())
 			{
@@ -117,20 +257,20 @@ namespace Core
 				_frameCounter++;
 				if (_frameCounter % WARNING_FRAME_INTERVAL == 0)
 				{
-					Debug.LogWarning($"[COORDINATOR] Waiting for processor bindings to become available... Missing: {string.Join(", ", GetMissingProcessorDependencies())}");
+					Debug.LogWarning($"Waiting for processor bindings to become available... Missing: {string.Join(", ", GetMissingProcessorDependencies())}");
 				}
 				yield return null;
 			}
 
 			CacheProcessorsFromBindings();
-			Debug.Log("[COORDINATOR] All processors available");
+			Debug.Log("All processors available");
 			_frameCounter = 0;
 
 			int nextSceneBuildIndex = GetNextSceneBuildIndex();
 			if (!IsValidBuildIndex(nextSceneBuildIndex))
 			{
 				CurrentStartupState = StartupState.Failed;
-				Debug.LogError($"[COORDINATOR] Could not load next scene. Build index {nextSceneBuildIndex} is invalid.");
+				Debug.LogError($"Could not load next scene. Build index {nextSceneBuildIndex} is invalid.");
 				yield break;
 			}
 
@@ -144,19 +284,19 @@ namespace Core
 				_frameCounter++;
 				if (_frameCounter % WARNING_FRAME_INTERVAL == 0)
 				{
-					Debug.LogWarning($"[COORDINATOR] Waiting for loaded scene data scriptables to become available... Missing: {string.Join(", ", GetMissingDataScriptableDependencies())}");
+					Debug.LogWarning($"Waiting for loaded scene data scriptables to become available... Missing: {string.Join(", ", GetMissingDataScriptableDependencies())}");
 				}
 				yield return null;
 			}
 
 			CacheDataScriptablesFromLoadedSceneBindings();
-			Debug.Log($"[COORDINATOR] Found {_dataScriptables.Count} bound data scriptables in loaded scene");
+			Debug.Log($"Found {_dataScriptables.Count} bound data scriptables in loaded scene");
 
 			// Inject data types into processors before initialization
 			InjectProcessorsWithDataTypes();
 
 			CurrentStartupState = StartupState.Initializing;
-			Debug.Log("[COORDINATOR] Stage: Initializing processors");
+			Debug.Log("Stage: Initializing processors");
 			_startupTask = InitializeAndActivateProcessorsAsync(_startupCancellationTokenSource.Token);
 			while (!_startupTask.IsCompleted)
 			{
@@ -166,21 +306,34 @@ namespace Core
 			if (_startupTask.IsFaulted)
 			{
 				CurrentStartupState = StartupState.Failed;
-				Debug.LogError("[COORDINATOR] Startup task failed");
+				Debug.LogError("Startup task failed");
 				Debug.LogException(_startupTask.Exception);
 				yield break;
 			}
 
-			// Mark initialization as complete so Process() can run
-			_initializationComplete = true;
-			CurrentStartupState = StartupState.Ready;
-			Debug.Log("[COORDINATOR] Stage: Ready - All processors initialized and activated");
+			if (!TryResolveProcessor<WorldGenProcessor>(out var startupWorldGenProcessor))
+			{
+				CurrentStartupState = StartupState.Failed;
+				Debug.LogError("Could not resolve WorldGenProcessor for startup bootstrap.");
+				yield break;
+			}
+
+			CurrentStartupState = StartupState.BootstrappingWorld;
+			Debug.Log("Stage: Bootstrapping world");
+			_worldSceneBootstrapInProgress = true;
+			yield return RunWorldBootstrap(startupWorldGenProcessor);
+			_worldSceneBootstrapInProgress = false;
 
 			if (_loadingScreen != null)
 			{
 				_loadingScreen.SetActive(false);
-				Debug.Log("[COORDINATOR] Deactivated UI loading screen");
+				Debug.Log("Deactivated UI loading screen");
 			}
+
+			_initializationComplete = true;
+			_processingLoopEnabled = true;
+			CurrentStartupState = StartupState.Ready;
+			Debug.Log("Stage: Ready - All processors initialized and activated");
 		}
 
 		private IEnumerable<Container> GetAvailableContainers()
@@ -226,74 +379,95 @@ namespace Core
 				return;
 			}
 
-			Debug.Log($"[COORDINATOR] Scene loaded callback received for {scene.name} ({scene.buildIndex})");
+			Debug.Log($"Scene loaded callback received for {scene.name} ({scene.buildIndex})");
 			StartCoroutine(RefreshSceneBindingsAndTryGenerate(scene));
 		}
 
 		private IEnumerator RefreshSceneBindingsAndTryGenerate(Scene scene)
 		{
+			bool previousProcessingLoopEnabled = _processingLoopEnabled;
 			_worldSceneBootstrapInProgress = true;
+			_processingLoopEnabled = false;
 			_loadedStartupSceneBuildIndex = scene.buildIndex;
-			Debug.Log($"[COORDINATOR] Refreshing scene data for {scene.name} ({scene.buildIndex})");
-
-			Container loadedSceneContainer = null;
-			for (int i = 0; i < WARNING_FRAME_INTERVAL; i++)
-			{
-				loadedSceneContainer = GetLoadedSceneContainer();
-				if (loadedSceneContainer != null)
-				{
-					break;
-				}
-
-				yield return null;
-			}
-
-			if (loadedSceneContainer == null)
-			{
-				Debug.LogWarning($"[COORDINATOR] No scene container became available for {scene.name} ({scene.buildIndex}).");
-				_worldSceneBootstrapInProgress = false;
-				yield break;
-			}
-
-			// Refresh scene-specific data for all processors
-			Debug.Log($"[COORDINATOR] Refreshing scene data for {_processors.Count} processors");
-			foreach (var processor in _processors)
-			{
-				try
-				{
-					processor.RefreshSceneData(loadedSceneContainer);
-					Debug.Log($"[COORDINATOR] Refreshed scene data for {GetProcessorName(processor)}");
-				}
-				catch (Exception ex)
-				{
-					Debug.LogError($"[COORDINATOR] Failed to refresh scene data for {GetProcessorName(processor)}: {ex.Message}");
-				}
-			}
-
-			if (!TryResolveProcessor<WorldGenProcessor>(out var worldGenProcessor))
-			{
-				Debug.LogError("[COORDINATOR] Could not resolve WorldGenProcessor for scene bootstrap.");
-				_worldSceneBootstrapInProgress = false;
-				yield break;
-			}
+			Debug.Log($"Refreshing scene data for {scene.name} ({scene.buildIndex})");
 
 			try
 			{
-				Reflex.Injectors.AttributeInjector.Inject(worldGenProcessor, loadedSceneContainer);
-				Debug.Log($"[COORDINATOR] Refreshed WorldGenProcessor scene data from {scene.name}.");
+				Container loadedSceneContainer = null;
+				for (int i = 0; i < WARNING_FRAME_INTERVAL; i++)
+				{
+					loadedSceneContainer = GetLoadedSceneContainer();
+					if (loadedSceneContainer != null)
+					{
+						break;
+					}
 
-				LoadingProgressReporter.Report(0.55f, "Checking world generation...");
-				worldGenProcessor.Initialize();
-				Debug.Log($"[COORDINATOR] WorldGenProcessor reinitialized for {scene.name}.");
+					yield return null;
+				}
+
+				if (loadedSceneContainer == null)
+				{
+					Debug.LogWarning($"No scene container became available for {scene.name} ({scene.buildIndex}).");
+					yield break;
+				}
+
+				Debug.Log($"Refreshing scene data for {_processors.Count} processors");
+				foreach (var processor in _processors)
+				{
+					try
+					{
+						processor.RefreshSceneData(loadedSceneContainer);
+						Debug.Log($"Refreshed scene data for {GetProcessorName(processor)}");
+					}
+					catch (Exception ex)
+					{
+						Debug.LogError($"Failed to refresh scene data for {GetProcessorName(processor)}: {ex.Message}");
+					}
+				}
+
+				if (!TryResolveProcessor<WorldGenProcessor>(out var worldGenProcessor))
+				{
+					Debug.LogError("Could not resolve WorldGenProcessor for scene bootstrap.");
+					yield break;
+				}
+
+				try
+				{
+					Reflex.Injectors.AttributeInjector.Inject(worldGenProcessor, loadedSceneContainer);
+					Debug.Log($"Refreshed WorldGenProcessor scene data from {scene.name}.");
+
+					LoadingProgressReporter.Report(0.55f, "Checking world generation...");
+					worldGenProcessor.Initialize();
+					Debug.Log($"WorldGenProcessor reinitialized for {scene.name}.");
+				}
+				catch (Exception ex)
+				{
+					Debug.LogError($"WorldGenProcessor scene-load initialize failed: {ex.Message}");
+					yield break;
+				}
+
+				yield return RunWorldBootstrap(worldGenProcessor);
 			}
-			catch (Exception ex)
+			finally
 			{
-				Debug.LogError($"[COORDINATOR] WorldGenProcessor scene-load initialize failed: {ex.Message}");
+				_processingLoopEnabled = previousProcessingLoopEnabled && _initializationComplete;
 				_worldSceneBootstrapInProgress = false;
-				yield break;
 			}
+		}
 
-			_worldSceneBootstrapInProgress = false;
+		private IEnumerator RunWorldBootstrap(WorldGenProcessor worldGenProcessor)
+		{
+			if (!TryResolveProcessor<TimeProcessor>(out var timeProcessor))
+				throw new InvalidOperationException("Coordinator: Could not resolve TimeProcessor for world bootstrap.");
+
+			timeProcessor.ResetWorldTime();
+			LoadingProgressReporter.Report(0.55f, "Bootstrapping world...");
+
+			while (!worldGenProcessor.IsWorldGenerated)
+			{
+				worldGenProcessor.Process();
+				yield return null;
+			}
 		}
 
 		private IEnumerator LoadSceneAdditively(int sceneBuildIndex)
@@ -301,12 +475,12 @@ namespace Core
 			Scene scene = SceneManager.GetSceneByBuildIndex(sceneBuildIndex);
 			if (!scene.IsValid() || !scene.isLoaded)
 			{
-				Debug.Log($"[COORDINATOR] Loading next scene additively: {sceneBuildIndex}");
+				Debug.Log($"Loading next scene additively: {sceneBuildIndex}");
 				AsyncOperation loadOperation = SceneManager.LoadSceneAsync(sceneBuildIndex, LoadSceneMode.Additive);
 				if (loadOperation == null)
 				{
 					CurrentStartupState = StartupState.Failed;
-					Debug.LogError($"[COORDINATOR] Failed to start additive load for scene {sceneBuildIndex}.");
+					Debug.LogError($"Failed to start additive load for scene {sceneBuildIndex}.");
 					yield break;
 				}
 
@@ -325,10 +499,10 @@ namespace Core
 
 			if (!SceneManager.SetActiveScene(scene))
 			{
-				Debug.LogWarning($"[COORDINATOR] Loaded scene {sceneBuildIndex} additively but could not set it active.");
+				Debug.LogWarning($"Loaded scene {sceneBuildIndex} additively but could not set it active.");
 			}
 
-			Debug.Log($"[COORDINATOR] Loaded next scene additively: {scene.name} ({sceneBuildIndex})");
+			Debug.Log($"Loaded next scene additively: {scene.name} ({sceneBuildIndex})");
 		}
 
 		private Container GetLoadedSceneContainer()
@@ -567,7 +741,7 @@ namespace Core
 
 		private async Task InitializeAndActivateProcessorsAsync(CancellationToken cancellationToken)
 		{
-			Debug.Log($"[COORDINATOR] Starting initialization of {_processors.Count} processors");
+			Debug.Log($"Starting initialization of {_processors.Count} processors");
 			ParallelProgressReporter.Reset();
 			InitializeStartupReports();
 
@@ -578,12 +752,12 @@ namespace Core
 			}
 
 			await Task.WhenAll(_processorStartupTasks);
-			Debug.Log("[COORDINATOR] All processors initialized");
+			Debug.Log("All processors initialized");
 
 			CurrentStartupState = StartupState.Activating;
-			Debug.Log("[COORDINATOR] Stage: Activating processors");
+			Debug.Log("Stage: Activating processors");
 			ActivateProcessors();
-			Debug.Log("[COORDINATOR] All processors activated");
+			Debug.Log("All processors activated");
 		}
 
 		private void InitializeStartupReports()
@@ -596,7 +770,7 @@ namespace Core
 				string processorName = GetProcessorName(processor);
 				_startupReports[processorName] = new ProcessorStartupReport(processorName);
 				ParallelProgressReporter.RegisterTrack(processorName, processorWeight);
-				Debug.Log($"[COORDINATOR] Registered track for: {processorName}");
+				Debug.Log($"Registered track for: {processorName}");
 			}
 		}
 
@@ -606,7 +780,7 @@ namespace Core
 			ProcessorStartupReport report = _startupReports[processorName];
 			report.Stage = ProcessorStartupStage.Initializing;
 			UpdateProcessorProgress(processorName, report, 0f, "Preparing initialization...");
-			Debug.Log($"[COORDINATOR] Initializing: {processorName}");
+			Debug.Log($"Initializing: {processorName}");
 
 			try
 			{
@@ -640,19 +814,19 @@ namespace Core
 
 				report.Stage = ProcessorStartupStage.Initialized;
 				UpdateProcessorProgress(processorName, report, 1f, processor is IPostInitializeProcessor ? "Initialized" : "Ready");
-				Debug.Log($"[COORDINATOR] Initialized: {processorName}");
+				Debug.Log($"Initialized: {processorName}");
 
 				if (processor is not IPostInitializeProcessor)
 				{
 					report.Stage = ProcessorStartupStage.Activated;
-					Debug.Log($"[COORDINATOR] Ready: {processorName}");
+					Debug.Log($"Ready: {processorName}");
 				}
 			}
 			catch (OperationCanceledException)
 			{
 				report.Stage = ProcessorStartupStage.Failed;
 				report.Status = "Cancelled";
-				Debug.LogError($"[COORDINATOR] Initialization cancelled: {processorName}");
+				Debug.LogError($"Initialization cancelled: {processorName}");
 				throw;
 			}
 			catch (Exception ex)
@@ -661,18 +835,18 @@ namespace Core
 				report.Exception = ex;
 				report.Status = ex.Message;
 				UpdateProcessorProgress(processorName, report, report.Progress, $"Failed: {ex.Message}");
-				Debug.LogError($"[COORDINATOR] Initialization failed: {processorName} - {ex.Message}");
+				Debug.LogError($"Initialization failed: {processorName} - {ex.Message}");
 				throw;
 			}
 		}
 
 		private void InjectProcessorsWithDataTypes()
 		{
-			Debug.Log("[COORDINATOR] Injecting data types into processors");
+			Debug.Log("Injecting data types into processors");
 			Container injectionContainer = GetLoadedSceneContainer() ?? Container.ProjectContainer;
 			if (injectionContainer == null)
 			{
-				Debug.LogError("[COORDINATOR] No container available for injection");
+				Debug.LogError("No container available for injection");
 				return;
 			}
 			foreach (var processor in _processors)
@@ -680,15 +854,15 @@ namespace Core
 				try
 				{
 					Reflex.Injectors.AttributeInjector.Inject(processor, injectionContainer);
-					Debug.Log($"[COORDINATOR] Injected: {GetProcessorName(processor)}");
+					Debug.Log($"Injected: {GetProcessorName(processor)}");
 				}
 				catch (Exception ex)
 				{
-					Debug.LogError($"[COORDINATOR] Injection failed: {GetProcessorName(processor)} - {ex.Message}");
+					Debug.LogError($"Injection failed: {GetProcessorName(processor)} - {ex.Message}");
 					throw;
 				}
 			}
-			Debug.Log("[COORDINATOR] All processors injected with data types");
+			Debug.Log("All processors injected with data types");
 		}
 
 		private void ActivateProcessors()
@@ -705,20 +879,20 @@ namespace Core
 				{
 					report.Stage = ProcessorStartupStage.Activating;
 					UpdateProcessorProgress(processorName, report, 1f, "Activating...");
-					Debug.Log($"[COORDINATOR] Activating: {processorName}");
+					Debug.Log($"Activating: {processorName}");
 
 					postInitializeProcessor.Activate();
 
 					report.Stage = ProcessorStartupStage.Activated;
 					UpdateProcessorProgress(processorName, report, 1f, "Ready");
-					Debug.Log($"[COORDINATOR] Activated: {processorName}");
+					Debug.Log($"Activated: {processorName}");
 				}
 				catch (Exception ex)
 				{
 					report.Stage = ProcessorStartupStage.Failed;
 					report.Exception = ex;
 					UpdateProcessorProgress(processorName, report, report.Progress, $"Failed: {ex.Message}");
-					Debug.LogError($"[COORDINATOR] Activation failed: {processorName} - {ex.Message}");
+					Debug.LogError($"Activation failed: {processorName} - {ex.Message}");
 					throw;
 				}
 			}
@@ -745,7 +919,7 @@ namespace Core
 
 		private void Update()
 		{
-			if (!_initializationComplete)
+			if (!_processingLoopEnabled)
 				return;
 
 			foreach (var processor in _processors)
@@ -756,7 +930,7 @@ namespace Core
 
 		private void OnDestroy()
 		{
-			Debug.Log("[COORDINATOR] Destroying coordinator");
+			Debug.Log(" Destroying coordinator");
 			if (_startupCancellationTokenSource != null)
 			{
 				_startupCancellationTokenSource.Cancel();

@@ -92,6 +92,13 @@ namespace Processors
 			return _timeRuntimeData.DayCount;
 		}
 
+		public void ResetWorldTime()
+		{
+			_timeRuntimeData.WorldTimePassed = 0f;
+			_timeRuntimeData.DayCount = 0;
+			_twitchChatProcessor.SetCurrentWorldTime(0f);
+		}
+
         /// <summary>
         /// Initializes the time processor.
         /// Creates RuntimeData after all processors are confirmed ready.

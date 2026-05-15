@@ -48,41 +48,7 @@ namespace UserInterface
 			UI_Objective uiObj = go.GetComponent<UI_Objective>();
 
 			uiObj.AmountTMP.text = $"{objective.Amount} / {objective.RequiredAmount}";
-			switch (objective.ObjectiveType)
-			{
-				case TownGoal.Enumerations.ObjectiveType.Build:
-					uiObj.ObjectiveText.text = $"Build {objective.RequiredAmount} {objective.Data.BuildingType}s";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.BuildAny:
-					uiObj.ObjectiveText.text = $"Build {objective.RequiredAmount} Buildings";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.Collect:
-					uiObj.ObjectiveText.text = $"Collect {objective.RequiredAmount} {objective.Data.ResourceType}";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.Kill:
-					uiObj.ObjectiveText.text = $"Kill {objective.RequiredAmount} {objective.Data.EnemyType}s";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.KillAny:
-					uiObj.ObjectiveText.text = $"Kill {objective.RequiredAmount} Enemies";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.EarnPerHour:
-					uiObj.ObjectiveText.text = $"Earn {objective.RequiredAmount} {objective.Data.ResourceType} per hour";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.Buy:
-					uiObj.ObjectiveText.text = $"Buy {objective.RequiredAmount} {objective.Data.ResourceType}";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.BuyAny:
-					uiObj.ObjectiveText.text = $"Buy {objective.RequiredAmount} Resources";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.Sell:
-					uiObj.ObjectiveText.text = $"Sell {objective.RequiredAmount} {objective.Data.ResourceType}";
-					break;
-				case TownGoal.Enumerations.ObjectiveType.SellAny:
-					uiObj.ObjectiveText.text = $"Sell {objective.RequiredAmount} Resources";
-					break;
-				default:
-					break;
-			}
+			uiObj.ObjectiveText.text = objective.GetRequirementText();
 
 			uiObj.ObjectiveSlider.value = 0;
 

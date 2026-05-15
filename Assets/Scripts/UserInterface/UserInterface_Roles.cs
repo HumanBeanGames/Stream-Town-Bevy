@@ -26,6 +26,35 @@ namespace UserInterface
 		private Transform _roleUITransform;
 
 		private Dictionary<PlayerRole, UIRoleDisplay> _roleDisplays;
+		private bool _subscribed;
+
+		private void OnEnable()
+		{
+			if (_subscribed)
+				return;
+
+			if (_roleProcessor != null)
+				_roleProcessor.OnRoleSlotsChangedEvent += OnRoleSlotsChanged;
+
+			if (_playerProcessor != null)
+				_playerProcessor.OnRulerChanged += OnRulerChanged;
+
+			_subscribed = true;
+		}
+
+		private void OnDisable()
+		{
+			if (!_subscribed)
+				return;
+
+			if (_roleProcessor != null)
+				_roleProcessor.OnRoleSlotsChangedEvent -= OnRoleSlotsChanged;
+
+			if (_playerProcessor != null)
+				_playerProcessor.OnRulerChanged -= OnRulerChanged;
+
+			_subscribed = false;
+		}
 
 		/// <summary>
 		/// Called when the number of role slots has changed and updates the text to display the new slot count.
@@ -35,20 +64,27 @@ namespace UserInterface
 		{
 			if (_roleDisplays == null || !_roleDisplays.ContainsKey(role))
 				return;
+
+			UIRoleDisplay roleDisplay = _roleDisplays[role];
+			if (roleDisplay == null)
+			{
+				_roleDisplays.Remove(role);
+				return;
+			}
+
 			if (role == PlayerRole.Ruler)
 				return;
-			_roleDisplays[role].RoleAmount.text = $"{_roleProcessor.GetSlotPrint(role)}";
+			roleDisplay.RoleAmount.text = $"{_roleProcessor.GetSlotPrint(role)}";
 
 			if (_roleProcessor.GetMaxSlots(role) == 0 && !_roleProcessor.RoleIsInfinite(role))
-				_roleDisplays[role].gameObject.SetActive(false);
+				roleDisplay.gameObject.SetActive(false);
 			else
-				_roleDisplays[role].gameObject.SetActive(true);
+				roleDisplay.gameObject.SetActive(true);
 		}
 
 		private void Start()
 		{
 			_roleDisplays = new Dictionary<PlayerRole, UIRoleDisplay>();
-			_roleProcessor.OnRoleSlotsChangedEvent += OnRoleSlotsChanged;
 			List<Character.RoleData> _resourceRoles = new List<Character.RoleData>();
 			List<Character.RoleData> _combatRoles = new List<Character.RoleData>();
 			List<Character.RoleData> _otherRoles = new List<Character.RoleData>();
@@ -127,7 +163,10 @@ namespace UserInterface
 
 		private void OnRulerChanged(Player player)
 		{
-			_roleDisplays[PlayerRole.Ruler].RoleAmount.text = player == null ? "No Ruler" : $"{player.TwitchUser.Username}";
+			if (_roleDisplays == null || !_roleDisplays.TryGetValue(PlayerRole.Ruler, out UIRoleDisplay roleDisplay) || roleDisplay == null)
+				return;
+
+			roleDisplay.RoleAmount.text = player == null ? "No Ruler" : $"{player.TwitchUser.Username}";
 		}
 	}
 }

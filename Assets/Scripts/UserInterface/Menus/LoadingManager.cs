@@ -17,6 +17,7 @@ namespace UserInterface.MainMenu
 	{
 		[Inject]
 		private GameStateProcessor _gameStateProcessor;
+		[Inject] private TimeProcessor _timeProcessor;
 
 		/// <summary>
 		/// The debug processor. Injected via Reflex dependency injection.

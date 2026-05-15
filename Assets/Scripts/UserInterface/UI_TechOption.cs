@@ -9,6 +9,8 @@ namespace UserInterface
         public TextMeshProUGUI VoteCommandTMP;
         public TextMeshProUGUI TitleTMP;
         public TextMeshProUGUI DescriptionTMP;
+        public Transform ObjectivesContainer;
+        public GameObject ObjectiveRowPrefab;
         public Slider VotesSlider;
         public TextMeshProUGUI VotesAmountTMP;
         public Image TechIcon;

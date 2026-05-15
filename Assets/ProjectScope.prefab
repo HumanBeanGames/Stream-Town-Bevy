@@ -491,7 +491,7 @@ MonoBehaviour:
   _enableSTSM_Idle_PlayerLogs: 0
   _enableHealerRoleLogs: 0
   _enableBuilderSearchLogs: 0
-  _enableBuildingLogs: 0
+  _enableBuildingLogs: 1
   _enableBuildingModelHandlerLogs: 0
   _enableBuildingPlacerLogs: 0
   _enablePlacementProbeLogs: 0
@@ -514,7 +514,7 @@ MonoBehaviour:
   _enableTwitchMessageLogs: 0
   _enableDebugCommandLogs: 0
   _enableTL_SecretsLogs: 0
-  _enableTechTreeProcessorLogs: 0
+  _enableTechTreeProcessorLogs: 1
   _enableTechnologyTreeLogs: 0
   _enableTownGoalProcessorLogs: 0
   _enableObjectiveLogs: 0

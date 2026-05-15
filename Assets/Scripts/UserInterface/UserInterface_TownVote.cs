@@ -98,9 +98,35 @@ namespace UserInterface
 			GameObject go = Instantiate(TechOptionPrefab, TownVoteOptionsContainer);
 
 			UI_TechOption uiTech = go.GetComponent<UI_TechOption>();
+			if (uiTech == null)
+				throw new InvalidOperationException("UserInterface_TownVote: TechOptionPrefab is missing UI_TechOption.");
+			if (uiTech.ObjectivesContainer == null)
+				throw new InvalidOperationException("UserInterface_TownVote: UI_TechOption is missing ObjectivesContainer.");
+			if (uiTech.ObjectiveRowPrefab == null)
+				throw new InvalidOperationException("UserInterface_TownVote: UI_TechOption is missing ObjectiveRowPrefab.");
 
 			uiTech.TitleTMP.text = nodeData.NodeTitle;
 			uiTech.DescriptionTMP.text = nodeData.Description;
+			for (int i = uiTech.ObjectivesContainer.childCount - 1; i >= 0; i--)
+				Destroy(uiTech.ObjectivesContainer.GetChild(i).gameObject);
+
+			if (nodeData.Objectives != null)
+			{
+				for (int i = 0; i < nodeData.Objectives.Count; i++)
+				{
+					if (nodeData.Objectives[i] == null)
+						continue;
+
+					GameObject objectiveRow = Instantiate(uiTech.ObjectiveRowPrefab, uiTech.ObjectivesContainer);
+					UI_VoteObjectiveRow uiObjectiveRow = objectiveRow.GetComponent<UI_VoteObjectiveRow>();
+					if (uiObjectiveRow == null)
+						throw new InvalidOperationException("UserInterface_TownVote: ObjectiveRowPrefab is missing UI_VoteObjectiveRow.");
+					if (uiObjectiveRow.ObjectiveText == null)
+						throw new InvalidOperationException("UserInterface_TownVote: UI_VoteObjectiveRow is missing ObjectiveText.");
+
+					uiObjectiveRow.ObjectiveText.text = nodeData.Objectives[i].GetRequirementText();
+				}
+			}
 			uiTech.VoteCommandTMP.text = $"!vote {index}";
 			uiTech.TechButton.gameObject.SetActive(true);
 			string modPath = nodeData.IconPath.Remove(0, 17);

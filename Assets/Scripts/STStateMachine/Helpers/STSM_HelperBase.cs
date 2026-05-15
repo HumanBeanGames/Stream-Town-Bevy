@@ -1,5 +1,7 @@
 using UnityEngine;
 
+using System;
+
 namespace STStateMachine.Helpers
 {
 	/// <summary>
@@ -22,7 +24,10 @@ namespace STStateMachine.Helpers
 
 		private void Awake()
 		{
-			_stateMachine = GetComponent<StateMachine>();
+			_stateMachine = GetComponentInParent<StateMachine>();
+			if (_stateMachine == null)
+				throw new InvalidOperationException($"{GetType().Name} on '{gameObject.name}' could not find a parent StateMachine. Helper components must live on the StateMachine GameObject or one of its children.");
+
 			Init();
 		}
 	}

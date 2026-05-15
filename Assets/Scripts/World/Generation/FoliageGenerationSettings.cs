@@ -3,6 +3,13 @@ using UnityEngine;
 
 namespace World.Generation
 {
+	[System.Serializable]
+	public class FoliageMeshSettings
+	{
+		public Mesh Mesh;
+		public Vector3 BaseScale = Vector3.one;
+	}
+
 	/// <summary>
 	/// Generation settings for Foliage to be placed in the world.
 	/// </summary>
@@ -10,7 +17,7 @@ namespace World.Generation
 	public class FoliageGenerationSettings : GenerationSettings
 	{
 		public string PoolName;
-		public List<Mesh> Meshes;
+		public List<FoliageMeshSettings> MeshSettings;
 		public Material Material;
 
 		public override string GetPoolName()
@@ -19,7 +26,7 @@ namespace World.Generation
 		}
 
 		// Constructor.
-		public FoliageGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f, List<Mesh> meshes = null, Material material = null) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, spawnThreshold)
+		public FoliageGenerationSettings(int size, int levelOfDetail, float noiseScale, int octaves, float persistance, float lacunarity, int seed, Vector2 offset, float spawnThreshold = 0.5f, Material material = null) : base(size, levelOfDetail, noiseScale, octaves, persistance, lacunarity, seed, offset, spawnThreshold)
 		{
 			Size = size;
 			LevelOfDetail = levelOfDetail;
@@ -30,7 +37,7 @@ namespace World.Generation
 			Seed = seed;
 			Offset = offset;
 			SpawnThreshold = spawnThreshold;
-			Meshes = meshes ?? new List<Mesh>();
+			MeshSettings = new List<FoliageMeshSettings>();
 			Material = material;
 			HeightMap = new float[size, size];
 		}

@@ -16,7 +16,9 @@ namespace STStateMachine.States
 		protected override void OnInit()
 		{
 			base.OnInit();
-			_attackAction = (STSM_Action_Attack)_stateMachine.GetStateByName("Attack");
+			_attackAction = _stateMachine.GetStateByName("Attack") as STSM_Action_Attack;
+			if (_attackAction == null)
+				throw new System.InvalidOperationException($"{GetType().Name} on '{gameObject.name}' requires a StateMachine state named 'Attack' of type {nameof(STSM_Action_Attack)}. Check the {_stateMachine.GetType().Name} state list on '{_stateMachine.gameObject.name}'.");
 		}
 
 		protected override void OnHasTarget()

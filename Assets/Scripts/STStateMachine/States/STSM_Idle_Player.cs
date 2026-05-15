@@ -435,6 +435,13 @@ namespace STStateMachine.States
 				// If we're a resource role, search for resources
 				if (_roleHandler.RoleData_SO.RoleFlags == Utils.PlayerRoleType.Resource)
 				{
+					Utils.Resource resourceType = _roleHandler.RoleData_SO.Resource;
+					if (_inventory.ResourceFull(resourceType))
+					{
+						_stateMachine.InvokeHelper(_helperDeposit);
+						return;
+					}
+
 					if (!_hasDataDrivenResourceTarget && CanGatherResource())
 					{
 						if (FindResourceTarget())

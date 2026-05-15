@@ -59,7 +59,7 @@ namespace Buildings
 			if (Stage1 != null)
 				Stage1.gameObject.SetActive(true);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage1 is null on {name}, cannot show construction stage 1");
+				Debug.LogWarning($"Stage1 is null on {name}, cannot show construction stage 1");
 
 			if (FullModel != null)
 				FullModel.gameObject.SetActive(false);
@@ -79,12 +79,12 @@ namespace Buildings
 			if (Stage1 != null)
 				Stage1.SetActive(false);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage1 is null on {name}, cannot hide construction stage 1");
+				Debug.LogWarning($"Stage1 is null on {name}, cannot hide construction stage 1");
 
 			if (Stage2 != null)
 				Stage2.SetActive(true);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage2 is null on {name}, cannot show construction stage 2");
+				Debug.LogWarning($"Stage2 is null on {name}, cannot show construction stage 2");
 		}
 
 		/// <summary>
@@ -95,12 +95,12 @@ namespace Buildings
 			if (Stage2 != null)
 				Stage2.SetActive(false);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage2 is null on {name}, cannot hide construction stage 2");
+				Debug.LogWarning($"Stage2 is null on {name}, cannot hide construction stage 2");
 
 			if (Stage3 != null)
 				Stage3.SetActive(true);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage3 is null on {name}, cannot show construction stage 3");
+				Debug.LogWarning($"Stage3 is null on {name}, cannot show construction stage 3");
 		}
 
 		/// <summary>
@@ -111,22 +111,22 @@ namespace Buildings
 			if (Stage1 != null)
 				Stage1.SetActive(false);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage1 is null on {name}, cannot hide construction stage 1");
+				Debug.LogWarning($"Stage1 is null on {name}, cannot hide construction stage 1");
 
 			if (Stage2 != null)
 				Stage2.SetActive(false);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage2 is null on {name}, cannot hide construction stage 2");
+				Debug.LogWarning($"Stage2 is null on {name}, cannot hide construction stage 2");
 
 			if (Stage3 != null)
 				Stage3.SetActive(false);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] Stage3 is null on {name}, cannot hide construction stage 3");
+				Debug.LogWarning($"Stage3 is null on {name}, cannot hide construction stage 3");
 
 			if (FullModel != null)
 				FullModel.SetActive(true);
 			else
-				Debug.LogWarning($"[BuildingModelHandler] FullModel is null, cannot activate finished building model on {name}");
+				Debug.LogWarning($"FullModel is null, cannot activate finished building model on {name}");
 
 			if (Upgrades != null)
 			{

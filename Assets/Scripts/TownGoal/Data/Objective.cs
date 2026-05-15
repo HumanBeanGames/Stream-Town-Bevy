@@ -62,6 +62,21 @@ namespace TownGoal.Data
         /// </summary>
 		public ObjectiveData Data => _data;
 
+        public string GetDisplayLabel()
+        {
+            return _data.GetDisplayLabel();
+        }
+
+        public string GetRequirementText()
+        {
+            return _data.GetRequirementText();
+        }
+
+        public string GetProgressText()
+        {
+            return $"{GetDisplayLabel()}: {_amount}/{_requiredAmount}";
+        }
+
         /// <summary>
         /// Initializes a new instance of the Objective class.
         /// </summary>

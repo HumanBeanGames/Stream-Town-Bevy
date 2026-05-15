@@ -145,7 +145,7 @@ namespace Twitch
 
 			if (_runtimeData.Client.IsConnected)
 			{
-				Debug.Log("[TWITCH] Connected successfully");
+				Debug.Log("Connected successfully");
 				UserInterface.MainMenu.LoadingProgressReporter.Report(0.96f, "Twitch connected");
 				// Only start ping loop after successful connection if not already running
 				if (!_runtimeData.SendPingRunning)
@@ -153,7 +153,7 @@ namespace Twitch
 			}
 			else
 			{
-				Debug.LogWarning("[TWITCH] Connection timed out after " + timeout + " seconds");
+				Debug.LogWarning("Connection timed out after " + timeout + " seconds");
 				UserInterface.MainMenu.LoadingProgressReporter.Report(0.96f, "Twitch connection timed out (continuing without Twitch)");
 				// Don't block - continue without Twitch connection
 			}

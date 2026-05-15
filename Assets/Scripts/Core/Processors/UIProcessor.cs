@@ -132,6 +132,12 @@ namespace Processors
             _uiRuntimeData.SeasonalSlider = seasonalSlider;
         }
 
+        public void RegisterHudCounters(TextMeshProUGUI playerCountText, TextMeshProUGUI buildingCountText, TextMeshProUGUI timeDisplayText, Slider seasonalSlider, TextMeshProUGUI activeObjectiveText)
+        {
+            RegisterHudCounters(playerCountText, buildingCountText, timeDisplayText, seasonalSlider);
+            _uiRuntimeData.ActiveObjectiveText = activeObjectiveText;
+        }
+
         // Updates resource display texts with current amounts.
         private void UpdateResourcesDisplay()
         {
@@ -249,13 +255,36 @@ namespace Processors
             _uiRuntimeData.RenderedTownGoal = currentGoal;
         }
 
+        private void UpdateActiveObjectiveDisplay()
+        {
+            if (_uiRuntimeData.ActiveObjectiveText == null)
+                return;
+
+            if (_techTreeProcessor == null || !_techTreeProcessor.TryGetCurrentGoal(out Goal currentGoal, out _))
+            {
+                _uiRuntimeData.ActiveObjectiveText.text = string.Empty;
+                return;
+            }
+
+            foreach (KeyValuePair<Objective, bool> objectiveStatus in currentGoal.ObjectivesStatuses)
+            {
+                if (objectiveStatus.Value)
+                    continue;
+
+                _uiRuntimeData.ActiveObjectiveText.text = objectiveStatus.Key.GetProgressText();
+                return;
+            }
+
+            _uiRuntimeData.ActiveObjectiveText.text = string.Empty;
+        }
+
         // Formats a resource amount string with optional max amount.
         private string FormattedResourceString(int currentAmount, int maxAmount = -1)
         {
             string newString = $"<size=48>{StringUtils.GetShortenedNumberAsString(currentAmount)}</size>";
 
             if (maxAmount != -1)
-	            newString += $" <size=32><color=#958450>/ {StringUtils.GetShortenedNumberAsString(maxAmount)}</color></size>";
+                newString += $" <size=32><color=#958450>/ {StringUtils.GetShortenedNumberAsString(maxAmount)}</color></size>";
 
             return newString;
         }
@@ -283,8 +312,7 @@ namespace Processors
         /// </summary>
         public void Activate()
         {
-            // TODO(Architecture): Remove scene lookups - these should be injected or configured
-            _uiRuntimeData.TownGoalInterface = GetComponent<UserInterface_TownGoal>();
+            BindSceneInterfaces();
         }
 
         /// <summary>
@@ -298,6 +326,8 @@ namespace Processors
             UpdateCountTexts();
             UpdateSeasonSlider();
             UpdateTimeOfDay();
+            UpdateTownGoalDisplay();
+            UpdateActiveObjectiveDisplay();
         }
 
         /// <summary>
@@ -306,7 +336,21 @@ namespace Processors
         /// </summary>
         public void RefreshSceneData(Container sceneContainer)
         {
-            // UIProcessor does not have scene-specific settings to refresh
+            BindSceneInterfaces();
+        }
+
+        private void BindSceneInterfaces()
+        {
+            _uiRuntimeData.TownGoalInterface = FindInterface<UserInterface_TownGoal>();
+            _uiRuntimeData.RulerVoteInterface = FindInterface<UserInterface_RulerVote>();
+            _uiRuntimeData.TownVoteInterface = FindInterface<UserInterface_TownVote>();
+            _uiRuntimeData.EventInterface = FindInterface<UserInterface_Event>();
+        }
+
+        private static T FindInterface<T>() where T : UnityEngine.Object
+        {
+            T[] matches = UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            return matches.Length > 0 ? matches[0] : null;
         }
 
         /// <summary>

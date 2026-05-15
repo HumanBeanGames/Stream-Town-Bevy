@@ -23,7 +23,7 @@ using Utils;
 
 namespace Processors
 {
-	public class TechTreeProcessor : MonoBehaviour, IInstaller, IProcessor
+	public class TechTreeProcessor : MonoBehaviour, IInstaller, IProcessor, IPostInitializeProcessor
 	{
 		[Inject] private MetaData.MetaData _metaData;
 		[Inject] private TechTreeSettings _techTreeSettings;
@@ -34,6 +34,7 @@ namespace Processors
 		[Inject] private BuildingProcessor _buildingProcessor;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
 		[Inject] private PlayerProcessor _playerProcessor;
+		[Inject] private UIProcessor _uiProcessor;
 
 		/// <summary>
 		/// The debug processor. Injected via Reflex dependency injection.
@@ -66,6 +67,11 @@ namespace Processors
 		{
 			if (_techTreeRuntimeData == null)
 				throw new InvalidOperationException("TechTreeProcessor runtime data has not been installed.");
+		}
+
+		public void Activate()
+		{
+			InitializeTree();
 
 			if (_metaData != null && _metaData.LoadType == MetaData.LoadType.Generate)
 			{
@@ -76,6 +82,9 @@ namespace Processors
 
 		public void InitializeTree()
 		{
+			if (_techTreeRuntimeData.TechTree != null)
+				return;
+
 			_techTreeRuntimeData.InitializeTechTree(new TechnologyTree(_techTreeSettings.TechTreeSO, this, _metaData));
 			_techTreeRuntimeData.InitializeGoalsFollowed(new Dictionary<Goal, Node_SO>());
 			//PrintAvailableNodes();
@@ -283,6 +292,9 @@ namespace Processors
 
 		public void StartNewTechVote(float delay = 0)
 		{
+			if (_uiProcessor == null || _uiProcessor.TownVoteInterface == null)
+				return;
+
 			var nodeDataArray = GetRandomAvailableTechsData();
 
 			if (nodeDataArray.Length == 0)
@@ -291,7 +303,7 @@ namespace Processors
 			if (nodeDataArray[0] == null)
 				return;
 
-			TechVote voteEvent = new TechVote(delay, 60, nodeDataArray);
+			TechVote voteEvent = new TechVote(delay, 60, nodeDataArray, _uiProcessor.TownVoteInterface);
 			voteEvent.EventEnded += OnTechVoteEnded;
 			if (!EventTypeExistsInQueue(voteEvent.Event))
 				_gameEventProcessor.EventQueue.Add(voteEvent);
@@ -453,7 +465,8 @@ namespace Processors
 		/// <param name="data"></param>
 		private void UnlockBuilding(NodeUnlockData data)
 		{
-			_buildingSettings.UnlockBuilding(data.BuildingType);
+			Debug.Log($"Unlocking building type: {data.BuildingType}");
+			_buildingProcessor.UnlockBuilding(data.BuildingType);
 
 			OnBuildingUnlocked?.Invoke(data.BuildingType);
 		}
@@ -524,6 +537,9 @@ namespace Processors
 			if (_techTreeRuntimeData.RequestStartTechVote)
 			{
 				if (_techTreeRuntimeData.TechTree == null)
+					return;
+
+				if (_uiProcessor == null || _uiProcessor.TownVoteInterface == null)
 					return;
 
 				StartNewTechVote(_techTreeRuntimeData.RequestedTechVoteDelay);

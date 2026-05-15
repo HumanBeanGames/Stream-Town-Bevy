@@ -18,6 +18,7 @@ namespace TechTree.Windows
 		private VisualElement _sideBarElement;
 		private TechTreeGraphView _graphView;
 		private Button _miniMapButton;
+		private bool _isSaving;
 
 		[MenuItem("Tools/Tech Tree Editor")]
 		public static void ShowExample()
@@ -73,14 +74,36 @@ namespace TechTree.Windows
 		// Toolbar actions
 		private void Save()
 		{
+			if (_isSaving || TechTreeIOUtility.IsSaving)
+				return;
+
 			if (string.IsNullOrEmpty(_fileNameTextField.value))
 			{
 				EditorUtility.DisplayDialog("Invalid FileName", "Hear me out, you need ensure the file name you've typed in is valid.", "Poggers");
 				return;
 			}
 
-			TechTreeIOUtility.Initialize(_graphView, _fileNameTextField.value);
-			TechTreeIOUtility.Save();
+			_isSaving = true;
+			DisableSaving();
+
+			try
+			{
+				TechTreeIOUtility.Initialize(_graphView, _fileNameTextField.value);
+				TechTreeIOUtility.Save();
+			}
+			finally
+			{
+				EditorApplication.delayCall += FinishSave;
+			}
+		}
+
+		private void FinishSave()
+		{
+			EditorApplication.delayCall -= FinishSave;
+			_isSaving = false;
+
+			if (_graphView != null && _graphView.NameErrorCount == 0)
+				EnableSaving();
 		}
 
 		private void Load()

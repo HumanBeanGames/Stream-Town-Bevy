@@ -204,28 +204,64 @@ namespace TechTree.Data
         /// </summary>
 		private void InitializeData()
 		{
+			Debug.Log("TechTree InitializeData: Starting initialization");
+			Debug.Log($"TechTree InitializeData: _metaData is null: {_metaData == null}");
+			if (_metaData != null)
+				Debug.Log($"TechTree InitializeData: LoadType: {_metaData.LoadType}");
+
 			List<Node_SO> allNodes = new List<Node_SO>(_tree.UngroupedNodes);
 
 			foreach (List<Node_SO> group in _tree.NodeGroups.Values)
 				allNodes.AddRange(group);
 
+			Debug.Log($"TechTree InitializeData: Total nodes: {allNodes.Count}");
+
 			foreach (Node_SO node in allNodes)
+			{
 				_unlockedNodes.Add(node, node.IsUnlocked);
+				if (node.IsUnlocked)
+					Debug.Log($"TechTree InitializeData: Node marked as unlocked in asset: {node.TechName}");
+			}
 
 			//TODO: This should probably be done in the editor tool...
 			ConnectParents(ref allNodes);
 			SetRootNode(ref allNodes);
+			Debug.Log($"TechTree InitializeData: Root node: {_rootNode?.TechName ?? "NULL"}");
+			Debug.Log($"TechTree InitializeData: Root node IsUnlocked: {_rootNode?.IsUnlocked}");
+
 			if (_metaData != null && _metaData.LoadType == MetaData.LoadType.Generate)
 			{
+				Debug.Log("TechTree InitializeData: LoadType is Generate, force-unlocking root node");
 				ForceUnlockNode(_rootNode);
 				RecursivelyAddAvailableNodes(_rootNode);
 			}
 			else if (_metaData == null)
 			{
+				Debug.Log("TechTree InitializeData: _metaData is null, defaulting to Generate behavior");
 				// Default to generating if no metadata is present
 				ForceUnlockNode(_rootNode);
 				RecursivelyAddAvailableNodes(_rootNode);
 			}
+			else
+			{
+				Debug.Log($"TechTree InitializeData: LoadType is {_metaData.LoadType}, skipping root node force-unlock");
+			}
+
+			// Always apply unlock effects for nodes marked as unlocked in the asset
+			// These represent baseline unlocks that should be available regardless of load type
+			int preUnlockedCount = 0;
+			foreach (Node_SO node in allNodes)
+			{
+				if (node.IsUnlocked)
+				{
+					Debug.Log($"Force-unlocking pre-unlocked node: {node.TechName}");
+					ForceUnlockNode(node);
+					preUnlockedCount++;
+				}
+			}
+			Debug.Log($"TechTree InitializeData: Force-unlocked {preUnlockedCount} pre-unlocked nodes");
+
+			Debug.Log("TechTree InitializeData: Initialization complete");
 		}
 
         /// <summary>

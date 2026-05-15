@@ -62,6 +62,12 @@ namespace Processors
 		private bool _escapePressed;
 
 		/// <summary>
+		/// Whether gameplay input dispatch is currently suppressed.
+		/// Used while text-entry UI owns focus.
+		/// </summary>
+		private bool _suppressGameplayInput;
+
+		/// <summary>
 		/// Gets or sets the PlayerInput component reference.
 		/// </summary>
 		public PlayerInput PlayerInput
@@ -126,6 +132,15 @@ namespace Processors
 		public bool EscapePressed => _escapePressed;
 
 		/// <summary>
+		/// Gets or sets whether gameplay input dispatch is currently suppressed.
+		/// </summary>
+		public bool SuppressGameplayInput
+		{
+			get => _suppressGameplayInput;
+			set => _suppressGameplayInput = value;
+		}
+
+		/// <summary>
 		/// Event fired when left mouse button is pressed.
 		/// Passes the input button that was pressed.
 		/// </summary>
@@ -162,6 +177,7 @@ namespace Processors
 			_mouseDelta = Vector2.zero;
 			_mousePosition = Vector2.zero;
 			_escapePressed = false;
+			_suppressGameplayInput = false;
 		}
 	}
 }

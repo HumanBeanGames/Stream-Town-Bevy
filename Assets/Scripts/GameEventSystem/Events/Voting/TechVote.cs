@@ -1,5 +1,4 @@
 using Processors;
-using Reflex.Attributes;
 using System;
 using System.Collections.Generic;
 using TechTree.Data;
@@ -24,23 +23,19 @@ namespace GameEventSystem.Events.Voting
 		private UserInterface_TownVote _townVoteInterface;
 
         /// <summary>
-        /// UI runtime scriptable data. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private UIProcessor _uiProcessor;
-
-        /// <summary>
         /// Initializes a new Tech vote instance.
         /// </summary>
         /// <param name="delay">The delay before the event starts.</param>
         /// <param name="eventDuration">The event duration.</param>
         /// <param name="nodeDataArray">The tech node data to vote on.</param>
+        /// <param name="townVoteInterface">The town vote UI to render into.</param>
         /// <param name="eventType">The event type.</param>
         /// <param name="data">Additional data.</param>
         /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
         /// <param name="timeout">The timeout.</param>
-		public TechVote(double delay, double eventDuration, TechNodeData[] nodeDataArray, EventType eventType = EventType.TechVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
+		public TechVote(double delay, double eventDuration, TechNodeData[] nodeDataArray, UserInterface_TownVote townVoteInterface, EventType eventType = EventType.TechVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
 		{
-			_townVoteInterface = _uiProcessor.TownVoteInterface;
+			_townVoteInterface = townVoteInterface;
 
 			_trackedOptions = new Dictionary<UI_TechOption, VoteOption>();
 			for (int i = 0; i < nodeDataArray.Length; i++)

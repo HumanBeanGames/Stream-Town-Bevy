@@ -33,6 +33,7 @@ namespace Processors
 		private TextMeshProUGUI _buildingCountText;
 		private TextMeshProUGUI _timeDisplayText;
 		private TextMeshProUGUI _recruitCountText;
+		private TextMeshProUGUI _activeObjectiveText;
 
 		public UserInterface_TownGoal TownGoalInterface
 		{
@@ -134,6 +135,11 @@ namespace Processors
 			get => _recruitCountText;
 			set => _recruitCountText = value;
 		}
+		public TextMeshProUGUI ActiveObjectiveText
+		{
+			get => _activeObjectiveText;
+			set => _activeObjectiveText = value;
+		}
 
 		/// <summary>
 		/// Initializes the UI runtime data with default values.
@@ -160,6 +166,7 @@ namespace Processors
 			_buildingCountText = null;
 			_timeDisplayText = null;
 			_recruitCountText = null;
+			_activeObjectiveText = null;
 		}
 	}
 }

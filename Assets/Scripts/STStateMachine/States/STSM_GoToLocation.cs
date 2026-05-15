@@ -379,6 +379,9 @@ namespace STStateMachine.States
 		// TODO:: Fix the detection and resolution. Not working correctly.
 		private void StuckCheck()
 		{
+			ResetStuckTracking();
+			return;
+
 			if (_aiPath == null)
 				return;
 

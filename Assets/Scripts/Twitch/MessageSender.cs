@@ -92,7 +92,7 @@ namespace Twitch
 		public void SendMessage(string message)
 		{
 			// Always log to Unity Console
-			UnityEngine.Debug.Log($"[Twitch Message] {message}");
+			UnityEngine.Debug.Log(message);
 
 			if (_twitchChatRuntimeData == null || !_twitchChatRuntimeData.MessagesAllowed)
 				return;

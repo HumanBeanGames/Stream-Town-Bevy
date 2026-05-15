@@ -358,6 +358,9 @@ namespace Processors
 		/// <returns>True if placement started successfully, false otherwise.</returns>
 		public bool TryStartNewBuildingPlacer(Player player, BuildingType type, out string errorMessage)
 		{
+			if (player == null)
+				throw new InvalidOperationException($"BuildingProcessor: Cannot start building placer for '{type}' without a valid player. Ensure PlayerProcessor.UserPlayer is established before UI building actions are enabled.");
+
 			// Check if player is already placing a building.
 			if (_buildingRuntimeData.Placers.ContainsKey(player))
 			{

@@ -76,6 +76,12 @@ namespace Processors
 			get { return _playerInputRuntimeData.PlayerInput != null ? _playerInputRuntimeData.PlayerInput.BasicControls.Escape.ReadValue<float>() > 0.01f : false; }
 		}
 
+		public bool SuppressGameplayInput
+		{
+			get => _playerInputRuntimeData.SuppressGameplayInput;
+			set => _playerInputRuntimeData.SuppressGameplayInput = value;
+		}
+
 		public void Initialize()
 		{
 			if (_playerInputRuntimeData == null)
@@ -102,11 +108,29 @@ namespace Processors
 
 			//_playerInput.BasicControls.Escape.started += ctx => OnEscape?.Invoke();
 
-			_playerInputRuntimeData.PlayerInput.BasicControls.BuildMenu.started += ctx => OnBuildMenu?.Invoke();
+			_playerInputRuntimeData.PlayerInput.BasicControls.BuildMenu.started += ctx =>
+			{
+				if (SuppressGameplayInput)
+					return;
 
-			_playerInputRuntimeData.PlayerInput.BasicControls.TechTree.started += ctx => OnTechTree?.Invoke();
+				OnBuildMenu?.Invoke();
+			};
 
-			_playerInputRuntimeData.PlayerInput.BasicControls.Recruit.started += ctx => OnRecruit?.Invoke();
+			_playerInputRuntimeData.PlayerInput.BasicControls.TechTree.started += ctx =>
+			{
+				if (SuppressGameplayInput)
+					return;
+
+				OnTechTree?.Invoke();
+			};
+
+			_playerInputRuntimeData.PlayerInput.BasicControls.Recruit.started += ctx =>
+			{
+				if (SuppressGameplayInput)
+					return;
+
+				OnRecruit?.Invoke();
+			};
 
 			_playerInputRuntimeData.PreviousMousePos = _playerInputRuntimeData.PlayerInput.BasicControls.MousePosition.ReadValue<Vector2>();
 

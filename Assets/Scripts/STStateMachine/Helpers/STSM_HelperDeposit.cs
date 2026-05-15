@@ -1,4 +1,5 @@
 using Character;
+using Buildings;
 using Processors;
 using Reflex.Attributes;
 using Sensors;
@@ -17,6 +18,7 @@ namespace STStateMachine.Helpers
 		private RoleHandler _roleHandler;
 		private StationSensor _stationSensor;
 		[Inject] private TownResourceProcessor _townResourceProcessor;
+		[Inject] private BuildingProcessor _buildingProcessor;
 		private STSM_Idle_Player _idle;
 
 		public override void Init()
@@ -30,50 +32,81 @@ namespace STStateMachine.Helpers
 
 		public override void InvokeHelper()
 		{
-			// If the resources are already full, swap to idle and reset position.
 			if (_townResourceProcessor.ResourceFull(_roleHandler.RoleData_SO.Resource))
 			{
-				_goToState.SetNextState(_idle);
-				_goToState.UsePosition = true;
-				_goToState.SetTargetPosition(Vector3.zero);
+				MoveToTownhallAndIdle();
 			}
-			// Go ahead and deposit at the designated station.
 			else
 			{
-				_goToState.SetNextState(_depositState);
-				_goToState.SetDistanceSatisfaction(_stationSensor.CurrentStation.Targetable.SizeSqr + 1);
-				_goToState.UsePosition = false;
-
-				// If the unit has a station, set the location target to the station.
 				if (_stationSensor.HasStation)
 				{
-					// Target the building center with a small offset
-					// The previous edge calculation using SizeSqr was incorrect
+					_goToState.SetNextState(_depositState);
+					_goToState.SetDistanceSatisfaction(_stationSensor.CurrentStation.Targetable.SizeSqr + 1);
+					_goToState.UsePosition = false;
 					Vector3 buildingCenter = _stationSensor.CurrentStation.transform.position;
 					Vector3 toPlayer = transform.position - buildingCenter;
-					toPlayer.y = 0; // Keep it horizontal
+					toPlayer.y = 0;
 					
 					if (toPlayer.magnitude > 0)
 					{
 						toPlayer.Normalize();
-						// Use a small fixed offset from building center (2 units)
 						Vector3 dropoffPoint = buildingCenter + toPlayer * 2f;
 						_goToState.SetTargetPosition(dropoffPoint);
 						_goToState.UsePosition = true;
 					}
 					else
 					{
-						// If player is at center, use center
 						_goToState.SetTarget(_stationSensor.CurrentStation.transform);
 					}
 				}
-				// Otherwise return to world center.
 				else
-					_goToState.SetTargetPosition(Vector3.zero);
+				{
+					MoveToTownhallAndIdle();
+				}
 			}
 
 			_stateMachine.RequestStateChange(_goToState);
 			_roleHandler.EquipmentHandler.EnableCarry(_roleHandler.CurrentRole);
+		}
+
+		private void MoveToTownhallAndIdle()
+		{
+			BuildingBase townhall = GetActiveTownhall();
+			_goToState.SetNextState(_idle);
+
+			if (townhall == null)
+				throw new System.InvalidOperationException($"{GetType().Name} on '{gameObject.name}' could not find an active Townhall for deposit fallback.");
+
+			Vector3 buildingCenter = townhall.transform.position;
+			Vector3 toPlayer = transform.position - buildingCenter;
+			toPlayer.y = 0;
+
+			if (toPlayer.magnitude > 0)
+			{
+				toPlayer.Normalize();
+				Vector3 waitPoint = buildingCenter + toPlayer * 2f;
+				_goToState.SetTargetPosition(waitPoint);
+				_goToState.UsePosition = true;
+				return;
+			}
+
+			_goToState.UsePosition = false;
+			_goToState.SetTarget(townhall.transform);
+		}
+
+		private BuildingBase GetActiveTownhall()
+		{
+			if (_buildingProcessor == null)
+				return null;
+
+			var townhalls = _buildingProcessor.GetBuildingsByType(Utils.BuildingType.Townhall);
+			for (int i = 0; i < townhalls.Count; i++)
+			{
+				if (townhalls[i] != null && townhalls[i].gameObject.activeInHierarchy)
+					return townhalls[i];
+			}
+
+			return null;
 		}
 	}
 }

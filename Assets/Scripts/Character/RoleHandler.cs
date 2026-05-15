@@ -200,7 +200,7 @@ namespace Character
 		{
 			if (!_roleProcessor.TryChangeRole(_currentRole, role, decrement))
 			{
-				Debug.LogWarning($"[ResourceGathering] TryChangeRole failed for {role}");
+				Debug.LogWarning($"TryChangeRole failed for {role}");
 				return false;
 			}
 
@@ -228,7 +228,7 @@ namespace Character
 		{
 			if (_roleProcessor.SlotsFull(role) && _roleProcessor.PlayerRoleLimits)
 			{
-				Debug.LogWarning($"[ResourceGathering] {role} slots full, keeping default {_starterRole}");
+				Debug.LogWarning($"{role} slots full, keeping default {_starterRole}");
 				return;
 			}
 
