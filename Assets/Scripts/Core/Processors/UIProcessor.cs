@@ -349,7 +349,7 @@ namespace Processors
 
         private static T FindInterface<T>() where T : UnityEngine.Object
         {
-            T[] matches = UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            T[] matches = UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include);
             return matches.Length > 0 ? matches[0] : null;
         }
 

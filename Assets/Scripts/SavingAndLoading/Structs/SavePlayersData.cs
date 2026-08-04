@@ -7,6 +7,10 @@ namespace SavingAndLoading.Structs
 	{
         public List<PlayerSaveData> PlayerSaveDatas;
 
+		public SavePlayersData()
+		{
+		}
+
         public SavePlayersData(List<PlayerSaveData> playerSaveDatas)
 		{
             PlayerSaveDatas = playerSaveDatas;

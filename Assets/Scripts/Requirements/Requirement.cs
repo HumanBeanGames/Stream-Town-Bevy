@@ -14,6 +14,6 @@ namespace Requirements
         /// <summary>
         /// The requirement data.
         /// </summary>
-		public object Data;
+		[System.NonSerialized] public object Data;
     }
 }

@@ -58,7 +58,7 @@ namespace Twitch.Commands
 		private UserInterface_Event ResolveEventInterface()
 		{
 			if (_eventInterface == null)
-				_eventInterface = UnityEngine.Object.FindFirstObjectByType<UserInterface_Event>();
+				_eventInterface = UnityEngine.Object.FindAnyObjectByType<UserInterface_Event>();
 
 			return _eventInterface;
 		}

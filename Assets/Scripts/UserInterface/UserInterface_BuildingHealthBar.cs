@@ -18,9 +18,15 @@ namespace UserInterface
 
 		private static SettingsData CurrentSettings;
 
+		public bool IsConfigured => _initialized;
+		public bool IsVisible => _displayUI != null && _displayUI.activeSelf;
+		public float DisplayedHealth => _healthBar != null ? _healthBar.value : 0f;
+
 		private void Start()
 		{
 			CurrentSettings = SettingsIO.LoadOrCreate();
+			UpdateHealthBar();
+			CheckWhatDisplayOption();
 		}
 
 		/// <summary>
@@ -66,7 +72,7 @@ namespace UserInterface
 		/// </summary>
 		public void UpdateHealthBar()
 		{
-			if (!_initialized)
+			if (!_initialized || _healthBar == null || _healthHandler == null)
 				return;
 
 			_healthBar.value = _healthHandler.HealthPercentage;
@@ -76,8 +82,11 @@ namespace UserInterface
 		{
 			_healthHandler = GetComponentInParent<HealthHandler>();
 			_healthBar = GetComponentInChildren<Slider>();
-			_displayUI = transform.GetChild(0).gameObject;
-			_initialized = true;
+			_displayUI = transform.childCount > 0 ? transform.GetChild(0).gameObject : null;
+			_initialized = _healthHandler != null && _healthBar != null && _displayUI != null;
+
+			if (!_initialized)
+				Debug.LogWarning($"Building health bar on '{name}' is missing its HealthHandler, Slider, or display root.", this);
 		}
 
 		private void Update()

@@ -333,8 +333,12 @@ namespace Target
         /// </summary>
 		public void OnReset()
 		{
+			// OnEnable may have re-added this pooled target using its previous cell index.
+			// Remove that stale registration before calculating the checkout position.
+			RemoveThisTarget();
 			_transform = transform;
 			_cellIndex = _cellSpacePartition.PositionToIndex(transform.position);
+			_partitionUpdateTime = 0f;
 
 			_debugProcessor.Log(DebugLogCategory.Targetable, $"OnReset for {name} - partition={(_cellSpacePartition != null)}, cellIndex={_cellIndex}, position={transform.position}, targetType={_targetType}");
 

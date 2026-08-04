@@ -27,7 +27,7 @@ namespace World.Generation
 		public float SpawnBiasMultiplier = 1f;
 		public float SpawnBiasAddition = 0f;
 		public float SpawnBiasMaxDistance = 150f;
-		public float[,] HeightMap;
+		[System.NonSerialized] public float[,] HeightMap;
 		public int Spacing;
 
 		// Constructor.

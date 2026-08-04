@@ -10,7 +10,6 @@ using UnityEngine.InputSystem;
 using Utils;
 using World;
 using World.Generation;
-using SavingAndLoading;
 using GUIDSystem;
 using Enemies;
 using PlayerControls;
@@ -40,6 +39,7 @@ using System.Diagnostics;
 using static UnityEngine.Rendering.GPUSort;
 using TwitchLib.Api.Core.Enums;
 using LogType = UnityEngine.LogType;
+using MetaLoadType = MetaData.LoadType;
 
 using Debug = UnityEngine.Debug;
 namespace Core
@@ -66,6 +66,7 @@ namespace Core
 		private readonly List<Task> _processorStartupTasks = new List<Task>();
 		private int _frameCounter = 0;
 		private const int WARNING_FRAME_INTERVAL = 120;
+		private const string PoolPrewarmTrackName = "Pool Prewarm";
 		private bool _initializationComplete = false;
 		private bool _processingLoopEnabled = false;
 		private CancellationTokenSource _startupCancellationTokenSource;
@@ -73,6 +74,8 @@ namespace Core
 		private int _loadedStartupSceneBuildIndex = -1;
 		private GameObject _loadingScreen;
 		private bool _worldSceneBootstrapInProgress;
+		private bool _pendingWorldSceneLoad;
+		private MetaLoadType _pendingWorldLoadType = MetaLoadType.Generate;
 
 		public StartupState CurrentStartupState { get; private set; } = StartupState.NotStarted;
 
@@ -129,6 +132,12 @@ namespace Core
 			[HideInCallstack]
             void ILogHandler.LogFormat(LogType logType, UnityEngine.Object context, string format, params object[] args)
             {
+				if (ObjectPoolingProcessor.IsPrewarmingPools && logType == LogType.Log)
+				{
+					DiscardMetadata();
+					return;
+				}
+
 				DebugLogCategory category = ConsumeCategory();
 				string caller = ConsumeCaller(context);
 				DebugSettings settings = DebugSettings.ActiveInstance;
@@ -146,6 +155,13 @@ namespace Core
 				DebugLogCategory category = _nextCategory ?? DebugLogCategory.General;
 				_nextCategory = null;
 				return category;
+			}
+
+			private static void DiscardMetadata()
+			{
+				_nextCategory = null;
+				_nextCallerFilePath = null;
+				_nextCallerMemberName = null;
 			}
 
 			private static string ConsumeCaller(UnityEngine.Object context)
@@ -240,6 +256,89 @@ namespace Core
 			_instance?.HandleSceneLoaded(scene, mode);
 		}
 
+		/// <summary>
+		/// Suspends processor updates before scene-owned objects begin unloading.
+		/// World transitions resume only after the destination scene has completed
+		/// its binding refresh and world bootstrap.
+		/// </summary>
+		public static void BeginSceneTransition(bool loadingWorld, MetaLoadType loadType = MetaLoadType.Generate)
+		{
+			if (_instance == null)
+				return;
+
+			_instance._processingLoopEnabled = false;
+			_instance._pendingWorldSceneLoad = loadingWorld;
+			_instance._pendingWorldLoadType = loadType;
+			if (_instance.TryResolveProcessor<TwitchChatProcessor>(out var twitchChatProcessor))
+				twitchChatProcessor.CancelBroadcasterConnection();
+			if (loadingWorld)
+			{
+				if (_instance.TryResolveProcessor<GameEventProcessor>(out var gameEventProcessor))
+					gameEventProcessor.ResetWorldState();
+				if (_instance.TryResolveProcessor<GameStateProcessor>(out var gameStateProcessor))
+					gameStateProcessor.NotifyLoadingWorld();
+			}
+			else
+			{
+				_instance.ResetAbandonedWorldRuntimeState();
+			}
+			Debug.Log($"Suspending processor loop before {(loadingWorld ? "world" : "menu")} scene transition (intent={loadType}).");
+		}
+
+		/// <summary>
+		/// Project-scoped processors outlive every scene. Clear the world they were
+		/// serving before a non-world scene is activated so renderers and gameplay
+		/// systems cannot consume the previous save's runtime data in the menu.
+		/// This is deliberately an in-memory reset and never modifies the save file.
+		/// </summary>
+		private void ResetAbandonedWorldRuntimeState()
+		{
+			TryResetProcessor<ObjectPoolingProcessor>(processor => processor.ReturnAllActiveObjectsToPools());
+			TryResetProcessor<GameEventProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<TownGoalProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<GUIDProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<WorldGenProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<ResourceProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<FoliageProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<BuildingProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<RoleProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<PlayerProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<TownResourceProcessor>(processor => processor.ResetWorldState());
+			TryResetProcessor<TechTreeProcessor>(processor => processor.ResetWorldState());
+
+			if (TryResolveProcessor<GridProcessor>(out var gridProcessor) &&
+				TryResolveProcessor<ResourceProcessor>(out var resourceProcessor) &&
+				TryResolveProcessor<FoliageProcessor>(out var foliageProcessor))
+			{
+				try
+				{
+					gridProcessor.ResetWorldState(resourceProcessor, foliageProcessor);
+				}
+				catch (Exception exception)
+				{
+					Debug.LogException(exception);
+				}
+			}
+
+			Debug.Log("Cleared abandoned world runtime state for non-world scene transition.");
+		}
+
+		private void TryResetProcessor<TProcessor>(Action<TProcessor> reset) where TProcessor : class
+		{
+			if (!TryResolveProcessor<TProcessor>(out var processor))
+				return;
+
+			try
+			{
+				reset(processor);
+			}
+			catch (Exception exception)
+			{
+				Debug.LogError($"Failed to clear {typeof(TProcessor).Name} while leaving the world: {exception.Message}");
+				Debug.LogException(exception);
+			}
+		}
+
 		private void Start()
 		{
 			Debug.Log("Startup sequence started");
@@ -323,6 +422,8 @@ namespace Core
 			_worldSceneBootstrapInProgress = true;
 			yield return RunWorldBootstrap(startupWorldGenProcessor);
 			_worldSceneBootstrapInProgress = false;
+			if (TryResolveProcessor<GameStateProcessor>(out var startupGameStateProcessor))
+				startupGameStateProcessor.NotifyPlayerReady();
 
 			if (_loadingScreen != null)
 			{
@@ -338,12 +439,12 @@ namespace Core
 
 		private IEnumerable<Container> GetAvailableContainers()
 		{
-			var sceneScopes = FindObjectsByType<SceneScope>(FindObjectsSortMode.None);
-			var processedScenes = new HashSet<int>();
+			var sceneScopes = FindObjectsByType<SceneScope>();
+			var processedScenes = new HashSet<ulong>();
 			for (int i = 0; i < sceneScopes.Length; i++)
 			{
 				Scene scene = sceneScopes[i].gameObject.scene;
-				if (!scene.isLoaded || !processedScenes.Add(scene.handle))
+				if (!scene.isLoaded || !processedScenes.Add(scene.handle.GetRawData()))
 				{
 					continue;
 				}
@@ -379,13 +480,26 @@ namespace Core
 				return;
 			}
 
+			if (!_pendingWorldSceneLoad)
+			{
+				_loadedStartupSceneBuildIndex = scene.buildIndex;
+				_processingLoopEnabled = false;
+				if (Container.ProjectContainer != null &&
+					Container.ProjectContainer.HasBinding(typeof(ProjectCamera)))
+				{
+					Container.ProjectContainer.Resolve<ProjectCamera>()?.RestoreMenuPose();
+				}
+				Debug.Log($"Non-world scene {scene.name} ({scene.buildIndex}) loaded; processor loop remains suspended.");
+				return;
+			}
+
 			Debug.Log($"Scene loaded callback received for {scene.name} ({scene.buildIndex})");
 			StartCoroutine(RefreshSceneBindingsAndTryGenerate(scene));
 		}
 
 		private IEnumerator RefreshSceneBindingsAndTryGenerate(Scene scene)
 		{
-			bool previousProcessingLoopEnabled = _processingLoopEnabled;
+			bool bootstrapSucceeded = false;
 			_worldSceneBootstrapInProgress = true;
 			_processingLoopEnabled = false;
 			_loadedStartupSceneBuildIndex = scene.buildIndex;
@@ -447,20 +561,48 @@ namespace Core
 				}
 
 				yield return RunWorldBootstrap(worldGenProcessor);
+				if (TryResolveProcessor<GameStateProcessor>(out var gameStateProcessor))
+					gameStateProcessor.NotifyPlayerReady();
+				bootstrapSucceeded = true;
 			}
 			finally
 			{
-				_processingLoopEnabled = previousProcessingLoopEnabled && _initializationComplete;
+				_processingLoopEnabled = bootstrapSucceeded && _initializationComplete;
+				_pendingWorldSceneLoad = false;
 				_worldSceneBootstrapInProgress = false;
 			}
 		}
 
 		private IEnumerator RunWorldBootstrap(WorldGenProcessor worldGenProcessor)
 		{
+			if (_pendingWorldLoadType == MetaLoadType.Load)
+			{
+				if (!TryResolveProcessor<SaveProcessor>(out var saveProcessor))
+					throw new InvalidOperationException("Coordinator: Could not resolve SaveProcessor for world load.");
+
+				if (!saveProcessor.HasSaveGame)
+					throw new InvalidOperationException($"Coordinator: No save file exists at {saveProcessor.SavePath}.");
+
+				LoadingProgressReporter.Report(0.55f, "Loading saved world...");
+				CancellationToken cancellationToken = _startupCancellationTokenSource?.Token ?? CancellationToken.None;
+				Task loadTask = saveProcessor.LoadGameAsync(LoadingProgressReporter.Report, cancellationToken);
+				while (!loadTask.IsCompleted)
+					yield return null;
+
+				if (loadTask.IsCanceled)
+					throw new OperationCanceledException("World load was cancelled.", cancellationToken);
+
+				if (loadTask.IsFaulted)
+					throw loadTask.Exception?.GetBaseException() ?? new InvalidOperationException("World load failed.");
+
+				yield break;
+			}
+
 			if (!TryResolveProcessor<TimeProcessor>(out var timeProcessor))
 				throw new InvalidOperationException("Coordinator: Could not resolve TimeProcessor for world bootstrap.");
 
 			timeProcessor.ResetWorldTime();
+			worldGenProcessor.CreateStartingNpcRosterOnCompletion = true;
 			LoadingProgressReporter.Report(0.55f, "Bootstrapping world...");
 
 			while (!worldGenProcessor.IsWorldGenerated)
@@ -468,6 +610,7 @@ namespace Core
 				worldGenProcessor.Process();
 				yield return null;
 			}
+
 		}
 
 		private IEnumerator LoadSceneAdditively(int sceneBuildIndex)
@@ -518,7 +661,7 @@ namespace Core
 				return null;
 			}
 
-			var sceneScopes = FindObjectsByType<SceneScope>(FindObjectsSortMode.None);
+			var sceneScopes = FindObjectsByType<SceneScope>();
 			for (int i = 0; i < sceneScopes.Length; i++)
 			{
 				if (sceneScopes[i].gameObject.scene.handle != scene.handle)
@@ -621,6 +764,7 @@ namespace Core
 			yield return typeof(TownGoalProcessor);
 			yield return typeof(TownResourceProcessor);
 			yield return typeof(TradeProcessor);
+			yield return typeof(TwitchClientProcessor);
 			yield return typeof(TwitchChatProcessor);
 			yield return typeof(LabelDisplayProcessor);
 			yield return typeof(UIProcessor);
@@ -752,6 +896,7 @@ namespace Core
 			}
 
 			await Task.WhenAll(_processorStartupTasks);
+			await PrewarmObjectPoolsAsync(cancellationToken);
 			Debug.Log("All processors initialized");
 
 			CurrentStartupState = StartupState.Activating;
@@ -772,6 +917,25 @@ namespace Core
 				ParallelProgressReporter.RegisterTrack(processorName, processorWeight);
 				Debug.Log($"Registered track for: {processorName}");
 			}
+
+			if (_processors.OfType<ObjectPoolingProcessor>().Any())
+			{
+				ParallelProgressReporter.RegisterTrack(PoolPrewarmTrackName, processorWeight);
+				Debug.Log($"Registered track for: {PoolPrewarmTrackName}");
+			}
+		}
+
+		private async Task PrewarmObjectPoolsAsync(CancellationToken cancellationToken)
+		{
+			ObjectPoolingProcessor poolingProcessor = _processors.OfType<ObjectPoolingProcessor>().FirstOrDefault();
+			if (poolingProcessor == null)
+				return;
+
+			Debug.Log("Stage: Prewarming pooled objects");
+			await poolingProcessor.PrewarmPoolsAsync(
+				(progress, status) => ParallelProgressReporter.UpdateTrack(PoolPrewarmTrackName, progress, status),
+				cancellationToken);
+			Debug.Log("All pooled objects prewarmed");
 		}
 
 		private async Task InitializeProcessorAsync(IProcessor processor, CancellationToken cancellationToken)
@@ -919,7 +1083,7 @@ namespace Core
 
 		private void Update()
 		{
-			if (!_processingLoopEnabled)
+			if (!_processingLoopEnabled || ObjectPoolingProcessor.IsPrewarmingPools)
 				return;
 
 			foreach (var processor in _processors)

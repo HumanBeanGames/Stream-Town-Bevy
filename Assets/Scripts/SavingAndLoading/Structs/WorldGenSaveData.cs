@@ -1,4 +1,3 @@
-using UnityEngine;
 using System.Collections.Generic;
 
 namespace SavingAndLoading.Structs
@@ -9,10 +8,17 @@ namespace SavingAndLoading.Structs
     [System.Serializable]
     public struct WorldGenSaveData
     {
+        public const int CurrentTerrainGeneratorVersion = 1;
+
+        // Schema 2 worlds normally regenerate terrain from these few values.
+        // Legacy worlds retain MapMesh until they are generated from a known seed.
+        public bool HasTerrainSeed;
+        public int TerrainSeed;
+        public int TerrainGeneratorVersion;
         public MeshSaveData MapMesh;
 
-        public List<ResourceSaveData> Resources;
-        public List<FoliageSaveData> Foliage;
+        public ResourceProcessorSaveData Resources;
+        public FoliageProcessorSaveData Foliage;
         public List<EnemyCampSaveData> EnemyCamps;
 
         /// <summary>
@@ -23,8 +29,11 @@ namespace SavingAndLoading.Structs
         /// <param name="foliage">The worlds foliage</param>
         /// <param name="camps">The worlds camps</param>
         
-        public WorldGenSaveData(MeshSaveData mesh, List<ResourceSaveData> resources, List<FoliageSaveData> foliage, List<EnemyCampSaveData> camps)
+        public WorldGenSaveData(bool hasTerrainSeed, int terrainSeed, MeshSaveData mesh, ResourceProcessorSaveData resources, FoliageProcessorSaveData foliage, List<EnemyCampSaveData> camps)
         {   
+            HasTerrainSeed = hasTerrainSeed;
+            TerrainSeed = terrainSeed;
+            TerrainGeneratorVersion = CurrentTerrainGeneratorVersion;
             MapMesh = mesh;
             Resources = resources;
             Foliage = foliage;

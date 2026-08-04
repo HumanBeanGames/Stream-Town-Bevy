@@ -213,23 +213,35 @@ namespace Twitch.Commands
         /// <param name="args">The arguments containing the vote option.</param>
         public void Vote(Player player, string command, params string[] args)
         {
+            if (args == null || args.Length == 0 || string.IsNullOrWhiteSpace(args[0]))
+            {
+                const string usageMessage = "Failed - Use !vote followed by an option number, for example !vote 3";
+                _twitchChatProcessor.RecordCommandResult(command, usageMessage);
+                _twitchChatProcessor.SendPlayerMessage(player, usageMessage);
+                return;
+            }
+
             var currentEvent = _gameEventProcessor.CurrentEvent;
 
-            if (currentEvent == null || !(currentEvent is VoteEvent))
+            if (!(currentEvent is VoteEvent voteEvent))
             {
-                _twitchChatProcessor.SendPlayerMessage(player, "Failed - No Vote Active");
+                const string noVoteMessage = "Failed - No vote is active yet";
+                _twitchChatProcessor.RecordCommandResult(command, noVoteMessage);
+                _twitchChatProcessor.SendPlayerMessage(player, noVoteMessage);
                 return;
             }
 
-            VoteEvent voteEvent = (VoteEvent)currentEvent;
-
-            if (voteEvent.HasVoted(player))
+            string option = args[0].Trim();
+            if (!voteEvent.TryAddVote(new PlayerVote(player, new VoteOption(option, null)), out string failureReason))
             {
-                _twitchChatProcessor.SendPlayerMessage(player, "Failed - You have already voted!");
+                string failureMessage = $"Vote failed - {failureReason}";
+                _twitchChatProcessor.RecordCommandResult(command, failureMessage);
+                _twitchChatProcessor.SendPlayerMessage(player, failureMessage);
                 return;
             }
 
-            voteEvent.Action(new PlayerVote(player, new VoteOption(args[0], null)));
+            string successMessage = $"Vote {option} accepted";
+            _twitchChatProcessor.RecordCommandResult(command, successMessage);
         }
 
         /// <summary>

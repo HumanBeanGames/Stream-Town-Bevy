@@ -37,7 +37,7 @@ namespace TechTree.Data
         /// <summary>
         /// The object value.
         /// </summary>
-		[field: SerializeField]
+		[field: NonSerialized]
 		public object ObjectValue { get; set; }
 
         /// <summary>

@@ -63,32 +63,42 @@ namespace Twitch.Commands
 			Vector3 moveVector = Vector3.zero;
 			int rotationAmount = 0;
 
-			// Append Command as an argument
-			string[] argsAppended = new string[args.Length + 1];
-			argsAppended[0] = command;
-			args.CopyTo(argsAppended, 1);
-
-
-			for (int i = 0; i < argsAppended.Length; i += 2)
+			// Direction aliases include their direction in the command itself. The
+			// explicit !move command already carries directions in its arguments.
+			string[] movementArgs;
+			if (command == "move")
 			{
-				int value = 0;
+				movementArgs = args;
+			}
+			else
+			{
+				movementArgs = new string[args.Length + 1];
+				movementArgs[0] = command;
+				args.CopyTo(movementArgs, 1);
+			}
 
-				if (!((i + 1) < argsAppended.Length && int.TryParse(argsAppended[i + 1], out value)))
-					value = 1;
+			for (int i = 0; i < movementArgs.Length; i++)
+			{
+				int value = 1;
+				if ((i + 1) < movementArgs.Length && int.TryParse(movementArgs[i + 1], out int parsedValue))
+				{
+					value = parsedValue;
+					i++;
+				}
 
-				switch (argsAppended[i])
+				switch (movementArgs[i])
 				{
 					case "up":
-						moveVector += Vector3.right * value;
-						break;
-					case "down":
-						moveVector += Vector3.left * value;
-						break;
-					case "left":
 						moveVector += Vector3.forward * value;
 						break;
-					case "right":
+					case "down":
 						moveVector += Vector3.back * value;
+						break;
+					case "left":
+						moveVector += Vector3.left * value;
+						break;
+					case "right":
+						moveVector += Vector3.right * value;
 						break;
 					case "rotate":
 						rotationAmount += value;

@@ -1,5 +1,3 @@
-using UnityEngine;
-
 namespace SavingAndLoading.Structs 
 {
     /// <summary>
@@ -11,17 +9,5 @@ namespace SavingAndLoading.Structs
         public TransformSaveData Transform;
         public int Health;
         public uint GUID;
-
-        /// <summary>
-        /// Sets the values of EnemyCampSaveData
-        /// </summary>
-        /// <param name="transform">The camps transform</param>
-        /// <param name="health">The camps health</param>
-        public EnemyCampSaveData(Transform transform, int health, uint gUID)
-        {
-            Transform = new TransformSaveData(transform);
-            Health = health;
-            GUID = gUID;
-        }
     }
 }

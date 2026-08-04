@@ -19,6 +19,7 @@ using ScriptablesProcessorInfrastructure;
 using Data.Containers;
 using Enemies;
 using TownGoal;
+using UserInterface;
 
 namespace Processors
 {
@@ -41,6 +42,7 @@ namespace Processors
 		[Inject] private BuildingProcessor _buildingProcessor;
 		[Inject] private StationProcessor _stationProcessor;
 		[Inject] private TradeProcessor _tradeProcessor;
+		[Inject] private MetaData.MetaData _metaData;
 
 		/// <summary>
 		/// The debug processor. Injected via Reflex dependency injection.
@@ -59,6 +61,7 @@ namespace Processors
 		private RulerCommands _rulerCommands;
 		private BroadcasterCommands _broadcasterCommands;
 		private CommandDictionary _commandDictionary;
+		private TwitchConnectionPanelView _connectionPanelView;
 
 		private void InitializeCommandInfrastructure()
 		{
@@ -76,13 +79,12 @@ namespace Processors
 			_gameMasterCommands = new GameMasterCommands(_roleProcessor,
 				_gameSettings, _townResourceProcessor, _playerProcessor, _gameEventProcessor, _townGoalProcessor,
 				_techTreeProcessor, _worldGenProcessor, _buildingProcessor, _poolingProcessor, this);
-			_miscCommands = new MiscCommands(_buildingProcessor, this, _roleCommands, _buildingCommands);
+			_miscCommands = new MiscCommands(_buildingProcessor, this, _roleCommands, _buildingCommands, _roleProcessor);
 			_moderatorCommands = new ModeratorCommands(_playerProcessor, _gameEventProcessor, _roleCommands);
 			_rulerCommands = new RulerCommands(_playerProcessor, _roleProcessor, _townResourceProcessor,
 				_gameEventProcessor, _tradeProcessor, this, _gameMasterCommands);
-			_broadcasterCommands = new BroadcasterCommands(null, _playerProcessor,
-				_techTreeProcessor, _gameEventProcessor, this, _playerCommands);
-			_broadcasterCommands.Initialize();
+			_broadcasterCommands = new BroadcasterCommands(_playerProcessor,
+				_techTreeProcessor, _metaData, this, _playerCommands);
 			_commandDictionary = new CommandDictionary(_playerCommands, _roleCommands, _buildingCommands,
 				_miscCommands, _gameMasterCommands, _moderatorCommands, _rulerCommands);
 		}
@@ -130,72 +132,126 @@ namespace Processors
 			TwitchChatRuntimeData runtimeData = RequireRuntimeData();
 			RequireCommandInfrastructure();
 
-			if (!runtimeData.PlayerReady)
-				return;
-
-			string command = e.Command.CommandText.ToLower();
+			string command = (e.Command.CommandText ?? string.Empty).Trim().TrimStart('!').ToLowerInvariant();
+			runtimeData.LastCommand = command;
+			runtimeData.LastCommandUser = e.Command.ChatMessage.Username ?? string.Empty;
+			runtimeData.LastCommandResult = "Received";
 
 			if (!runtimeData.MessagesAllowed)
 			{
-				if (e.Command.ArgumentsAsList == null || e.Command.ArgumentsAsList.Count < 0)
-				return;
-#if UNITY_EDITOR
-				_broadcasterCommands.Connect("", e);
-#else
-				if (e.Command.CommandText.ToLower() == "connect" && e.Command.ChatMessage.IsBroadcaster)
+				if (command == "connect" &&
+					e.Command.ChatMessage.IsBroadcaster &&
+					e.Command.ArgumentsAsList != null &&
+					e.Command.ArgumentsAsList.Count > 0)
+				{
 					_broadcasterCommands.Connect(e.Command.ArgumentsAsList[0], e);
+				}
+				else
+				{
+					runtimeData.LastCommandResult = "Ignored while broadcaster authorization is pending";
+				}
 				return;
-#endif
+			}
 
+			if (!runtimeData.PlayerReady)
+			{
+				runtimeData.LastCommandResult = "Ignored while world player data is not ready";
+				return;
+			}
+
+			string[] normalizedArgs = e.Command.ArgumentsAsList == null
+				? Array.Empty<string>()
+				: e.Command.ArgumentsAsList
+					.Select(argument => argument?.Trim().ToLowerInvariant() ?? string.Empty)
+					.ToArray();
+
+			if (!_commandDictionary.TryValidateArguments(command, normalizedArgs, out string usage))
+			{
+				runtimeData.LastCommandResult = $"Invalid arguments; usage: {usage}";
+				SendMessage($"{e.Command.ChatMessage.Username}: Invalid arguments. Usage: {usage}");
+				return;
 			}
 
 			if (_commandDictionary.SimpleCommands.ContainsKey(command))
 			{
+				runtimeData.LastCommandResult = "Dispatched";
 				_commandDictionary.SimpleCommands[command].Invoke();
 				return;
 			}
 
-			// Check that player exists
-			if (runtimeData.PlayerExistsByID != null && runtimeData.PlayerExistsByID(e.Command.ChatMessage.UserId, out int index))
+			if (TryResolvePlayer(runtimeData, e.Command.ChatMessage.UserId, e.Command.ChatMessage.Username, out Player player))
 			{
-				Player player = runtimeData.GetPlayer(index);
-				if (player == null)
-					return;
 				player.TwitchUser.TimeSinceLastMessage = runtimeData.CurrentWorldTime;
 
 				UpdateUserType(player, e);
 
 
 				// Check if the command has arguments.
-				if (e.Command.ArgumentsAsList.Count > 0 && _commandDictionary.CommandsWithArgs.ContainsKey(command))
+				if (normalizedArgs.Length > 0 && _commandDictionary.CommandsWithArgs.ContainsKey(command))
 				{
-					string[] argsToLower = e.Command.ArgumentsAsList.ToArray();
-
-					//Lowecase all arguments
-					for (int i = 0; i < argsToLower.Length; i++)
-					{
-						argsToLower[i] = argsToLower[i].ToLower();
-					}
-
-					_commandDictionary.CommandsWithArgs[command].Invoke(player, command, argsToLower);
+					runtimeData.LastCommandResult = "Dispatched";
+					_commandDictionary.CommandsWithArgs[command].Invoke(player, command, normalizedArgs);
 				}
 				else if (_commandDictionary.CommandsNoArgs.ContainsKey(command))
 				{
+					runtimeData.LastCommandResult = "Dispatched";
 					_commandDictionary.CommandsNoArgs[command].Invoke(player);
+				}
+				else if (_commandDictionary.CommandsWithArgs.ContainsKey(command))
+				{
+					runtimeData.LastCommandResult = "Dispatched";
+					_commandDictionary.CommandsWithArgs[command].Invoke(player, command, normalizedArgs);
+				}
+				else
+				{
+					runtimeData.LastCommandResult = "Unknown command";
 				}
 			}
 			// Check if player is trying to create character or call a simple command
 			else
 			{
 				if (CommandDictionary.CreateNameVariants.Contains(command))
+				{
 					_playerCommands.TryCreatePlayer(e);
+					runtimeData.LastCommandResult = "Character created";
+				}
+				else
+				{
+					runtimeData.LastCommandResult = "Rejected because no matching character was found";
+					if (_commandDictionary.CommandsWithArgs.ContainsKey(command) || _commandDictionary.CommandsNoArgs.ContainsKey(command))
+						SendMessage($"{e.Command.ChatMessage.Username}: You need to create a character first with !join");
+				}
 			}
+		}
+
+		private static bool TryResolvePlayer(TwitchChatRuntimeData runtimeData, string userId, string username, out Player player)
+		{
+			player = null;
+			int index = -1;
+			bool found = runtimeData.PlayerExistsByID != null &&
+				!string.IsNullOrWhiteSpace(userId) &&
+				runtimeData.PlayerExistsByID(userId, out index);
+
+			if (!found)
+			{
+				found = runtimeData.PlayerExistsByName != null &&
+					!string.IsNullOrWhiteSpace(username) &&
+					runtimeData.PlayerExistsByName(username.ToLowerInvariant(), out index);
+			}
+
+			if (!found || runtimeData.GetPlayer == null)
+				return false;
+
+			player = runtimeData.GetPlayer(index);
+			return player != null;
 		}
 
 		public void ProcessMessage(OnMessageReceivedArgs e)
 		{
 			TwitchChatRuntimeData runtimeData = RequireRuntimeData();
 			RequireCommandInfrastructure();
+			if (!runtimeData.MessagesAllowed || !runtimeData.PlayerReady)
+				return;
 
 			if (runtimeData.PlayerExistsByID != null && runtimeData.PlayerExistsByID(e.ChatMessage.UserId, out int index))
 			{
@@ -228,6 +284,15 @@ namespace Processors
 			string command = parts[0].ToLower();
 			string[] args = parts.Length > 1 ? parts.Skip(1).ToArray() : new string[0];
 
+			if (!_commandDictionary.TryValidateArguments(command, args, out string usage))
+			{
+				_debugProcessor.LogError(DebugLogCategory.TwitchClient,
+					$"[Debug Command] Invalid arguments. Usage: {usage}");
+				if (player != null)
+					SendPlayerMessage(player, $"Invalid arguments. Usage: {usage}");
+				return;
+			}
+
 			// Route to appropriate command handler
 			if (_commandDictionary.SimpleCommands.ContainsKey(command))
 			{
@@ -242,7 +307,8 @@ namespace Processors
 				return;
 			}
 
-			if (args.Length > 0 && _commandDictionary.CommandsWithArgs.ContainsKey(command))
+			if (_commandDictionary.CommandsWithArgs.ContainsKey(command) &&
+				(args.Length > 0 || !_commandDictionary.CommandsNoArgs.ContainsKey(command)))
 			{
 				_commandDictionary.CommandsWithArgs[command].Invoke(player, command, args);
 				_debugProcessor.Log(DebugLogCategory.TwitchClient, $"[Debug Command] Executed: {command} {string.Join(" ", args)}");
@@ -302,7 +368,7 @@ namespace Processors
 		/// Sends a message to Twitch chat.
 		/// </summary>
 		/// <param name="message">The message to send.</param>
-		public void SendMessage(string message)
+		public new void SendMessage(string message)
 		{
 			RequireCommandInfrastructure();
 			_messageSender.SendMessage(message);
@@ -323,12 +389,24 @@ namespace Processors
 		/// Sets the player data access methods for Twitch chat to use.
 		/// Called by PlayerProcessor during initialization.
 		/// </summary>
-		public void SetPlayerDataAccess(PlayerExistsByIDDelegate playerExistsByID, Func<int, Player> getPlayer)
+		public void SetPlayerDataAccess(PlayerExistsByIDDelegate playerExistsByID, PlayerExistsByNameDelegate playerExistsByName, Func<int, Player> getPlayer)
 		{
 			TwitchChatRuntimeData runtimeData = RequireRuntimeData();
 			runtimeData.PlayerExistsByID = playerExistsByID;
+			runtimeData.PlayerExistsByName = playerExistsByName;
 			runtimeData.GetPlayer = getPlayer;
 		}
+
+		public void RecordCommandResult(string command, string result)
+		{
+			TwitchChatRuntimeData runtimeData = RequireRuntimeData();
+			runtimeData.LastCommand = command ?? string.Empty;
+			runtimeData.LastCommandResult = result ?? string.Empty;
+		}
+
+		public string LastCommand => RequireRuntimeData().LastCommand;
+		public string LastCommandUser => RequireRuntimeData().LastCommandUser;
+		public string LastCommandResult => RequireRuntimeData().LastCommandResult;
 
 		/// <summary>
 		/// Sets the current world time for Twitch chat to use.
@@ -378,16 +456,54 @@ namespace Processors
 		public bool TryAuthorizeBroadcasterConnection(string providedCode, bool isBroadcaster)
 		{
 			TwitchChatRuntimeData runtimeData = RequireRuntimeData();
-			if (!isBroadcaster || string.IsNullOrWhiteSpace(providedCode) || providedCode != runtimeData.BroadcasterConnectCode)
+			if (!isBroadcaster)
+			{
+				Debug.LogWarning("Twitch !connect rejected because the sender was not identified as the channel broadcaster.");
 				return false;
+			}
+
+			if (string.IsNullOrWhiteSpace(providedCode))
+			{
+				Debug.LogWarning("Twitch !connect rejected because no connection code was supplied.");
+				return false;
+			}
+
+			if (!string.Equals(providedCode.Trim(), runtimeData.BroadcasterConnectCode, StringComparison.Ordinal))
+			{
+				Debug.LogWarning("Twitch !connect rejected because the supplied connection code did not match the active challenge.");
+				return false;
+			}
 
 			runtimeData.MessagesAllowed = true;
+			Debug.Log("Twitch broadcaster connection authorized.");
 			return true;
 		}
 
 		public void ClearBroadcasterConnectCode()
 		{
 			RequireRuntimeData().BroadcasterConnectCode = string.Empty;
+		}
+
+		public void CompleteBroadcasterConnection()
+		{
+			ClearBroadcasterConnectCode();
+			if (_connectionPanelView != null)
+				_connectionPanelView.Hide();
+			ReleaseConnectionPause();
+		}
+
+		public void CancelBroadcasterConnection()
+		{
+			if (_twitchChatRuntimeData == null)
+				return;
+
+			_twitchChatRuntimeData.MessagesAllowed = false;
+			_twitchChatRuntimeData.PlayerReady = false;
+			_twitchChatRuntimeData.BroadcasterConnectCode = string.Empty;
+			if (_connectionPanelView != null)
+				_connectionPanelView.Hide();
+			_connectionPanelView = null;
+			ReleaseConnectionPause();
 		}
 
 		/// <summary>
@@ -447,7 +563,45 @@ namespace Processors
 		/// </summary>
 		public void RefreshSceneData(Container sceneContainer)
 		{
-			// TwitchChatProcessor does not have scene-specific settings to refresh
+			_connectionPanelView = FindConnectionPanelView();
+			if (_connectionPanelView == null)
+			{
+				ReleaseConnectionPause();
+				return;
+			}
+
+			TwitchChatRuntimeData runtimeData = RequireRuntimeData();
+			runtimeData.MessagesAllowed = false;
+			runtimeData.PlayerReady = false;
+			runtimeData.BroadcasterConnectCode = GenerateBroadcasterConnectCode();
+			AcquireConnectionPause(runtimeData);
+			_connectionPanelView.Show(runtimeData.BroadcasterConnectCode);
+		}
+
+		private static void AcquireConnectionPause(TwitchChatRuntimeData runtimeData)
+		{
+			if (runtimeData.ConnectionPauseActive)
+				return;
+
+			runtimeData.TimeScaleBeforeConnectionPause = Time.timeScale;
+			runtimeData.ConnectionPauseActive = true;
+			Time.timeScale = 0f;
+		}
+
+		private void ReleaseConnectionPause()
+		{
+			if (_twitchChatRuntimeData == null || !_twitchChatRuntimeData.ConnectionPauseActive)
+				return;
+
+			Time.timeScale = _twitchChatRuntimeData.TimeScaleBeforeConnectionPause;
+			_twitchChatRuntimeData.ConnectionPauseActive = false;
+		}
+
+		private static TwitchConnectionPanelView FindConnectionPanelView()
+		{
+			TwitchConnectionPanelView[] views = UnityEngine.Object.FindObjectsByType<TwitchConnectionPanelView>(
+				FindObjectsInactive.Include);
+			return views.Length > 0 ? views[0] : null;
 		}
 	}
 }

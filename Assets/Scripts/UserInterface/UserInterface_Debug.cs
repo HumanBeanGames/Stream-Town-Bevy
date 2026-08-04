@@ -174,7 +174,7 @@ namespace UserInterface
 		private Vector3 GetRandomSpawnPositionNearTownhall()
 		{
 			// Find townhall specifically by BuildingType
-			Buildings.BuildingBase[] allBuildings = GameObject.FindObjectsOfType<Buildings.BuildingBase>();
+			Buildings.BuildingBase[] allBuildings = GameObject.FindObjectsByType<Buildings.BuildingBase>();
 			Buildings.BuildingBase townhall = null;
 			
 			foreach (var building in allBuildings)
@@ -453,8 +453,6 @@ namespace UserInterface
 
 				// Set up as debug player
 				RoleHandler roleHandler = obj.GetComponent<RoleHandler>();
-				roleHandler.SetStarterRole(PlayerRole.Builder);
-
 				// Link the Player data to the character
 				_debugPlayer.Character = obj.gameObject;
 				_debugPlayer.RoleHandler = roleHandler;

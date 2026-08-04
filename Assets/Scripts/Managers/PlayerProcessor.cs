@@ -27,6 +27,15 @@ namespace Processors
     /// </summary>
     public class PlayerProcessor : MonoBehaviour, IInstaller, IProcessor
     {
+		private static readonly PlayerRole[] StartingNpcRoles =
+		{
+			PlayerRole.Defender,
+			PlayerRole.Logger,
+			PlayerRole.Miner,
+			PlayerRole.Gatherer,
+			PlayerRole.Builder
+		};
+
         /// <summary>
         /// Runtime data for player data.
         /// Assigned in InjectRuntimeData.
@@ -96,6 +105,9 @@ namespace Processors
         /// Gets the list of all active players.
         /// </summary>
         public List<Player> Players => _playerRuntimeData.Players;
+
+		/// <summary>Logical recruit records, including characters that are temporarily inactive.</summary>
+		public List<Player> Recruits => _playerRuntimeData.Recruits;
 
         /// <summary>
         /// Gets the current ruler player.
@@ -180,8 +192,26 @@ namespace Processors
             _playerRuntimeData.InitializePlayerState(roleStatModifiers, globalStatModifier, playerUpdateQueue);
 
             // Set up player data access for Twitch chat
-            _twitchChatProcessor.SetPlayerDataAccess((string userID, out int index) => PlayerExistsByID(userID, out index), GetPlayer);
+            _twitchChatProcessor.SetPlayerDataAccess(
+                (string userID, out int index) => PlayerExistsByID(userID, out index),
+                (string username, out int index) => PlayerExistsByNameToLower(username, out index),
+                GetPlayer);
         }
+
+		/// <summary>Clears session-owned players and derived stat modifiers before a restore.</summary>
+		public void ResetWorldState()
+		{
+			_playerRuntimeData.Players.Clear();
+			_playerRuntimeData.Recruits.Clear();
+			_playerRuntimeData.Ruler = null;
+			_playerRuntimeData.UserPlayer = null;
+
+			Dictionary<PlayerRole, StatModifiers> roleStatModifiers = new Dictionary<PlayerRole, StatModifiers>();
+			for (int i = 0; i < (int)PlayerRole.Count; i++)
+				roleStatModifiers.Add((PlayerRole)i, new StatModifiers());
+
+			_playerRuntimeData.InitializePlayerState(roleStatModifiers, new StatModifiers(), new Queue<Player>());
+		}
 
         /// <summary>
         /// Registers this processor as a singleton in the dependency injection container.
@@ -211,13 +241,15 @@ namespace Processors
         public void AddNewPlayer(Player data, PlayerRole startingRole = PlayerRole.Builder)
         {
             // TODO: Optimize this, store it when objects are pooled.
-            PoolableObject obj = _poolingProcessor.GetPooledObject("Player");
+			Vector3 spawnPosition = ResolveSpawnPosition();
+			PoolableObject obj = _poolingProcessor.GetPooledObject("Player", spawnPosition, Quaternion.identity);
+			if (obj == null)
+			{
+				Debug.LogError($"PlayerProcessor could not spawn '{data?.TwitchUser?.UserID ?? "unknown"}' because the Player pool is unavailable.");
+				return;
+			}
 
-            Vector3 spawnPosition = ResolveSpawnPosition();
-            obj.transform.position = spawnPosition;
-            obj.gameObject.SetActive(true);
-
-            data.RoleHandler = obj.GetComponent<RoleHandler>();
+			data.RoleHandler = obj.GetComponent<RoleHandler>();
             data.RoleHandler.Player = data;
             data.StationSensor = obj.GetComponent<StationSensor>();
             data.HealthHandler = obj.GetComponent<HealthHandler>();
@@ -227,7 +259,8 @@ namespace Processors
             data.EquipmentHandler = obj.GetComponent<CharacterModelHandler>();
             data.GUIDComponent = obj.GetComponent<GUIDComponent>();
             data.PlayerTarget = obj.GetComponent<TargetablePlayer>();
-            data.RoleHandler.SetStarterRole(startingRole);
+            data.RoleHandler.InitializeForSpawn(startingRole);
+            obj.GetComponent<STStateMachine.StateMachine>()?.PrepareForSpawn();
             data.Character = obj.gameObject;
             data.StationSensor.Player = data;
             var unitText = obj.GetComponentInChildren<UnitTextDisplay>();
@@ -236,11 +269,10 @@ namespace Processors
             unitText.SetDisplayText(data.TwitchUser.Username);
             unitText.SetTextColor(Twitch.Utils.UserColours.GetColourByUserType(data.TwitchUser.GameUserType));
             data.UnitTextDisplay = unitText;
-            PoolableObject petObj = _poolingProcessor.GetPooledObject("Pet");
+            PoolableObject petObj = _poolingProcessor.GetPooledObject("Pet", spawnPosition, Quaternion.identity);
             Pet pet = petObj.GetComponent<Pet>();
 
             pet.SetOwner(obj.transform, data);
-            petObj.gameObject.SetActive(true);
             _playerRuntimeData.PlayerUpdateQueue.Enqueue(data);
             data.Pet = pet;
 
@@ -258,6 +290,39 @@ namespace Processors
                 _playerRuntimeData.Players.Add(data);
             }
         }
+
+		/// <summary>
+		/// Ensures a newly generated town starts with one NPC in each essential role.
+		/// Existing recruits are counted so repeated world-completion notifications
+		/// cannot duplicate the starting roster.
+		/// </summary>
+		public void EnsureStartingNpcRoster()
+		{
+			for (int roleIndex = 0; roleIndex < StartingNpcRoles.Length; roleIndex++)
+			{
+				PlayerRole role = StartingNpcRoles[roleIndex];
+				bool exists = false;
+
+				for (int recruitIndex = 0; recruitIndex < _playerRuntimeData.Recruits.Count; recruitIndex++)
+				{
+					Player recruit = _playerRuntimeData.Recruits[recruitIndex];
+					if (recruit != null && recruit.IsNPC && recruit.RoleHandler != null &&
+						recruit.RoleHandler.CurrentRole == role)
+					{
+						exists = true;
+						break;
+					}
+				}
+
+				if (exists)
+					continue;
+
+				Player recruitData = new Player(
+					new TwitchUser($"starting-npc-{role.ToString().ToLowerInvariant()}", string.Empty),
+					true);
+				AddNewPlayer(recruitData, role);
+			}
+		}
 
         private Vector3 ResolveSpawnPosition()
         {
@@ -350,8 +415,26 @@ namespace Processors
         /// <returns>The added player, or null if the player already exists or recruit pool is full.</returns>
         public Player AddExistingPlayer(Player data, PlayerRole startingRole = PlayerRole.Builder)
         {
+			if (data == null || data.Character == null)
+				return null;
+
             if (_playerRuntimeData.Players.Contains(data))
                 return null;
+
+			PoolableObject pooledObject = data.Character.GetComponent<PoolableObject>();
+			data.PoolableObject = pooledObject;
+			data.RoleHandler = data.Character.GetComponent<RoleHandler>();
+			data.StationSensor = data.Character.GetComponent<StationSensor>();
+			data.HealthHandler = data.Character.GetComponent<HealthHandler>();
+			data.TargetSensor = data.Character.GetComponent<TargetSensor>();
+			data.EquipmentHandler = data.Character.GetComponent<CharacterModelHandler>();
+			data.GUIDComponent = data.Character.GetComponent<GUIDComponent>();
+			data.PlayerTarget = data.Character.GetComponent<TargetablePlayer>();
+			if (data.RoleHandler == null || data.StationSensor == null || data.HealthHandler == null)
+				return null;
+
+			data.HealthHandler.OnDeath = attacked => data.OnCharacterDied(attacked, _twitchChatProcessor);
+			data.HealthHandler.OnRevived = () => data.OnCharacterRespawned(_twitchChatProcessor);
 
             if (data.TwitchUser.Username == "")
                 if (_playerRuntimeData.Recruits.Count < 200)
@@ -364,11 +447,18 @@ namespace Processors
             else
                 _playerRuntimeData.Players.Add(data);
 
+            data.RoleHandler.Player = data;
+            data.RoleHandler.InitializeForSpawn(startingRole);
+            data.Character.GetComponent<STStateMachine.StateMachine>()?.PrepareForSpawn();
             data.StationSensor.Player = data;
-            var unitText = data.Character.GetComponentInChildren<UnitTextDisplay>();
-            unitText.SetDisplayText(data.TwitchUser.Username);
-            unitText.SetTextColor(Twitch.Utils.UserColours.GetColourByUserType(data.TwitchUser.GameUserType));
-            data.UnitTextDisplay = unitText;
+            var unitText = data.Character.GetComponentInChildren<UnitTextDisplay>(true);
+			if (unitText != null)
+			{
+				unitText.gameObject.SetActive(true);
+				unitText.SetDisplayText(data.TwitchUser.Username);
+				unitText.SetTextColor(Twitch.Utils.UserColours.GetColourByUserType(data.TwitchUser.GameUserType));
+				data.UnitTextDisplay = unitText;
+			}
             _playerRuntimeData.PlayerUpdateQueue.Enqueue(data);
             return data;
         }

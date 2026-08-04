@@ -116,6 +116,7 @@ namespace GameEventSystem
         /// Whether the event is active.
         /// </summary>
 		private bool _active;
+		private bool _scheduled;
 
         /// <summary>
         /// Game event processor. Injected via Reflex dependency injection.
@@ -152,12 +153,16 @@ namespace GameEventSystem
         /// </summary>
 		public double Timeout => _timeout;
 
+		public bool IsActive => _active;
+
         /// <summary>
         /// Gets the remaining duration.
         /// </summary>
         /// <param name="currentTime">The current time.</param>
         /// <returns>The remaining duration.</returns>
 		public double RemainingDuration(double currentTime) => _active ? (StartTime + EventDuration) - currentTime : -1;
+
+		public double SecondsUntilStart(double currentTime) => _active ? 0d : Math.Max(0d, StartTime - currentTime);
 
         /// <summary>
         /// Gets whether the event was successful.
@@ -181,6 +186,17 @@ namespace GameEventSystem
 			_data = data;
 			_overrideCurrentEvent = overrideCurrentEvent;
 			_timeout = timeout;
+			_scheduled = false;
+		}
+
+		/// <summary>Converts the constructor's relative delay into world time exactly once.</summary>
+		internal void Schedule(double currentTime)
+		{
+			if (_scheduled)
+				return;
+
+			_eventStartTime = currentTime + Math.Max(0d, _eventStartTime);
+			_scheduled = true;
 		}
 
         /// <summary>
@@ -191,6 +207,7 @@ namespace GameEventSystem
 		internal void Start(bool force = false, double currentTime = 0)
 		{
 			_eventStartTime = currentTime;
+			_scheduled = true;
 			_active = true;
 			OnStarted();
 			EventStarted?.Invoke();
@@ -207,6 +224,17 @@ namespace GameEventSystem
 			_active = false;
 			OnStopped();
 			EventEnded?.Invoke(_success, Event, _returnData);
+		}
+
+		/// <summary>
+		/// Tears down an active scene event without treating a scene transition as
+		/// completion. In particular, abandoning a tech vote must not select its
+		/// first option and start a new goal in the persistent project state.
+		/// </summary>
+		internal void Cancel()
+		{
+			_active = false;
+			OnStopped();
 		}
 
         /// <summary>

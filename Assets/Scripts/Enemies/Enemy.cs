@@ -81,8 +81,23 @@ namespace Enemies
         /// <summary>
         /// Called when the enemy is pooled.
         /// </summary>
-		public void OnPooled()
+        public void OnPooled()
 		{
+		}
+
+		/// <summary>
+		/// Rebuilds player-count-derived maximum health before applying saved health.
+		/// </summary>
+		public void RestoreHealth(int health)
+		{
+			if (_healthHandler.BaseMaxHealth > 0)
+			{
+				_healthHandler.SetMaxHealth(
+					_healthHandler.BaseMaxHealth +
+					(int)(_additionalHealthPerPlayer * (_playerProcessor.PlayerCount() + _playerProcessor.RecruitCount())));
+			}
+
+			_healthHandler.SetHealth(health);
 		}
 
         /// <summary>
@@ -96,6 +111,7 @@ namespace Enemies
 			_healthHandler = GetComponent<HealthHandler>();
 			_activeResourceIncrementer = GetComponent<ActiveResourceIncrementer>();
 			_targetSensor = GetComponent<TargetSensor>();
+			_stationSensor = GetComponent<StationSensor>();
 			_gUIDComponent = GetComponent<GUIDComponent>();
 		}
 

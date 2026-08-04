@@ -13,6 +13,10 @@ namespace SavingAndLoading.Structs
         public List<EnemySaveData> EnemySaveData;
 		public WorldSaveData WorldSaveData;
 
+		public SaveGameData()
+		{
+		}
+
 		// Do XML commenting here once done
 		public SaveGameData(WorldGenSaveData worldGenSaveData, List<BuildingSaveData> buildingSaveData, List<EnemySaveData> enemySaveData, WorldSaveData worldSaveData)
 		{

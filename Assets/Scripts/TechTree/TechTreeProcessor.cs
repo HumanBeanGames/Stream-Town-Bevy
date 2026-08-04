@@ -14,7 +14,6 @@ using Twitch;
 using UnityEngine;
 using Reflex.Attributes;
 using Reflex.Core;
-using SavingAndLoading;
 using ScriptablesProcessorInfrastructure;
 using Data.Containers;
 using GameEventSystem;
@@ -67,6 +66,24 @@ namespace Processors
 		{
 			if (_techTreeRuntimeData == null)
 				throw new InvalidOperationException("TechTreeProcessor runtime data has not been installed.");
+		}
+
+		/// <summary>
+		/// Restores authored baseline technology state after leaving a world. Saved
+		/// progression is restored later by SaveProcessor when Load Game is chosen.
+		/// </summary>
+		public void ResetWorldState()
+		{
+			_techTreeRuntimeData.TimeSinceLastUnlock = 0;
+			_techTreeRuntimeData.TechsUnlocked = 0;
+			_techTreeRuntimeData.CurrentTech = null;
+			_techTreeRuntimeData.RequestStartTechVote = false;
+			_techTreeRuntimeData.RequestedTechVoteDelay = 0f;
+			_techTreeRuntimeData.RequestDelayedSetup = false;
+			_techTreeRuntimeData.GoalsFollowed.Clear();
+
+			if (_techTreeRuntimeData.TechTree != null)
+				_techTreeRuntimeData.TechTree.RestoreUnlockedNodeIds(Array.Empty<string>());
 		}
 
 		public void Activate()
@@ -139,6 +156,19 @@ namespace Processors
 		public List<bool> GetUnlockedTechStates()
 		{
 			return _techTreeRuntimeData.TechTree.GetUnlockedNodes();
+		}
+
+		public List<string> GetUnlockedTechIds()
+		{
+			return _techTreeRuntimeData.TechTree.GetUnlockedNodeIds();
+		}
+
+		public void RestoreUnlockedTechIds(IEnumerable<string> unlockedTechIds)
+		{
+			_techTreeRuntimeData.TechsUnlocked = 0;
+			_techTreeRuntimeData.CurrentTech = null;
+			_techTreeRuntimeData.GoalsFollowed.Clear();
+			_techTreeRuntimeData.TechTree.RestoreUnlockedNodeIds(unlockedTechIds);
 		}
 
 		public void SetUnlockedTechStates(List<bool> unlockedNodes)
@@ -248,11 +278,14 @@ namespace Processors
 					nodes.Add(_techTreeRuntimeData.TechTree.AvailableNodes[i]);
 			}
 
-			Node_SO[] randomNodes = new Node_SO[count];
+			int resultCount = Mathf.Min(Mathf.Max(0, count), nodes.Count);
+			Node_SO[] randomNodes = new Node_SO[resultCount];
 
-			for (int i = 0; i < count; i++)
+			for (int i = 0; i < resultCount; i++)
 			{
-				randomNodes[i] = GetRandomTechFromList(nodes);
+				int index = UnityEngine.Random.Range(0, nodes.Count);
+				randomNodes[i] = nodes[index];
+				nodes.RemoveAt(index);
 			}
 
 			return randomNodes;
@@ -305,8 +338,35 @@ namespace Processors
 
 			TechVote voteEvent = new TechVote(delay, 60, nodeDataArray, _uiProcessor.TownVoteInterface);
 			voteEvent.EventEnded += OnTechVoteEnded;
-			if (!EventTypeExistsInQueue(voteEvent.Event))
-				_gameEventProcessor.EventQueue.Add(voteEvent);
+			_gameEventProcessor.AddEvent(voteEvent);
+		}
+
+		public TechVote RestoreTechVote(IEnumerable<string> techNames, float delaySeconds, float durationSeconds)
+		{
+			if (_uiProcessor == null || _uiProcessor.TownVoteInterface == null)
+				return null;
+
+			List<TechNodeData> options = new List<TechNodeData>();
+			if (techNames != null)
+			{
+				foreach (string techName in techNames)
+				{
+					Node_SO node = _techTreeRuntimeData.TechTree.GetNodeFromName(techName);
+					if (node != null)
+						options.Add(TechNodeData.FromNodeSO(node));
+				}
+			}
+
+			if (options.Count == 0)
+				return null;
+
+			TechVote voteEvent = new TechVote(
+				Mathf.Max(0f, delaySeconds),
+				Mathf.Max(0.1f, durationSeconds),
+				options.ToArray(),
+				_uiProcessor.TownVoteInterface);
+			voteEvent.EventEnded += OnTechVoteEnded;
+			return _gameEventProcessor.AddEvent(voteEvent) ? voteEvent : null;
 		}
 
 		private bool EventTypeExistsInQueue(GameEvent.EventType type)

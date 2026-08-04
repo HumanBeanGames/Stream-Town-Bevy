@@ -78,6 +78,21 @@ namespace Level
 			return true;
 		}
 
+		/// <summary>
+		/// Restores a saved level without affordability checks or resource costs,
+		/// while replaying authored level-up effects for each restored level.
+		/// </summary>
+		public virtual void RestoreLevel(int level)
+		{
+			int targetLevel = Mathf.Clamp(level, 1, _maxLevel);
+			_currentLevel = 1;
+			while (_currentLevel < targetLevel)
+			{
+				_currentLevel++;
+				_onLevelUp.Invoke();
+			}
+		}
+
         /// <summary>
         /// Initializes the level handler.
         /// </summary>

@@ -87,12 +87,21 @@ namespace Sensors
         /// The target search range.
         /// </summary>
 		[SerializeField]
-		private float _targetSearchRange = 100f;
+		private float _targetSearchRange = 20f;
 
         /// <summary>
         /// Gets or sets whether to update the target.
         /// </summary>
 		public bool UpdateTarget { get; set; }
+
+        /// <summary>
+        /// Sets the target search range.
+        /// </summary>
+        /// <param name="range">The new search range.</param>
+        public void SetTargetSearchRange(float range)
+        {
+            _targetSearchRange = range;
+        }
 
         /// <summary>
         /// Gets whether the sensor has a target.
@@ -378,8 +387,9 @@ namespace Sensors
         /// <summary>
         /// Clears the target on disable.
         /// </summary>
-		private void OnDisable()
+		protected override void OnDisable()
 		{
+			base.OnDisable();
 			ClearTarget();
 		}
 

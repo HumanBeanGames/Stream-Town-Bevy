@@ -16,7 +16,7 @@ namespace Character
 	/// <summary>
 	/// Handles the current role of the Player character.
 	/// </summary>
-	public class RoleHandler : MonoBehaviour
+	public class RoleHandler : MonoBehaviour, Utils.Pooling.IPooledObjectReset
 	{
         /// <summary>
         /// The player associated with this role handler.
@@ -119,6 +119,8 @@ namespace Character
         /// The health handler.
         /// </summary>
 		private HealthHandler _healthHandler;
+		private PlayerDeathHandler _playerDeathHandler;
+		private bool _spawnInitialized;
 
         /// <summary>
         /// Array of player role data for all roles.
@@ -213,7 +215,7 @@ namespace Character
 
 			_currentRole = role;
 			_currentPlayerRoleData = _playerRoleData[(int)_currentRole];
-			_aiPath.maxSpeed = _currentPlayerRoleData.MoveSpeed;
+			RefreshCurrentRoleRuntimeState();
 
 			_onRoleChanged.Invoke(_currentRole, role, _equipmentHandler.CurrentBodyType);
 			OnRoleChanged?.Invoke(this);
@@ -233,6 +235,49 @@ namespace Character
 			}
 
 			_starterRole = role;
+		}
+
+		/// <summary>
+		/// Applies spawn-specific state after a prewarmed Player has been positioned and assigned.
+		/// </summary>
+		public bool InitializeForSpawn(PlayerRole role)
+		{
+			if (_spawnInitialized)
+				return true;
+
+			SetStarterRole(role);
+			if (!TrySetRole(_starterRole, false))
+				return false;
+
+			_healthHandler.SetHealth(_healthHandler.MaxHealth);
+			_playerDeathHandler.InitializeForSpawn();
+			_spawnInitialized = true;
+			return true;
+		}
+
+		/// <summary>
+		/// Clears logical-player state when this pooled character is checked out again.
+		/// </summary>
+		public void OnReset()
+		{
+			_spawnInitialized = false;
+			_player = null;
+			_starterRole = PlayerRole.Builder;
+			_currentRole = PlayerRole.Builder;
+			_prevRole = PlayerRole.Builder;
+			_characterGlobalPassives.Clear();
+			for (int i = 0; i < (int)StatType.Count; i++)
+				_characterGlobalPassives[(StatType)i] = 0f;
+
+			_inventory.ResetToDefaults();
+			if (_playerRoleData != null)
+			{
+				for (int i = 0; i < _playerRoleData.Length; i++)
+					_playerRoleData[i]?.ResetProgression();
+			}
+
+			if (_playerRoleData != null && (int)_currentRole < _playerRoleData.Length)
+				_currentPlayerRoleData = _playerRoleData[(int)_currentRole];
 		}
 
 		/// <summary>
@@ -258,6 +303,27 @@ namespace Character
 			{
 				_playerRoleData[i].RecalculateStats();
 			}
+
+			RefreshCurrentRoleRuntimeState();
+		}
+
+		/// <summary>
+		/// Applies the current role's calculated values to stateful scene components.
+		/// This must run after role levels or processor-owned stat modifiers change.
+		/// </summary>
+		private void RefreshCurrentRoleRuntimeState()
+		{
+			if (_currentPlayerRoleData == null)
+				return;
+
+			_aiPath.maxSpeed = _currentPlayerRoleData.MoveSpeed;
+			_aiPath.maxAcceleration = _currentPlayerRoleData.MoveAcceleration;
+			_healthHandler.SetMaxHealth(_currentPlayerRoleData.MaxHealth);
+			_healthHandler.SetHealthRegen(_currentPlayerRoleData.HealthRegen);
+
+			// Search ahead of the actual action range so the character can acquire a target.
+			float searchRange = _currentPlayerRoleData.ActionRange * 2f;
+			_targetSensor.SetTargetSearchRange(Mathf.Max(10f, searchRange));
 		}
 
         /// <summary>
@@ -295,6 +361,7 @@ namespace Character
 			_animationHandler = GetComponentInChildren<AnimationHandler>();
 			_equipmentHandler = GetComponent<CharacterModelHandler>();
 			_healthHandler = GetComponent<HealthHandler>();
+			_playerDeathHandler = GetComponent<PlayerDeathHandler>();
 			_aiPath = GetComponent<AIPath>();
 
 			// Initialize player role data array.
@@ -314,21 +381,26 @@ namespace Character
 			}
 		}
 
-        // Sets the starter role and health on Start.
-		private void Start()
-		{
-			// Try to set the starter role.
-			TrySetRole(_starterRole, false);
-
-			// Set the health to maximum.
-			_healthHandler.SetHealth(_healthHandler.MaxHealth);
-		}
-
-        // Subscribes to tech tree events on Enable.
+		// Subscribes to tech tree events on Enable.
 		private void OnEnable()
 		{
 			// Subscribe to stat boost unlocked event.
+			_techTreeProcessor.OnStatBoostUnlocked -= OnStatBoostUnlocked;
 			_techTreeProcessor.OnStatBoostUnlocked += OnStatBoostUnlocked;
+		}
+
+		/// <summary>
+		/// Restores role history without firing a role transition.
+		/// </summary>
+		public void RestorePreviousRole(PlayerRole previousRole)
+		{
+			_prevRole = previousRole;
+		}
+
+		private void OnDisable()
+		{
+			if (_techTreeProcessor != null)
+				_techTreeProcessor.OnStatBoostUnlocked -= OnStatBoostUnlocked;
 		}
 
         // Called when a stat boost is unlocked for a role.

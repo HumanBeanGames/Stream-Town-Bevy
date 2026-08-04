@@ -171,26 +171,28 @@ namespace Twitch.Commands
 			Vector3 moveVector = Vector3.zero;
 			int zoomFactor = 0;
 
-			for (int i = 0; i < args.Length; i += 2)
+			for (int i = 0; i < args.Length; i++)
 			{
-				int value = 0;
-
-				if (!((i + 1) < args.Length && int.TryParse(args[i + 1], out value)))
-					value = 1;
+				int value = 1;
+				if ((i + 1) < args.Length && int.TryParse(args[i + 1], out int parsedValue))
+				{
+					value = parsedValue;
+					i++;
+				}
 
 				switch (args[i])
 				{
-					case "up":
-						moveVector += Vector3.right * value;
-						break;
-					case "down":
-						moveVector += Vector3.left * value;
-						break;
-					case "left":
+				case "up":
 						moveVector += Vector3.forward * value;
 						break;
-					case "right":
+					case "down":
 						moveVector += Vector3.back * value;
+						break;
+					case "left":
+						moveVector += Vector3.left * value;
+						break;
+					case "right":
+						moveVector += Vector3.right * value;
 						break;
 					case "out":
 						zoomFactor = 1 * value;

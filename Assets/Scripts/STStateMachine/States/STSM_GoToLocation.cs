@@ -11,6 +11,9 @@ namespace STStateMachine.States
 	/// </summary>
 	public class STSM_GoToLocation : STStateBase
 	{
+		// Keep the unfinished recovery logic available without making the code below unreachable.
+		private static readonly bool StuckDetectionEnabled = false;
+
 		/// <summary>
 		/// Minimum distance a unit has to move within the check window to count as meaningful motion.
 		/// </summary>
@@ -115,14 +118,26 @@ namespace STStateMachine.States
 		public void SetTargetPosition(Vector3 targetPosition, float actionRange)
 		{
 			// Get the node at the target position
-			var targetNode = AstarPath.active.GetNearest(targetPosition, NNConstraint.Default).node;
+			var nearestTarget = AstarPath.active.GetNearest(targetPosition, NNConstraint.Default);
+			var targetNode = nearestTarget.node;
 			if (targetNode == null)
 			{
 				// Fallback to simple nearest if node not found
-				_targetPosition = AstarPath.active.GetNearest(targetPosition, NNConstraint.Default).position;
+				_targetPosition = nearestTarget.position;
 				_aiPath.destination = _targetPosition;
 				// Use default satisfaction if actionRange is 0
 				_distanceSatisfaction = actionRange == 0 ? 1f : actionRange * actionRange;
+				return;
+			}
+
+			// Idle wandering only needs the nearest walkable node. The surrounding-node
+			// search is useful for action ranges, but made every fresh Player perform nine
+			// A* nearest-node queries on its first idle update.
+			if (actionRange <= 0f)
+			{
+				_targetPosition = nearestTarget.position;
+				_aiPath.destination = _targetPosition;
+				_distanceSatisfaction = 1f;
 				return;
 			}
 
@@ -131,10 +146,9 @@ namespace STStateMachine.States
 			Vector3 closestNodePosition = targetNodePosition;
 			float closestDistanceSqr = Vector3.SqrMagnitude(targetNodePosition - transform.position);
 
-			int[] neighborOffsets = { -1, 0, 1 };
-			foreach (int xOffset in neighborOffsets)
+			for (int xOffset = -1; xOffset <= 1; xOffset++)
 			{
-				foreach (int zOffset in neighborOffsets)
+				for (int zOffset = -1; zOffset <= 1; zOffset++)
 				{
 					if (xOffset == 0 && zOffset == 0)
 						continue; // Skip the center node (already checked)
@@ -254,6 +268,8 @@ namespace STStateMachine.States
 
 		public override void OnEnter()
 		{
+			base.OnEnter();
+
 			_aiPath.enabled = true;
 			_distanceSatisfaction += (UsePosition && _targetPosition == Vector3.zero ? ZERO_VECTOR_SATISFACTION_DISTANCE : 0);
 			
@@ -270,21 +286,35 @@ namespace STStateMachine.States
 			//Check path is possible to point otherwise mark it as bad
 			if (!UsePosition)
 			{
-				GraphNode a = AstarPath.active.GetNearest(transform.position, NNConstraint.Default).node;
-				GraphNode b = AstarPath.active.GetNearest(_targetTransform.position, NNConstraint.Default).node;
+				if (_targetTransform == null)
+				{
+					_stateMachine.RequestStateChange("Idle");
+					return;
+				}
 
-				if (!PathUtilities.IsPathPossible(a, b) || a == null || b == null)
+				AstarPath astar = AstarPath.active;
+				GraphNode a = astar != null
+					? astar.GetNearest(transform.position, NNConstraint.Default).node
+					: null;
+				GraphNode b = astar != null
+					? astar.GetNearest(_targetTransform.position, NNConstraint.Default).node
+					: null;
+
+				if (a == null || b == null || !PathUtilities.IsPathPossible(a, b))
 				{
 					_debugProcessor.Log(DebugLogCategory.GoToLocation, $"Path wasn't possible from {transform.gameObject.name} to {_targetTransform.gameObject.name}");
-					_targetSensor.MarkCurrentTargetBad();
+					_targetSensor?.MarkCurrentTargetBad();
 
-					b = AstarPath.active.GetNearest(Vector3.zero, NNConstraint.Default).node;
-					if (!PathUtilities.IsPathPossible(a, b) || a == null || b == null)
+					b = astar != null
+						? astar.GetNearest(Vector3.zero, NNConstraint.Default).node
+						: null;
+					if (a == null || b == null || !PathUtilities.IsPathPossible(a, b))
 					{
 						transform.position = _onEnabledLocation;
 					}
 
 					_stateMachine.RequestStateChange("Idle");
+					return;
 				}
 			}
 		}
@@ -379,8 +409,11 @@ namespace STStateMachine.States
 		// TODO:: Fix the detection and resolution. Not working correctly.
 		private void StuckCheck()
 		{
-			ResetStuckTracking();
-			return;
+			if (!StuckDetectionEnabled)
+			{
+				ResetStuckTracking();
+				return;
+			}
 
 			if (_aiPath == null)
 				return;

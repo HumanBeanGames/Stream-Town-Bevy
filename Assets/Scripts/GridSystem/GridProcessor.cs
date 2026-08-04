@@ -103,6 +103,12 @@ namespace GridSystem
 			_cellSpacePartitioning.PopulateFoliageIndices(foliageProcessor);
 		}
 
+		/// <summary>Clears spatial references to instances from the abandoned world.</summary>
+		public void ResetWorldState(Processors.ResourceProcessor resourceProcessor, Processors.FoliageProcessor foliageProcessor)
+		{
+			RepopulateSpatialIndices(resourceProcessor, foliageProcessor);
+		}
+
 		/// <summary>
 		/// Processes grid logic every frame.
 		/// Called every frame by the Coordinator.

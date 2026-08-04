@@ -1,11 +1,7 @@
 using Processors;
-using System;
 using TwitchLib.Client.Events;
 using TechTree;
-using GameEventSystem;
 using MetaData;
-using UserInterface.MainMenu;
-using Reflex.Attributes;
 
 namespace Twitch.Commands
 {
@@ -14,35 +10,23 @@ namespace Twitch.Commands
     /// </summary>
 	public class BroadcasterCommands
 	{
-        private MainMenuManager _mainMenuManager;
         private PlayerProcessor _playerProcessor;
         private TechTreeProcessor _techTreeProcessor;
-        private GameEventProcessor _gameEventProcessor;
+        private MetaData.MetaData _metaData;
         private Processors.TwitchChatProcessor _twitchChatProcessor;
         private PlayerCommands _playerCommands;
 
-        public BroadcasterCommands(MainMenuManager mainMenuManager,
-            PlayerProcessor playerProcessor, TechTreeProcessor techTreeProcessor,
-            GameEventProcessor gameEventProcessor, Processors.TwitchChatProcessor twitchChatProcessor,
+        public BroadcasterCommands(PlayerProcessor playerProcessor,
+            TechTreeProcessor techTreeProcessor, MetaData.MetaData metaData,
+            Processors.TwitchChatProcessor twitchChatProcessor,
             PlayerCommands playerCommands)
         {
-            _mainMenuManager = mainMenuManager;
             _playerProcessor = playerProcessor;
             _techTreeProcessor = techTreeProcessor;
-            _gameEventProcessor = gameEventProcessor;
+            _metaData = metaData;
             _twitchChatProcessor = twitchChatProcessor;
             _playerCommands = playerCommands;
         }
-
-        /// <summary>
-        /// Initializes the broadcaster commands by resolving the main menu manager via scene lookup.
-        /// </summary>
-		public void Initialize()
-		{
-			_mainMenuManager = UnityEngine.Object.FindFirstObjectByType<MainMenuManager>();
-			if (_mainMenuManager != null)
-				_mainMenuManager.CodeDisplay?.Invoke(_twitchChatProcessor.GetBroadcasterConnectCode());
-		}
 
         /// <summary>
         /// Connects the broadcaster to the game.
@@ -51,17 +35,17 @@ namespace Twitch.Commands
         /// <param name="e">The chat command received args.</param>
 		internal void Connect(string arg, OnChatCommandReceivedArgs e)
 		{
-#if UNITY_EDITOR
-			_twitchChatProcessor.MessagesAllowed = true;
-#else
 			if (!_twitchChatProcessor.TryAuthorizeBroadcasterConnection(arg, e.Command.ChatMessage.IsBroadcaster))
 				return;
-#endif
-			_mainMenuManager?.CodeDisplay?.Invoke("");
-			_mainMenuManager?.ConnectPanel?.SetActive(false);
+
+			_twitchChatProcessor.CompleteBroadcasterConnection();
 			_techTreeProcessor.RequestDelayedSetup();
-			if (_mainMenuManager != null && (_mainMenuManager.LoadType == LoadType.Generate || _mainMenuManager.LoadType == LoadType.Load) && _playerProcessor.UserPlayer == null)
+			if (_metaData != null &&
+				(_metaData.LoadType == LoadType.Generate || _metaData.LoadType == LoadType.Load) &&
+				_playerProcessor.UserPlayer == null)
+			{
 				_playerProcessor.SetUserPlayer(_playerCommands.TryCreatePlayer(e));
+			}
 		}
 	}
 }

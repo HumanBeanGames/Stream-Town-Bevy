@@ -73,3 +73,7 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Local Twitch OAuth credentials must never be committed or shipped in StreamingAssets.
+/[Aa]ssets/[Ss]treamingAssets/twitch_secrets.json
+/[Aa]ssets/[Ss]treamingAssets/twitch_secrets.json.meta

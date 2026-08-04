@@ -24,11 +24,17 @@ namespace Processors
 		public bool PlayerReady = false;
 		public float CurrentWorldTime = 0f;
 		public string BroadcasterConnectCode = string.Empty;
+		public bool ConnectionPauseActive = false;
+		public float TimeScaleBeforeConnectionPause = 1f;
+		public string LastCommand = string.Empty;
+		public string LastCommandUser = string.Empty;
+		public string LastCommandResult = string.Empty;
 
 		/// <summary>
 		/// Player data access methods.
 		/// </summary>
 		public PlayerExistsByIDDelegate PlayerExistsByID;
+		public PlayerExistsByNameDelegate PlayerExistsByName;
 		public Func<int, Player> GetPlayer;
 
 		public TwitchChatRuntimeData()
@@ -38,6 +44,11 @@ namespace Processors
 			PlayerReady = false;
 			CurrentWorldTime = 0f;
 			BroadcasterConnectCode = string.Empty;
+			ConnectionPauseActive = false;
+			TimeScaleBeforeConnectionPause = 1f;
+			LastCommand = string.Empty;
+			LastCommandUser = string.Empty;
+			LastCommandResult = string.Empty;
 		}
 	}
 
@@ -59,4 +70,6 @@ namespace Processors
 	/// Delegate for checking if a player exists by ID with an output parameter for the index.
 	/// </summary>
 	public delegate bool PlayerExistsByIDDelegate(string userID, out int index);
+
+	public delegate bool PlayerExistsByNameDelegate(string username, out int index);
 }

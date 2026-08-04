@@ -121,5 +121,14 @@ namespace GameResources
 
 			_changeDuringPeriod += amount;
 		}
+
+		/// <summary>Clears session-derived samples when a different world is restored.</summary>
+		public void ResetRuntimeState()
+		{
+			_timestampData.Clear();
+			_averageOverTime = 0;
+			_updateTimer = 0f;
+			_changeDuringPeriod = 0;
+		}
 	}
 }

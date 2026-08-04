@@ -1,9 +1,8 @@
-using Processors;
 using System.Collections.Generic;
 using UserInterface;
 using System.Linq;
 using System;
-using Reflex.Attributes;
+using Processors;
 
 namespace GameEventSystem.Events.Voting
 {
@@ -22,15 +21,7 @@ namespace GameEventSystem.Events.Voting
         /// </summary>
         private List<UI_RulerOption> _trackedOptions = new List<UI_RulerOption>();
 
-        /// <summary>
-        /// UI runtime scriptable data. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private UIProcessor _uiProcessor;
-
-        /// <summary>
-        /// Player processor. Injected via Reflex dependency injection.
-        /// </summary>
-        [Inject] private PlayerProcessor _playerProcessor;
+        private readonly PlayerProcessor _playerProcessor;
 
         /// <summary>
         /// The ruler vote interface.
@@ -42,14 +33,17 @@ namespace GameEventSystem.Events.Voting
         /// </summary>
         /// <param name="delay">The delay before the event starts.</param>
         /// <param name="eventDuration">The event duration.</param>
+		/// <param name="rulerVoteInterface">The scene-local UI adapter used to render the vote.</param>
+		/// <param name="playerProcessor">The processor used to validate player-name options.</param>
         /// <param name="eventType">The event type.</param>
         /// <param name="data">Additional data.</param>
         /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
         /// <param name="timeout">The timeout.</param>
-        public NewKingVote(double delay, double eventDuration, EventType eventType = EventType.NewKingVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
+        public NewKingVote(double delay, double eventDuration, UserInterface_RulerVote rulerVoteInterface, PlayerProcessor playerProcessor, EventType eventType = EventType.NewKingVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
         {
             _alwaysReturnSuccess = true;
-            _rulerVoteInterface = _uiProcessor.RulerVoteInterface;
+            _rulerVoteInterface = rulerVoteInterface ?? throw new ArgumentNullException(nameof(rulerVoteInterface));
+            _playerProcessor = playerProcessor ?? throw new ArgumentNullException(nameof(playerProcessor));
         }
 
         /// <summary>
@@ -100,6 +94,7 @@ namespace GameEventSystem.Events.Voting
         protected override void OnStarted()
         {
             base.OnStarted();
+            _rulerVoteInterface.DisableRulerContainer();
             _rulerVoteInterface.ActivateRulerContainer();
             _rulerVoteInterface.DescriptionTMP.text = "Who should be Ruler? \n type !vote playername";
         }
@@ -148,14 +143,12 @@ namespace GameEventSystem.Events.Voting
             }
 
             optionsSorted = optionsSorted.OrderByDescending(x => x.Votes).ToList();
-            UserInterface_RulerVote uiProcessor = _uiProcessor.RulerVoteInterface;
-
             List<UI_RulerOption> rulerOptions = new List<UI_RulerOption>();
 
-            if (uiProcessor.Options.Count <= 0)
+            if (_rulerVoteInterface.Options.Count <= 0)
                 return;
 
-            foreach (var v in uiProcessor.Options)
+            foreach (var v in _rulerVoteInterface.Options)
                 rulerOptions.Add(v.Key);
 
             for (int i = 0; i < MAX_TRACKED_OPTIONS && i < rulerOptions.Count && i < optionsSorted.Count; i++)

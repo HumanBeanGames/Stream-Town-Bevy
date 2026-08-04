@@ -20,7 +20,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// Dictionary mapping building types to their individual cost modifiers.
 		/// Positive values increase cost, negative values decrease cost.
 		/// </summary>
-		[SerializeField]
+		[System.NonSerialized]
 		private Dictionary<BuildingType, int> _buildingCostModifiers = new Dictionary<BuildingType, int>();
 
 		public Dictionary<BuildingType, int> BuildingCostModifiers
@@ -46,7 +46,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// Dictionary mapping building types to their maximum upgrade levels.
 		/// Determines how many times each building type can be upgraded.
 		/// </summary>
-		[SerializeField]
+		[System.NonSerialized]
 		private Dictionary<BuildingType, int> _buildingsMaxLevel = new Dictionary<BuildingType, int>();
 
 		public Dictionary<BuildingType, int> BuildingsMaxLevel
@@ -59,7 +59,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// Dictionary mapping building types to their required building age.
 		/// Determines which age a building belongs to for progression purposes.
 		/// </summary>
-		[SerializeField]
+		[System.NonSerialized]
 		private Dictionary<BuildingType, Age> _buildingAges = new Dictionary<BuildingType, Age>();
 
 		public Dictionary<BuildingType, Age> BuildingAges
@@ -72,7 +72,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// Dictionary mapping building types to their resource cost requirements.
 		/// Nested dictionary maps each building type to a dictionary of resource types and amounts.
 		/// </summary>
-		[SerializeField]
+		[System.NonSerialized]
 		private Dictionary<BuildingType, Dictionary<Resource, int>> _buildingsCostResources = new Dictionary<BuildingType, Dictionary<Resource, int>>();
 
 		public Dictionary<BuildingType, Dictionary<Resource, int>> BuildingsCostResources => _buildingsCostResources;

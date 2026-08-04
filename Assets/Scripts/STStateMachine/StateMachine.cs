@@ -1,4 +1,5 @@
 using Processors;
+using Pathfinding;
 using Reflex.Attributes;
 using STStateMachine.Helpers;
 using STStateMachine.States;
@@ -71,6 +72,31 @@ namespace STStateMachine
 		}
 
 		/// <summary>
+		/// Returns a pooled character to its starting state at its new spawn position.
+		/// Idle path selection is staggered so checkout does not perform A* work immediately.
+		/// </summary>
+		public void PrepareForSpawn()
+		{
+			ClearResourceTarget();
+			_interruptable = true;
+
+			if (_startingState is STSM_Idle startingIdle)
+				startingIdle.PrepareForSpawn();
+
+			if (_currentState != null && _startingState != null && _currentState != _startingState)
+				RequestStateChange(_startingState, true);
+
+			if (_currentState is STSM_Idle currentIdle)
+				currentIdle.PrepareForSpawn();
+
+			_previousState = null;
+
+			AIPath aiPath = GetComponent<AIPath>();
+			if (aiPath != null)
+				aiPath.destination = transform.position;
+		}
+
+		/// <summary>
 		/// Requests the state machine to swap to the desired state.
 		/// </summary>
 		/// <param name="state"></param>
@@ -82,6 +108,8 @@ namespace STStateMachine
 
 			if (state == null)
 				return;
+
+			state.Initialize(this);
 
 			// Exit Current State.
 			if (_currentState != null)
@@ -188,6 +216,9 @@ namespace STStateMachine
 
 		public void Update()
 		{
+			if (ObjectPoolingProcessor.IsPrewarmingPools)
+				return;
+
 			if (_currentState)
 				_currentState.OnUpdate();
 

@@ -1,126 +1,70 @@
-using Units;
-
+using System;
 using ScriptablesProcessorInfrastructure;
-using System.Collections.Generic;
-using Character;
-using World;
-using World.Generation;
 
 namespace Processors
 {
-	/// <summary>
-	/// Runtime data for SaveProcessor.
-	/// Manages player/enemy lists, autosave configuration, loading progress.
-	/// </summary>
-	public class SaveRuntimeData : IRuntimeDataScriptable
+	public enum SaveOperationState
 	{
-		/// <summary>
-		/// List of players to be saved/loaded.
-		/// Contains all player data for save operations.
-		/// </summary>
-		private List<Player> _players;
+		Idle,
+		Saving,
+		Loading,
+		Succeeded,
+		Failed
+	}
 
-		/// <summary>
-		/// List of enemies to be saved/loaded.
-		/// Contains all enemy data for save operations.
-		/// </summary>
-		private List<Enemies.Enemy> _enemies;
+	/// <summary>
+	/// Mutable runtime state for SaveProcessor. It contains no persistence or
+	/// world-mutation logic.
+	/// </summary>
+	public sealed class SaveRuntimeData : IRuntimeDataScriptable
+	{
+		public bool Autosave { get; set; }
+		public float AutosaveTime { get; set; }
+		public float TimeElapsed { get; set; }
+		public SaveOperationState OperationState { get; private set; }
+		public float Progress { get; private set; }
+		public string Status { get; private set; }
+		public string LastError { get; private set; }
+		public bool IsBusy => OperationState == SaveOperationState.Saving || OperationState == SaveOperationState.Loading;
 
-		/// <summary>
-		/// Whether autosave is currently enabled.
-		/// If true, the game automatically saves at intervals.
-		/// </summary>
-		private bool _autosave;
+		public event Action<SaveOperationState, float, string> OperationChanged;
 
-		/// <summary>
-		/// Time interval between autosaves in seconds.
-		/// Determines how frequently autosaves occur.
-		/// </summary>
-		private float _autosaveTime;
-
-		/// <summary>
-		/// Time elapsed since the last autosave.
-		/// Used to trigger autosave at the configured interval.
-		/// </summary>
-		private float _timeElapsed;
-
-		/// <summary>
-		/// Current loading progress percentage.
-		/// Used to display loading progress to the player.
-		/// </summary>
-		private int _loadPercent;
-
-		/// <summary>
-		/// Gets the list of players for save/load.
-		/// </summary>
-		public List<Player> Players
-		{
-			get => _players;
-			set => _players = value;
-		}
-
-		/// <summary>
-		/// Gets the list of enemies for save/load.
-		/// </summary>
-		public List<Enemies.Enemy> Enemies
-		{
-			get => _enemies;
-			set => _enemies = value;
-		}
-
-		/// <summary>
-		/// Gets or sets whether autosave is enabled.
-		/// </summary>
-		public bool Autosave
-		{
-			get => _autosave;
-			set => _autosave = value;
-		}
-
-		/// <summary>
-		/// Gets or sets the autosave interval in seconds.
-		/// </summary>
-		public float AutosaveTime
-		{
-			get => _autosaveTime;
-			set => _autosaveTime = value;
-		}
-
-		/// <summary>
-		/// Gets or sets the time elapsed since last autosave.
-		/// </summary>
-		public float TimeElapsed
-		{
-			get => _timeElapsed;
-			set => _timeElapsed = value;
-		}
-
-		/// <summary>
-		/// Gets the loading progress percentage.
-		/// </summary>
-		public int LoadPercent => _loadPercent;
-
-		/// <summary>
-		/// Initializes the save runtime data with default values.
-		/// </summary>
 		public SaveRuntimeData()
 		{
-			_players = new List<Player>();
-			_enemies = new List<Enemies.Enemy>();
-			_autosave = false;
-			_autosaveTime = 0.0f;
-			_timeElapsed = 0.0f;
-			_loadPercent = 0;
+			OperationState = SaveOperationState.Idle;
+			Status = "Ready";
 		}
 
-		public void InitializeEnemies(List<Enemies.Enemy> enemies)
+		public void Begin(SaveOperationState state, string status)
 		{
-			_enemies = enemies ?? new List<Enemies.Enemy>();
+			OperationState = state;
+			Progress = 0f;
+			Status = status;
+			LastError = null;
+			OperationChanged?.Invoke(OperationState, Progress, Status);
 		}
 
-		public void InitializePlayers(List<Player> players)
+		public void Report(float progress, string status)
 		{
-			_players = players ?? new List<Player>();
+			Progress = Math.Max(0f, Math.Min(1f, progress));
+			Status = status;
+			OperationChanged?.Invoke(OperationState, Progress, Status);
+		}
+
+		public void Complete(string status)
+		{
+			OperationState = SaveOperationState.Succeeded;
+			Progress = 1f;
+			Status = status;
+			OperationChanged?.Invoke(OperationState, Progress, Status);
+		}
+
+		public void Fail(string error)
+		{
+			OperationState = SaveOperationState.Failed;
+			LastError = error;
+			Status = error;
+			OperationChanged?.Invoke(OperationState, Progress, Status);
 		}
 	}
 }

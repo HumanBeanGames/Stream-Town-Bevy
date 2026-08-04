@@ -30,14 +30,14 @@ namespace Utils.Pooling
 
 		[SerializeField]
 		private string _poolName;
-		private object _saveableObject;
+		private SaveableObject _saveableObject;
 		[SerializeField]
 		private PoolType _poolType;
 
 		private bool _isReturningToPool = false;
 
 		public PoolType PoolType => _poolType;
-		public object SaveableObject
+		public SaveableObject SaveableObject
 		{
 			get { return _saveableObject; }
 			set { _saveableObject = value; }
@@ -69,7 +69,7 @@ namespace Utils.Pooling
 			IPooledObjectReset[] resettables = GetComponents<IPooledObjectReset>();
 			foreach (var resettable in resettables)
 			{
-				if (resettable != this) // Don't call OnReset on ourselves again
+				if (!ReferenceEquals(resettable, this)) // Don't call OnReset on ourselves again
 					resettable.OnReset();
 			}
 		}
@@ -79,25 +79,32 @@ namespace Utils.Pooling
 			switch (_poolType)
 			{
 				case PoolType.Other:
+					GUIDComponent otherGuid = GetComponent<GUIDComponent>();
+					HealthHandler otherHealth = GetComponent<HealthHandler>();
+					if (otherGuid != null && otherHealth != null)
+					{
+						SaveableObject = new SaveableEnemyCamp();
+						((SaveableEnemyCamp)SaveableObject).SetVariables(GetComponent<Targetable>(), otherGuid, _poolName, this, otherHealth);
+					}
 					break;
 				case PoolType.Resource:
-					SaveableObject = (object)new SaveableResource();
+					SaveableObject = new SaveableResource();
 					((SaveableResource)SaveableObject).SetVariables(gameObject.GetComponent<Targetable>(), gameObject.GetComponent<GUIDComponent>(), _poolName, this, GetComponent<ResourceHolder>());
 					break;
 				case PoolType.Enemy:
-					SaveableObject = (object)new SaveableEnemy();
+					SaveableObject = new SaveableEnemy();
 					((SaveableEnemy)SaveableObject).SetVariables(gameObject.GetComponent<Targetable>(), gameObject.GetComponent<GUIDComponent>(), _poolName, this, GetComponent<Enemy>());
 					break;
 				case PoolType.Player:
-					SaveableObject = (object)new SaveablePlayer();
+					SaveableObject = new SaveablePlayer();
 					((SaveablePlayer)SaveableObject).SetVariables(gameObject.GetComponent<Targetable>(), gameObject.GetComponent<GUIDComponent>(), _poolName, this, GetComponent<RoleHandler>());
 					break;
 				case PoolType.Building:
-					SaveableObject = (object)new SaveableBuilding();
+					SaveableObject = new SaveableBuilding();
 					((SaveableBuilding)SaveableObject).SetVariables(gameObject.GetComponent<Targetable>(), gameObject.GetComponent<GUIDComponent>(), _poolName, this, GetComponent<BuildingBase>());
 					break;				
 				case PoolType.Foliage:
-					SaveableObject = (object)new SaveablFoliage();
+					SaveableObject = new SaveablFoliage();
 					((SaveablFoliage)SaveableObject).SetVariables(_poolName, this);
 					break;
 			}
@@ -105,17 +112,17 @@ namespace Utils.Pooling
 
 		private void OnEnable()
 		{
-			if (_saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent != null)
+			if (_saveableObject != null && _saveableObject.GUIDComponent != null)
 				_guidProcessor.CreateGUIDandAddToDictionary(this);
 		}
 
 		private void OnDisable()
 		{
-			if (_saveableObject != null && ((SaveableObject)_saveableObject).GUIDComponent !=null && _guidProcessor != null)
-				_guidProcessor.RemoveFromGUID(PoolType, ((SaveableObject)_saveableObject).GUIDComponent.GUID);
+			if (_saveableObject != null && _saveableObject.GUIDComponent !=null && _guidProcessor != null)
+				_guidProcessor.RemoveFromGUID(PoolType, _saveableObject.GUIDComponent.GUID);
 
 			// Only return to pool if not already being returned (prevents double-adding when AddToPool disables the object)
-			if (_poolingProcessor != null && !_isReturningToPool)
+			if (_poolingProcessor != null && !_isReturningToPool && !string.IsNullOrWhiteSpace(_poolName))
 				_poolingProcessor.AddToPool(_poolName, this);
 		}
 	}

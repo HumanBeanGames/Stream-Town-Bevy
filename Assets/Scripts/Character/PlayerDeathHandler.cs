@@ -56,7 +56,8 @@ namespace Character
 		/// <summary>
 		/// Called when the player dies.
 		/// </summary>
-		public void OnDeath()
+		/// <param name="killedByPlayer">Whether the player was killed by another player (unused).</param>
+		public void OnDeath(bool killedByPlayer)
 		{
 			if (_stateMachine == null || _aIPath == null || _reviveActive)
 				return;
@@ -92,8 +93,10 @@ namespace Character
 			_healthHandler = GetComponent<HealthHandler>();
 		}
 
-        // Sets the spawn position.
-		private void Start()
+		/// <summary>
+		/// Captures the actual spawn position after a prewarmed Player is checked out.
+		/// </summary>
+		public void InitializeForSpawn()
 		{
 			_spawnPosition = transform.position;
 		}

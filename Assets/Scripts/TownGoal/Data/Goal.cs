@@ -2,7 +2,6 @@ using TownGoal.Data;
 using System.Collections.Generic;
 using UnityEngine;
 using System;
-using SavingAndLoading.Structs;
 using Processors;
 
 namespace TownGoal.Data
@@ -43,19 +42,6 @@ namespace TownGoal.Data
 
 			if (_objectiveStatuses.Count == 0)
 				CheckAllObjectivesComplete();
-		}
-
-        /// <summary>
-        /// Sets objectives from save data.
-        /// </summary>
-        /// <param name="data">The objective save data.</param>
-		public void SetobjectivesFromSave(List<ObjectiveSaveData> data)
-		{
-			int index = 0;
-			foreach (Objective objective in _objectiveStatuses.Keys)
-			{
-				objective.SetValues(data[index].Amount, data[index].RequiredAmount);
-			}
 		}
 
         /// <summary>

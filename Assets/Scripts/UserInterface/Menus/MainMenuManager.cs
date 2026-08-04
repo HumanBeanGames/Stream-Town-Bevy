@@ -1,6 +1,6 @@
+using System.Collections;
 using MetaData;
 using Reflex.Attributes;
-using SavingAndLoading;
 using ScriptablesProcessorInfrastructure;
 using Settings;
 using UnityEngine;
@@ -22,7 +22,6 @@ namespace UserInterface.MainMenu
         /// <summary>
         /// Runtime main menu data ScriptableObject.
         /// </summary>
-        [SerializeField]
         private MainMenuRuntimeData _mainMenuRuntimeData;
 
 		[SerializeField]
@@ -34,13 +33,15 @@ namespace UserInterface.MainMenu
 		[Inject]
 		private SettingsProcessor _settingsProcessor;
 
+		[Inject]
+		private Twitch.TwitchClientProcessor _twitchClientProcessor;
+
+		private SaveProcessor _saveProcessor;
+
 		/// <summary>
 		/// The debug processor. Injected via Reflex dependency injection.
 		/// </summary>
 		[Inject] private Processors.DebugProcessor _debugProcessor;
-
-		[SerializeField]
-		private SettingsPanel _settingsPanel;
 
 		[SerializeField]
 		LoadingManager _loadingManager = null;
@@ -48,26 +49,14 @@ namespace UserInterface.MainMenu
 		[SerializeField]
 		private Button _loadButton;
 
-		[SerializeField]
-		SettingsData CurrentSettings;
+		[Inject]
+		private SettingsData _currentSettings;
 
 		[SerializeField]
 		private GameObject _channelNameUI;
 
 		[Inject]
 		private Access_ChannelNameInput _channelNameInput;
-
-		public System.Action<string> CodeDisplay
-		{
-			get => _mainMenuRuntimeData.CodeDisplay;
-			set => _mainMenuRuntimeData.CodeDisplay = value;
-		}
-
-		public GameObject ConnectPanel
-		{
-			get => _mainMenuRuntimeData.ConnectPanel;
-			set => _mainMenuRuntimeData.ConnectPanel = value;
-		}
 
 		public LoadType LoadType
 		{
@@ -88,13 +77,13 @@ namespace UserInterface.MainMenu
 			if (_mainMenuRuntimeData.ChannelName != null && _mainMenuRuntimeData.ChannelName != "")
 			{
 				_debugProcessor.Log(DebugLogCategory.MainMenuManager, "Channel name is valid, proceeding to save and load");
-				CurrentSettings.channelName = _mainMenuRuntimeData.ChannelName;
-				_settingsProcessor.SaveSettings();
+				_settingsProcessor.SaveChannelName(_mainMenuRuntimeData.ChannelName);
+				_twitchClientProcessor?.EnsureConnectionForConfiguredChannel();
 
 				_mainMenuRuntimeData.Loading = true;
 				_metaData.LoadType = _mainMenuRuntimeData.LoadType;
 				_settingsProcessor.TogglingConnectionTab(false);
-				_loadingManager.LoadWorldScene(_sceneIndex);
+				_loadingManager.LoadWorldScene(_sceneIndex, _mainMenuRuntimeData.LoadType);
 			}
 			else
 			{
@@ -104,7 +93,7 @@ namespace UserInterface.MainMenu
 
 		public void SetChannelName(string name)
 		{
-			_mainMenuRuntimeData.ChannelName = name.ToLower();	
+			_mainMenuRuntimeData.ChannelName = name?.Trim().TrimStart('#').ToLowerInvariant() ?? string.Empty;
 		}
 
 		public void ToggleChannelName()
@@ -116,13 +105,13 @@ namespace UserInterface.MainMenu
 		{
 			if (!_mainMenuRuntimeData.Loading)
 			{
-				if (CurrentSettings.channelName != null && CurrentSettings.channelName != "")
+				if (HasConfiguredChannel())
 				{
 					_mainMenuRuntimeData.Loading = true;
 					_metaData.LoadType = LoadType.Generate;
 					_debugProcessor.Log(DebugLogCategory.MainMenuManager, "Generating World");
 					_settingsProcessor.TogglingConnectionTab(false);
-					_loadingManager.LoadWorldScene(_sceneIndex);
+					_loadingManager.LoadWorldScene(_sceneIndex, LoadType.Generate);
 				}
 				else
 				{
@@ -136,13 +125,13 @@ namespace UserInterface.MainMenu
 		{
 			if (!_mainMenuRuntimeData.Loading)
 			{
-				if (CurrentSettings.channelName != null && CurrentSettings.channelName != "")
+				if (HasConfiguredChannel())
 				{
 					_mainMenuRuntimeData.Loading = true;
 					_metaData.LoadType = LoadType.Load;
 					_debugProcessor.Log(DebugLogCategory.MainMenuManager, "Loading World");
 					_settingsProcessor.TogglingConnectionTab(false);
-					_loadingManager.LoadWorldScene(_sceneIndex);
+					_loadingManager.LoadWorldScene(_sceneIndex, LoadType.Load);
 				}
 				else
 				{
@@ -159,7 +148,7 @@ namespace UserInterface.MainMenu
 
 		public void OptionMenuToggle()
 		{
-			_settingsPanel.Enabled = !_settingsPanel.Enabled;
+			_settingsProcessor.ToggleSettingsPanel();
 		}
 
 		public void QuitGame()
@@ -174,20 +163,56 @@ namespace UserInterface.MainMenu
 
 		private void Start()
 		{
+			_currentSettings ??= SettingsIO.LoadOrCreate();
+			string savedChannel = _currentSettings?.channelName?.Trim() ?? string.Empty;
+			_mainMenuRuntimeData.ChannelName = savedChannel;
+			if (_channelNameInput != null && string.IsNullOrWhiteSpace(_channelNameInput.text))
+				_channelNameInput.text = savedChannel;
+
 			if (_metaData == null)
 				_metaData = _injectedMetaData;
 			if (_loadingManager == null)
 				_loadingManager = FindAnyObjectByType<LoadingManager>();
 			if (_metaData == null)
 				_metaData = FindAnyObjectByType<MetaData.MetaData>();
-			if (_settingsPanel == null)
-				_settingsPanel = FindAnyObjectByType<SettingsPanel>();
+			RefreshLoadButtonAvailability();
+			StartCoroutine(RefreshLoadButtonWhenSaveStorageIsReady());
+		}
 
-			if (GameIO.DoesSaveFileExist(GameIO.SaveFileType.GameSave))
-				return;
+		private bool HasConfiguredChannel()
+		{
+			_currentSettings ??= SettingsIO.LoadOrCreate();
+			return _currentSettings != null && !string.IsNullOrWhiteSpace(_currentSettings.channelName);
+		}
 
-			_loadButton.interactable = false;
-			_loadButton.image.color = new Color(191, 191, 191, 255);
+		private IEnumerator RefreshLoadButtonWhenSaveStorageIsReady()
+		{
+			// Scene Start can run before Reflex has finished injecting the persistent
+			// SaveProcessor's storage. SavePath being populated means availability can
+			// now be evaluated conclusively, including the valid "no save" case.
+			while (_saveProcessor == null || string.IsNullOrEmpty(_saveProcessor.SavePath))
+			{
+				Container projectContainer = Container.ProjectContainer;
+				if (projectContainer != null && projectContainer.HasBinding(typeof(SaveProcessor)))
+					_saveProcessor = projectContainer.Resolve<SaveProcessor>();
+
+				yield return null;
+			}
+
+			RefreshLoadButtonAvailability();
+		}
+
+		[Inject]
+		private void InjectSaveProcessor(SaveProcessor saveProcessor)
+		{
+			_saveProcessor = saveProcessor;
+			RefreshLoadButtonAvailability();
+		}
+
+		private void RefreshLoadButtonAvailability()
+		{
+			if (_loadButton != null)
+				_loadButton.interactable = _saveProcessor != null && _saveProcessor.HasSaveGame;
 		}
 	}
 }

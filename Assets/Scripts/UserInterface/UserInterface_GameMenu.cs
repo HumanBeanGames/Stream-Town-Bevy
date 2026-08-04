@@ -1,94 +1,122 @@
-using UnityEngine;
-using Settings;
-using UnityEngine.UI;
-using UnityEngine.InputSystem;
-using UnityEngine.SceneManagement;
+using MetaData;
 using PlayerControls;
-using UserInterface.MainMenu;
 using Processors;
 using Reflex.Attributes;
+using Settings;
+using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
+using UserInterface.MainMenu;
 
-namespace UserInterface 
+namespace UserInterface
 {
-    public class UserInterface_GameMenu : MonoBehaviour 
+	/// <summary>
+	/// Thin UI adapter for the game menu. It owns no save state: commands are
+	/// forwarded to SaveProcessor and scene transitions to LoadingManager.
+	/// </summary>
+	public class UserInterface_GameMenu : MonoBehaviour
 	{
-		[SerializeField]
-		private GameObject _gameMenu;
+		[SerializeField] private GameObject _gameMenu;
 
-		[SerializeField]
-		private GameObject _savePanel;
+		[Inject] private SettingsProcessor _settingsProcessor;
+		[Inject] private SaveProcessor _saveProcessor;
+		[Inject] private MetaData.MetaData _metaData;
+		[Inject] private SettingsPanel _settingsPanel;
 
-		[SerializeField]
-		private GameObject _loadPanel;
+		private LoadingManager _loadingManager;
 
-		[SerializeField]
-		private GameObject _mainMenuPanel;
-		
-		private GameObject _settingsPanel;
-		[Inject] SettingsProcessor _settingsProcessor;
+		public bool SavedGame => _saveProcessor != null && _saveProcessor.HasSaveGame;
 
-		private LoadingManager _loadingProcessor;
-		private bool _savedGame;
-
-		public bool SavedGame
-        {
-            get { return _savedGame; }
-			set { _savedGame = value; }
-		}
 		public void ToggleGameMenu()
 		{
+			if (_gameMenu == null)
+			{
+				Debug.LogError("The game menu visual panel has not been assigned.", this);
+				return;
+			}
+
 			_gameMenu.SetActive(!_gameMenu.activeSelf);
 		}
 
 		public void ToggleSettingsPanel()
 		{
-			_settingsPanel.SetActive(!_settingsPanel.activeSelf);
+			_settingsProcessor?.ToggleSettingsPanel();
 		}
 
-		public void ToggleSavePanel()
-		{
-			_savePanel.SetActive(!_savePanel.activeSelf);
-		}
-
-		public void ToggleLoadPanel()
-		{
-			_loadPanel.SetActive(!_loadPanel.activeSelf);			
-		}
+		// Kept as UnityEvent entry points for the existing menu prefab.
+		public void ToggleSavePanel() => SaveGame();
+		public void ToggleLoadPanel() => LoadGame();
 
 		public void ToggleMainMenuPanel()
 		{
-			_mainMenuPanel.SetActive(!_mainMenuPanel.activeSelf);
+			QuitToMainMenu();
+		}
+
+		public void SaveGame()
+		{
+			_saveProcessor?.SaveGame();
+		}
+
+		public void LoadGame()
+		{
+			if (_saveProcessor == null || !_saveProcessor.HasSaveGame || _saveProcessor.IsBusy)
+				return;
+
+			if (_metaData == null)
+				_metaData = FindAnyObjectByType<MetaData.MetaData>();
+
+			if (_loadingManager == null)
+				_loadingManager = FindAnyObjectByType<LoadingManager>();
+
+			if (_metaData == null || _loadingManager == null)
+			{
+				Debug.LogError("Cannot load the save: MetaData or LoadingManager is unavailable.");
+				return;
+			}
+
+			_metaData.LoadType = LoadType.Load;
+			_loadingManager.LoadWorldScene(SceneManager.GetActiveScene().buildIndex, LoadType.Load);
 		}
 
 		public void QuitToMainMenu()
-        {
-			_settingsProcessor.TogglingConnectionTab(true);
-			_loadingProcessor.LoadNonWorldScenes(1);
+		{
+			_settingsProcessor?.TogglingConnectionTab(true);
+			if (_loadingManager == null)
+				_loadingManager = FindAnyObjectByType<LoadingManager>();
+			_loadingManager?.LoadNonWorldScenes(1);
 		}
 
-        private void Start()
+		public void ToggleIdleMode(bool idle)
 		{
-			_loadingProcessor = FindAnyObjectByType<LoadingManager>();
-			_settingsProcessor.ApplyAutosaveIntervalFromCurrentSettings();
+			CameraController cameraController = FindAnyObjectByType<CameraController>();
+			if (cameraController != null)
+				cameraController.IsIdle = idle;
+		}
+
+		private void Awake()
+		{
+			if (_gameMenu == null)
+				Debug.LogError("The game menu visual panel has not been assigned.", this);
+		}
+
+		private void Start()
+		{
+			_loadingManager = FindAnyObjectByType<LoadingManager>();
+			_settingsProcessor?.ApplyAutosaveIntervalFromCurrentSettings();
 		}
 
 		private void Update()
 		{
-			if(Keyboard.current.escapeKey.wasPressedThisFrame)
+			if (Keyboard.current == null || !Keyboard.current.escapeKey.wasPressedThisFrame)
+				return;
+
+			if (_settingsPanel != null && _settingsPanel.Enabled)
 			{
-				if (!_mainMenuPanel.activeSelf && !_settingsPanel.activeSelf)
-				{
-					ToggleGameMenu();
-				}
-				if (_settingsPanel.activeSelf)
-				{
-					_settingsProcessor.ToggleSettingsPanel();
-				}
-				if (_mainMenuPanel.activeSelf)
-				{
-					ToggleMainMenuPanel();
-				}
+				_settingsProcessor.ToggleSettingsPanel();
+				return;
 			}
+
+			ToggleGameMenu();
 		}
 	}
 }

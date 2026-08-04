@@ -5,7 +5,9 @@ using Utils.Pooling;
 namespace SavingAndLoading.SavableObjects 
 {
     /// <summary>
-    /// Base class for objects that can be saved and loaded.
+    /// Lightweight descriptor for a pooled object that participates in a save.
+    /// It contains references only; SaveProcessor owns all conversion and restore
+    /// behaviour.
     /// </summary>
     public class SaveableObject 
 	{
@@ -28,18 +30,6 @@ namespace SavingAndLoading.SavableObjects
         /// The poolable object.
         /// </summary>
         public PoolableObject PoolableObject;
-
-        /// <summary>
-        /// Saves the object data.
-        /// </summary>
-        /// <returns>The saved data.</returns>
-        public virtual object SaveData() {return new object(); }
-
-        /// <summary>
-        /// Loads the object data.
-        /// </summary>
-        /// <param name="data">The data to load.</param>
-        public virtual void LoadData(object data) {}
 
         /// <summary>
         /// Sets the object variables.

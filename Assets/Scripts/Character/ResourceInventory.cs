@@ -70,6 +70,11 @@ namespace Character
 		}
 
 		/// <summary>
+		/// Gets whether this inventory entry ignores its maximum amount.
+		/// </summary>
+		public bool IsUnlimited => _unlimited;
+
+		/// <summary>
 		/// Initializes a new instance of the ResourceInventory class.
 		/// </summary>
 		/// <param name="startingAmount">The initial amount of the resource.</param>

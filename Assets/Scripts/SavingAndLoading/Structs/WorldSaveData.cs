@@ -3,6 +3,13 @@ using Utils;
 
 namespace SavingAndLoading.Structs
 {
+	[System.Serializable]
+	public struct ResourceAmountSaveData
+	{
+		public string ResourceType;
+		public int Amount;
+	}
+
 	/// <summary>
 	/// Struct holding information for the world state  (time, last event, time since last event, )
 	/// </summary>
@@ -15,6 +22,7 @@ namespace SavingAndLoading.Structs
 		public int TimeSinceLastEvent;
 
 		public TechTreeSaveData TechTree;
+		public List<ResourceAmountSaveData> TownResources;
 
 		//public Weather Weather;
 		//public float WeatherTimeLeft;
@@ -36,6 +44,7 @@ namespace SavingAndLoading.Structs
 			GoldResourceAmount = gold;
 
 			TechTree = techtree;
+			TownResources = null;
 
 			WorldAgeInSeconds = worldAge;
 			LastEvent = lastEvent;

@@ -28,12 +28,30 @@ namespace Processors
 		/// </summary>
 		public bool SendPingRunning { get; set; } = false;
 
+		/// <summary>
+		/// Whether the user currently wants the Twitch connection to remain active.
+		/// </summary>
+		public bool ConnectionDesired { get; set; } = true;
+
+		/// <summary>
+		/// Whether the hourly OAuth validation loop is running.
+		/// </summary>
+		public bool CredentialsValidationRunning { get; set; } = false;
+
+		/// <summary>
+		/// Human-readable connection state for UI and diagnostics. Never contains credentials.
+		/// </summary>
+		public string ConnectionStatus { get; set; } = "Not initialized";
+
 		public TwitchClientRuntimeData()
 		{
 			Client = null;
 			ChannelName = "";
 			IsConnecting = false;
 			SendPingRunning = false;
+			ConnectionDesired = true;
+			CredentialsValidationRunning = false;
+			ConnectionStatus = "Not initialized";
 		}
 	}
 }

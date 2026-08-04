@@ -86,7 +86,7 @@ namespace Character
         /// <summary>
         /// Gets or sets the dictionary of unlocked pet types.
         /// </summary>
-		public Dictionary<PetType, bool> PetsUnlocked;
+		[System.NonSerialized] public Dictionary<PetType, bool> PetsUnlocked;
 
         /// <summary>
         /// Gets or sets the active pet.

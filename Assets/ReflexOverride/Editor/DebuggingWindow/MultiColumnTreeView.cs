@@ -3,6 +3,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 using UnityEngine.Assertions;
+using UnityTreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem<int>;
 
 namespace Reflex.Editor.DebuggingWindow
 {
@@ -19,7 +20,7 @@ namespace Reflex.Editor.DebuggingWindow
             Calls,
         }
 
-        public MultiColumnTreeView(TreeViewState state, MultiColumnHeader multiColumnHeader, TreeModel<MyTreeElement> model) : base(state, multiColumnHeader, model)
+        public MultiColumnTreeView(TreeViewState<int> state, MultiColumnHeader multiColumnHeader, TreeModel<MyTreeElement> model) : base(state, multiColumnHeader, model)
         {
             rowHeight = RowHeight;
             columnIndexForTreeFoldouts = 0;
@@ -85,7 +86,7 @@ namespace Reflex.Editor.DebuggingWindow
             }
         }
 
-        private void DrawName(TreeViewItem item, Rect area, string name)
+        private void DrawName(UnityTreeViewItem item, Rect area, string name)
         {
             area.xMin += GetContentIndent(item);
             GUI.Label(area, name, Styles.RichTextLabel);
@@ -157,7 +158,7 @@ namespace Reflex.Editor.DebuggingWindow
             base.RowGUI(args);
         }
 
-        protected override bool CanMultiSelect(TreeViewItem item)
+        protected override bool CanMultiSelect(UnityTreeViewItem item)
         {
             return false;
         }

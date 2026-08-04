@@ -71,17 +71,54 @@ namespace Processors
 		/// <returns>The newly generated GUID.</returns>
 		public uint CreateGUIDandAddToDictionary(PoolableObject comp)
 		{
-			// Generate a new unique GUID for this object type
-			uint gUID = GenerateNewGUID(comp.PoolType.ToString());
-			
-			// Assign the GUID to the object's GUID component
-			((SaveableObject)comp.SaveableObject).GUIDComponent.SetGUID(gUID);
-			
-			// Add the object to the dictionary if the type exists and GUID is not already used
-			if (_guidRuntimeData.WorldObjects.ContainsKey((comp.PoolType).ToString()) && !_guidRuntimeData.WorldObjects[comp.PoolType.ToString()].ContainsKey(gUID))
-				_guidRuntimeData.WorldObjects[comp.PoolType.ToString()].Add(((SaveableObject)comp.SaveableObject).GUIDComponent.GUID, comp);
+			if (comp == null || !(comp.SaveableObject is SaveableObject saveable) || saveable.GUIDComponent == null)
+				throw new ArgumentException("A poolable object with a GUID component is required.", nameof(comp));
 
-			return gUID;
+			string type = comp.PoolType.ToString();
+			Dictionary<uint, PoolableObject> objects = _guidRuntimeData.WorldObjects[type];
+			uint existingGuid = saveable.GUIDComponent.GUID;
+			if (existingGuid != 0)
+			{
+				if (!objects.TryGetValue(existingGuid, out PoolableObject existingObject))
+				{
+					objects.Add(existingGuid, comp);
+					return existingGuid;
+				}
+
+				if (ReferenceEquals(existingObject, comp))
+					return existingGuid;
+			}
+
+			uint guid = GenerateNewGUID(type);
+			saveable.GUIDComponent.SetGUID(guid);
+			objects.Add(guid, comp);
+			return guid;
+		}
+
+		/// <summary>
+		/// Replaces any checkout-time GUID with the identity stored in a save file.
+		/// Stale dictionary entries for the same pooled instance are removed first.
+		/// </summary>
+		public void RegisterLoadedGUID(PoolableObject comp, uint guid)
+		{
+			if (guid == 0)
+				throw new ArgumentOutOfRangeException(nameof(guid), "Loaded GUIDs cannot be zero.");
+			if (comp == null || !(comp.SaveableObject is SaveableObject saveable) || saveable.GUIDComponent == null)
+				throw new ArgumentException("A poolable object with a GUID component is required.", nameof(comp));
+
+			Dictionary<uint, PoolableObject> objects = _guidRuntimeData.WorldObjects[comp.PoolType.ToString()];
+			List<uint> staleKeys = objects
+				.Where(pair => ReferenceEquals(pair.Value, comp) && pair.Key != guid)
+				.Select(pair => pair.Key)
+				.ToList();
+			for (int i = 0; i < staleKeys.Count; i++)
+				objects.Remove(staleKeys[i]);
+
+			if (objects.TryGetValue(guid, out PoolableObject collision) && !ReferenceEquals(collision, comp))
+				throw new InvalidOperationException($"Loaded GUID {guid} is already assigned to another {comp.PoolType} object.");
+
+			saveable.GUIDComponent.SetGUID(guid);
+			objects[guid] = comp;
 		}
 
 		/// <summary>
@@ -108,18 +145,17 @@ namespace Processors
 		/// <param name="comp">The poolable object to add to the dictionary.</param>
 		public void AddToDictionary(PoolableObject comp)
 		{
-			// Get all existing GUIDs for this pool type (not used but kept for potential validation)
-			List<uint> keys = _guidRuntimeData.WorldObjects[comp.PoolType.ToString()].Keys.ToList();
-			
-			// Add the object if its GUID is not already in the dictionary
-			if (!_guidRuntimeData.WorldObjects[comp.PoolType.ToString()].ContainsKey(((SaveableObject)comp.SaveableObject).GUIDComponent.GUID))
-				_guidRuntimeData.WorldObjects[comp.PoolType.ToString()].Add(((SaveableObject)comp.SaveableObject).GUIDComponent.GUID, comp);
-			// Log warning if GUID is zero (uninitialized)
-			else if (((SaveableObject)comp.SaveableObject).GUIDComponent.GUID == 0)
-				_debugProcessor.Log(DebugLogCategory.General, "GUID == 0");
-			// Log warning if GUID is already in use (duplicate)
-			else
-				_debugProcessor.Log(DebugLogCategory.General, "Duplicate GUID detected");
+			if (comp == null || !(comp.SaveableObject is SaveableObject saveable) || saveable.GUIDComponent == null)
+				return;
+
+			uint guid = saveable.GUIDComponent.GUID;
+			if (guid == 0)
+			{
+				_debugProcessor.LogWarning(DebugLogCategory.General, "Cannot register GUID 0.");
+				return;
+			}
+
+			RegisterLoadedGUID(comp, guid);
 		}
 
 		/// <summary>
@@ -136,6 +172,21 @@ namespace Processors
 				return comp;
 			else
 				return null;
+		}
+
+		public bool TryGetComponentFromID(uint guid, string type, out PoolableObject component)
+		{
+			component = null;
+			return !string.IsNullOrWhiteSpace(type)
+				&& _guidRuntimeData.WorldObjects.TryGetValue(type, out Dictionary<uint, PoolableObject> objects)
+				&& objects.TryGetValue(guid, out component);
+		}
+
+		/// <summary>Clears identities from the previous scene before a saved world is restored.</summary>
+		public void ResetWorldState()
+		{
+			foreach (Dictionary<uint, PoolableObject> objects in _guidRuntimeData.WorldObjects.Values)
+				objects.Clear();
 		}
 
 		/// <summary>

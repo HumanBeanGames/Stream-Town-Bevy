@@ -1,7 +1,5 @@
 using Level;
 using Processors;
-using SavingAndLoading.SavableObjects;
-using SavingAndLoading.Structs;
 using ScriptablesProcessorInfrastructure;
 using System.Collections.Generic;
 using Target;
@@ -139,30 +137,6 @@ namespace Buildings
                 FoliageRemoved.Clear();
             }
         }
-
-        public List<FoliageSaveData> GetRemovedFoliageData()
-        {
-            List<FoliageSaveData> data = new List<FoliageSaveData>();
-            for (int i = 0; i < FoliageRemoved.Count; i++)
-            {
-                data.Add((FoliageSaveData)((SaveablFoliage)FoliageRemoved[i].SaveableObject).SaveData());
-            }
-            return data;
-        }
-
-        public void SetRemovedFoliage(List<FoliageSaveData> data)
-        {
-            List<PoolableObject> removedFoliage = new List<PoolableObject>();
-            for (int i = 0; i < data.Count; i++)
-            {
-                PoolableObject obj = _poolingManager.GetPooledObject(data[i].FoliageType, false);
-                ((SaveablFoliage)(obj.SaveableObject)).LoadData((object)data[i]);
-                removedFoliage.Add(obj);
-                obj.gameObject.SetActive(false);
-            }
-            FoliageRemoved = removedFoliage;
-        }
-
         /// <summary>
         /// Called when a building is Spawned
         /// </summary>
@@ -294,10 +268,17 @@ namespace Buildings
 
             // Inform the model handler that construction has finished.
             _modelHandler[_modelHandlerIndex].OnFinishedConstruction();
+			_targetable.SetTargetType(_finishedTargetType);
 
             // Enable station if we have one.
             if (_hasStation)
                 _station.enabled = true;
+
+			// Always-built prefabs already invoked these effects during OnSpawn.
+			// Player-constructed prefabs need their derived storage/role-slot effects
+			// rebuilt without announcing a new gameplay construction event.
+			if (!_spawnBuilt)
+				_onBuiltEvent.Invoke();
         }
 
         /// <summary>

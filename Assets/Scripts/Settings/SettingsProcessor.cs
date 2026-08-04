@@ -458,6 +458,21 @@ namespace Settings
             SnapshotBaselineFromCurrent();
         }
 
+		/// <summary>
+		/// Persists a channel entered by the main-menu connection prompt without
+		/// rereading unrelated settings widgets from a different UI scope.
+		/// </summary>
+		public void SaveChannelName(string channelName)
+		{
+			string normalizedChannel = channelName?.Trim().TrimStart('#').ToLowerInvariant() ?? string.Empty;
+			CurrentSettings.channelName = normalizedChannel;
+			if (_channelNameInput != null)
+				_channelNameInput.text = normalizedChannel;
+
+			SettingsIO.Save(CurrentSettings);
+			SnapshotBaselineFromCurrent();
+		}
+
         /// <summary>
         /// Reset to default settings (new SettingsData) and refresh the UI to show those defaults.
         /// </summary>

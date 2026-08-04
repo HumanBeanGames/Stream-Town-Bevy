@@ -1,7 +1,6 @@
 using MetaData;
 
 using ScriptablesProcessorInfrastructure;
-using UnityEngine;
 
 namespace Processors
 {
@@ -28,25 +27,6 @@ namespace Processors
 		/// Used for Twitch integration to connect to the correct stream.
 		/// </summary>
 		private string _channelName;
-
-		/// <summary>
-		/// Action to display code on the UI.
-		/// </summary>
-		public System.Action<string> CodeDisplay;
-
-		/// <summary>
-		/// The connect panel GameObject for the main menu UI.
-		/// </summary>
-		private GameObject _connectPanel;
-
-		/// <summary>
-		/// Gets or sets the connect panel GameObject.
-		/// </summary>
-		public GameObject ConnectPanel
-		{
-			get => _connectPanel;
-			set => _connectPanel = value;
-		}
 
 		/// <summary>
 		/// Gets or sets whether the game is loading.
@@ -83,7 +63,6 @@ namespace Processors
 			_loading = false;
 			_loadType = LoadType.Generate;
 			_channelName = string.Empty;
-			_connectPanel = null;
 		}
 	}
 }

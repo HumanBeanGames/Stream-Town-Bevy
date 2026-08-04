@@ -20,6 +20,13 @@ namespace Processors
     /// </summary>
     public partial class ObjectPoolingProcessor : MonoBehaviour, IInstaller, IProcessor, IAsyncInitializableProcessor, IMainThreadInitializableProcessor
     {
+        private const float PoolCreationFrameBudgetSeconds = 0.005f;
+        private const float PrewarmTargetFrameMilliseconds = 33f;
+        private const int MinPrewarmBatchSize = 16;
+        private const int MaxPrewarmBatchSize = 64;
+
+        public static bool IsPrewarmingPools { get; private set; }
+
         /// <summary>
         /// Reflex DI container for dependency injection.
         /// Injected via Reflex dependency injection.
@@ -54,6 +61,7 @@ namespace Processors
         /// Tracks whether pooling has been initialized for the current scene.
         /// </summary>
         private bool _poolingInitializedForScene = false;
+        private bool _poolsPrewarmedForScene = false;
 
         /// <summary>
         /// Processor containing game event runtime data.
@@ -93,7 +101,7 @@ namespace Processors
         /// Pools all configured objects and reports progress.
         /// </summary>
         /// <param name="progressReporter">Optional callback for reporting progress (progress, message).</param>
-        public async Task InitializePooling(Action<float, string> progressReporter = null)
+        public async Task InitializePooling(Action<float, string> progressReporter = null, CancellationToken cancellationToken = default)
         {
             _debugProcessor.Log(DebugLogCategory.ObjectPoolingProcessor, $"InitializePooling entry - _poolingInitializedForScene: {_poolingInitializedForScene}, _objectPoolingSettings: {_objectPoolingSettings != null}, _container: {_container != null}, _sceneContainer: {_sceneContainer != null}");
 
@@ -132,9 +140,111 @@ namespace Processors
                 }
             }
 
-            await PoolObjectsAsync(_objectPoolingSettings.ObjectsToPool, _objectPoolingSettings.DebugPooling, progressReporter);
+            _poolsPrewarmedForScene = false;
+            await PoolObjectsAsync(_objectPoolingSettings.ObjectsToPool, _objectPoolingSettings.DebugPooling, progressReporter, cancellationToken);
             _gameStateProcessor.NotifyObjectsPooled();
             _poolingInitializedForScene = true;
+        }
+
+        /// <summary>
+        /// Activates every pooled instance long enough for its first-frame Unity lifecycle work to run,
+        /// then safely returns it to its inactive state without adding a second queue entry.
+        /// Must be called after all processors have completed initialization.
+        /// </summary>
+        public async Task PrewarmPoolsAsync(Action<float, string> progressReporter = null, CancellationToken cancellationToken = default)
+        {
+            if (_poolsPrewarmedForScene)
+            {
+                progressReporter?.Invoke(1f, "Pool prewarming complete");
+                return;
+            }
+
+            if (!_poolingInitializedForScene || _objectPoolingRuntimeData.AllObjects == null)
+                throw new InvalidOperationException("Object pools must be created before they can be prewarmed.");
+
+            int totalObjectCount = 0;
+            foreach (var pool in _objectPoolingRuntimeData.AllObjects.Values)
+                totalObjectCount += pool.Count;
+
+            if (totalObjectCount == 0)
+            {
+                _poolsPrewarmedForScene = true;
+                progressReporter?.Invoke(1f, "Pool prewarming complete");
+                return;
+            }
+
+            int prewarmedObjectCount = 0;
+            progressReporter?.Invoke(0f, $"Prewarming pooled objects (0/{totalObjectCount})...");
+
+            IsPrewarmingPools = true;
+            try
+            {
+                foreach (var pool in _objectPoolingRuntimeData.AllObjects)
+                {
+                    IReadOnlyList<PoolableObject> poolObjects = pool.Value;
+                    int nextObjectIndex = 0;
+                    int batchSize = MinPrewarmBatchSize;
+
+                    while (nextObjectIndex < poolObjects.Count)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        int currentBatchSize = Mathf.Min(batchSize, poolObjects.Count - nextObjectIndex);
+                        var activeBatch = new List<PoolableObject>(currentBatchSize);
+
+                        try
+                        {
+                            for (int i = 0; i < currentBatchSize; i++)
+                            {
+                                PoolableObject poolObject = poolObjects[nextObjectIndex + i];
+                                if (poolObject == null || poolObject.gameObject.activeSelf)
+                                    continue;
+
+                                poolObject.SetReturningToPool(true);
+                                activeBatch.Add(poolObject);
+                                poolObject.gameObject.SetActive(true);
+                            }
+
+                            if (activeBatch.Count > 0)
+                            await Awaitable.NextFrameAsync(cancellationToken);
+                        }
+                        finally
+                        {
+                            for (int i = 0; i < activeBatch.Count; i++)
+                            {
+                                PoolableObject poolObject = activeBatch[i];
+                                if (poolObject != null)
+                                {
+                                    if (poolObject.gameObject.activeSelf)
+                                        poolObject.gameObject.SetActive(false);
+                                    poolObject.SetReturningToPool(false);
+                                }
+                            }
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                        nextObjectIndex += currentBatchSize;
+                        prewarmedObjectCount += currentBatchSize;
+
+                        float progress = prewarmedObjectCount / (float)totalObjectCount;
+                        progressReporter?.Invoke(progress, $"Prewarming {pool.Key} ({nextObjectIndex}/{poolObjects.Count})...");
+
+                        float lastFrameMilliseconds = Time.unscaledDeltaTime * 1000f;
+                        if (lastFrameMilliseconds < PrewarmTargetFrameMilliseconds * 0.5f)
+                            batchSize = Mathf.Min(batchSize * 2, MaxPrewarmBatchSize);
+                        else if (lastFrameMilliseconds > PrewarmTargetFrameMilliseconds)
+                            batchSize = Mathf.Max(MinPrewarmBatchSize, batchSize / 2);
+                    }
+                }
+            }
+            finally
+            {
+                IsPrewarmingPools = false;
+            }
+
+            _poolsPrewarmedForScene = true;
+            progressReporter?.Invoke(1f, $"Prewarmed {prewarmedObjectCount} pooled objects");
+            _debugProcessor.Log(DebugLogCategory.ObjectPoolingProcessor, $"Prewarmed {prewarmedObjectCount} pooled objects across {_objectPoolingRuntimeData.AllObjects.Count} pools");
         }
 
         /// <summary>
@@ -145,6 +255,20 @@ namespace Processors
         /// <param name="printWarning">Whether to print a warning when exceeding pool size.</param>
         /// <returns>The pooled object, or null if the pool doesn't exist.</returns>
         public PoolableObject GetPooledObject(string name, bool printWarning = true)
+        {
+            return GetPooledObjectInternal(name, printWarning, false, Vector3.zero, Quaternion.identity);
+        }
+
+        /// <summary>
+        /// Gets a pooled object and assigns its world pose before the object is activated.
+        /// Use this for objects whose OnEnable or pooled reset logic depends on their position.
+        /// </summary>
+        public PoolableObject GetPooledObject(string name, Vector3 position, Quaternion rotation, bool printWarning = true)
+        {
+            return GetPooledObjectInternal(name, printWarning, true, position, rotation);
+        }
+
+        private PoolableObject GetPooledObjectInternal(string name, bool printWarning, bool applyPoseBeforeActivation, Vector3 position, Quaternion rotation)
         {
             if (!_objectPoolingRuntimeData.PooledObjects.ContainsKey(name))
             {
@@ -163,6 +287,9 @@ namespace Processors
 
                 if (!go.gameObject.activeInHierarchy)
                 {
+                    if (applyPoseBeforeActivation)
+                        go.transform.SetPositionAndRotation(position, rotation);
+
                     go.gameObject.SetActive(true);
 
                     _debugProcessor.Log(DebugLogCategory.ObjectPoolingProcessor, $"Checking if {go.name} implements IPooledObjectReset");
@@ -194,7 +321,7 @@ namespace Processors
             if (printWarning)
                 _debugProcessor.LogWarning(DebugLogCategory.ObjectPoolingProcessor, $"Exceeded Pool amount and Instantiating a new object of type {name}. Current Count is {_objectPoolingRuntimeData.PooledObjects[name].Count + 1}");
 
-            return InstantiateNewObjectToPool(name, _objectPoolingSettings.ObjectsToPool);
+            return InstantiateNewObjectToPool(name, _objectPoolingSettings.ObjectsToPool, applyPoseBeforeActivation, position, rotation);
         }
 
         /// <summary>
@@ -204,23 +331,37 @@ namespace Processors
         /// <returns>List of all active objects of the specified type, or null if pool doesn't exist.</returns>
         public List<PoolableObject> GetAllActivePooledObjectsOfType(string name)
         {
-            if (!_objectPoolingRuntimeData.AllObjects.ContainsKey(name))
+            if (!TryGetAllActivePooledObjectsOfType(name, out List<PoolableObject> activeObjects))
             {
                 _debugProcessor.LogError(DebugLogCategory.ObjectPoolingProcessor, $"Tried to get active pooled objects of {name} but they don't exist.");
                 return null;
             }
 
-            List<PoolableObject> activeObjects = new List<PoolableObject>();
-            for (int i = _objectPoolingRuntimeData.AllObjects[name].Count - 1; i >= 0; i--)
-            {
-                PoolableObject go = _objectPoolingRuntimeData.AllObjects[name][i];
-
-                if (go.transform.gameObject.activeInHierarchy)
-                {
-                    activeObjects.Add(go);
-                }
-            }
             return activeObjects;
+        }
+
+        /// <summary>
+        /// Tries to get all active objects from a pool without logging when the pool is absent.
+        /// Use this for optional content discovery, such as snapshot capture across enum values.
+        /// </summary>
+        public bool TryGetAllActivePooledObjectsOfType(string name, out List<PoolableObject> activeObjects)
+        {
+            activeObjects = new List<PoolableObject>();
+            if (_objectPoolingRuntimeData?.AllObjects == null ||
+                !_objectPoolingRuntimeData.AllObjects.TryGetValue(name, out List<PoolableObject> poolObjects))
+            {
+                return false;
+            }
+
+            for (int i = poolObjects.Count - 1; i >= 0; i--)
+            {
+                PoolableObject go = poolObjects[i];
+
+                if (go != null && go.gameObject.activeInHierarchy)
+                    activeObjects.Add(go);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -309,7 +450,9 @@ namespace Processors
                     obj.name = objName + j;
                     allObjects[objName].Add(poolObj);
                     poolObj.Initialize(objName);
+                    poolObj.SetReturningToPool(true);
                     obj.SetActive(false);
+                    poolObj.SetReturningToPool(false);
                     pooledObjects[objName].Enqueue(poolObj);
                 }
             }
@@ -328,6 +471,35 @@ namespace Processors
             for (int i = 0; i < objects.Count; i++)
             {
                 objects[i].gameObject.SetActive(false);
+            }
+        }
+
+        /// <summary>
+        /// Returns every checked-out object before an in-place world restore.
+        /// The snapshot is collected first because disabling a parent can make
+        /// child pool objects inactive in the hierarchy before their own turn.
+        /// </summary>
+        public void ReturnAllActiveObjectsToPools()
+        {
+            if (_objectPoolingRuntimeData?.AllObjects == null)
+                return;
+
+            List<PoolableObject> checkedOutObjects = new List<PoolableObject>();
+            foreach (List<PoolableObject> poolObjects in _objectPoolingRuntimeData.AllObjects.Values)
+            {
+                for (int i = 0; i < poolObjects.Count; i++)
+                {
+                    PoolableObject poolObject = poolObjects[i];
+                    if (poolObject != null && poolObject.gameObject.activeSelf)
+                        checkedOutObjects.Add(poolObject);
+                }
+            }
+
+            for (int i = 0; i < checkedOutObjects.Count; i++)
+            {
+                PoolableObject poolObject = checkedOutObjects[i];
+                if (poolObject != null && poolObject.gameObject.activeSelf)
+                    AddToPool(poolObject.PoolName, poolObject);
             }
         }
 
@@ -360,6 +532,7 @@ namespace Processors
 
             // Reset the flag so pooling can be re-initialized for the new scene
             _poolingInitializedForScene = false;
+            _poolsPrewarmedForScene = false;
 
             _debugProcessor.Log(DebugLogCategory.ObjectPoolingProcessor, $"Waiting for Coordinator to refresh scene bindings before re-initializing pooling for scene: {scene.name}");
         }
@@ -375,7 +548,7 @@ namespace Processors
         /// </summary>
         public async Task InitializeAsync(ProcessorStartupContext startupContext, CancellationToken cancellationToken)
         {
-            await InitializePooling((progress, status) => startupContext.Report(progress, status));
+            await InitializePooling((progress, status) => startupContext.Report(progress, status), cancellationToken);
         }
 
         /// <summary>
@@ -394,6 +567,11 @@ namespace Processors
         /// </summary>
         public void RefreshSceneData(Container sceneContainer)
         {
+            // Coordinator's sceneLoaded callback can run before this processor's
+            // own sceneLoaded listener. Reset here so bootstrap never mistakes
+            // the previous scene's destroyed pools for current initialized pools.
+            _poolingInitializedForScene = false;
+            _poolsPrewarmedForScene = false;
             _sceneContainer = sceneContainer;
             if (sceneContainer != null)
             {
@@ -435,6 +613,7 @@ namespace Processors
         public void ResetPoolingInitialization()
         {
             _poolingInitializedForScene = false;
+            _poolsPrewarmedForScene = false;
             _debugProcessor.Log(DebugLogCategory.ObjectPoolingProcessor, $"Pooling initialization flag reset");
         }
 
@@ -471,14 +650,21 @@ namespace Processors
         }
 
         // Instantiates a new object to add to a pool when the pool is exhausted.
-        private PoolableObject InstantiateNewObjectToPool(string name, List<Utils.Pooling.PooledObjectData> objectsToPool)
+        private PoolableObject InstantiateNewObjectToPool(
+            string name,
+            List<Utils.Pooling.PooledObjectData> objectsToPool,
+            bool applyPoseBeforeActivation,
+            Vector3 position,
+            Quaternion rotation)
         {
             Container injectionContainer = GetRequiredInjectionContainer();
             for (int i = 0; i < objectsToPool.Count; i++)
             {
                 if (objectsToPool[i].Name == name)
                 {
-                    GameObject obj = UnityEngine.Object.Instantiate(objectsToPool[i].Prefab);
+                    GameObject obj = applyPoseBeforeActivation
+                        ? UnityEngine.Object.Instantiate(objectsToPool[i].Prefab, position, rotation)
+                        : UnityEngine.Object.Instantiate(objectsToPool[i].Prefab);
                     GameObjectInjector.InjectRecursive(obj, injectionContainer);
                     PoolableObject poolObj = null;
                     if (!obj.TryGetComponent(out poolObj))
@@ -506,7 +692,7 @@ namespace Processors
             return null;
         }
 
-        private async Task PoolObjectsAsync(List<Utils.Pooling.PooledObjectData> objectsToPool, bool debugPooling, Action<float, string> progressReporter = null)
+        private async Task PoolObjectsAsync(List<Utils.Pooling.PooledObjectData> objectsToPool, bool debugPooling, Action<float, string> progressReporter, CancellationToken cancellationToken)
         {
             Dictionary<string, Queue<PoolableObject>> pooledObjects = new Dictionary<string, Queue<PoolableObject>>();
             Dictionary<string, GameObject> poolParents = new Dictionary<string, GameObject>();
@@ -530,6 +716,10 @@ namespace Processors
             }
 
             int objectTypeCount = objectsToPool.Count;
+            int totalObjectCount = 0;
+            int createdObjectCount = 0;
+            for (int i = 0; i < objectTypeCount; i++)
+                totalObjectCount += Mathf.Max(0, objectsToPool[i].PoolAmount);
 
             if (objectTypeCount == 0)
             {
@@ -539,6 +729,7 @@ namespace Processors
 
             for (int i = 0; i < objectsToPool.Count; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 DateTime before = DateTime.Now;
                 string objName = objectsToPool[i].Name;
                 int poolAmount = objectsToPool[i].PoolAmount;
@@ -551,6 +742,7 @@ namespace Processors
 
                 for (int j = 0; j < objectsToPool[i].PoolAmount; j++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     GameObject obj = UnityEngine.Object.Instantiate(objectsToPool[i].Prefab, Vector3.zero, Quaternion.identity, parentObject.transform);
                     GameObjectInjector.InjectRecursive(obj, injectionContainer);
 
@@ -560,8 +752,20 @@ namespace Processors
                     obj.name = objName + j;
                     allObjects[objName].Add(poolObj);
                     poolObj.Initialize(objName);
+                    poolObj.SetReturningToPool(true);
                     obj.SetActive(false);
+                    poolObj.SetReturningToPool(false);
                     pooledObjects[objName].Enqueue(poolObj);
+
+                    createdObjectCount++;
+                    float overallProgress = totalObjectCount > 0 ? createdObjectCount / (float)totalObjectCount : 1f;
+                    progressReporter?.Invoke(overallProgress, $"Creating {objName} pool ({j + 1}/{poolAmount})...");
+
+                    if (Time.realtimeSinceStartup - frameStartTime >= PoolCreationFrameBudgetSeconds)
+                    {
+                        await Task.Yield();
+                        frameStartTime = Time.realtimeSinceStartup;
+                    }
                 }
 
                 if (poolAmount == 0)
@@ -575,11 +779,10 @@ namespace Processors
                 if (debugPooling)
                     _debugProcessor.Log(DebugLogCategory.ObjectPoolingProcessor, $"Pooling {objName} took {duration.TotalMilliseconds}ms");
                 frameStartTime = Time.realtimeSinceStartup;
-                await Task.Yield();
             }
 
             _objectPoolingRuntimeData.InitializePooling(pooledObjects, allObjects, poolParents, TimeSpan.Zero);
-            progressReporter?.Invoke(1f, "Pooling complete");
+            progressReporter?.Invoke(1f, "Pool creation complete");
         }
     }
 }

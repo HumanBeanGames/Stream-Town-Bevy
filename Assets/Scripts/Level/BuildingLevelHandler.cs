@@ -31,7 +31,7 @@ namespace Level
         /// <returns>True if the building can level up.</returns>
 		public override bool CanLevel()
 		{
-			return CanLevel();
+			return CanLevel(false);
 		}
 
 		/// <summary>
@@ -54,8 +54,13 @@ namespace Level
 		/// </summary>
 		public override void OnLevelUp()
 		{
-			_buildingProcessor.OnLevelBuilding(_buildingBase.BuildingType, _currentLevel);
 			base.OnLevelUp();
+			OnLeveledUp?.Invoke(this);
+		}
+
+		public override void RestoreLevel(int level)
+		{
+			base.RestoreLevel(level);
 			OnLeveledUp?.Invoke(this);
 		}
 

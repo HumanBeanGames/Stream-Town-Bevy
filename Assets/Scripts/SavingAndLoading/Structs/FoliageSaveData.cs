@@ -1,6 +1,3 @@
-using UnityEngine;
-using Utils;
-
 namespace SavingAndLoading.Structs
 {
     /// <summary>
@@ -12,16 +9,5 @@ namespace SavingAndLoading.Structs
 	{
         public TransformSaveData FoliageTransform;
         public string FoliageType;
-
-        /// <summary>
-        /// Sets the values of FoliageSaveData
-        /// </summary>
-        /// <param name="transform">The foliage transform</param>
-        /// <param name="type">The foliage type</param>
-        public FoliageSaveData(Transform transform, string type)
-        {
-            FoliageTransform = new TransformSaveData(transform);
-            FoliageType = type;
-        }
     }
 }

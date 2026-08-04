@@ -7,7 +7,7 @@ namespace ScriptablesProcessorInfrastructure
 	[CreateAssetMenu(fileName = "TradeSettings", menuName = "Scriptables/Trade Settings")]
 	public class TradeSettings : ScriptableObject, IDataScriptable
 	{
-		[SerializeField]
+		[System.NonSerialized]
 		private Dictionary<Resource, float> _resourceSellRates = new Dictionary<Resource, float>()
 		{
 			{ Resource.Wood, 0.25f },

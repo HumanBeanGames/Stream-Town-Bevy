@@ -72,7 +72,7 @@ namespace Audio
 
 		private void OnDisable()
 		{
-
+			_audioSourcesProcessor?.RemoveSourceFromQueue(this);
 		}
 	}
 }

@@ -49,21 +49,33 @@ namespace STStateMachine.States
 				_debugProcessor.Log(DebugLogCategory.ResourceGathering, $"ActionAmount was 0, using default: {_actionAmount}");
 			}
 
+			var resourceTarget = _resourceProcessor.GetResourceTarget(_stateMachine.ResourceTargetGUID);
+			if (!resourceTarget.HasValue)
+			{
+				_debugProcessor.LogWarning(DebugLogCategory.ResourceGathering, $"Resource GUID {_stateMachine.ResourceTargetGUID} not found in ResourceProcessor");
+				_stateMachine.RequestStateChange("Idle");
+				CleanupDataDrivenTarget();
+				return;
+			}
+
+			float rangeSqr = (_actionRange * _actionRange) + resourceTarget.Value.SizeSqr;
+			if (Vector3.SqrMagnitude(resourceTarget.Value.Position - transform.position) > rangeSqr)
+			{
+				_stateMachine.RequestStateChange("Idle");
+				return;
+			}
+
 			// Disable AIPath to prevent pathfinding while gathering
 			_aiPath.enabled = false;
 			_aiPath.canMove = false;
 
 			// Face the resource target
-			var resourceTarget = _resourceProcessor.GetResourceTarget(_stateMachine.ResourceTargetGUID);
-			if (resourceTarget.HasValue)
+			Vector3 directionToTarget = (resourceTarget.Value.Position - transform.position).normalized;
+			directionToTarget.y = 0; // Keep rotation on horizontal plane only
+			if (directionToTarget != Vector3.zero)
 			{
-				Vector3 directionToTarget = (resourceTarget.Value.Position - transform.position).normalized;
-				directionToTarget.y = 0; // Keep rotation on horizontal plane only
-				if (directionToTarget != Vector3.zero)
-				{
-					transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(directionToTarget), 0.1f);
-					transform.rotation = Quaternion.LookRotation(directionToTarget); // Snap to face immediately
-				}
+				transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(directionToTarget), 0.1f);
+				transform.rotation = Quaternion.LookRotation(directionToTarget); // Snap to face immediately
 			}
 
 			// Initialize the action timer and animation
@@ -132,6 +144,12 @@ namespace STStateMachine.States
 				return false;
 			}
 
+			float rangeSqr = (_actionRange * _actionRange) + resourceTarget.Value.SizeSqr;
+			if (Vector3.SqrMagnitude(resourceTarget.Value.Position - transform.position) > rangeSqr)
+			{
+				_stateMachine.RequestStateChange("Idle");
+				return false;
+			}
 
 			int amountTaken = _resourceProcessor.TakeResource(_stateMachine.ResourceTargetGUID, _actionAmount);
 

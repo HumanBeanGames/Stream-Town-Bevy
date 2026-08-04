@@ -1,5 +1,4 @@
 using Animation;
-using SavingAndLoading.Structs;
 using System.Collections.Generic;
 using UnityEngine;
 using Utils;
@@ -79,22 +78,6 @@ namespace Character
 		// Properties.
 		public Transform ModelTransform => _modelTransform;
 		public BodyType CurrentBodyType => _currentBodyType;
-
-		public PlayerCustomizationSaveData ToSaveData()
-		{
-			return new PlayerCustomizationSaveData(ChosenEyeIndex, ChosenHairIndex, ChosenFacialHairIndex, ChosenSkinColorIndex, chosenHairColorIndex, ChosenEyeColorIndex, ChosenBodyTypeIndex);
-		}
-
-		public void LoadFromSaveData(PlayerCustomizationSaveData data)
-		{
-			SetBodyTypeByIndex(data.ChosenBodyTypeIndex + 1);
-			SetHairByIndex(data.ChosenHairIndex + 1);
-			SetHairColorByIndex(data.ChosenHairColourIndex + 1);
-			SetEyeColorByIndex(data.ChosenEyeColourIndex + 1);
-			SetEyesByIndex(data.ChosenEyeColourIndex + 1);
-			SetFacialHairByIndex(data.ChosenFacialHairIndex + 1);
-			// TODO: set skin color
-		}
 
 		/// <summary>
 		/// Changes the player's currently active role if possible.

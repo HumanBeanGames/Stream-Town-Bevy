@@ -7,10 +7,7 @@ using UnityEngine;
 using Utils;
 using Character;
 using ScriptablesProcessorInfrastructure;
-using SavingAndLoading;
 using Utils.Pooling;
-using SavingAndLoading.SavableObjects;
-using SavingAndLoading.Structs;
 using Data.Containers;
 using Processors;
 
@@ -71,7 +68,8 @@ namespace Processors
         /// Object pooling processor for accessing pooled objects.
         /// Injected via Reflex dependency injection.
         /// </summary>
-        [Inject] private ObjectPoolingProcessor _poolingProcessor;
+		[Inject] private ObjectPoolingProcessor _poolingProcessor;
+		[Inject] private GUIDProcessor _guidProcessor;
 
         #endregion
 
@@ -123,6 +121,12 @@ namespace Processors
 
             InitializeRuntimeState();
         }
+
+		/// <summary>Clears world-instance and derived building state before a restore.</summary>
+		public void ResetWorldState()
+		{
+			InitializeRuntimeState();
+		}
 
         /// <summary>
         /// Processes building logic every frame.
@@ -843,20 +847,59 @@ namespace Processors
 		/// <param name="type">The building type to reset.</param>
 		public void ResetBuilding(BuildingType type)
 		{
-			List<BuildingSaveData> buildings = new List<BuildingSaveData>();
+			List<(string poolName, Vector3 position, Quaternion rotation, Vector3 scale,
+				int health, uint guid, BuildingState state, int level, List<PoolableObject> foliage)> buildings =
+				new List<(string, Vector3, Quaternion, Vector3, int, uint, BuildingState, int, List<PoolableObject>)>();
 
 			List<PoolableObject> objs = _poolingProcessor.GetAllActivePooledObjectsOfType(type.ToString());
 			if (objs != null)
+			{
 				for (int o = 0; o < objs.Count; o++)
-					buildings.Add((BuildingSaveData)((SaveableBuilding)(objs[o].SaveableObject)).SaveData());
+				{
+					BuildingBase current = objs[o].GetComponent<BuildingBase>();
+					GUIDSystem.GUIDComponent guid = objs[o].GetComponent<GUIDSystem.GUIDComponent>();
+					if (current == null || guid == null)
+						continue;
+
+					buildings.Add((
+						objs[o].PoolName,
+						current.transform.position,
+						current.transform.rotation,
+						current.transform.localScale,
+						current.HealthHandler.Health,
+						guid.GUID,
+						current.BuildingState,
+						current.LevelHandler != null ? current.LevelHandler.Level : 1,
+						current.FoliageRemoved == null
+							? new List<PoolableObject>()
+							: new List<PoolableObject>(current.FoliageRemoved)));
+				}
+			}
 
 			ResetBuildingType(type);
 			_poolingProcessor.DisableObjectsInPool(type.ToString());
 
 			for(int i = 0; i < buildings.Count; i++)
 			{
-				var building = _poolingProcessor.GetPooledObject(buildings[i].BuildingType.ToString(), false);
-				((SaveableBuilding)((building).SaveableObject)).LoadData((object)buildings[i]);
+				var data = buildings[i];
+				PoolableObject pooled = _poolingProcessor.GetPooledObject(data.poolName, data.position, data.rotation, false);
+				BuildingBase building = pooled != null ? pooled.GetComponent<BuildingBase>() : null;
+				if (building == null)
+					continue;
+
+				building.transform.localScale = data.scale;
+				building.BuildingState = data.state;
+				building.HealthHandler.SetHealth(data.health);
+				building.FoliageRemoved = data.foliage;
+				_guidProcessor.RegisterLoadedGUID(pooled, data.guid);
+				AddLoadedBuilding(building);
+				if (building.BuildingState == BuildingState.Building)
+					building.OnLoadedBuiltBuilding();
+				if (building.LevelHandler != null)
+					building.LevelHandler.RestoreLevel(Mathf.Max(1, data.level));
+
+				building.HealthHandler.SetHealth(data.health);
+				building.DamageHandler?.OnHealthChanged(building.HealthHandler);
 			}
 		}
 

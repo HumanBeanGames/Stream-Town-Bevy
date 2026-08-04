@@ -53,7 +53,7 @@ namespace Sensors
         /// <summary>
         /// Removes this sensor when disabled.
         /// </summary>
-		private void OnDisable()
+		protected virtual void OnDisable()
 		{
 			if (_processor)
 				_processor.RemoveSensor(this);

@@ -66,15 +66,21 @@ namespace Processors
 		/// </summary>
 		internal void ProcessSources()
 		{
+			if (_audioSourcesRuntimeData == null || _audioSettingsScriptable == null)
+				return;
+
 			Queue<AudioHandler> audioHandlers = _audioSourcesRuntimeData.AudioHandlers;
 			int updatesPerTick = _audioSettingsScriptable.UpdatesPerTick;
+			int handlersToProcess = Mathf.Min(updatesPerTick, audioHandlers.Count);
 
 			// Process up to the configured number of handlers per tick
 			// Limited by both the updatesPerTick setting and the total number of handlers
-			for (int i = 0; i < updatesPerTick && i < audioHandlers.Count; i++)
+			for (int i = 0; i < handlersToProcess; i++)
 			{
 				// Dequeue the next handler to process
 				AudioHandler audioHandler = audioHandlers.Dequeue();
+				if (audioHandler == null)
+					continue;
 				
 				// Only update and requeue if the handler is still enabled
 				if (audioHandler.enabled)
@@ -95,8 +101,30 @@ namespace Processors
 		/// <param name="handler">The audio handler to add to the queue.</param>
 		public void AddSourceToQueue(AudioHandler handler)
 		{
+			if (_audioSourcesRuntimeData == null || handler == null || handler.Tracked)
+				return;
+
 			_audioSourcesRuntimeData.AudioHandlers.Enqueue(handler);
 			handler.Tracked = true;
+		}
+
+		/// <summary>
+		/// Removes a scene-owned handler when it is disabled or destroyed.
+		/// </summary>
+		public void RemoveSourceFromQueue(AudioHandler handler)
+		{
+			if (_audioSourcesRuntimeData == null || handler == null)
+				return;
+
+			handler.Tracked = false;
+			Queue<AudioHandler> audioHandlers = _audioSourcesRuntimeData.AudioHandlers;
+			int handlerCount = audioHandlers.Count;
+			for (int i = 0; i < handlerCount; i++)
+			{
+				AudioHandler candidate = audioHandlers.Dequeue();
+				if (candidate != null && candidate != handler)
+					audioHandlers.Enqueue(candidate);
+			}
 		}
 		/// <param name="containerBuilder">The container builder to register bindings with.</param>
 		public void InstallBindings(ContainerBuilder containerBuilder)

@@ -166,6 +166,9 @@ namespace Character
         /// <value>The movement speed.</value>
 		public float MoveSpeed => _movementSpeed;
 
+		/// <summary>Gets the acceleration derived from this role's movement speed.</summary>
+		public float MoveAcceleration => _movementSpeed * ACCELERATION_MULTIPLIER;
+
         /// <summary>
         /// Gets the current level.
         /// </summary>
@@ -346,11 +349,24 @@ namespace Character
 		}
 
 		/// <summary>
+		/// Restores authored progression defaults when a pooled character is reused.
+		/// Saved role entries are overlaid after this reset.
+		/// </summary>
+		public void ResetProgression()
+		{
+			_level = 1;
+			_experience = 0;
+			_requiredExp = _roleProcessor.GetRequiredExperience(_level);
+			RecalculateStats();
+		}
+
+		/// <summary>
 		/// Sets the level
 		/// </summary>
 		public void SetLevel(int level)
 		{
 			_level = level;
+			_requiredExp = _roleProcessor.GetRequiredExperience(_level);
 		}
 
 		private int AddStatModifiersInt(StatModifiers statMod, StatType statType, int baseValue)

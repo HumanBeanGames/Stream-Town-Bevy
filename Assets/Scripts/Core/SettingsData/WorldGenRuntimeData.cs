@@ -17,6 +17,7 @@ namespace Processors
 	{
 		Idle,
 		InitializingPooling,
+		PrewarmingPooling,
 		GeneratingTerrain,
 		SpawningTownhall,
 		GeneratingObjects,
@@ -96,6 +97,7 @@ namespace Processors
 		/// The generated terrain mesh.
 		/// </summary>
 		private Mesh _generatedMesh;
+		private bool _terrainCanRegenerateFromSeed;
 
 		private GameObject _terrainHost;
 
@@ -180,6 +182,11 @@ namespace Processors
 		{
 			get => _generatedMesh;
 			set => _generatedMesh = value;
+		}
+		public bool TerrainCanRegenerateFromSeed
+		{
+			get => _terrainCanRegenerateFromSeed;
+			set => _terrainCanRegenerateFromSeed = value;
 		}
 		public GameObject TerrainHost
 		{
@@ -279,6 +286,7 @@ namespace Processors
 			_underWaterFoliage = new List<GameResources.FoliageData>();
 			_worldGenerated = false;
 			_generatedMesh = null;
+			_terrainCanRegenerateFromSeed = false;
 			_terrainHost = null;
 			_terrainCheckPassed = false;
 			_isEditorRegenerating = false;

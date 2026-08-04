@@ -24,7 +24,9 @@ namespace STStateMachine.Helpers
 
 		private void Awake()
 		{
-			_stateMachine = GetComponentInParent<StateMachine>();
+			_stateMachine = GetComponent<StateMachine>();
+			if (_stateMachine == null)
+				_stateMachine = GetComponentInParent<StateMachine>(true);
 			if (_stateMachine == null)
 				throw new InvalidOperationException($"{GetType().Name} on '{gameObject.name}' could not find a parent StateMachine. Helper components must live on the StateMachine GameObject or one of its children.");
 

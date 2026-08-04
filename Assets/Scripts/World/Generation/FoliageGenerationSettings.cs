@@ -20,6 +20,25 @@ namespace World.Generation
 		public List<FoliageMeshSettings> MeshSettings;
 		public Material Material;
 
+		/// <summary>
+		/// Stable persistence/determinism identity. PoolName remains the preferred
+		/// author-controlled ID; existing blank configurations get a deterministic
+		/// fallback instead of collapsing into one save group.
+		/// </summary>
+		public string StableId
+		{
+			get
+			{
+				if (!string.IsNullOrWhiteSpace(PoolName))
+					return PoolName;
+				if (Material != null && !string.IsNullOrWhiteSpace(Material.name))
+					return $"material:{Material.name}";
+				if (MeshSettings != null && MeshSettings.Count > 0 && MeshSettings[0]?.Mesh != null)
+					return $"mesh:{MeshSettings[0].Mesh.name}";
+				return "foliage:unidentified";
+			}
+		}
+
 		public override string GetPoolName()
 		{
 			return PoolName;

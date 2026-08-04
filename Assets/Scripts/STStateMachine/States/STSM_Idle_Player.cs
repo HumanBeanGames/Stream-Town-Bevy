@@ -442,18 +442,7 @@ namespace STStateMachine.States
 						return;
 					}
 
-					if (!_hasDataDrivenResourceTarget && CanGatherResource())
-					{
-						if (FindResourceTarget())
-						{
-							_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
-							_goToState.UsePosition = false;
-							_goToState.SetNextState(_gatherResourceAction);
-							_stateMachine.RequestStateChange(_goToState);
-							return;
-						}
-					}
-					else if (_stateMachine.HasResourceTarget && _stateMachine.ResourceTargetGUID != 0)
+					if (_stateMachine.HasResourceTarget && _stateMachine.ResourceTargetGUID != 0)
 					{
 						var resourceTarget = _resourceProcessor.GetResourceTarget(_stateMachine.ResourceTargetGUID);
 						if (resourceTarget.HasValue)
@@ -461,6 +450,7 @@ namespace STStateMachine.States
 							_currentResourceGUID = _stateMachine.ResourceTargetGUID;
 							_currentResourcePosition = resourceTarget.Value.Position;
 							_currentResourceType = _stateMachine.ResourceTargetType;
+							_hasDataDrivenResourceTarget = true;
 
 							_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
 							_goToState.UsePosition = false;
@@ -471,6 +461,18 @@ namespace STStateMachine.States
 						else
 						{
 							ClearResourceTarget();
+						}
+					}
+
+					if (!_hasDataDrivenResourceTarget && CanGatherResource())
+					{
+						if (FindResourceTarget())
+						{
+							_goToState.SetTargetFromPosition(_currentResourcePosition, _roleHandler.PlayerRoleData.ActionRange);
+							_goToState.UsePosition = false;
+							_goToState.SetNextState(_gatherResourceAction);
+							_stateMachine.RequestStateChange(_goToState);
+							return;
 						}
 					}
 				}

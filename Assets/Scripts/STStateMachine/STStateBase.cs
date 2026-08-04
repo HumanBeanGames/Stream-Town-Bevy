@@ -50,6 +50,26 @@ namespace STStateMachine
 				return;
 
 			ResolveStateMachine();
+			Initialize(_stateMachine);
+		}
+
+		/// <summary>
+		/// Establishes explicit ownership before a StateMachine enters this state.
+		/// Hierarchy discovery remains a fallback for direct state calls.
+		/// </summary>
+		internal void Initialize(StateMachine stateMachine)
+		{
+			if (stateMachine == null)
+				throw new ArgumentNullException(nameof(stateMachine));
+
+			if (_initialized)
+			{
+				if (_stateMachine != stateMachine)
+					throw new InvalidOperationException($"{GetType().Name} on '{gameObject.name}' is already owned by another StateMachine.");
+				return;
+			}
+
+			_stateMachine = stateMachine;
 			OnInit();
 			_initialized = true;
 		}
@@ -59,14 +79,26 @@ namespace STStateMachine
 			if (_stateMachine != null)
 				return;
 
-			_stateMachine = GetComponentInParent<StateMachine>();
+			// Resolve the common case explicitly and include inactive parents so
+			// pooled activation order cannot affect state-machine discovery.
+			_stateMachine = GetComponent<StateMachine>();
+			if (_stateMachine == null)
+				_stateMachine = GetComponentInParent<StateMachine>(true);
 			if (_stateMachine == null)
 				throw new InvalidOperationException($"{GetType().Name} on '{gameObject.name}' could not find a parent StateMachine. State components must live on the StateMachine GameObject or one of its children.");
 		}
 
 		private void Awake()
 		{
-			InitializeIfNeeded();
+			// Do not fail during pooled prefab activation if hierarchy discovery is
+			// temporarily unavailable. The owning StateMachine binds the state before
+			// its first transition.
+			_stateMachine = GetComponent<StateMachine>();
+			if (_stateMachine == null)
+				_stateMachine = GetComponentInParent<StateMachine>(true);
+
+			if (_stateMachine != null)
+				Initialize(_stateMachine);
 		}
 	}
 }

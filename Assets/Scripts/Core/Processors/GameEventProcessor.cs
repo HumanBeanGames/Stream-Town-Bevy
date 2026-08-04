@@ -42,6 +42,12 @@ namespace Processors
         /// </summary>
         [Inject] private TimeProcessor _timeProcessor;
 
+		/// <summary>
+		/// Provides the current scene's UI adapters. Event objects are ordinary C#
+		/// objects, so their required adapters are passed explicitly at construction.
+		/// </summary>
+		[Inject] private UIProcessor _uiProcessor;
+
         /// <summary>
         /// The debug processor. Injected via Reflex dependency injection.
         /// </summary>
@@ -184,6 +190,34 @@ namespace Processors
             _gameEventRuntimeData.TimeTillRulerVote = initialTimeUntilRulerVote;
         }
 
+		/// <summary>Cancels transient scene events and clears their queue before loading a snapshot.</summary>
+		public void ResetWorldState()
+		{
+			if (_gameEventRuntimeData.CurrentEvent != null)
+			{
+				try
+				{
+					_gameEventRuntimeData.CurrentEvent.Cancel();
+				}
+				catch (Exception exception)
+				{
+					// Events own scene-local UI adapters. If a transition was initiated
+					// externally, that UI may already be gone; transient cleanup must
+					// never prevent the next world snapshot from loading.
+					_debugProcessor.LogWarning(DebugLogCategory.VoteEvent,
+						$"Discarding a stale event during world reset: {exception.Message}");
+				}
+				finally
+				{
+					_gameEventRuntimeData.CurrentEvent = null;
+				}
+			}
+
+			_gameEventRuntimeData.EventQueue.Clear();
+			_gameEventRuntimeData.EventActive = false;
+			_gameEventRuntimeData.CanStartNewRulerVote = false;
+		}
+
         /// <summary>
         /// Sets the falling fish visual effect particle system.
         /// </summary>
@@ -210,10 +244,14 @@ namespace Processors
         /// <returns>True if the event was added, false if it already exists in the queue.</returns>
         public bool AddEvent(GameEvent gameEvent)
         {
+			if (gameEvent == null)
+				return false;
+
             // Check if an event of this type already exists in the queue
             if (EventTypeExistsInQueue(gameEvent.Event))
                 return false;
 
+			gameEvent.Schedule(_timeProcessor.WorldTimePassed);
             // Add the event to the sorted queue
             _gameEventRuntimeData.EventQueue.Add(gameEvent);
 
@@ -240,12 +278,7 @@ namespace Processors
             if (EventTypeExistsInQueue(eventType))
                 return false;
 
-            _gameEventRuntimeData.EventQueue.Add(new GameEvent(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout));
-
-            if (_gameEventSettings.LogEvents)
-                _debugProcessor.Log(DebugLogCategory.General, $"Game Event Added: '{eventType}'");
-
-            return true;
+			return AddEvent(new GameEvent(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout));
         }
 
         /// <summary>
@@ -431,7 +464,10 @@ namespace Processors
                 {
                     // Mark that a vote can no longer be started
                     _gameEventRuntimeData.CanStartNewRulerVote = false;
-                    StartKeepRulerVote();
+					if (_playerProcessor.GetRuler() == null)
+						StartNewRulerVote();
+					else
+						StartKeepRulerVote();
                 }
             }
         }
@@ -442,9 +478,24 @@ namespace Processors
         /// </summary>
         public void StartKeepRulerVote()
         {
+			if (_playerProcessor.GetRuler() == null)
+			{
+				StartNewRulerVote();
+				return;
+			}
+
+			if (EventTypeExistsInQueue(GameEvent.EventType.KeepKingVote))
+				return;
+
+			if (!TryGetRulerVoteInterface(out UserInterface.UserInterface_RulerVote rulerVoteInterface))
+			{
+				DeferRulerVoteUntilUiIsReady();
+				return;
+			}
+
             _debugProcessor.Log(DebugLogCategory.General, "Keep ruler vote");
             // Create a new keep ruler vote event with 1 minute duration and 1 hour timeout
-            KeepKingVote keepKingVote = new KeepKingVote(1, 120, timeout: 3600);
+			KeepKingVote keepKingVote = new KeepKingVote(1, 120, rulerVoteInterface, timeout: 3600);
 
             // Add the event to the queue and subscribe to its completion
             if (AddEvent(keepKingVote))
@@ -452,16 +503,49 @@ namespace Processors
         }
 
         /// <summary>
-        /// Starts the timer for the next ruler vote.
-        /// Resets the timer to the minimum time before a vote can occur.
+        /// Starts an election for a new ruler using the current scene's ruler-vote UI.
         /// </summary>
         public void StartNewRulerVote()
         {
-            // Allow a new ruler vote to be started
-            _gameEventRuntimeData.CanStartNewRulerVote = true;
-            // Reset the timer to the minimum time
-            _gameEventRuntimeData.TimeTillRulerVote = _gameEventRuntimeData.RulerVoteMinTime;
+			if (EventTypeExistsInQueue(GameEvent.EventType.NewKingVote))
+				return;
+
+			if (!TryGetRulerVoteInterface(out UserInterface.UserInterface_RulerVote rulerVoteInterface))
+			{
+				DeferRulerVoteUntilUiIsReady();
+				return;
+			}
+
+			_debugProcessor.Log(DebugLogCategory.General, "New ruler vote");
+			NewKingVote newKingVote = new NewKingVote(1, 120, rulerVoteInterface, _playerProcessor, timeout: 3600);
+			if (AddEvent(newKingVote))
+				newKingVote.EventEnded += OnNewRulerVoteEnded;
         }
+
+		/// <summary>Schedules the next ruler vote after the normal cooldown.</summary>
+		public void ScheduleNextRulerVote()
+		{
+			_gameEventRuntimeData.CanStartNewRulerVote = true;
+			_gameEventRuntimeData.TimeTillRulerVote = _gameEventRuntimeData.RulerVoteMinTime;
+		}
+
+		private bool TryGetRulerVoteInterface(out UserInterface.UserInterface_RulerVote rulerVoteInterface)
+		{
+			rulerVoteInterface = _uiProcessor?.RulerVoteInterface;
+			if (rulerVoteInterface != null)
+				return true;
+
+			_debugProcessor.LogWarning(
+				DebugLogCategory.VoteEvent,
+				"Ruler vote UI is not bound for the active scene; deferring the vote.");
+			return false;
+		}
+
+		private void DeferRulerVoteUntilUiIsReady()
+		{
+			_gameEventRuntimeData.CanStartNewRulerVote = true;
+			_gameEventRuntimeData.TimeTillRulerVote = 1f;
+		}
 
         /// <summary>
         /// Callback invoked when the keep ruler vote ends.
@@ -485,7 +569,7 @@ namespace Processors
             // Process the vote result
             if (option.OptionName == "yes")
             {
-                // Keep Ruler - no action needed
+				ScheduleNextRulerVote();
             }
             else
             {
@@ -520,6 +604,7 @@ namespace Processors
                 // Set the winning player as the new ruler
                 _playerProcessor.SetRuler(_playerProcessor.GetPlayer(index));
                 _debugProcessor.Log(DebugLogCategory.General, $"Winner Was {option.OptionName}");
+				ScheduleNextRulerVote();
             }
             else
                 _debugProcessor.Log(DebugLogCategory.General, "No Player Found");

@@ -43,6 +43,22 @@ namespace TownGoal
 			_townGoalRuntimeData.CurrentGoals = new List<Goal>(1);
 		}
 
+		public void ResetWorldState()
+		{
+			for (int i = 0; i < _townGoalRuntimeData.CurrentGoals.Count; i++)
+			{
+				Goal goal = _townGoalRuntimeData.CurrentGoals[i];
+				if (goal == null)
+					continue;
+
+				goal.OnGoalCompleted -= OnGoalCompleted;
+				foreach (Objective objective in goal.ObjectivesStatuses.Keys)
+					objective.UnsubscribeFromEvents(_gameEventProcessor);
+			}
+
+			_townGoalRuntimeData.CurrentGoals.Clear();
+		}
+
 		public void InstallBindings(ContainerBuilder containerBuilder)
 		{
 			containerBuilder.AddSingleton(this);

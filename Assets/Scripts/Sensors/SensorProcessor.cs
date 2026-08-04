@@ -76,10 +76,17 @@ namespace Sensors
 
 		private void UpdateSensors()
 		{
-			for (int i = 0; i < _sensorRuntimeData.Sensors.Count; i++)
+			for (int i = _sensorRuntimeData.Sensors.Count - 1; i >= 0; i--)
 			{
-				if (_sensorRuntimeData.Sensors[i].gameObject.activeInHierarchy)
-					_sensorRuntimeData.Sensors[i].STUpdate();
+				SensorBase sensor = _sensorRuntimeData.Sensors[i];
+				if (sensor == null)
+				{
+					_sensorRuntimeData.Sensors.RemoveAt(i);
+					continue;
+				}
+
+				if (sensor.gameObject.activeInHierarchy)
+					sensor.STUpdate();
 			}
 		}
 

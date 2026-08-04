@@ -37,6 +37,19 @@ namespace STStateMachine.States
 		/// </summary>
 		public bool NewPositionOnEnter { get; set; }
 
+		/// <summary>
+		/// Resets idle timing for a pooled character without immediately requesting a path.
+		/// A small randomized offset prevents many characters restored in one frame from
+		/// requesting their next idle destination together.
+		/// </summary>
+		public void PrepareForSpawn()
+		{
+			NewPositionOnEnter = false;
+			_checkTimer = 0f;
+			_newLocationTimer = Random.Range(0f, Mathf.Max(0f, _newLocationTime * 0.5f));
+			_idleStartPosition = transform.position;
+		}
+
 		public override void OnEnter()
 		{
 			base.OnEnter();

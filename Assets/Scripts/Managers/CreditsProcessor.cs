@@ -19,7 +19,7 @@ namespace Processors
         /// </summary>
         public void SkipCredits()
 		{
-			_loadingProcessor.LoadWorldScene(1);
+			_loadingProcessor.LoadNonWorldScenes(1);
 		}
 
 		public void Initialize()

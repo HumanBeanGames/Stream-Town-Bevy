@@ -343,6 +343,12 @@ namespace Processors
             InitializeRoleData();
         }
 
+		/// <summary>Resets role occupancy and authored slot limits before players are restored.</summary>
+		public void ResetWorldState()
+		{
+			InitializeRoleData();
+		}
+
         /// <summary>
         /// Registers this processor as a singleton in the dependency injection container.
         /// Called by Reflex during container initialization.

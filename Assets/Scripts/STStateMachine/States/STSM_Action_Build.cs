@@ -90,6 +90,19 @@ namespace STStateMachine.States
 			_buildHelper.Target = _target;
 			_buildHelper.InvokeHelper();
 
+			// ModHealth can complete construction and remove the Construction flag
+			// synchronously. Leave Build immediately instead of waiting for the next
+			// action interval with an already-complete target.
+			if (_target == null || !_target.gameObject.activeInHierarchy ||
+				(_target.TargetType & TargetMask.Construction) == 0 ||
+				(_buildHelper.TargetHealth != null &&
+				 _buildHelper.TargetHealth.Health >= _buildHelper.TargetHealth.MaxHealth))
+			{
+				((STSM_Idle)_stateMachine.GetStateByName("Idle")).NewPositionOnEnter = true;
+				_stateMachine.RequestStateChange("Idle");
+				return false;
+			}
+
 			return true;
 		}
 	}

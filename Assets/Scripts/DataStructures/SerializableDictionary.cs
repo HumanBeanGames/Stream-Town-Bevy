@@ -7,6 +7,7 @@ using UnityEngine.Serialization;
 
 namespace DataStructures
 {
+	[Serializable]
 	public class SerializableDictionary
 	{
 	}

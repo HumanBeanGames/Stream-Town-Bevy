@@ -17,7 +17,7 @@ namespace TechTree.Data.Save
 		public float FloatValue { get; set; }
 		[field: SerializeField]
 		public string StringValue { get; set; }
-		[field: SerializeField]
+		[field: System.NonSerialized]
 		public object ObjectValue { get; set; }
 		[field: SerializeField]
 		public char CharValue { get; set; }

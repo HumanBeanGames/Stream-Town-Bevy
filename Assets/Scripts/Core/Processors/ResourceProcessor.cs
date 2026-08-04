@@ -306,6 +306,45 @@ namespace Processors
 		public Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> GetRecruitResources() => _resourceData.RecruitResourcesCache;
 
 		/// <summary>
+		/// Generic resource snapshot boundary used by persistence and other
+		/// data-oriented consumers. Unsupported resource types return null.
+		/// </summary>
+		public Dictionary<(int meshIndex, int materialIndex), GameResources.ResourceData[]> GetResources(global::Utils.Resource resourceType)
+		{
+			switch (resourceType)
+			{
+				case global::Utils.Resource.Wood: return _resourceData.WoodResourcesCache;
+				case global::Utils.Resource.Ore: return _resourceData.OreResourcesCache;
+				case global::Utils.Resource.Food: return _resourceData.FoodResourcesCache;
+				case global::Utils.Resource.Gold: return _resourceData.GoldResourcesCache;
+				case global::Utils.Resource.Recruit: return _resourceData.RecruitResourcesCache;
+				default: return null;
+			}
+		}
+
+		/// <summary>Clears generated instances and assignment state before restoring another world.</summary>
+		public void ResetWorldState()
+		{
+			_resourceData.ResourceAssignmentCounts.Clear();
+			_resourceData.ResourceCurrentAmounts.Clear();
+
+			void Clear(global::Utils.Resource resourceType)
+			{
+				SetGeneratedResources(
+					resourceType,
+					new List<GameResources.ResourceData>(),
+					new List<Mesh>(),
+					new List<Material>());
+			}
+
+			Clear(global::Utils.Resource.Wood);
+			Clear(global::Utils.Resource.Ore);
+			Clear(global::Utils.Resource.Food);
+			Clear(global::Utils.Resource.Gold);
+			Clear(global::Utils.Resource.Recruit);
+		}
+
+		/// <summary>
 		/// Gets the cached transformation matrices for wood resources.
 		/// </summary>
 		public Dictionary<(int meshIndex, int materialIndex), Matrix4x4[]> GetWoodMatrices()

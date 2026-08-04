@@ -29,6 +29,13 @@ namespace Character
 			_resources = resources;
 		}
 
+		/// <summary>Restores the authored inventory entries for a reused pooled player.</summary>
+		public void ResetToDefaults()
+		{
+			_resources.Clear();
+			InitData();
+		}
+
 
 		/// <summary>
 		/// Adds a given resource and amount to the player's inventory.

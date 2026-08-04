@@ -41,6 +41,7 @@ GameObject:
   - component: {fileID: 2240970141336404593}
   - component: {fileID: -4699427914955792433}
   - component: {fileID: 9166350241427600923}
+  - component: {fileID: 665713219405184231}
   m_Layer: 0
   m_Name: Player_Character
   m_TagString: Player
@@ -77,14 +78,14 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 1c5152c319b88c943a51c1a4072be5e0, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   _currentRole: 1
   _onRoleChanged:
     m_PersistentCalls:
       m_Calls:
       - m_Target: {fileID: 8480558382399605843}
-        m_TargetAssemblyTypeName: Character.EquipmentHandler, Assembly-CSharp
+        m_TargetAssemblyTypeName: Character.CharacterModelHandler, Assembly-CSharp
         m_MethodName: SwitchRole
         m_Mode: 0
         m_Arguments:
@@ -919,6 +920,21 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _displayUI: {fileID: 6166034780445587159}
   _initialized: 0
+--- !u!114 &665713219405184231
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2274655305257698699}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b92252984a443114a99b71bc105c22a0, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  _healthBar: {fileID: 0}
+  _displayUI: {fileID: 0}
+  _hideDelay: 3
 --- !u!1 &3492923106381143731
 GameObject:
   m_ObjectHideFlags: 0

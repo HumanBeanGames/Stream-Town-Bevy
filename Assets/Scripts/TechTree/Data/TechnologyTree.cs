@@ -1,5 +1,4 @@
 using Processors;
-using SavingAndLoading;
 using System;
 using System.Collections.Generic;
 using TechTree.ScriptableObjects;
@@ -142,6 +141,74 @@ namespace TechTree.Data
 			return result;
 		}
 
+		/// <summary>
+		/// Returns stable, data-authored identifiers for unlocked technologies.
+		/// TechName is the persistence contract; adding or reordering nodes does not
+		/// change existing saves.
+		/// </summary>
+		public List<string> GetUnlockedNodeIds()
+		{
+			List<string> result = new List<string>();
+			foreach (KeyValuePair<Node_SO, bool> node in _unlockedNodes)
+			{
+				if (node.Value && node.Key != null && !string.IsNullOrWhiteSpace(node.Key.TechName))
+					result.Add(node.Key.TechName);
+			}
+
+			return result;
+		}
+
+		/// <summary>
+		/// Rebuilds the tree from stable identifiers and invokes unlock effects once,
+		/// from roots toward leaves.
+		/// </summary>
+		public void RestoreUnlockedNodeIds(IEnumerable<string> unlockedNodeIds)
+		{
+			HashSet<string> ids = new HashSet<string>(unlockedNodeIds ?? Array.Empty<string>(), StringComparer.Ordinal);
+			// Authored baseline unlocks are part of the game definition, not mutable
+			// runtime state. Merge them so older/broken saves cannot relock Hamlet.
+			foreach (Node_SO node in _unlockedNodes.Keys)
+			{
+				if (node != null && node.IsUnlocked && !string.IsNullOrWhiteSpace(node.TechName))
+					ids.Add(node.TechName);
+			}
+			// Generate-mode initialization always unlocks the root. It is therefore
+			// baseline game state even when an older save omitted it.
+			if (_rootNode != null && !string.IsNullOrWhiteSpace(_rootNode.TechName))
+				ids.Add(_rootNode.TechName);
+
+			_availableNodes.Clear();
+			foreach (Node_SO node in new List<Node_SO>(_unlockedNodes.Keys))
+				_unlockedNodes[node] = false;
+
+			List<Node_SO> nodes = new List<Node_SO>();
+			foreach (Node_SO node in _unlockedNodes.Keys)
+			{
+				if (node != null && ids.Contains(node.TechName))
+					nodes.Add(node);
+			}
+
+			nodes.Sort((left, right) => GetDepth(left).CompareTo(GetDepth(right)));
+			for (int i = 0; i < nodes.Count; i++)
+				ForceUnlockNode(nodes[i]);
+
+			if (_rootNode != null && !_unlockedNodes[_rootNode])
+				_availableNodes.Add(_rootNode);
+		}
+
+		private static int GetDepth(Node_SO node)
+		{
+			int depth = 0;
+			Node_SO current = node;
+			while (current != null && current.Parent != null)
+			{
+				depth++;
+				current = current.Parent;
+			}
+
+			return depth;
+		}
+
         /// <summary>
         /// Gets the current node's index.
         /// </summary>
@@ -183,20 +250,16 @@ namespace TechTree.Data
         /// <param name="unlockedNodes">The list of unlocked node states.</param>
 		public void SetUnlockedNodes(List<bool> unlockedNodes)
 		{
-			List<Node_SO> nodesToBeProcessed = new List<Node_SO>();
+			List<string> unlockedNodeIds = new List<string>();
 			int i = 0;
 			foreach (Node_SO node in _unlockedNodes.Keys)
 			{
-				node.IsUnlocked = unlockedNodes[i];
-				if (node.IsUnlocked && !nodesToBeProcessed.Contains(node))
-					nodesToBeProcessed.Add(node);
+				if (unlockedNodes != null && i < unlockedNodes.Count && unlockedNodes[i])
+					unlockedNodeIds.Add(node.TechName);
 				i++;
 			}
 
-			for (int j = nodesToBeProcessed.Count - 1; j >= 0; j--)
-			{
-				ForceUnlockNode(nodesToBeProcessed[j]);
-			}
+			RestoreUnlockedNodeIds(unlockedNodeIds);
 		}
 
         /// <summary>

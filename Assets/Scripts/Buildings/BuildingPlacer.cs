@@ -1,10 +1,9 @@
 using Character;
 using Processors;
 using Pathfinding;
-using SavingAndLoading.SavableObjects;
-using SavingAndLoading.Structs;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UserInterface;
 using Utils;
 using Utils.Pooling;
@@ -376,7 +375,7 @@ namespace Buildings
                 // Use FoliageProcessor's efficient spatial partitioning method
                 _foliageProcessor.RemoveFoliageInBounds(bounds);
             }
-            catch (System.Exception ex)
+            catch (System.Exception)
             {
                 // Silently fail if foliage removal fails
             }
@@ -391,7 +390,7 @@ namespace Buildings
             // Allow left-click confirm for debug player only
             if (_owner != null && _owner.TwitchUser.Username == "Debugger")
             {
-                if (Input.GetMouseButtonDown(0))
+                if (Mouse.current?.leftButton.wasPressedThisFrame == true)
                 {
                     // Check if placer is still active in the processor
                     if (_buildingProcessor != null)

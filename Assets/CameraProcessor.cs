@@ -1,4 +1,3 @@
-using NUnit.Framework;
 using PlayerControls;
 using Reflex.Attributes;
 using Settings;
@@ -26,7 +25,7 @@ public class CameraProcessor : MonoBehaviour
         {
             _camera = Camera.main;
             _cameraData = _camera.GetUniversalAdditionalCameraData();
-            SettingsProcessor _settingsProcessor = FindObjectsByType<SettingsProcessor>(FindObjectsSortMode.None)[0];
+            SettingsProcessor _settingsProcessor = FindObjectsByType<SettingsProcessor>()[0];
             _settingsProcessor.LoadSettings();
         }
     }*/

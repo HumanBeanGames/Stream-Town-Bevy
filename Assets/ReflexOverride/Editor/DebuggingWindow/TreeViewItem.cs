@@ -2,7 +2,7 @@ using UnityEditor.IMGUI.Controls;
 
 namespace Reflex.Editor.DebuggingWindow
 {
-    internal class TreeViewItem<T> : TreeViewItem where T : TreeElement
+    internal class TreeViewItem<T> : UnityEditor.IMGUI.Controls.TreeViewItem<int> where T : TreeElement
     {
         public T Data { get; }
 

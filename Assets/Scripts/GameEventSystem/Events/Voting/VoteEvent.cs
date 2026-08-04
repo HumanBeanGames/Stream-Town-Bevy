@@ -44,6 +44,8 @@ namespace GameEventSystem.Events.Voting
         /// </summary>
 		public VoteOption WinningOption => _winningOption;
 
+		public IReadOnlyDictionary<Player, PlayerVote> PlayerVotes => _playerVotes;
+
         /// <summary>
         /// Initializes a new vote event instance.
         /// </summary>
@@ -67,7 +69,7 @@ namespace GameEventSystem.Events.Voting
 		protected override void OnActioned(object data = null)
 		{
 			PlayerVote vote = data as PlayerVote;
-			AddVote(vote);
+			TryAddVote(vote, out _);
 		}
 
         /// <summary>
@@ -128,23 +130,31 @@ namespace GameEventSystem.Events.Voting
 		/// Adds a player's vote the tallies.
 		/// </summary>
 		/// <param name="vote">The player vote.</param>
-		private void AddVote(PlayerVote vote)
+		public bool TryAddVote(PlayerVote vote, out string failureReason)
 		{
+			failureReason = string.Empty;
+			if (vote == null || vote.Player == null || vote.VoteOption == null || string.IsNullOrWhiteSpace(vote.VoteOption.OptionName))
+			{
+				failureReason = "The vote was missing a player or option.";
+				return false;
+			}
+
 			if (_playerVotes.ContainsKey(vote.Player))
 			{
-				Debug.Log($"'{vote.Player.TwitchUser.Username}' Already Voted");
-				return;
+				failureReason = "You have already voted.";
+				return false;
 			}
 
-			if (!CheckOptionIsValid(vote))
+			if (!CheckOptionIsValid(vote) || !_options.TryGetValue(vote.VoteOption.OptionName, out VoteOption selectedOption))
 			{
-				Debug.Log($"'{vote.VoteOption.OptionName}' Was not a Valid Option");
-				return;
+				failureReason = $"'{vote.VoteOption.OptionName}' is not a valid option. Available options: {string.Join(", ", _options.Keys)}.";
+				return false;
 			}
 
-			_options[vote.VoteOption.OptionName].Votes++;
+			selectedOption.Votes++;
 			_playerVotes.Add(vote.Player, vote);
 			OnVoteAdded(vote);
+			return true;
 		}
 
         /// <summary>

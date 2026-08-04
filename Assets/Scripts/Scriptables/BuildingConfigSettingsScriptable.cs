@@ -17,7 +17,7 @@ namespace ScriptablesProcessorInfrastructure
 		/// Dictionary mapping building types to their individual cost modifiers.
 		/// Positive values increase cost, negative values decrease cost.
 		/// </summary>
-		public Dictionary<BuildingType, int> BuildingCostModifiers = new Dictionary<BuildingType, int>();
+		[System.NonSerialized] public Dictionary<BuildingType, int> BuildingCostModifiers = new Dictionary<BuildingType, int>();
 
 		[Header("Global Modifier")]
 		/// <summary>
@@ -31,13 +31,13 @@ namespace ScriptablesProcessorInfrastructure
 		/// Dictionary mapping building types to their maximum upgrade levels.
 		/// Determines how many times each building type can be upgraded.
 		/// </summary>
-		public Dictionary<BuildingType, int> BuildingsMaxLevel = new Dictionary<BuildingType, int>();
+		[System.NonSerialized] public Dictionary<BuildingType, int> BuildingsMaxLevel = new Dictionary<BuildingType, int>();
 
 		[Header("Building Ages")]
 		/// <summary>
 		/// Dictionary mapping building types to their required building age.
 		/// Determines which age a building belongs to for progression purposes.
 		/// </summary>
-		public Dictionary<BuildingType, Age> BuildingAges = new Dictionary<BuildingType, Age>();
+		[System.NonSerialized] public Dictionary<BuildingType, Age> BuildingAges = new Dictionary<BuildingType, Age>();
 	}
 }

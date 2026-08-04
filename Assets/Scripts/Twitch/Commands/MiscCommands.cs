@@ -20,14 +20,16 @@ namespace Twitch.Commands
         private Processors.TwitchChatProcessor _twitchChatProcessor;
         private RoleCommands _roleCommands;
         private BuildingCommands _buildingCommands;
+		private RoleProcessor _roleProcessor;
 
         public MiscCommands(BuildingProcessor buildingProcessor, Processors.TwitchChatProcessor twitchChatProcessor,
-            RoleCommands roleCommands, BuildingCommands buildingCommands)
+            RoleCommands roleCommands, BuildingCommands buildingCommands, RoleProcessor roleProcessor)
         {
             _buildingProcessor = buildingProcessor;
             _twitchChatProcessor = twitchChatProcessor;
             _roleCommands = roleCommands;
             _buildingCommands = buildingCommands;
+			_roleProcessor = roleProcessor;
         }
 
 	        /// <summary>
@@ -126,6 +128,18 @@ namespace Twitch.Commands
 		public void Help()
 		{
 			_twitchChatProcessor.SendPreBuiltMessage("help");
+		}
+
+		/// <summary>
+		/// Lists roles that currently have an available slot and explains how to
+		/// choose one. This remains available before character creation.
+		/// </summary>
+		public void Roles()
+		{
+			List<string> roles = _roleProcessor.GetAvailableRolesAsString();
+			string roleList = roles.Count > 0 ? string.Join(", ", roles) : "none currently available";
+			_twitchChatProcessor.SendMessage(
+				$"Available roles: {roleList}. Use !role <role> after joining; use !info <role> for details.");
 		}
 
 		/// <summary>

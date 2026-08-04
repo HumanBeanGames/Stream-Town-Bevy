@@ -1,5 +1,3 @@
-using Processors;
-using Reflex.Attributes;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,27 +21,22 @@ namespace GameEventSystem.Events.Voting
 		private UserInterface_RulerVote _rulerVoteInterface;
 
         /// <summary>
-        /// UI runtime scriptable data. Injected via Reflex dependency injection.
-        /// </summary>
-		[Inject] private UIProcessor _uiProcessor;
-
-        /// <summary>
         /// Initializes a new Keep King vote instance.
         /// </summary>
         /// <param name="delay">The delay before the event starts.</param>
         /// <param name="eventDuration">The event duration.</param>
+		/// <param name="rulerVoteInterface">The scene-local UI adapter used to render the vote.</param>
         /// <param name="eventType">The event type.</param>
         /// <param name="data">Additional data.</param>
         /// <param name="overrideCurrentEvent">Whether to override the current event.</param>
         /// <param name="timeout">The timeout.</param>
-		public KeepKingVote(double delay, double eventDuration, EventType eventType = EventType.KeepKingVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
+		public KeepKingVote(double delay, double eventDuration, UserInterface_RulerVote rulerVoteInterface, EventType eventType = EventType.KeepKingVote, object data = null, bool overrideCurrentEvent = false, double timeout = -1) : base(delay, eventDuration, eventType, data, overrideCurrentEvent, timeout)
 		{
 			_alwaysReturnSuccess = true;
-			_rulerVoteInterface = _uiProcessor.RulerVoteInterface;
+			_rulerVoteInterface = rulerVoteInterface ?? throw new ArgumentNullException(nameof(rulerVoteInterface));
 
 			_options.Add("yes", new VoteOption("yes", null));
 			_options.Add("no", new VoteOption("no", null));
-			InitializeOptions();
 		}
 
         /// <summary>
@@ -74,6 +67,8 @@ namespace GameEventSystem.Events.Voting
 		protected override void OnStarted()
 		{
 			base.OnStarted();
+			_rulerVoteInterface.DisableRulerContainer();
+			InitializeOptions();
 			_rulerVoteInterface.ActivateRulerContainer();
 			_rulerVoteInterface.DescriptionTMP.text = "Keep the ruler?";
 		}

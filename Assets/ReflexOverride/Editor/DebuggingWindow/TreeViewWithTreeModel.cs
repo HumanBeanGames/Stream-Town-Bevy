@@ -3,15 +3,16 @@ using System.Collections.Generic;
 using Reflex.Logging;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
+using UnityTreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem<int>;
 
 namespace Reflex.Editor.DebuggingWindow
 {
-    internal class TreeViewWithTreeModel<T> : TreeView where T : TreeElement
+    internal class TreeViewWithTreeModel<T> : TreeView<int> where T : TreeElement
     {
         private TreeModel<T> _treeModel;
-        private readonly List<TreeViewItem> _rows = new List<TreeViewItem>(100);
+        private readonly List<UnityTreeViewItem> _rows = new List<UnityTreeViewItem>(100);
 
-        public TreeViewWithTreeModel(TreeViewState state, MultiColumnHeader multiColumnHeader, TreeModel<T> model) : base(state, multiColumnHeader)
+        public TreeViewWithTreeModel(TreeViewState<int> state, MultiColumnHeader multiColumnHeader, TreeModel<T> model) : base(state, multiColumnHeader)
         {
             Init(model);
         }
@@ -26,13 +27,13 @@ namespace Reflex.Editor.DebuggingWindow
             return _treeModel.Find(id);
         }
 
-        protected override TreeViewItem BuildRoot()
+        protected override UnityTreeViewItem BuildRoot()
         {
             int depthForHiddenRoot = -1;
             return new TreeViewItem<T>(_treeModel.Root.Id, depthForHiddenRoot, _treeModel.Root.Name, _treeModel.Root);
         }
 
-        protected override IList<TreeViewItem> BuildRows(TreeViewItem root)
+        protected override IList<UnityTreeViewItem> BuildRows(UnityTreeViewItem root)
         {
             if (_treeModel.Root == null)
             {
@@ -59,7 +60,7 @@ namespace Reflex.Editor.DebuggingWindow
             return _rows;
         }
 
-        private void AddChildrenRecursive(T parent, int depth, IList<TreeViewItem> newRows)
+        private void AddChildrenRecursive(T parent, int depth, IList<UnityTreeViewItem> newRows)
         {
             foreach (T child in parent.Children)
             {
@@ -80,7 +81,7 @@ namespace Reflex.Editor.DebuggingWindow
             }
         }
 
-        private static void Search(T searchFromThis, string search, List<TreeViewItem> result)
+        private static void Search(T searchFromThis, string search, List<UnityTreeViewItem> result)
         {
             if (string.IsNullOrEmpty(search))
             {
@@ -121,7 +122,7 @@ namespace Reflex.Editor.DebuggingWindow
             SortSearchResult(result);
         }
 
-        private static void SortSearchResult(List<TreeViewItem> rows)
+        private static void SortSearchResult(List<UnityTreeViewItem> rows)
         {
             rows.Sort((x, y) => EditorUtility.NaturalCompare(x.displayName, y.displayName));
         }

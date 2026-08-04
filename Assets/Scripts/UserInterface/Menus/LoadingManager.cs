@@ -1,5 +1,4 @@
 using Processors;
-using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -50,12 +49,6 @@ namespace UserInterface.MainMenu
         /// </summary>
         private float _loadProgress;
 
-        /// <summary>
-        /// Event fired when a scene load is requested.
-        /// Passes the scene index to load.
-        /// </summary>
-        public event Action<int> OnSceneLoadRequested;
-
 		[SerializeField]
 		private GameObject _loadingUI;
 
@@ -93,8 +86,12 @@ namespace UserInterface.MainMenu
 			await LoadSceneAsync(sceneIndex, false);
 		}
 
-		private async Task LoadSceneAsync(int sceneIndex, bool loadingWorld)
+		private async Task LoadSceneAsync(
+			int sceneIndex,
+			bool loadingWorld,
+			MetaData.LoadType loadType = MetaData.LoadType.Generate)
 		{
+			Core.Coordinator.BeginSceneTransition(loadingWorld, loadType);
 			System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
 			RandomizeTooltip();
@@ -164,7 +161,12 @@ namespace UserInterface.MainMenu
 
 		public async void LoadWorldScene(int sceneIndex)
 		{
-			await LoadSceneAsync(sceneIndex, true);
+			await LoadSceneAsync(sceneIndex, true, MetaData.LoadType.Generate);
+		}
+
+		public async void LoadWorldScene(int sceneIndex, MetaData.LoadType loadType)
+		{
+			await LoadSceneAsync(sceneIndex, true, loadType);
 		}
 
 		private void RandomizeTooltip()
@@ -190,12 +192,6 @@ namespace UserInterface.MainMenu
 			ParallelProgressReporter.OnOverallProgressUpdated += HandleParallelProgressUpdated;
 			ParallelProgressReporter.OnTrackProgressUpdated += HandleTrackProgressUpdated;
 			ParallelProgressReporter.OnTrackRegistered += HandleTrackRegistered;
-			OnSceneLoadRequested += HandleSceneLoadRequested;
-		}
-
-		private void HandleSceneLoadRequested(int sceneIndex)
-		{
-			LoadNonWorldScenes(sceneIndex);
 		}
 
 		private void Awake()
@@ -267,7 +263,6 @@ namespace UserInterface.MainMenu
 			ParallelProgressReporter.OnOverallProgressUpdated -= HandleParallelProgressUpdated;
 			ParallelProgressReporter.OnTrackProgressUpdated -= HandleTrackProgressUpdated;
 			ParallelProgressReporter.OnTrackRegistered -= HandleTrackRegistered;
-			OnSceneLoadRequested -= HandleSceneLoadRequested;
 			if (_gameStateProcessor != null)
 				_gameStateProcessor.GeneratedWorld -= DisableUI;
 

@@ -1,5 +1,3 @@
-using System;
-
 using ScriptablesProcessorInfrastructure;
 using PlayerControls;
 using System.Collections.Generic;
@@ -9,7 +7,7 @@ namespace Processors
 {
 	/// <summary>
 	/// Runtime data class that stores player input state for the game.
-	/// Manages PlayerInput component, held keys, mouse position/delta, and input events.
+	/// Manages PlayerInput, held keys, and mouse position/delta state.
 	/// </summary>
 	public class PlayerInputRuntimeData : IRuntimeDataScriptable
 	{
@@ -139,30 +137,6 @@ namespace Processors
 			get => _suppressGameplayInput;
 			set => _suppressGameplayInput = value;
 		}
-
-		/// <summary>
-		/// Event fired when left mouse button is pressed.
-		/// Passes the input button that was pressed.
-		/// </summary>
-		public event Action<Data.SharedTypes.InputButton> OnLeftClickPress;
-
-		/// <summary>
-		/// Event fired when right mouse button is pressed.
-		/// Passes the input button that was pressed.
-		/// </summary>
-		public event Action<Data.SharedTypes.InputButton> OnRightClickPress;
-
-		/// <summary>
-		/// Event fired when left mouse button is released.
-		/// Passes the input button that was released.
-		/// </summary>
-		public event Action<Data.SharedTypes.InputButton> OnLeftClickRelease;
-
-		/// <summary>
-		/// Event fired while left mouse button is held down.
-		/// Passes the input button being held.
-		/// </summary>
-		public event Action<Data.SharedTypes.InputButton> OnLeftClickHold;
 
 		/// <summary>
 		/// Initializes the player input runtime data with default values.

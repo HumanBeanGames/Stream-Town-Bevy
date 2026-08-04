@@ -4,6 +4,7 @@ using Processors;
 using System;
 using Target;
 using Reflex.Attributes;
+using UserInterface;
 
 namespace Units
 {
@@ -41,8 +42,9 @@ namespace Units
 		public bool Dead => _health <= 0 ? true : false;
 		public int Health => _health;
 		public int MaxHealth => _maxHealth;
-		public float HealthPercentage => (float)_health / _maxHealth;
+		public float HealthPercentage => _maxHealth > 0 ? Mathf.Clamp01((float)_health / _maxHealth) : 0f;
 		public bool RegenRequiresFood => _regenRequiresFood;
+		public void SetRegenRequiresFood(bool value) => _regenRequiresFood = value;
 		public Action<bool> OnDeath { get; set; }
 		public Action<object> OnDeathObject { get; set; }
 		public event Action<HealthHandler> OnHealthChange;
@@ -186,6 +188,17 @@ namespace Units
 		private void Awake()
 		{
 			_baseMaxHealth = _maxHealth;
+
+			// Unit health bars are runtime presentation attached to the shared health
+			// boundary. This ensures players and every enemy type receive the same
+			// behaviour without requiring the component to be duplicated across every
+			// prefab. Buildings already own their purpose-built, settings-aware display.
+			if (GetComponentInChildren<UnitHealthBar>(true) == null &&
+				GetComponentInChildren<UserInterface_BuildingHealthBar>(true) == null)
+			{
+				gameObject.AddComponent<UnitHealthBar>();
+			}
+
 			// Don't set health here - let BuildingBase handle it based on construction state
 		}
 

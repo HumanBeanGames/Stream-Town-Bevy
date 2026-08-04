@@ -68,6 +68,17 @@ namespace Processors
 			return _townResourceRuntimeData.Resources[resourceType].Amount;
 		}
 
+		public bool TryGetResourceAmount(Resource resourceType, out int amount)
+		{
+			amount = 0;
+			if (_townResourceRuntimeData == null ||
+				!_townResourceRuntimeData.Resources.TryGetValue(resourceType, out ResourceInventory inventory))
+				return false;
+
+			amount = inventory.Amount;
+			return true;
+		}
+
 		/// <summary>
 		/// Sets the amount of a resource to a specific value.
 		/// </summary>
@@ -76,6 +87,8 @@ namespace Processors
 		public void SetResourceAmount(Resource resourceType, int resourceAmount)
 		{
 			_townResourceRuntimeData.Resources[resourceType].Amount = resourceAmount;
+			if (_townResourceRuntimeData.OnResourceChangeEventDict.TryGetValue(resourceType, out UnityEvent<StorageStatus> statusChanged))
+				statusChanged.Invoke(GetResourceStatus(resourceType));
 		}
 
 		/// <summary>
@@ -251,6 +264,25 @@ namespace Processors
 			_townResourceRuntimeData.ResourceBoostValues.Add(Resource.Ore, 0);
 			_townResourceRuntimeData.ResourceBoostValues.Add(Resource.Wood, 0);
 			_townResourceRuntimeData.ResourceBoostValues.Add(Resource.Recruit, 0);
+		}
+
+		/// <summary>Restores authored inventory limits before saved tech effects are replayed.</summary>
+		public void ResetWorldState()
+		{
+			_townResourceRuntimeData.Resources[Resource.Food] = new ResourceInventory(_resourceData.FoodStartingAmount, _resourceData.FoodMaxAmount, _resourceData.FoodInfinite);
+			_townResourceRuntimeData.Resources[Resource.Ore] = new ResourceInventory(_resourceData.OreStartingAmount, _resourceData.OreMaxAmount, _resourceData.OreInfinite);
+			_townResourceRuntimeData.Resources[Resource.Wood] = new ResourceInventory(_resourceData.WoodStartingAmount, _resourceData.WoodMaxAmount, _resourceData.WoodInfinite);
+			_townResourceRuntimeData.Resources[Resource.Gold] = new ResourceInventory(_resourceData.GoldStartingAmount, _resourceData.GoldMaxAmount, _resourceData.GoldInfinite);
+			_townResourceRuntimeData.Resources[Resource.Recruit] = new ResourceInventory(_resourceData.RecruitStartingAmount, _resourceData.RecruitMaxAmount, _resourceData.RecruitInfinite);
+
+			_townResourceRuntimeData.ResourceBoostValues.Clear();
+			_townResourceRuntimeData.ResourceBoostValues[Resource.Food] = 0;
+			_townResourceRuntimeData.ResourceBoostValues[Resource.Ore] = 0;
+			_townResourceRuntimeData.ResourceBoostValues[Resource.Wood] = 0;
+			_townResourceRuntimeData.ResourceBoostValues[Resource.Recruit] = 0;
+
+			foreach (ResourceRateOfChange rate in _townResourceRuntimeData.ResourceRatesOfChange.Values)
+				rate.ResetRuntimeState();
 		}
 
 		/// <summary>

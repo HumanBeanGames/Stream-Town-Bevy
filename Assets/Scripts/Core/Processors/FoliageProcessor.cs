@@ -176,12 +176,24 @@ namespace Processors
 		/// </summary>
 		public void SetGeneratedFoliage(List<FoliageData> onLandFoliage, List<FoliageData> underWaterFoliage)
 		{
+			_removedOnLandFoliageIndices.Clear();
+			_removedUnderWaterFoliageIndices.Clear();
 			_foliageRuntimeData.OnLandFoliage = onLandFoliage ?? new List<FoliageData>();
 			_foliageRuntimeData.UnderWaterFoliage = underWaterFoliage ?? new List<FoliageData>();
 			_foliageRuntimeData.OnLandFoliageCache = GroupByMeshAndMaterial(_foliageRuntimeData.OnLandFoliage.ToArray());
 			_foliageRuntimeData.UnderWaterFoliageCache = GroupByMeshAndMaterial(_foliageRuntimeData.UnderWaterFoliage.ToArray());
 			_foliageRuntimeData.OnLandMatricesCache = BuildMatricesDictionary(_foliageRuntimeData.OnLandFoliageCache);
 			_foliageRuntimeData.UnderWaterMatricesCache = BuildMatricesDictionary(_foliageRuntimeData.UnderWaterFoliageCache);
+		}
+
+		/// <summary>
+		/// Clears generated foliage and every derived render cache when a world is
+		/// abandoned. The destination scene can then provide its own authored
+		/// foliage without project-lifetime data leaking across the scene boundary.
+		/// </summary>
+		public void ResetWorldState()
+		{
+			SetGeneratedFoliage(new List<FoliageData>(), new List<FoliageData>());
 		}
 
 		/// <summary>

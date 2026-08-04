@@ -4,6 +4,7 @@ using GUIDSystem;
 using Processors;
 using Pathfinding;
 using SavingAndLoading.SavableObjects;
+using SavingAndLoading.Structs;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -49,10 +50,13 @@ namespace Processors
 		[Inject] private GridSystem.Partitioning.CellSpacePartitioning _cellSpacePartitioning;
 		[Inject] private GridSystem.GridProcessor _gridProcessor;
 		[Inject] private BuildingProcessor _buildingProcessor;
+		[Inject] private PlayerProcessor _playerProcessor;
 
 		private const int MAX_GENERATION_ATTEMPTS = 10;
 		private Task _poolingInitializationTask = null;
+		private Task _poolPrewarmingTask = null;
 		private bool _objectsGenerated = false;
+		public bool CreateStartingNpcRosterOnCompletion { private get; set; }
 		private const int MAX_TOWNHALL_SPIRAL_RINGS = 24;
 		private const string TERRAIN_HOST_NAME = "GeneratedTerrain";
 
@@ -73,12 +77,13 @@ namespace Processors
 			return height > 0f;
 		}
 
-		private static (Mesh mesh, Vector3 scale) SelectFoliageMeshAndScale(FoliageGenerationSettings settings)
+		private static (Mesh mesh, Vector3 scale) SelectFoliageMeshAndScale(FoliageGenerationSettings settings, Vector3 position)
 		{
 			if (settings.MeshSettings == null || settings.MeshSettings.Count == 0)
 				throw new InvalidOperationException($"WorldGenProcessor: Foliage settings '{settings.PoolName}' must define at least one mesh setting.");
 
-			FoliageMeshSettings meshSettings = settings.MeshSettings[UnityEngine.Random.Range(0, settings.MeshSettings.Count)];
+			int meshIndex = WorldInstanceDeterminism.SelectFoliageMesh(position, settings.StableId, settings.MeshSettings.Count);
+			FoliageMeshSettings meshSettings = settings.MeshSettings[meshIndex];
 			if (meshSettings.Mesh == null)
 				throw new InvalidOperationException($"WorldGenProcessor: Foliage settings '{settings.PoolName}' contains a mesh setting with no Mesh assigned.");
 
@@ -91,7 +96,7 @@ namespace Processors
 				return;
 
 			Scene activeScene = SceneManager.GetActiveScene();
-			Camera[] sceneCameras = FindObjectsByType<Camera>(FindObjectsSortMode.None);
+			Camera[] sceneCameras = FindObjectsByType<Camera>();
 			for (int i = 0; i < sceneCameras.Length; i++)
 			{
 				Camera candidate = sceneCameras[i];
@@ -134,6 +139,11 @@ namespace Processors
 			}
 
 			_runtimeData.WorldGenerated = true;
+			if (CreateStartingNpcRosterOnCompletion)
+			{
+				CreateStartingNpcRosterOnCompletion = false;
+				_playerProcessor?.EnsureStartingNpcRoster();
+			}
 			_gameStateProcessor.NotifyWorldLoaded();
 		}
 
@@ -173,10 +183,54 @@ namespace Processors
 
 			// Reset generation flags
 			_objectsGenerated = false;
+			CreateStartingNpcRosterOnCompletion = false;
+			_runtimeData.WorldGenerated = false;
+			_poolingInitializationTask = null;
+			_poolPrewarmingTask = null;
 
 			// Start world generation on initialization
 			_runtimeData.State = GenerationState.InitializingPooling;
 			_runtimeData.GenerationAttempts = 0;
+		}
+
+		/// <summary>
+		/// Discards data owned by the previous world. WorldGenRuntimeData lives in
+		/// the project container, so scene unloading alone cannot clear these lists.
+		/// </summary>
+		public void ResetWorldState()
+		{
+			_objectsGenerated = false;
+			_poolingInitializationTask = null;
+			_poolPrewarmingTask = null;
+
+			_runtimeData.PooledObjects.Clear();
+			_runtimeData.Buildings.Clear();
+			_runtimeData.EnemyCampSpawners.Clear();
+			_runtimeData.WoodResources.Clear();
+			_runtimeData.OreResources.Clear();
+			_runtimeData.FoodResources.Clear();
+			_runtimeData.GoldResources.Clear();
+			_runtimeData.RecruitResources.Clear();
+			_runtimeData.OnLandFoliage.Clear();
+			_runtimeData.UnderWaterFoliage.Clear();
+
+			_runtimeData.WorldGenerated = false;
+			_runtimeData.GeneratedMesh = null;
+			_runtimeData.TerrainCanRegenerateFromSeed = false;
+			_runtimeData.TerrainHost = null;
+			_runtimeData.TerrainCheckPassed = false;
+			_runtimeData.State = GenerationState.Idle;
+			_runtimeData.GenerationAttempts = 0;
+			_runtimeData.CurrentGenerationSettingsIndex = 0;
+			_runtimeData.CurrentY = 0;
+			_runtimeData.CurrentX = 0;
+			_runtimeData.TotalChecks = 0;
+			_runtimeData.ChecksProcessed = 0;
+			_runtimeData.GeneratedNoiseMap = null;
+			_runtimeData.ParallelTaskCount = 0;
+			_runtimeData.CompletedParallelTasks = 0;
+			_runtimeData.ForceGenerate = false;
+			_runtimeData.ProgressReporterCallback = null;
 		}
 
 		/// <summary>
@@ -198,15 +252,36 @@ namespace Processors
 					if (_poolingInitializationTask == null)
 					{
 						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Starting pooling initialization");
-						_objectPoolingProcessor.ResetPoolingInitialization();
 						_poolingInitializationTask = _objectPoolingProcessor.InitializePooling(null);
 					}
 
 					// Check if pooling initialization is complete
 					if (_poolingInitializationTask != null && _poolingInitializationTask.IsCompleted)
 					{
+						if (_poolingInitializationTask.IsFaulted)
+							throw _poolingInitializationTask.Exception?.GetBaseException() ?? new InvalidOperationException("Pool creation failed.");
+
 						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Pooling initialization complete");
 						_poolingInitializationTask = null;
+						_runtimeData.State = GenerationState.PrewarmingPooling;
+					}
+					break;
+
+				case GenerationState.PrewarmingPooling:
+					if (_poolPrewarmingTask == null)
+					{
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Starting pool activation prewarm");
+						_poolPrewarmingTask = _objectPoolingProcessor.PrewarmPoolsAsync((progress, status) =>
+							LoadingProgressReporter.Report(0.55f + (Mathf.Clamp01(progress) * 0.15f), status));
+					}
+
+					if (_poolPrewarmingTask.IsCompleted)
+					{
+						if (_poolPrewarmingTask.IsFaulted)
+							throw _poolPrewarmingTask.Exception?.GetBaseException() ?? new InvalidOperationException("Pool prewarming failed.");
+
+						_debugProcessor.Log(DebugLogCategory.WorldGenProcessor, "Pool activation prewarm complete");
+						_poolPrewarmingTask = null;
 						_runtimeData.State = GenerationState.GeneratingTerrain;
 					}
 					break;
@@ -342,6 +417,7 @@ namespace Processors
 
 			GameObject terrainHost = GetOrCreateTerrainHost();
 			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(ProceduralMeshGenerator.GenerateTerrainMeshData(meshSettings, _terrainGenerationSettings.MeshHeightMultiplier, _terrainGenerationSettings.MeshHeightCurve, _terrainGenerationSettings.EnableIslandBias, _terrainGenerationSettings.IslandBiasCurve, _terrainGenerationSettings.IslandSize, _terrainGenerationSettings.IslandMultiplier, _terrainGenerationSettings.IslandAddition, _terrainGenerationSettings.QuantizationFactor, _terrainGenerationSettings.CellSize, _terrainGenerationSettings.TopFaceProportion), terrainHost);
+			_runtimeData.TerrainCanRegenerateFromSeed = true;
 		}
 
 		/// <summary>
@@ -352,7 +428,7 @@ namespace Processors
 		private void GenerateNavmesh()
 		{
 			// Get AstarPath component from scene
-			AstarPath astarPath = GameObject.FindObjectOfType<AstarPath>();
+			AstarPath astarPath = GameObject.FindAnyObjectByType<AstarPath>();
 			if (astarPath == null)
 			{
 				_debugProcessor.LogError(DebugLogCategory.WorldGenProcessor, "AstarPath component not found in scene. Cannot generate navmesh.");
@@ -560,6 +636,40 @@ namespace Processors
 		{
 			GameObject terrainHost = GetOrCreateTerrainHost();
 			_runtimeData.GeneratedMesh = ProceduralMeshGenerator.CreateMesh(mesh, terrainHost);
+			_runtimeData.TerrainCanRegenerateFromSeed = false;
+		}
+
+		public bool TryGetTerrainSeed(out int seed)
+		{
+			seed = _terrainGenerationSettings?.GenerationSettings?.Seed ?? 0;
+			return _runtimeData != null && _runtimeData.TerrainCanRegenerateFromSeed;
+		}
+
+		public void RestoreTerrainFromSeed(int seed, int generatorVersion)
+		{
+			if (generatorVersion != WorldGenSaveData.CurrentTerrainGeneratorVersion)
+				throw new InvalidOperationException($"Unsupported terrain generator version {generatorVersion}.");
+
+			_terrainGenerationSettings.GenerationSettings.Seed = seed;
+			GenerateTerrain();
+		}
+
+		/// <summary>
+		/// Rebuilds navigation after a saved terrain and its blockers have been restored.
+		/// </summary>
+		public void BuildNavigationForLoadedWorld()
+		{
+			GenerateNavmesh();
+		}
+
+		/// <summary>
+		/// Completes the loaded-world lifecycle and publishes the same readiness event
+		/// used by generated worlds.
+		/// </summary>
+		public void CompleteLoadedWorld()
+		{
+			_runtimeData.State = GenerationState.Complete;
+			CompleteWorldGeneration(GetActiveTownhallObject());
 		}
 
 		private GameObject GetOrCreateTerrainHost()
@@ -1000,6 +1110,22 @@ namespace Processors
 				}
 			}
 
+			ApplyDeterministicResourceVisuals(global::Utils.Resource.Wood, _runtimeData.WoodResources,
+				meshListsByType.TryGetValue(global::Utils.Resource.Wood, out List<Mesh> woodMeshes) ? woodMeshes.Count : 0,
+				materialListsByType.TryGetValue(global::Utils.Resource.Wood, out List<Material> woodMaterials) ? woodMaterials.Count : 0);
+			ApplyDeterministicResourceVisuals(global::Utils.Resource.Ore, _runtimeData.OreResources,
+				meshListsByType.TryGetValue(global::Utils.Resource.Ore, out List<Mesh> oreMeshes) ? oreMeshes.Count : 0,
+				materialListsByType.TryGetValue(global::Utils.Resource.Ore, out List<Material> oreMaterials) ? oreMaterials.Count : 0);
+			ApplyDeterministicResourceVisuals(global::Utils.Resource.Food, _runtimeData.FoodResources,
+				meshListsByType.TryGetValue(global::Utils.Resource.Food, out List<Mesh> foodMeshes) ? foodMeshes.Count : 0,
+				materialListsByType.TryGetValue(global::Utils.Resource.Food, out List<Material> foodMaterials) ? foodMaterials.Count : 0);
+			ApplyDeterministicResourceVisuals(global::Utils.Resource.Gold, _runtimeData.GoldResources,
+				meshListsByType.TryGetValue(global::Utils.Resource.Gold, out List<Mesh> goldMeshes) ? goldMeshes.Count : 0,
+				materialListsByType.TryGetValue(global::Utils.Resource.Gold, out List<Material> goldMaterials) ? goldMaterials.Count : 0);
+			ApplyDeterministicResourceVisuals(global::Utils.Resource.Recruit, _runtimeData.RecruitResources,
+				meshListsByType.TryGetValue(global::Utils.Resource.Recruit, out List<Mesh> recruitMeshes) ? recruitMeshes.Count : 0,
+				materialListsByType.TryGetValue(global::Utils.Resource.Recruit, out List<Material> recruitMaterials) ? recruitMaterials.Count : 0);
+
 			// Update ResourceProcessor with generated resources
 			_resourceProcessor.SetGeneratedResources(global::Utils.Resource.Wood, _runtimeData.WoodResources,
 				meshListsByType.ContainsKey(global::Utils.Resource.Wood) ? meshListsByType[global::Utils.Resource.Wood] : null,
@@ -1122,20 +1248,6 @@ namespace Processors
 								continue;
 							}
 
-							// Select mesh and material
-							int meshIndex = -1;
-							int materialIndex = -1;
-							Mesh selectedMesh = null;
-							if (settings.Meshes != null && settings.Meshes.Count > 0)
-							{
-								meshIndex = UnityEngine.Random.Range(0, settings.Meshes.Count);
-								selectedMesh = settings.Meshes[meshIndex];
-							}
-							if (settings.Materials != null && settings.Materials.Count > 0)
-							{
-								materialIndex = UnityEngine.Random.Range(0, settings.Materials.Count);
-							}
-
 							// Calculate amount
 							int amount = 100;
 							if (settings.SetByDistance)
@@ -1149,9 +1261,9 @@ namespace Processors
 								? position + new Vector3(0.5f, 0, 0.5f)
 								: position;
 
-							// Create resource data for GPU instancing
-							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
-							Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
+							int meshIndex = WorldInstanceDeterminism.SelectResourceMesh(resourcePosition, resourceType, settings.Meshes?.Count ?? 0);
+							int materialIndex = WorldInstanceDeterminism.SelectResourceMaterial(resourcePosition, resourceType, settings.Materials?.Count ?? 0);
+							Quaternion rotation = WorldInstanceDeterminism.SelectResourceRotation(resourcePosition, resourceType);
 							uint guid = _guidProcessor.GenerateResourceGUID(existingGUIDs);
 							existingGUIDs.Add(guid);
 							GameResources.ResourceData resourceData = new GameResources.ResourceData(resourcePosition, resourceType, amount, false, Matrix4x4.TRS(resourcePosition, rotation, Vector3.one), guid, meshIndex, materialIndex);
@@ -1271,11 +1383,10 @@ namespace Processors
 								continue;
 							}
 
-							(Mesh selectedMesh, Vector3 selectedScale) = SelectFoliageMeshAndScale(settings);
+							(Mesh selectedMesh, Vector3 selectedScale) = SelectFoliageMeshAndScale(settings, position);
 
 							// Create foliage data for GPU instancing
-							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
-							Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
+							Quaternion rotation = WorldInstanceDeterminism.SelectFoliageRotation(position, settings.StableId);
 							GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, selectedScale, selectedMesh, settings.Material);
 							foliageList.Add(foliageData);
 
@@ -1296,6 +1407,9 @@ namespace Processors
 		/// </summary>
 		private void SetGeneratedResources(global::Utils.Resource resourceType, List<GameResources.ResourceData> resources, List<Mesh> meshes, List<Material> materials)
 		{
+			resources ??= new List<GameResources.ResourceData>();
+			ApplyDeterministicResourceVisuals(resourceType, resources, meshes?.Count ?? 0, materials?.Count ?? 0);
+
 			switch (resourceType)
 			{
 				case global::Utils.Resource.Wood:
@@ -1313,6 +1427,29 @@ namespace Processors
 				case global::Utils.Resource.Recruit:
 					_runtimeData.RecruitResources = resources ?? new List<GameResources.ResourceData>();
 					break;
+			}
+		}
+
+		private static void ApplyDeterministicResourceVisuals(
+			global::Utils.Resource resourceType,
+			List<GameResources.ResourceData> resources,
+			int meshCount,
+			int materialCount)
+		{
+			if (resources == null)
+				return;
+
+			for (int i = 0; i < resources.Count; i++)
+			{
+				GameResources.ResourceData resource = resources[i];
+				resource.ResourceType = resourceType;
+				resource.MeshIndex = WorldInstanceDeterminism.SelectResourceMesh(resource.Position, resourceType, meshCount);
+				resource.MaterialIndex = WorldInstanceDeterminism.SelectResourceMaterial(resource.Position, resourceType, materialCount);
+				resource.Matrix = Matrix4x4.TRS(
+					resource.Position,
+					WorldInstanceDeterminism.SelectResourceRotation(resource.Position, resourceType),
+					Vector3.one);
+				resources[i] = resource;
 			}
 		}
 
@@ -1789,18 +1926,9 @@ namespace Processors
 						{
 							spawnAttempts++;
 
-							// Select mesh for offset calculation
-							Mesh selectedMesh = null;
-							if (settings is ResourceGenerationSettings meshMaterialSettings)
+							if (settings is FoliageGenerationSettings foliageSettings)
 							{
-								if (meshMaterialSettings.Meshes != null && meshMaterialSettings.Meshes.Count > 0)
-								{
-									selectedMesh = meshMaterialSettings.Meshes[UnityEngine.Random.Range(0, meshMaterialSettings.Meshes.Count)];
-								}
-							}
-							else if (settings is FoliageGenerationSettings foliageSettings)
-							{
-								(selectedMesh, _) = SelectFoliageMeshAndScale(foliageSettings);
+								SelectFoliageMeshAndScale(foliageSettings, position);
 							}
 
 							// Get terrain height at spawn position using raycast
@@ -1821,8 +1949,8 @@ namespace Processors
 
 							PoolableObject obj = GetPooledObject(settings.GetPoolName());
 							obj.transform.position = position;
-							float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
-							obj.transform.Rotate(Vector3.up, randomRotation);
+							float deterministicRotation = WorldInstanceDeterminism.SelectIndex(position, settings.Seed, 4) * 90f;
+							obj.transform.Rotate(Vector3.up, deterministicRotation);
 							obj.gameObject.SetActive(true);
 							spawns++;
 						}
@@ -1932,23 +2060,6 @@ namespace Processors
 								if (Physics.BoxCast(position + Vector3.up * 5, colSize, Vector3.down, Quaternion.identity, 10, _layerSettings.CollisionMask))
 									continue;
 
-							// Randomly select mesh and material indices from the settings (for offset calculation)
-							int meshIndex = -1;
-							int materialIndex = -1;
-							Mesh spawnedMesh = null;
-							if (settings is ResourceGenerationSettings meshMaterialSettings)
-							{
-								if (meshMaterialSettings.Meshes != null && meshMaterialSettings.Meshes.Count > 0)
-								{
-									meshIndex = UnityEngine.Random.Range(0, meshMaterialSettings.Meshes.Count);
-									spawnedMesh = meshMaterialSettings.Meshes[meshIndex];
-								}
-								if (meshMaterialSettings.Materials != null && meshMaterialSettings.Materials.Count > 0)
-								{
-									materialIndex = UnityEngine.Random.Range(0, meshMaterialSettings.Materials.Count);
-								}
-							}
-
 							// Require terrain hit at spawn position
 							if (!Physics.Raycast(new Vector3(position.x, 100, position.z), Vector3.down, out RaycastHit hit, 200, terrainMask))
 							{
@@ -1965,8 +2076,10 @@ namespace Processors
 							if (resourceType != global::Utils.Resource.None && woodResources != null && oreResources != null && foodResources != null && goldResources != null && recruitResources != null)
 							{
 								spawns++;
-								float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
-								Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
+								ResourceGenerationSettings visualSettings = settings as ResourceGenerationSettings;
+								int meshIndex = WorldInstanceDeterminism.SelectResourceMesh(position, resourceType, visualSettings?.Meshes?.Count ?? 0);
+								int materialIndex = WorldInstanceDeterminism.SelectResourceMaterial(position, resourceType, visualSettings?.Materials?.Count ?? 0);
+								Quaternion rotation = WorldInstanceDeterminism.SelectResourceRotation(position, resourceType);
 
 								// Calculate amount (default 100, or distance-based if enabled)
 								int amount = 100;
@@ -2004,9 +2117,8 @@ namespace Processors
 							{
 								spawns++;
 								// Handle foliage data collection
-								float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
-								Quaternion rotation = Quaternion.Euler(0, randomRotation, 0);
-								(Mesh selectedMesh, Vector3 selectedScale) = SelectFoliageMeshAndScale(foliageSettings);
+								Quaternion rotation = WorldInstanceDeterminism.SelectFoliageRotation(position, foliageSettings.StableId);
+								(Mesh selectedMesh, Vector3 selectedScale) = SelectFoliageMeshAndScale(foliageSettings, position);
 
 								GameResources.FoliageData foliageData = new GameResources.FoliageData(position, rotation, selectedScale, selectedMesh, foliageSettings.Material);
 
@@ -2021,8 +2133,8 @@ namespace Processors
 								// Only instantiate if not collecting ResourceData (foliage, etc.)
 								PoolableObject obj = GetPooledObject(settings.GetPoolName(), false);
 								obj.transform.position = position;
-								float randomRotation = UnityEngine.Random.Range(0, 4) * 90;
-								obj.transform.Rotate(Vector3.up, randomRotation);
+								float deterministicRotation = WorldInstanceDeterminism.SelectIndex(position, settings.Seed, 4) * 90f;
+								obj.transform.Rotate(Vector3.up, deterministicRotation);
 								obj.gameObject.SetActive(true);
 							}
 

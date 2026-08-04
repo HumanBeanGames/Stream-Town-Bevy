@@ -204,8 +204,9 @@ namespace Sensors
         /// <summary>
         /// Clears the current station on disable.
         /// </summary>
-		private void OnDisable()
+		protected override void OnDisable()
 		{
+			base.OnDisable();
 			_currentStation = null;
 		}
 	}

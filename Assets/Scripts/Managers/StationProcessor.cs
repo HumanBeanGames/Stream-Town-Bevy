@@ -40,6 +40,9 @@ namespace Processors
 		/// <param name="station">The station to update.</param>
 		public void UpdateStation(Station station)
 		{
+			if (station == null)
+				return;
+
 			if (_stationRuntimeData.StationUpdateQueue.Contains(station))
 				return;
 
@@ -166,7 +169,9 @@ namespace Processors
 		{
 			if (_stationRuntimeData.StationUpdateQueue.Count > 0)
 			{
-				_stationRuntimeData.StationUpdateQueue.Dequeue().PopulateDictionary();
+				Station station = _stationRuntimeData.StationUpdateQueue.Dequeue();
+				if (station != null && station.isActiveAndEnabled)
+					station.PopulateDictionary();
 			}
 
 			if (_stationRuntimeData.ClearDisabledQueue.Count > 0)

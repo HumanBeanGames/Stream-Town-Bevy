@@ -20,6 +20,7 @@ namespace GameResources
         /// Maximum instances per draw call.
         /// </summary>
 		private const int MAX_INSTANCES_PER_DRAW = 1023;
+		private readonly Matrix4x4[] _batchMatrices = new Matrix4x4[MAX_INSTANCES_PER_DRAW];
 
         /// <summary>
         /// Updates the resource rendering each frame.
@@ -75,10 +76,9 @@ namespace GameResources
 				for (int i = 0; i < matrices.Length; i += MAX_INSTANCES_PER_DRAW)
 				{
 					int batchCount = Mathf.Min(MAX_INSTANCES_PER_DRAW, matrices.Length - i);
-					Matrix4x4[] batchMatrices = new Matrix4x4[batchCount];
-					System.Array.Copy(matrices, i, batchMatrices, 0, batchCount);
+					System.Array.Copy(matrices, i, _batchMatrices, 0, batchCount);
 
-					Graphics.DrawMeshInstanced(mesh, 0, material, batchMatrices, batchCount);
+					Graphics.DrawMeshInstanced(mesh, 0, material, _batchMatrices, batchCount);
 				}
 			}
 		}
