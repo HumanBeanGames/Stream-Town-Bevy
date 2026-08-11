@@ -17,8 +17,11 @@ mistaken for production-ready systems.
   not expose Bevy entity identifiers.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
   grounding data, and repeatable world hashes.
-- A runnable 300-agent ECS simulation with dynamic obstacles, path following,
-  a town hall, resources, a status HUD, and injected chat-command processing.
+- A runnable 300-agent ECS simulation with one enemy, dynamic obstacles, path
+  following, a town hall, resources, a status HUD, pan/zoom camera controls,
+  click-to-select grid picking, and an explicit idle/moving visual state machine.
+- An injected `!join` vertical slice that goes through the shipping command
+  parser and creates both the stable domain actor and its visible ECS entity.
 - Engine-independent gathering, depositing, construction, roles, technology
   voting, trade, combat, death/respawn, timed events, days, seasons, and weather.
 - Checksummed native RON saves written atomically with backup recovery.
@@ -40,9 +43,9 @@ mistaken for production-ready systems.
 - Unity prefab/ScriptableObject export with variant and override flattening, the
   A* compatibility exporter, RON content generation, and the Blender-to-GLB
   conversion pipeline.
-- The production terrain renderer, camera controls and picking, actor steering,
-  complete role/building/resource/station/inventory/equipment behavior, and
-  every reachable balance rule from the Unity scenes.
+- The production terrain renderer, production-grade actor steering, complete
+  role/building/resource/station/inventory/equipment behavior, and every
+  reachable balance rule from the Unity scenes.
 - Twitch IRC/OAuth networking, reconnect and rate limiting, and OS credential
   storage. The command grammar and deterministic injection path exist only.
 - Animation graph/controller conversion, rigged production models, WGSL shader
@@ -84,7 +87,7 @@ cargo run -p stream_town_migrate -- validate-manifest generated/content-manifest
 ## Milestone interpretation
 
 Foundation is substantially implemented. The vertical slice is runnable and its
-deterministic 300-agent navigation gate passes, but it is still missing the
-production camera/picking, animation, connected Twitch transport, and converted
-content required to close that milestone. Gameplay parity, presentation, and
-hardening remain long-term work.
+deterministic 300-agent navigation gate passes, but it is still missing rigged
+production animation, connected Twitch transport, converted content, and the
+recorded reference-machine GPU measurement required to close that milestone.
+Gameplay parity, presentation, and hardening remain long-term work.

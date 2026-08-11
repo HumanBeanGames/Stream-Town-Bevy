@@ -26,6 +26,9 @@ cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifes
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 Legacy Unity saves are never modified by migration tools.
 
+In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
+J to inject a parsed `!join`, F5 to save, and Escape to return to the menu.
+
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
 remaining work.

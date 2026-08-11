@@ -1,7 +1,10 @@
 use std::{collections::VecDeque, path::PathBuf, time::Duration};
 
 use avian3d::prelude::PhysicsPlugins;
-use bevy::{prelude::*, window::WindowResolution};
+use bevy::{
+    prelude::*,
+    window::{PrimaryWindow, WindowResolution},
+};
 use stream_town_domain::{
     ActorKind, ChatCommand, GameConfig, GeneratedWorld, GridPos, NativeSaveStore, SavedActor,
     StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
@@ -43,6 +46,9 @@ struct SessionStats {
 #[derive(Resource, Default)]
 struct InjectedCommands(VecDeque<ChatCommand>);
 
+#[derive(Resource, Default)]
+struct SelectedCell(Option<GridPos>);
+
 #[derive(Component)]
 struct StateEntity;
 
@@ -52,6 +58,7 @@ struct WorldEntity;
 #[derive(Component)]
 struct Agent {
     id: StableId,
+    kind: ActorKind,
     origin: GridPos,
     path: Vec<GridPos>,
     path_index: usize,
@@ -67,6 +74,22 @@ struct Hud;
 #[derive(Component)]
 struct TownHall;
 
+#[derive(Component)]
+struct SelectionMarker;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum MovementAnimationState {
+    #[default]
+    Idle,
+    Moving,
+}
+
+#[derive(Component, Default)]
+struct AgentAnimation {
+    state: MovementAnimationState,
+    phase: f32,
+}
+
 pub struct StreamTownGamePlugin;
 
 impl Plugin for StreamTownGamePlugin {
@@ -74,6 +97,7 @@ impl Plugin for StreamTownGamePlugin {
         app.init_state::<GameState>()
             .init_resource::<SessionStats>()
             .init_resource::<InjectedCommands>()
+            .init_resource::<SelectedCell>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
                     PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
@@ -92,6 +116,9 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     move_agents,
+                    animate_agents,
+                    camera_controls,
+                    select_grid_cell,
                     game_input,
                     process_injected_commands,
                     update_hud,
@@ -163,8 +190,14 @@ fn main_menu_input(
 fn generate_and_spawn_world(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
+    mut selected: ResMut<SelectedCell>,
+    mut cameras: Query<&mut Transform, With<Camera2d>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
+    selected.0 = None;
+    if let Ok(mut camera) = cameras.single_mut() {
+        *camera = Transform::default();
+    }
     let mut generated = generate_world(&config.0.world);
     let centre = GridPos {
         x: config.0.world.width / 2,
@@ -222,6 +255,17 @@ fn generate_and_spawn_world(
         Transform::from_xyz(hall.x, hall.y, 1.0),
     ));
 
+    commands.spawn((
+        WorldEntity,
+        SelectionMarker,
+        Sprite::from_color(
+            Color::srgba(0.95, 0.92, 0.18, 0.35),
+            Vec2::splat(config.0.world.cell_size * 0.9),
+        ),
+        Transform::from_xyz(0.0, 0.0, 1.5),
+        Visibility::Hidden,
+    ));
+
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
     'cells: for z in 0..generated.navigation.height() {
@@ -236,21 +280,36 @@ fn generate_and_spawn_world(
             };
             let target = nearest_walkable(&generated, target).unwrap_or(centre);
             let world_position = grid_to_world(position, &config.0);
-            let actor_id =
-                StableId::new(format!("actor:viewer_{spawned:04}")).expect("generated ID");
+            let actor_id = StableId::new(if spawned == 0 {
+                "actor:enemy_0000".to_owned()
+            } else {
+                format!("actor:viewer_{spawned:04}")
+            })
+            .expect("generated ID");
+            let kind = if spawned == 0 {
+                ActorKind::Enemy
+            } else {
+                ActorKind::Player
+            };
             simulation.join_player(actor_id.clone(), position);
+            if kind == ActorKind::Enemy {
+                let _ = simulation
+                    .assign_role(&actor_id, StableId::new("role:enemy").expect("static ID"));
+            }
             commands.spawn((
                 WorldEntity,
                 GridLocation(position),
                 Agent {
                     id: actor_id,
+                    kind: kind.clone(),
                     origin: position,
                     path: Vec::new(),
                     path_index: 0,
                     target,
                 },
+                AgentAnimation::default(),
                 Sprite::from_color(
-                    Color::srgb(0.35, 0.72, 0.95),
+                    actor_color(&kind, false),
                     Vec2::splat(config.0.world.cell_size * 0.35),
                 ),
                 Transform::from_xyz(world_position.x, world_position.y, 2.0),
@@ -265,8 +324,8 @@ fn generate_and_spawn_world(
     commands.spawn((
         WorldEntity,
         Hud,
-        Text2d::new(format!(
-            "{} agents  •  world {}\nF5 Save  •  ! commands simulated  •  ESC Menu",
+        Text::new(format!(
+            "{} agents | world {}\nF5 Save | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu",
             spawned,
             &generated.deterministic_hash[..12]
         )),
@@ -275,11 +334,26 @@ fn generate_and_spawn_world(
             ..default()
         },
         TextColor(Color::WHITE),
-        Transform::from_xyz(0.0, world_size.y * 0.5 + 36.0, 10.0),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(12),
+            left: px(12),
+            ..default()
+        },
     ));
     commands.insert_resource(WorldRuntime { generated });
     commands.insert_resource(SimulationRuntime(simulation));
     next_state.set(GameState::InGame);
+}
+
+fn actor_color(kind: &ActorKind, moving: bool) -> Color {
+    match (kind, moving) {
+        (&ActorKind::Enemy, true) => Color::srgb(1.0, 0.28, 0.22),
+        (&ActorKind::Enemy, false) => Color::srgb(0.72, 0.12, 0.12),
+        (&ActorKind::Player, true) => Color::srgb(0.52, 0.86, 1.0),
+        (&ActorKind::Player, false) => Color::srgb(0.35, 0.72, 0.95),
+        _ => Color::srgb(0.65, 0.65, 0.65),
+    }
 }
 
 fn nearest_walkable(world: &GeneratedWorld, desired: GridPos) -> Option<GridPos> {
@@ -350,6 +424,99 @@ fn move_agents(
     }
 }
 
+fn animate_agents(
+    time: Res<Time>,
+    mut agents: Query<(&Agent, &mut AgentAnimation, &mut Sprite, &mut Transform)>,
+) {
+    for (agent, mut animation, mut sprite, mut transform) in &mut agents {
+        let moving = !agent.path.is_empty() && agent.path_index < agent.path.len();
+        let next_state = if moving {
+            MovementAnimationState::Moving
+        } else {
+            MovementAnimationState::Idle
+        };
+        if animation.state != next_state {
+            animation.state = next_state;
+            animation.phase = 0.0;
+        }
+        animation.phase += time.delta_secs() * if moving { 9.0 } else { 2.0 };
+        let pulse = if moving {
+            1.0 + animation.phase.sin().abs() * 0.16
+        } else {
+            1.0
+        };
+        transform.scale = Vec3::new(1.0, pulse, 1.0);
+        sprite.color = actor_color(&agent.kind, moving);
+    }
+}
+
+fn camera_controls(
+    time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut cameras: Query<&mut Transform, With<Camera2d>>,
+) {
+    let Ok(mut transform) = cameras.single_mut() else {
+        return;
+    };
+    let mut direction = Vec2::ZERO;
+    if keyboard.pressed(KeyCode::KeyA) {
+        direction.x -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyD) {
+        direction.x += 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyS) {
+        direction.y -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyW) {
+        direction.y += 1.0;
+    }
+    if direction != Vec2::ZERO {
+        let speed = 420.0 * transform.scale.x * time.delta_secs();
+        transform.translation += direction.normalize().extend(0.0) * speed;
+    }
+    let zoom_factor = if keyboard.pressed(KeyCode::KeyQ) {
+        1.0 + time.delta_secs()
+    } else if keyboard.pressed(KeyCode::KeyE) {
+        1.0 - time.delta_secs() * 0.65
+    } else {
+        1.0
+    };
+    transform.scale = (transform.scale * zoom_factor).clamp(Vec3::splat(0.35), Vec3::splat(4.0));
+}
+
+fn select_grid_cell(
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    config: Res<RuntimeConfig>,
+    mut selected: ResMut<SelectedCell>,
+    mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
+) {
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok(world_position) = camera.viewport_to_world_2d(camera_transform, cursor) else {
+        return;
+    };
+    let Some(cell) = world_to_grid(world_position, &config.0) else {
+        return;
+    };
+    selected.0 = Some(cell);
+    if let Ok((mut transform, mut visibility)) = markers.single_mut() {
+        let marker_position = grid_to_world(cell, &config.0);
+        transform.translation.x = marker_position.x;
+        transform.translation.y = marker_position.y;
+        *visibility = Visibility::Visible;
+    }
+}
+
 fn game_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<GameState>>,
@@ -371,22 +538,60 @@ fn game_input(
         }
     }
     if keyboard.just_pressed(KeyCode::KeyJ) {
-        injected.0.push_back(ChatCommand::Join);
+        injected
+            .0
+            .push_back("!join".parse().expect("static chat command"));
     }
 }
 
 fn process_injected_commands(
-    mut commands: ResMut<InjectedCommands>,
+    mut ecs: Commands,
+    mut queue: ResMut<InjectedCommands>,
+    config: Res<RuntimeConfig>,
+    world: Res<WorldRuntime>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
 ) {
     let debug_viewer = StableId::new("twitch:debug_viewer").expect("static ID");
-    while let Some(command) = commands.0.pop_front() {
+    while let Some(command) = queue.0.pop_front() {
         match &command {
             ChatCommand::Join => {
-                simulation
-                    .0
-                    .join_player(debug_viewer.clone(), GridPos { x: 32, z: 32 });
+                if !simulation.0.actors.contains_key(&debug_viewer) {
+                    let desired = GridPos {
+                        x: world.generated.navigation.width() / 2,
+                        z: world.generated.navigation.height() / 2,
+                    };
+                    if let Some(position) = nearest_walkable(&world.generated, desired) {
+                        let target = nearest_walkable(
+                            &world.generated,
+                            GridPos {
+                                x: position.x.saturating_sub(8),
+                                z: position.z.saturating_sub(8),
+                            },
+                        )
+                        .unwrap_or(position);
+                        let world_position = grid_to_world(position, &config.0);
+                        simulation.0.join_player(debug_viewer.clone(), position);
+                        ecs.spawn((
+                            WorldEntity,
+                            GridLocation(position),
+                            Agent {
+                                id: debug_viewer.clone(),
+                                kind: ActorKind::Player,
+                                origin: position,
+                                path: Vec::new(),
+                                path_index: 0,
+                                target,
+                            },
+                            AgentAnimation::default(),
+                            Sprite::from_color(
+                                actor_color(&ActorKind::Player, false),
+                                Vec2::splat(config.0.world.cell_size * 0.45),
+                            ),
+                            Transform::from_xyz(world_position.x, world_position.y, 3.0),
+                        ));
+                    }
+                }
             }
             ChatCommand::SelectRole(role) => {
                 let _ = simulation.0.assign_role(&debug_viewer, role.clone());
@@ -420,7 +625,7 @@ fn update_hud(
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
-    mut hud: Single<&mut Text2d, With<Hud>>,
+    mut hud: Single<&mut Text, With<Hud>>,
 ) {
     if !stats.is_changed() {
         return;
@@ -430,7 +635,7 @@ fn update_hud(
         .next()
         .map_or("none", |agent| agent.id.as_str());
     hud.0 = format!(
-        "{} agents  •  {:.0}s  •  {} routes  •  {} commands  •  {:?} / {:?}\nF5 Save  •  J Inject !join  •  ESC Menu  •  first {first_id}",
+        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?}\nF5 Save | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -456,7 +661,7 @@ fn snapshot_world(
             .iter()
             .map(|(agent, location)| SavedActor {
                 id: agent.id.clone(),
-                kind: ActorKind::Player,
+                kind: agent.kind.clone(),
                 archetype: StableId::new("archetype:viewer").expect("static ID"),
                 grid_position: location.0,
                 height_centimetres: world
@@ -516,6 +721,23 @@ fn grid_to_world(position: GridPos, config: &GameConfig) -> Vec2 {
     )
 }
 
+fn world_to_grid(position: Vec2, config: &GameConfig) -> Option<GridPos> {
+    let x = (position.x / config.world.cell_size + f32::from(config.world.width) * 0.5).floor();
+    let z = (position.y / config.world.cell_size + f32::from(config.world.height) * 0.5).floor();
+    if x < 0.0
+        || z < 0.0
+        || x >= f32::from(config.world.width)
+        || z >= f32::from(config.world.height)
+    {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(GridPos {
+        x: x as u16,
+        z: z as u16,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,5 +778,47 @@ mod tests {
             .count();
         assert_eq!(actual, expected);
         assert!(app.world().contains_resource::<WorldRuntime>());
+
+        let enemies = app
+            .world_mut()
+            .query::<&Agent>()
+            .iter(app.world())
+            .filter(|agent| agent.kind == ActorKind::Enemy)
+            .count();
+        assert_eq!(enemies, 1);
+
+        app.world_mut()
+            .resource_mut::<InjectedCommands>()
+            .0
+            .push_back("!join".parse().unwrap());
+        app.update();
+        let joined_count = app
+            .world_mut()
+            .query_filtered::<Entity, With<Agent>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(joined_count, expected + 1);
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .actors
+                .contains_key(&StableId::new("twitch:debug_viewer").unwrap())
+        );
+    }
+
+    #[test]
+    fn world_grid_projection_round_trips() {
+        let config = GameConfig::default();
+        for cell in [
+            GridPos { x: 0, z: 0 },
+            GridPos { x: 31, z: 47 },
+            GridPos { x: 63, z: 63 },
+        ] {
+            assert_eq!(
+                world_to_grid(grid_to_world(cell, &config), &config),
+                Some(cell)
+            );
+        }
     }
 }
