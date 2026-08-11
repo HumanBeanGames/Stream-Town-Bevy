@@ -31,9 +31,13 @@ mistaken for production-ready systems.
   grounded to deterministic centimetre heights.
 - Unity's five-member starting NPC roster (Defender, Logger, Miner, Gatherer,
   Builder) is restored. Resource workers choose role-matched stable nodes,
-  path to them, gather/deplete five units per visit, carry 25 units, return to a
+  path to them, gather/deplete their authored `BaseActionAmount`, carry the
+  authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable Town Hall approach, and deposit into the authoritative town economy;
-  exhausted resource visuals are hidden.
+  exhausted resource visuals are hidden. Content schema 6 converts each role's
+  resource affinity, action rate/range, health/regeneration/defense, movement
+  speed, and carry capacity. Live gathering, construction, combat range/damage,
+  health, cooldowns, and movement use those bases plus technology percentages.
 - Combat roles acquire living enemies while the Goblin holds its ground and
   retaliates. Both sides path into range, attack on a one-second cadence, apply
   deterministic role-specific damage, enter the controller's Death state at
@@ -46,7 +50,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 5 also promotes Unity `Placeable` and all six technology effect
+  Content schema 6 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -100,7 +104,7 @@ mistaken for production-ready systems.
   model scene variants, 15 roles, and the shipping 363-node, 362-edge technology
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, promotes construction/upgrade balance and
-  all 413 authored technology effects into content schema 5, preserves the
+  all 413 authored technology effects and role base stats into content schema 6, preserves the
   remaining typed Unity fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -171,10 +175,11 @@ mistaken for production-ready systems.
   projectiles/area attacks/healing beyond the live melee combat loop, building
   station activation and derived level-up effects beyond the live construction/
   upgrade loop, and every reachable balance rule from the Unity scenes.
-- Building-derived storage contributions and role base-stat curves are not yet
-  semantically converted. Technology percentages are authoritative for the live
-  Bevy rules, but health regeneration/action range and age changes for the
-  always-present Town Hall still require those underlying building/role systems.
+- Building-derived storage contributions and role level/progression curves are
+  not yet semantically converted. Technology percentages and role level-one
+  bases are authoritative for the live Bevy rules, but health-regeneration
+  ticking and age changes for the always-present Town Hall still require those
+  underlying building/role systems.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on

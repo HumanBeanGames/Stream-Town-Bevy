@@ -50,7 +50,9 @@ catalog of 26 production buildings, 215 prefab archetypes, 288 model scene
 variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
-authored technology effects in content schema 5, and follows nested prefabs to
+authored technology effects plus every shipping role's level-one action,
+health, defense, movement, carry, and resource-affinity fields in content schema 6,
+and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
@@ -111,9 +113,12 @@ their `Unlock Building` effects. A semicolon-delimited
 for repeatable diagnostics.
 
 The Unity starting NPC roster is present as stable Defender, Logger, Miner,
-Gatherer, and Builder actors. Resource roles select the nearest matching
-generated node, gather and deplete it in five-unit actions, carry 25 units, then
-path back to the Town Hall and deposit into the town balances shown by the HUD.
+Gatherer, and Builder actors. Resource roles select their authored resource and
+the nearest matching generated node, gather using `BaseActionAmount`, carry the
+authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
+into the town balances shown by the HUD. Movement, action cadence/range, health,
+defense, and construction/combat amounts likewise use converted role bases plus
+the unlocked technology percentages.
 Node depletion and carried inventories are part of native save/load state.
 The starting Defender and Goblin also run a live melee loop: acquire a living
 target, path into range, exchange deterministic damage once per second, trigger
