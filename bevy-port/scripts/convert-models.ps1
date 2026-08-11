@@ -42,7 +42,8 @@ $blenderArguments = @(
     '--',
     '--repo-root', $repositoryRoot,
     '--output-root', $OutputRoot,
-    '--report', $reportPath
+    '--report', $reportPath,
+    '--unity-export', (Join-Path $repositoryRoot 'bevy-port\generated\unity-export.json')
 )
 foreach ($source in $Only) {
     $blenderArguments += @('--only', $source)

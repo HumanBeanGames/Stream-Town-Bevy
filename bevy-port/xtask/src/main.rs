@@ -52,9 +52,9 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", model_baseline_path.display()))?;
     for (field, expected) in [
-        ("/schema_version", 1_u64),
+        ("/schema_version", 2_u64),
         ("/models", 253),
-        ("/bytes", 95_464_376),
+        ("/bytes", 95_464_596),
         ("/meshes", 820),
         ("/skins", 43),
         ("/animations", 33),
@@ -81,16 +81,36 @@ fn validate() -> Result<()> {
         .values()
         .filter(|node| node.prerequisites.is_empty())
         .count();
+    let archetype_scenes: usize = content
+        .archetypes
+        .values()
+        .map(|archetype| archetype.scenes.len())
+        .sum();
     if (
+        content.schema_version,
+        content.archetypes.len(),
+        archetype_scenes,
         content.buildings.len(),
         content.roles.len(),
         content.technology.nodes.len(),
         content.technology.groups.len(),
         technology_edges,
         technology_roots,
-    ) != (27, 15, 363, 20, 362, 1)
+        content.source_records.len(),
+    ) != (2, 215, 288, 26, 15, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
+    }
+    for (archetype_id, archetype) in &content.archetypes {
+        for scene in &archetype.scenes {
+            let path = Path::new("assets").join(&scene.asset_path);
+            if !path.is_file() {
+                bail!(
+                    "archetype {archetype_id} references missing converted model {}",
+                    path.display()
+                );
+            }
+        }
     }
 
     let mut checked_json = 0_usize;
@@ -119,7 +139,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 405 semantic records, and the 253-model conversion baseline are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 404 semantic records, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

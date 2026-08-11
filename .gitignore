@@ -94,6 +94,10 @@ crashlytics-build.properties
 /bevy-port/target/
 /bevy-port/.stream-town/
 /bevy-port/generated/
-/bevy-port/assets/migrated/
+/bevy-port/assets/migrated/*
+!/bevy-port/assets/migrated/models/
+/bevy-port/assets/migrated/models/*
+!/bevy-port/assets/migrated/models/**/
+!/bevy-port/assets/migrated/models/**/*.glb
 *.stbevy
 *.stbevy.bak

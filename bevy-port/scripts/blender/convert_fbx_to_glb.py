@@ -5,15 +5,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import struct
 import sys
 
 import bpy
+from mathutils import Matrix
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 EXCLUDED_PARTS = {
     "astarpathfindingproject",
     "migrationonly",
@@ -29,6 +31,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--unity-export", type=Path)
     parser.add_argument("--only", action="append", default=[])
     return parser.parse_args(values)
 
@@ -71,6 +74,104 @@ def reset_scene() -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
 
+def unity_model_bounds(export_path: Path | None) -> dict[str, dict[str, list[float]]]:
+    if export_path is None or not export_path.is_file():
+        return {}
+    export = json.loads(export_path.read_text(encoding="utf-8"))
+    result: dict[str, dict[str, list[float]]] = {}
+    for asset in export.get("Assets", []):
+        if asset.get("Kind") != "model" or not asset.get("GameObject"):
+            continue
+        minimum = [math.inf, math.inf, math.inf]
+        maximum = [-math.inf, -math.inf, -math.inf]
+        found = False
+        for component in asset["GameObject"].get("Components", []):
+            for field in component.get("Fields", []):
+                if field.get("Path") != "bounds" or not isinstance(field.get("Value"), dict):
+                    continue
+                bounds = field["Value"]
+                center = bounds.get("Center", {})
+                size = bounds.get("Size", {})
+                try:
+                    for axis, key in enumerate(("x", "y", "z")):
+                        half = float(size[key]) * 0.5
+                        minimum[axis] = min(minimum[axis], float(center[key]) - half)
+                        maximum[axis] = max(maximum[axis], float(center[key]) + half)
+                    found = True
+                except (KeyError, TypeError, ValueError):
+                    continue
+        if found:
+            result[asset["Path"]] = bounds_record(minimum, maximum)
+    return result
+
+
+def bounds_record(minimum: list[float], maximum: list[float]) -> dict[str, list[float]]:
+    return {
+        "center": [(minimum[index] + maximum[index]) * 0.5 for index in range(3)],
+        "size": [maximum[index] - minimum[index] for index in range(3)],
+    }
+
+
+def evaluated_scene_bounds() -> dict[str, list[float]] | None:
+    dependency_graph = bpy.context.evaluated_depsgraph_get()
+    minimum = [math.inf, math.inf, math.inf]
+    maximum = [-math.inf, -math.inf, -math.inf]
+    found = False
+    for source_object in bpy.context.scene.objects:
+        if source_object.type != "MESH":
+            continue
+        evaluated = source_object.evaluated_get(dependency_graph)
+        for vertex in evaluated.data.vertices:
+            position = evaluated.matrix_world @ vertex.co
+            for axis in range(3):
+                minimum[axis] = min(minimum[axis], float(position[axis]))
+                maximum[axis] = max(maximum[axis], float(position[axis]))
+            found = True
+    return bounds_record(minimum, maximum) if found else None
+
+
+def normalize_to_unity_bounds(target: dict[str, list[float]] | None) -> tuple[float, dict[str, list[float]] | None]:
+    imported = evaluated_scene_bounds()
+    if target is None or imported is None:
+        return 1.0, imported
+    imported_extent = max(imported["size"])
+    target_extent = max(target["size"])
+    if imported_extent <= 1.0e-9 or target_extent <= 1.0e-9:
+        return 1.0, imported
+    scale = target_extent / imported_extent
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"invalid Unity normalization scale {scale}")
+    if not math.isclose(scale, 1.0, rel_tol=1.0e-7, abs_tol=1.0e-9):
+        bake_uniform_scale(scale)
+        bpy.context.view_layer.update()
+    return scale, evaluated_scene_bounds()
+
+
+def bake_uniform_scale(scale: float) -> None:
+    """Bake Unity's effective model units into geometry, rigs, and translation curves."""
+    transform = Matrix.Scale(scale, 4)
+    transformed_data: set[int] = set()
+    for source_object in bpy.context.scene.objects:
+        source_object.location *= scale
+        data = source_object.data
+        if data is None or data.as_pointer() in transformed_data:
+            continue
+        if source_object.type == "MESH":
+            data.transform(transform, shape_keys=True)
+            transformed_data.add(data.as_pointer())
+        elif source_object.type == "ARMATURE":
+            data.transform(transform)
+            transformed_data.add(data.as_pointer())
+    for action in bpy.data.actions:
+        for curve in action.fcurves:
+            if not curve.data_path.endswith("location"):
+                continue
+            for keyframe in curve.keyframe_points:
+                keyframe.co[1] *= scale
+                keyframe.handle_left[1] *= scale
+                keyframe.handle_right[1] *= scale
+
+
 def inspect_glb(path: Path) -> dict[str, int]:
     payload = path.read_bytes()
     if len(payload) < 20:
@@ -93,9 +194,14 @@ def inspect_glb(path: Path) -> dict[str, int]:
     }
 
 
-def convert(source: Path, output: Path) -> dict[str, object]:
+def convert(
+    source: Path,
+    output: Path,
+    target_bounds: dict[str, list[float]] | None,
+) -> dict[str, object]:
     reset_scene()
     bpy.ops.import_scene.fbx(filepath=str(source), use_anim=True)
+    normalization_scale, output_bounds = normalize_to_unity_bounds(target_bounds)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f"{output.stem}.tmp.glb")
     bpy.ops.export_scene.gltf(
@@ -109,7 +215,12 @@ def convert(source: Path, output: Path) -> dict[str, object]:
     )
     metadata = inspect_glb(temporary)
     os.replace(temporary, output)
-    return metadata
+    return {
+        **metadata,
+        "normalization_scale": normalization_scale,
+        "unity_bounds": target_bounds,
+        "output_bounds": output_bounds,
+    }
 
 
 def write_report(path: Path, report: dict[str, object]) -> None:
@@ -128,6 +239,9 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
     assets_root = (repo_root / "Assets").resolve()
     output_root = args.output_root.resolve()
+    bounds_by_source = unity_model_bounds(
+        args.unity_export.resolve() if args.unity_export is not None else None
+    )
     sources = discover_sources(repo_root, args.only)
     entries: list[dict[str, object]] = []
     failures: list[str] = []
@@ -138,7 +252,7 @@ def main() -> int:
         output_name = normalized_relative(output, repo_root)
         print(f"[{index}/{len(sources)}] {source_name}", flush=True)
         try:
-            metadata = convert(source, output)
+            metadata = convert(source, output, bounds_by_source.get(source_name))
             entries.append(
                 {
                     "source": source_name,

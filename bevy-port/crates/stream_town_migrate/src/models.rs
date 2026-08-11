@@ -29,6 +29,15 @@ struct ModelEntry {
     animations: usize,
     materials: usize,
     images: usize,
+    normalization_scale: f64,
+    unity_bounds: Option<ModelBounds>,
+    output_bounds: Option<ModelBounds>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelBounds {
+    center: [f64; 3],
+    size: [f64; 3],
 }
 
 #[derive(Debug, Serialize)]
@@ -53,7 +62,7 @@ pub fn validate(
         .with_context(|| format!("failed to read model report {}", report_path.display()))?;
     let report: ModelConversionReport = serde_json::from_str(&encoded)
         .with_context(|| format!("failed to parse model report {}", report_path.display()))?;
-    if report.schema_version != 1 {
+    if report.schema_version != 2 {
         bail!(
             "unsupported model conversion schema {}",
             report.schema_version
@@ -133,6 +142,7 @@ pub fn validate(
             bail!("GLB byte count changed for {}", entry.output);
         }
         validate_glb_header(&output, entry.output_bytes)?;
+        validate_normalization(&entry)?;
         summary.bytes = summary.bytes.saturating_add(entry.output_bytes);
         summary.meshes += entry.meshes;
         summary.skins += entry.skins;
@@ -141,6 +151,48 @@ pub fn validate(
         summary.images += entry.images;
     }
     Ok(summary)
+}
+
+fn validate_normalization(entry: &ModelEntry) -> Result<()> {
+    if !entry.normalization_scale.is_finite() || entry.normalization_scale <= 0.0 {
+        bail!("invalid normalization scale for {}", entry.source);
+    }
+    let Some(output) = entry.output_bounds.as_ref() else {
+        if entry.meshes > 0 {
+            bail!("missing output bounds for mesh model {}", entry.source);
+        }
+        return Ok(());
+    };
+    validate_bounds(output, "output", &entry.source)?;
+    let Some(unity) = entry.unity_bounds.as_ref() else {
+        return Ok(());
+    };
+    validate_bounds(unity, "Unity", &entry.source)?;
+
+    let output_extent = output.size.into_iter().fold(0.0_f64, f64::max);
+    let unity_extent = unity.size.into_iter().fold(0.0_f64, f64::max);
+    let relative_error = (output_extent - unity_extent).abs() / unity_extent;
+    if relative_error > 0.05 {
+        bail!(
+            "normalized extent for {} differs from Unity by {:.1}%",
+            entry.source,
+            relative_error * 100.0
+        );
+    }
+    Ok(())
+}
+
+fn validate_bounds(bounds: &ModelBounds, label: &str, source: &str) -> Result<()> {
+    if !bounds
+        .center
+        .into_iter()
+        .chain(bounds.size)
+        .all(f64::is_finite)
+        || bounds.size.into_iter().any(|extent| extent < 0.0)
+    {
+        bail!("invalid {label} bounds for {source}");
+    }
+    Ok(())
 }
 
 fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {

@@ -12,8 +12,8 @@ pub mod world;
 pub use command::{ChatCommand, CommandParseError};
 pub use config::{GameConfig, GameplayConfig, WindowConfig, WorldGenConfig};
 pub use content::{
-    AuthoredRecord, AuthoredValue, BuildingDef, ContentCatalog, RoleDef, TechGroup, TechNode,
-    TechTree,
+    ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
+    BuildingDef, ContentCatalog, RoleDef, TechGroup, TechNode, TechTree,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};

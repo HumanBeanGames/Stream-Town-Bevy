@@ -323,7 +323,8 @@ namespace StreamTown.Migration
                 {
                     Field("sharedMesh", "ObjectReference", AssetReference(skinned.sharedMesh)),
                     Field("sharedMaterials", "ObjectReferenceArray", skinned.sharedMaterials.Select(AssetReference).ToArray()),
-                    Field("enabled", "Boolean", skinned.enabled)
+                    Field("enabled", "Boolean", skinned.enabled),
+                    Field("bounds", "Bounds", BoundsValue(skinned.bounds))
                 };
             }
             if (component is MeshRenderer renderer)
@@ -331,7 +332,8 @@ namespace StreamTown.Migration
                 return new List<NeutralField>
                 {
                     Field("sharedMaterials", "ObjectReferenceArray", renderer.sharedMaterials.Select(AssetReference).ToArray()),
-                    Field("enabled", "Boolean", renderer.enabled)
+                    Field("enabled", "Boolean", renderer.enabled),
+                    Field("bounds", "Bounds", BoundsValue(renderer.bounds))
                 };
             }
             if (component is MeshFilter meshFilter)
@@ -340,6 +342,38 @@ namespace StreamTown.Migration
                 {
                     Field("sharedMesh", "ObjectReference", AssetReference(meshFilter.sharedMesh))
                 };
+            }
+            if (component is Collider collider)
+            {
+                var fields = new List<NeutralField>
+                {
+                    Field("enabled", "Boolean", collider.enabled),
+                    Field("isTrigger", "Boolean", collider.isTrigger),
+                    Field("bounds", "Bounds", BoundsValue(collider.bounds))
+                };
+                if (collider is BoxCollider box)
+                {
+                    fields.Add(Field("center", "Vector3", Vector3Value(box.center)));
+                    fields.Add(Field("size", "Vector3", Vector3Value(box.size)));
+                }
+                else if (collider is CapsuleCollider capsule)
+                {
+                    fields.Add(Field("center", "Vector3", Vector3Value(capsule.center)));
+                    fields.Add(Field("radius", "Float", capsule.radius));
+                    fields.Add(Field("height", "Float", capsule.height));
+                    fields.Add(Field("direction", "Integer", capsule.direction));
+                }
+                else if (collider is SphereCollider sphere)
+                {
+                    fields.Add(Field("center", "Vector3", Vector3Value(sphere.center)));
+                    fields.Add(Field("radius", "Float", sphere.radius));
+                }
+                else if (collider is MeshCollider mesh)
+                {
+                    fields.Add(Field("sharedMesh", "ObjectReference", AssetReference(mesh.sharedMesh)));
+                    fields.Add(Field("convex", "Boolean", mesh.convex));
+                }
+                return fields;
             }
             if (component is Animator animator)
             {

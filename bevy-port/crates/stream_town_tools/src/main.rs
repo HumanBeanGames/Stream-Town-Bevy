@@ -191,7 +191,8 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     }
     ui.separator();
     ui.label(format!(
-        "Active catalog: {} buildings, {} roles, {} technologies, {} source records",
+        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} source records",
+        state.catalog.archetypes.len(),
         state.catalog.buildings.len(),
         state.catalog.roles.len(),
         state.catalog.technology.nodes.len(),
@@ -208,6 +209,8 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
     ui.heading("Content catalog and stable references");
     ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
     ui.horizontal(|ui| {
+        ui.label(format!("Archetypes: {}", state.catalog.archetypes.len()));
+        ui.separator();
         ui.label(format!("Buildings: {}", state.catalog.buildings.len()));
         ui.separator();
         ui.label(format!("Roles: {}", state.catalog.roles.len()));
@@ -224,6 +227,28 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
     });
     ui.separator();
     egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.collapsing("Prefab archetypes", |ui| {
+            for (id, archetype) in &state.catalog.archetypes {
+                ui.collapsing(format!("{}  ({id})", archetype.display_name), |ui| {
+                    ui.label(format!("Kind: {:?}", archetype.kind));
+                    ui.monospace(format!("Unity prefab: {}", archetype.source_path));
+                    ui.label(format!(
+                        "Footprint: {} x {}; scene variants: {}",
+                        archetype.footprint[0],
+                        archetype.footprint[1],
+                        archetype.scenes.len()
+                    ));
+                    for scene in &archetype.scenes {
+                        let marker = if scene.is_default {
+                            "default"
+                        } else {
+                            "variant"
+                        };
+                        ui.monospace(format!("{marker}: {}", scene.asset_path));
+                    }
+                });
+            }
+        });
         ui.collapsing("Buildings", |ui| {
             for (id, building) in &state.catalog.buildings {
                 ui.collapsing(format!("{}  ({id})", building.display_name), |ui| {

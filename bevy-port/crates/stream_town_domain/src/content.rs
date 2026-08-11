@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -8,11 +11,55 @@ use crate::StableId;
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
     pub schema_version: u32,
+    #[serde(default)]
+    pub archetypes: BTreeMap<StableId, ArchetypeDef>,
     pub buildings: BTreeMap<StableId, BuildingDef>,
     pub roles: BTreeMap<StableId, RoleDef>,
     pub technology: TechTree,
     #[serde(default)]
     pub source_records: BTreeMap<StableId, AuthoredRecord>,
+}
+
+/// A Unity prefab reduced to the stable data Bevy needs to spawn it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ArchetypeDef {
+    pub display_name: String,
+    pub kind: ArchetypeKind,
+    pub source_guid: String,
+    pub source_path: String,
+    pub bounds: ArchetypeBounds,
+    pub footprint: [u16; 2],
+    pub scenes: Vec<ArchetypeScene>,
+    pub component_types: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchetypeKind {
+    Building,
+    Player,
+    Enemy,
+    Resource,
+    Environment,
+    Vfx,
+    Ui,
+    #[default]
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct ArchetypeBounds {
+    pub center: [f32; 3],
+    pub size: [f32; 3],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ArchetypeScene {
+    pub source_model: String,
+    /// Asset-server-relative path below `bevy-port/assets`.
+    pub asset_path: String,
+    pub age: Option<u8>,
+    pub is_default: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -96,15 +143,65 @@ pub enum ContentError {
     TechnologyCycle(StableId),
     #[error("building {0} has an empty footprint")]
     EmptyFootprint(StableId),
+    #[error("building {building} references missing archetype {archetype}")]
+    MissingArchetype {
+        building: StableId,
+        archetype: StableId,
+    },
+    #[error("archetype {0} has an empty footprint")]
+    EmptyArchetypeFootprint(StableId),
+    #[error("archetype {archetype} has invalid scene asset path {path}")]
+    InvalidScenePath { archetype: StableId, path: String },
+    #[error("archetype {archetype} has {defaults} default scenes; expected exactly one")]
+    DefaultSceneCount {
+        archetype: StableId,
+        defaults: usize,
+    },
     #[error("technology group {group} references missing node {node}")]
     MissingGroupNode { group: StableId, node: StableId },
 }
 
 impl ContentCatalog {
     pub fn validate(&self) -> Result<(), ContentError> {
+        for (id, archetype) in &self.archetypes {
+            if archetype.footprint[0] == 0 || archetype.footprint[1] == 0 {
+                return Err(ContentError::EmptyArchetypeFootprint(id.clone()));
+            }
+            for scene in &archetype.scenes {
+                if !scene.asset_path.starts_with("migrated/models/")
+                    || !Path::new(&scene.asset_path)
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+                    || scene.asset_path.contains("..")
+                    || scene.asset_path.contains('\\')
+                {
+                    return Err(ContentError::InvalidScenePath {
+                        archetype: id.clone(),
+                        path: scene.asset_path.clone(),
+                    });
+                }
+            }
+            let defaults = archetype
+                .scenes
+                .iter()
+                .filter(|scene| scene.is_default)
+                .count();
+            if !archetype.scenes.is_empty() && defaults != 1 {
+                return Err(ContentError::DefaultSceneCount {
+                    archetype: id.clone(),
+                    defaults,
+                });
+            }
+        }
         for (id, building) in &self.buildings {
             if building.footprint[0] == 0 || building.footprint[1] == 0 {
                 return Err(ContentError::EmptyFootprint(id.clone()));
+            }
+            if !self.archetypes.contains_key(&building.archetype) {
+                return Err(ContentError::MissingArchetype {
+                    building: id.clone(),
+                    archetype: building.archetype.clone(),
+                });
             }
         }
         self.technology.validate()
