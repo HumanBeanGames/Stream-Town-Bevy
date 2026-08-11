@@ -324,6 +324,9 @@ fn convert_export(
     for guid in &technology_guids {
         let asset = required_guid_asset(&assets_by_guid, guid, TECH_NODE_TYPE)?;
         let id = node_ids[guid].clone();
+        let (global_building_cost_reduction_percent, building_cost_reduction_percent) =
+            building_cost_reductions(asset)?;
+        let (global_stat_boost_percent, role_stat_boost_percent) = stat_boosts(asset)?;
         let group_name = technology_group_name(&asset.path);
         let group_id = stable_id("tech_group", &slug(&group_name))?;
         groups
@@ -349,6 +352,12 @@ fn convert_export(
                 unlocks,
                 building_level_caps: building_level_caps(asset)?,
                 unlocked_buildings: unlocked_buildings(asset)?,
+                building_cost_reduction_percent,
+                global_building_cost_reduction_percent,
+                storage_boost_percent: storage_boosts(asset)?,
+                global_stat_boost_percent,
+                role_stat_boost_percent,
+                aged_buildings: aged_buildings(asset)?,
                 objectives,
                 group: Some(group_id),
                 age: required_enum(asset, "<Age>k__BackingField")?,
@@ -949,6 +958,108 @@ fn unlocked_buildings(asset: &UnityAsset) -> Result<BTreeSet<StableId>> {
     Ok(buildings)
 }
 
+fn building_cost_reductions(asset: &UnityAsset) -> Result<(i32, BTreeMap<StableId, i32>)> {
+    let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
+    let mut global = 0_i32;
+    let mut buildings = BTreeMap::<StableId, i32>::new();
+    for index in 0..size {
+        let prefix = format!("<Unlocks>k__BackingField.Array.data[{index}]");
+        if required_enum(asset, &format!("{prefix}.<TechType>k__BackingField"))?
+            != "Building Cost Reduction"
+        {
+            continue;
+        }
+        let amount = technology_i32(asset, &prefix)?;
+        let building = required_enum(asset, &format!("{prefix}.<BuildingType>k__BackingField"))?;
+        if building == "Count" {
+            global = global.saturating_add(amount);
+        } else {
+            let current = buildings
+                .entry(stable_id("building", &slug(&building))?)
+                .or_default();
+            *current = current.saturating_add(amount);
+        }
+    }
+    Ok((global, buildings))
+}
+
+fn storage_boosts(asset: &UnityAsset) -> Result<BTreeMap<StableId, i32>> {
+    let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
+    let mut resources = BTreeMap::<StableId, i32>::new();
+    for index in 0..size {
+        let prefix = format!("<Unlocks>k__BackingField.Array.data[{index}]");
+        if required_enum(asset, &format!("{prefix}.<TechType>k__BackingField"))? != "Storage Boost"
+        {
+            continue;
+        }
+        let resource = required_enum(asset, &format!("{prefix}.<ResourceType>k__BackingField"))?;
+        let current = resources
+            .entry(stable_id("resource", &slug(&resource))?)
+            .or_default();
+        *current = current.saturating_add(technology_i32(asset, &prefix)?);
+    }
+    Ok(resources)
+}
+
+type StatBoosts = (
+    BTreeMap<StableId, i32>,
+    BTreeMap<StableId, BTreeMap<StableId, i32>>,
+);
+
+fn stat_boosts(asset: &UnityAsset) -> Result<StatBoosts> {
+    let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
+    let mut global = BTreeMap::<StableId, i32>::new();
+    let mut roles = BTreeMap::<StableId, BTreeMap<StableId, i32>>::new();
+    for index in 0..size {
+        let prefix = format!("<Unlocks>k__BackingField.Array.data[{index}]");
+        if required_enum(asset, &format!("{prefix}.<TechType>k__BackingField"))? != "Stat Boost" {
+            continue;
+        }
+        let stat = stable_id(
+            "stat",
+            &slug(&required_enum(
+                asset,
+                &format!("{prefix}.<StatType>k__BackingField"),
+            )?),
+        )?;
+        let role = required_enum(asset, &format!("{prefix}.<PlayerRole>k__BackingField"))?;
+        let amount = technology_i32(asset, &prefix)?;
+        let current = if role == "Count" {
+            global.entry(stat).or_default()
+        } else {
+            roles
+                .entry(stable_id("role", &slug(&role))?)
+                .or_default()
+                .entry(stat)
+                .or_default()
+        };
+        *current = current.saturating_add(amount);
+    }
+    Ok((global, roles))
+}
+
+fn aged_buildings(asset: &UnityAsset) -> Result<BTreeSet<StableId>> {
+    let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
+    let mut buildings = BTreeSet::new();
+    for index in 0..size {
+        let prefix = format!("<Unlocks>k__BackingField.Array.data[{index}]");
+        if required_enum(asset, &format!("{prefix}.<TechType>k__BackingField"))?
+            != "Age Up Building"
+        {
+            continue;
+        }
+        let building = required_enum(asset, &format!("{prefix}.<BuildingType>k__BackingField"))?;
+        buildings.insert(stable_id("building", &slug(&building))?);
+    }
+    Ok(buildings)
+}
+
+fn technology_i32(asset: &UnityAsset, prefix: &str) -> Result<i32> {
+    required_i64(asset, &format!("{prefix}.<IntValue>k__BackingField"))?
+        .try_into()
+        .with_context(|| format!("{} technology modifier is out of range", asset.path))
+}
+
 fn technology_group_name(path: &str) -> String {
     path.split_once("/Groups/")
         .and_then(|(_, suffix)| suffix.split('/').next())
@@ -1128,7 +1239,7 @@ mod tests {
                 ),
                 field(
                     "<Unlocks>k__BackingField.Array.size",
-                    Value::from(if name == "Root" { 2 } else { 0 }),
+                    Value::from(if name == "Root" { 6 } else { 0 }),
                 ),
                 field("<Objectives>k__BackingField.Array.size", Value::from(0)),
                 field("<Age>k__BackingField", enum_value("Age 1")),
@@ -1167,6 +1278,58 @@ mod tests {
                     ),
                     field(
                         "<Unlocks>k__BackingField.Array.data[1].<IntValue>k__BackingField",
+                        Value::from(0),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[2].<TechType>k__BackingField",
+                        enum_value("Building Cost Reduction"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[2].<BuildingType>k__BackingField",
+                        enum_value("Townhall"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[2].<IntValue>k__BackingField",
+                        Value::from(5),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[3].<TechType>k__BackingField",
+                        enum_value("Storage Boost"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[3].<ResourceType>k__BackingField",
+                        enum_value("Wood"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[3].<IntValue>k__BackingField",
+                        Value::from(10),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[4].<TechType>k__BackingField",
+                        enum_value("Stat Boost"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[4].<PlayerRole>k__BackingField",
+                        enum_value("Builder"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[4].<StatType>k__BackingField",
+                        enum_value("Action Amount"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[4].<IntValue>k__BackingField",
+                        Value::from(20),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[5].<TechType>k__BackingField",
+                        enum_value("Age Up Building"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[5].<BuildingType>k__BackingField",
+                        enum_value("Townhall"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[5].<IntValue>k__BackingField",
                         Value::from(0),
                     ),
                 ]);
@@ -1329,6 +1492,18 @@ mod tests {
                 .unlocked_buildings
                 .contains(&town_hall)
         );
+        let root_node = &catalog.technology.nodes[&root];
+        assert_eq!(root_node.building_cost_reduction_percent[&town_hall], 5);
+        assert_eq!(
+            root_node.storage_boost_percent[&StableId::new("resource:wood").unwrap()],
+            10
+        );
+        assert_eq!(
+            root_node.role_stat_boost_percent[&StableId::new("role:builder").unwrap()]
+                [&StableId::new("stat:action_amount").unwrap()],
+            20
+        );
+        assert!(root_node.aged_buildings.contains(&town_hall));
         assert_eq!(catalog.technology.nodes[&child].prerequisites, vec![root]);
         catalog.validate().unwrap();
 

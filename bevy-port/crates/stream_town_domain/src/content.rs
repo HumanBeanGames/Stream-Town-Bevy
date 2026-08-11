@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 4;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 5;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -103,6 +103,24 @@ pub struct TechNode {
     /// Authored `Unlock Building` effects applied when this technology is unlocked.
     #[serde(default)]
     pub unlocked_buildings: BTreeSet<StableId>,
+    /// Authored percentage reductions keyed by building type.
+    #[serde(default)]
+    pub building_cost_reduction_percent: BTreeMap<StableId, i32>,
+    /// Unity supports a `BuildingType.Count` target for a global reduction.
+    #[serde(default)]
+    pub global_building_cost_reduction_percent: i32,
+    /// Authored percentage storage boosts keyed by resource type.
+    #[serde(default)]
+    pub storage_boost_percent: BTreeMap<StableId, i32>,
+    /// Authored global percentage stat boosts keyed by stat type.
+    #[serde(default)]
+    pub global_stat_boost_percent: BTreeMap<StableId, i32>,
+    /// Authored percentage stat boosts keyed first by role, then by stat type.
+    #[serde(default)]
+    pub role_stat_boost_percent: BTreeMap<StableId, BTreeMap<StableId, i32>>,
+    /// Authored `Age Up Building` effects. An unlocked effect selects the age-two scene.
+    #[serde(default)]
+    pub aged_buildings: BTreeSet<StableId>,
     pub objectives: Vec<StableId>,
     #[serde(default)]
     pub group: Option<StableId>,
@@ -175,6 +193,16 @@ pub enum ContentError {
     },
     #[error("technology group {group} references missing node {node}")]
     MissingGroupNode { group: StableId, node: StableId },
+    #[error("technology {technology} references missing building {building}")]
+    MissingTechnologyBuilding {
+        technology: StableId,
+        building: StableId,
+    },
+    #[error("technology {technology} references missing role {role}")]
+    MissingTechnologyRole {
+        technology: StableId,
+        role: StableId,
+    },
 }
 
 impl ContentCatalog {
@@ -224,6 +252,30 @@ impl ContentCatalog {
             }
             if building.level_cost_multiplier_per_thousand == 0 {
                 return Err(ContentError::InvalidLevelCostMultiplier(id.clone()));
+            }
+        }
+        for (technology_id, technology) in &self.technology.nodes {
+            for building in technology
+                .building_level_caps
+                .keys()
+                .chain(&technology.unlocked_buildings)
+                .chain(technology.building_cost_reduction_percent.keys())
+                .chain(&technology.aged_buildings)
+            {
+                if !self.buildings.contains_key(building) {
+                    return Err(ContentError::MissingTechnologyBuilding {
+                        technology: technology_id.clone(),
+                        building: building.clone(),
+                    });
+                }
+            }
+            for role in technology.role_stat_boost_percent.keys() {
+                if !self.roles.contains_key(role) {
+                    return Err(ContentError::MissingTechnologyRole {
+                        technology: technology_id.clone(),
+                        role: role.clone(),
+                    });
+                }
             }
         }
         self.technology.validate()

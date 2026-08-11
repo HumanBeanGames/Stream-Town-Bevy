@@ -191,6 +191,7 @@ struct BuildingPresentation {
     base_height_offset: f32,
     applied_stage: u8,
     applied_level: u16,
+    applied_age: u8,
 }
 
 #[derive(Component)]
@@ -1045,6 +1046,14 @@ fn default_archetype_scene(
         .or_else(|| archetype.scenes.first())
 }
 
+fn archetype_scene_for_age(archetype: &ArchetypeDef, age: u8) -> Option<&ArchetypeScene> {
+    archetype
+        .scenes
+        .iter()
+        .find(|scene| scene.age == Some(age))
+        .or_else(|| default_archetype_scene(archetype))
+}
+
 fn archetype_by_source<'a>(
     content: &'a ContentCatalog,
     kind: ArchetypeKind,
@@ -1406,11 +1415,25 @@ fn next_agent_goal(
 fn complete_agent_goal(
     simulation: &mut WorldSimulation,
     world: &mut GeneratedWorld,
+    content: &ContentCatalog,
     actor_id: &StableId,
     goal: &AgentGoal,
     current: GridPos,
 ) {
-    const GATHER_AMOUNT: u32 = 5;
+    let Some(role) = simulation
+        .actors
+        .get(actor_id)
+        .map(|actor| actor.role.clone())
+    else {
+        return;
+    };
+    let action_amount_percent = technology_stat_boost_percent(
+        content,
+        simulation,
+        &role,
+        &StableId::new("stat:action_amount").expect("static ID"),
+    );
+    let action_amount = |base| percentage_adjusted(base, action_amount_percent);
     match goal {
         AgentGoal::Gather(resource_id) => {
             let Some(resource) = world
@@ -1420,7 +1443,7 @@ fn complete_agent_goal(
             else {
                 return;
             };
-            let amount = resource.amount.min(GATHER_AMOUNT);
+            let amount = resource.amount.min(action_amount(5));
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
             if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
@@ -1429,7 +1452,19 @@ fn complete_agent_goal(
             }
         }
         AgentGoal::Deposit => {
-            if let Err(error) = simulation.deposit_all(actor_id) {
+            let capacities = simulation
+                .actors
+                .get(actor_id)
+                .into_iter()
+                .flat_map(|actor| actor.inventory.keys())
+                .map(|resource| {
+                    (
+                        resource.clone(),
+                        resource_storage_capacity(content, simulation, resource),
+                    )
+                })
+                .collect();
+            if let Err(error) = simulation.deposit_all_with_capacities(actor_id, &capacities) {
                 warn!(actor = %actor_id, %error, "resource deposit action failed");
             }
         }
@@ -1446,17 +1481,24 @@ fn complete_agent_goal(
             {
                 return;
             }
-            let damage = if attacker.role.as_str() == "role:enemy" {
+            let base_damage = if attacker.role.as_str() == "role:enemy" {
                 12
             } else {
                 25
             };
+            let defense = technology_stat_boost_percent(
+                content,
+                simulation,
+                &target.role,
+                &StableId::new("stat:defense").expect("static ID"),
+            );
+            let damage = percentage_reduced(action_amount(base_damage), defense);
             if let Err(error) = simulation.damage_actor(target_id, damage) {
                 warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
             }
         }
         AgentGoal::Construct(building_id) => {
-            if let Err(error) = simulation.work_on_building(building_id, 25) {
+            if let Err(error) = simulation.work_on_building(building_id, action_amount(25)) {
                 warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
             }
         }
@@ -1464,13 +1506,32 @@ fn complete_agent_goal(
     }
 }
 
-fn action_cooldown(goal: &AgentGoal) -> f32 {
-    match goal {
+fn action_cooldown(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &StableId,
+    goal: &AgentGoal,
+) -> f32 {
+    let base = match goal {
         AgentGoal::Attack(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) => 0.75,
         AgentGoal::Deposit => 0.25,
         AgentGoal::Wander => 0.0,
+    };
+    let Some(role) = simulation.actors.get(actor).map(|actor| &actor.role) else {
+        return base;
+    };
+    let percent = technology_stat_boost_percent(
+        content,
+        simulation,
+        role,
+        &StableId::new("stat:action_speed").expect("static ID"),
+    );
+    if base <= f32::EPSILON {
+        0.0
+    } else {
+        (base * (1.0 - percentage_as_f32(percent) / 100.0)).max(0.1)
     }
 }
 
@@ -1496,6 +1557,27 @@ fn move_agents(
     for (mut agent, mut location, animation, mut transform) in &mut agents {
         agent.action_cooldown_seconds =
             (agent.action_cooldown_seconds - time.delta_secs()).max(0.0);
+        if let Some(role) = simulation
+            .0
+            .actors
+            .get(&agent.id)
+            .map(|actor| actor.role.clone())
+        {
+            let health_percent = technology_stat_boost_percent(
+                &content.0,
+                &simulation.0,
+                &role,
+                &StableId::new("stat:health").expect("static ID"),
+            );
+            let desired_max = i32::try_from(percentage_adjusted(100, health_percent))
+                .unwrap_or(i32::MAX)
+                .max(1);
+            if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
+                let increase = desired_max.saturating_sub(actor.max_health).max(0);
+                actor.max_health = desired_max;
+                actor.health = actor.health.saturating_add(increase).min(desired_max);
+            }
+        }
         let alive = simulation
             .0
             .actors
@@ -1534,11 +1616,13 @@ fn move_agents(
                     complete_agent_goal(
                         &mut simulation.0,
                         &mut world.generated,
+                        &content.0,
                         &agent.id,
                         &agent.goal,
                         location.0,
                     );
-                    agent.action_cooldown_seconds = action_cooldown(&agent.goal);
+                    agent.action_cooldown_seconds =
+                        action_cooldown(&content.0, &simulation.0, &agent.id, &agent.goal);
                 }
             }
             agent.origin = location.0;
@@ -1567,7 +1651,21 @@ fn move_agents(
             target.y += animation.base_scale.y * 0.5;
         }
         let distance = target - transform.translation;
+        let movement_percent = simulation
+            .0
+            .actors
+            .get(&agent.id)
+            .map(|actor| {
+                technology_stat_boost_percent(
+                    &content.0,
+                    &simulation.0,
+                    &actor.role,
+                    &StableId::new("stat:movement_speed").expect("static ID"),
+                )
+            })
+            .unwrap_or_default();
         let step = config.0.gameplay.agent_speed_cells_per_second
+            * (1.0 + percentage_as_f32(movement_percent) / 100.0).max(0.0)
             * config.0.world.cell_size
             * time.delta_secs();
         if distance.length_squared() <= step * step {
@@ -1615,25 +1713,53 @@ fn building_construction_stage(health: i32, complete: bool) -> u8 {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_building_presentation(
     simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
     render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
     mut buildings: Query<(
         &RuntimeBuilding,
         &mut BuildingPresentation,
         &mut Transform,
         Option<&mut MeshMaterial3d<StandardMaterial>>,
+        Option<&mut WorldAssetRoot>,
     )>,
 ) {
-    for (runtime, mut presentation, mut transform, material) in &mut buildings {
+    for (runtime, mut presentation, mut transform, material, world_asset) in &mut buildings {
         let Some(state) = simulation.0.buildings.get(&runtime.id) else {
             continue;
         };
+        let building = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, building)| building.archetype == state.archetype);
+        let age = building.map_or(1, |(building_id, _)| {
+            building_age(&content.0, &simulation.0, building_id)
+        });
         let construction_stage = building_construction_stage(state.health, state.complete);
         if presentation.applied_stage == construction_stage
             && presentation.applied_level == state.level
+            && presentation.applied_age == age
         {
             continue;
+        }
+        if presentation.applied_age != age {
+            if let (Some((_, building)), Some(mut world_asset), Some(asset_server)) =
+                (building, world_asset, asset_server.as_deref())
+            {
+                let archetype = &content.0.archetypes[&building.archetype];
+                if let Some(scene) = archetype_scene_for_age(archetype, age)
+                    .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+                {
+                    world_asset.0 = asset_server
+                        .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone()));
+                }
+            }
+            presentation.applied_age = age;
         }
         let stage_scale = match construction_stage {
             0 => 0.35,
@@ -2783,11 +2909,11 @@ fn load_input(
         ecs.entity(entity).despawn();
     }
     for saved in snapshot.simulation.buildings.values() {
-        let Some(building) = content
+        let Some((building_id, building)) = content
             .0
             .buildings
-            .values()
-            .find(|building| building.archetype == saved.archetype)
+            .iter()
+            .find(|(_, building)| building.archetype == saved.archetype)
         else {
             error!(
                 building = %saved.id,
@@ -2817,6 +2943,7 @@ fn load_input(
             &content.0.archetypes[&building.archetype],
             saved.position,
             building.footprint,
+            building_age(&content.0, &snapshot.simulation, building_id),
         );
     }
     world.generated = restored_world;
@@ -3026,8 +3153,140 @@ fn building_is_unlocked(
         .any(|technology| technology.unlocked_buildings.contains(building))
 }
 
-fn building_upgrade_cost(building: &BuildingDef, current_level: u16) -> BTreeMap<StableId, u32> {
+fn technology_stat_boost_percent(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    role: &StableId,
+    stat: &StableId,
+) -> i32 {
+    if role.as_str() == "role:enemy" {
+        return 0;
+    }
+    simulation
+        .unlocked_technology
+        .iter()
+        .filter_map(|technology| content.technology.nodes.get(technology))
+        .fold(0_i32, |total, technology| {
+            total
+                .saturating_add(
+                    technology
+                        .global_stat_boost_percent
+                        .get(stat)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+                .saturating_add(
+                    technology
+                        .role_stat_boost_percent
+                        .get(role)
+                        .and_then(|stats| stats.get(stat))
+                        .copied()
+                        .unwrap_or_default(),
+                )
+        })
+}
+
+fn building_cost_reduction_percent(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building: &StableId,
+) -> i32 {
+    simulation
+        .unlocked_technology
+        .iter()
+        .filter_map(|technology| content.technology.nodes.get(technology))
+        .fold(0_i32, |total, technology| {
+            total
+                .saturating_add(technology.global_building_cost_reduction_percent)
+                .saturating_add(
+                    technology
+                        .building_cost_reduction_percent
+                        .get(building)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+        })
+}
+
+fn storage_boost_percent(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    resource: &StableId,
+) -> i32 {
+    simulation
+        .unlocked_technology
+        .iter()
+        .filter_map(|technology| content.technology.nodes.get(technology))
+        .filter_map(|technology| technology.storage_boost_percent.get(resource).copied())
+        .fold(0_i32, i32::saturating_add)
+}
+
+fn building_age(content: &ContentCatalog, simulation: &WorldSimulation, building: &StableId) -> u8 {
+    if simulation
+        .unlocked_technology
+        .iter()
+        .filter_map(|technology| content.technology.nodes.get(technology))
+        .any(|technology| technology.aged_buildings.contains(building))
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn percentage_adjusted(base: u32, percent: i32) -> u32 {
+    let base = i64::from(base);
+    let adjusted = base.saturating_add(base.saturating_mul(i64::from(percent)) / 100);
+    u32::try_from(adjusted.clamp(0, i64::from(u32::MAX))).unwrap_or(u32::MAX)
+}
+
+fn percentage_reduced(base: u32, reduction_percent: i32) -> u32 {
+    percentage_adjusted(base, reduction_percent.saturating_neg())
+}
+
+fn percentage_as_f32(percent: i32) -> f32 {
+    f32::from(
+        i16::try_from(percent.clamp(-10_000, 10_000))
+            .expect("clamped technology percentage fits i16"),
+    )
+}
+
+const BASE_RESOURCE_STORAGE: u32 = 10_000;
+
+fn resource_storage_capacity(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    resource: &StableId,
+) -> u32 {
+    percentage_adjusted(
+        BASE_RESOURCE_STORAGE,
+        storage_boost_percent(content, simulation, resource),
+    )
+}
+
+fn building_construction_cost(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building_id: &StableId,
+    building: &BuildingDef,
+) -> BTreeMap<StableId, u32> {
+    let reduction = building_cost_reduction_percent(content, simulation, building_id);
+    building
+        .cost
+        .iter()
+        .map(|(resource, cost)| (resource.clone(), percentage_reduced(*cost, reduction)))
+        .collect()
+}
+
+fn building_upgrade_cost(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building_id: &StableId,
+    building: &BuildingDef,
+    current_level: u16,
+) -> BTreeMap<StableId, u32> {
     let level_squared = u64::from(current_level).saturating_pow(2);
+    let reduction = building_cost_reduction_percent(content, simulation, building_id);
     building
         .level_cost
         .iter()
@@ -3036,7 +3295,10 @@ fn building_upgrade_cost(building: &BuildingDef, current_level: u16) -> BTreeMap
                 .saturating_mul(level_squared)
                 .saturating_mul(u64::from(building.level_cost_multiplier_per_thousand))
                 / 1_000;
-            (resource.clone(), u32::try_from(scaled).unwrap_or(u32::MAX))
+            (
+                resource.clone(),
+                percentage_reduced(u32::try_from(scaled).unwrap_or(u32::MAX), reduction),
+            )
         })
         .collect()
 }
@@ -3131,6 +3393,7 @@ fn spawn_runtime_building(
     archetype: &ArchetypeDef,
     position: GridPos,
     footprint: [u16; 2],
+    age: u8,
 ) {
     let centre = GridPos {
         x: position.x + footprint[0] / 2,
@@ -3145,7 +3408,7 @@ fn spawn_runtime_building(
         GridLocation(position),
         Transform::from_translation(world_position),
     ));
-    if let Some(scene) = default_archetype_scene(archetype).filter(|scene| {
+    if let Some(scene) = archetype_scene_for_age(archetype, age).filter(|scene| {
         asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
     }) {
         let base_scale = Vec3::splat(config.world.cell_size / 2.0);
@@ -3161,6 +3424,7 @@ fn spawn_runtime_building(
                 base_height_offset: 0.0,
                 applied_stage: u8::MAX,
                 applied_level: u16::MAX,
+                applied_age: age,
             },
             Transform::from_translation(world_position).with_scale(base_scale),
         ));
@@ -3181,6 +3445,7 @@ fn spawn_runtime_building(
                 base_height_offset: size.y * 0.5,
                 applied_stage: u8::MAX,
                 applied_level: u16::MAX,
+                applied_age: age,
             },
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(if building.complete {
@@ -3318,13 +3583,19 @@ fn process_injected_commands(
                     let position = find_building_site(&world.generated, near, building.footprint)
                         .ok_or_else(|| "no valid building site is available".to_owned())?;
                     let runtime_id = runtime_building_id(&simulation.0);
+                    let cost = building_construction_cost(
+                        &content.0,
+                        &simulation.0,
+                        &building_id,
+                        building,
+                    );
                     simulation
                         .0
                         .construct(
                             runtime_id.clone(),
                             building.archetype.clone(),
                             position,
-                            &building.cost,
+                            &cost,
                         )
                         .map_err(|error| error.to_string())?;
                     let region = building_region(position, building.footprint, &world.generated)
@@ -3346,6 +3617,7 @@ fn process_injected_commands(
                         &content.0.archetypes[&building.archetype],
                         position,
                         building.footprint,
+                        building_age(&content.0, &simulation.0, &building_id),
                     );
                     Ok(format!("placed {} construction", building.display_name))
                 })
@@ -3372,7 +3644,13 @@ fn process_injected_commands(
                             format!("no completed {} is available", definition.display_name)
                         })?;
                     let max_level = maximum_building_level(&content.0, &simulation.0, &building_id);
-                    let cost = building_upgrade_cost(definition, candidate.1);
+                    let cost = building_upgrade_cost(
+                        &content.0,
+                        &simulation.0,
+                        &building_id,
+                        definition,
+                        candidate.1,
+                    );
                     simulation
                         .0
                         .upgrade_building(&candidate.0, max_level, &cost)
@@ -3778,6 +4056,7 @@ mod tests {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
+                &content,
                 &actor_id,
                 &gather,
                 resource.position,
@@ -3805,6 +4084,7 @@ mod tests {
         complete_agent_goal(
             &mut simulation,
             &mut world,
+            &content,
             &actor_id,
             &AgentGoal::Deposit,
             resource.position,
@@ -3845,6 +4125,7 @@ mod tests {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
+                &content,
                 &defender,
                 &goal,
                 defender_position,
@@ -3855,7 +4136,9 @@ mod tests {
         simulation.respawn_actor(&enemy, enemy_position).unwrap();
         assert!(simulation.actors[&enemy].alive);
         assert_eq!(simulation.actors[&enemy].health, 100);
-        assert!((action_cooldown(&goal) - 1.0).abs() <= f32::EPSILON);
+        assert!(
+            (action_cooldown(&content, &simulation, &defender, &goal) - 1.0).abs() <= f32::EPSILON
+        );
     }
 
     #[test]
@@ -3920,6 +4203,7 @@ mod tests {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
+                &content,
                 &builder,
                 &goal,
                 builder_position,
@@ -3952,7 +4236,8 @@ mod tests {
         simulation.unlocked_technology.insert(technology);
         let max_level = maximum_building_level(&content, &simulation, &building_id);
         assert_eq!(max_level, authored_cap);
-        let upgrade_cost = building_upgrade_cost(definition, 1);
+        let upgrade_cost =
+            building_upgrade_cost(&content, &simulation, &building_id, definition, 1);
         assert_eq!(
             simulation
                 .upgrade_building(&runtime_id, max_level, &upgrade_cost)
@@ -4001,6 +4286,91 @@ mod tests {
             &simulation,
             &locked_building
         ));
+    }
+
+    #[test]
+    fn converted_technology_modifiers_change_runtime_rules() {
+        let content = embedded_content();
+        let mut simulation = WorldSimulation::new(42);
+
+        let (cost_technology, building_id, reduction) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                node.building_cost_reduction_percent
+                    .iter()
+                    .next()
+                    .map(|(building, amount)| (technology.clone(), building.clone(), *amount))
+            })
+            .expect("Unity technology graph contains building cost reductions");
+        let definition = &content.buildings[&building_id];
+        simulation.unlocked_technology.insert(cost_technology);
+        assert_eq!(
+            building_cost_reduction_percent(&content, &simulation, &building_id),
+            reduction
+        );
+        let adjusted = building_construction_cost(&content, &simulation, &building_id, definition);
+        for (resource, base) in &definition.cost {
+            assert_eq!(adjusted[resource], percentage_reduced(*base, reduction));
+        }
+
+        simulation.unlocked_technology.clear();
+        let (storage_technology, resource, boost) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                node.storage_boost_percent
+                    .iter()
+                    .next()
+                    .map(|(resource, amount)| (technology.clone(), resource.clone(), *amount))
+            })
+            .expect("Unity technology graph contains storage boosts");
+        simulation.unlocked_technology.insert(storage_technology);
+        assert_eq!(
+            resource_storage_capacity(&content, &simulation, &resource),
+            percentage_adjusted(BASE_RESOURCE_STORAGE, boost)
+        );
+
+        simulation.unlocked_technology.clear();
+        let (stat_technology, role, stat, boost) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                node.role_stat_boost_percent
+                    .iter()
+                    .find_map(|(role, stats)| {
+                        stats.iter().next().map(|(stat, amount)| {
+                            (technology.clone(), role.clone(), stat.clone(), *amount)
+                        })
+                    })
+            })
+            .expect("Unity technology graph contains role stat boosts");
+        simulation.unlocked_technology.insert(stat_technology);
+        assert_eq!(
+            technology_stat_boost_percent(&content, &simulation, &role, &stat),
+            boost
+        );
+
+        simulation.unlocked_technology.clear();
+        let (age_technology, aged_building) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                node.aged_buildings
+                    .iter()
+                    .next()
+                    .map(|building| (technology.clone(), building.clone()))
+            })
+            .expect("Unity technology graph contains building age upgrades");
+        assert_eq!(building_age(&content, &simulation, &aged_building), 1);
+        simulation.unlocked_technology.insert(age_technology);
+        assert_eq!(building_age(&content, &simulation, &aged_building), 2);
+        let archetype = &content.archetypes[&content.buildings[&aged_building].archetype];
+        assert_eq!(archetype_scene_for_age(archetype, 2).unwrap().age, Some(2));
     }
 
     #[test]
@@ -4303,7 +4673,13 @@ mod tests {
                 .find(|(id, building)| {
                     building.placeable && building_is_unlocked(content, simulation, id)
                 })
-                .map(|(id, building)| (id.clone(), building.clone()))
+                .map(|(id, building)| {
+                    (
+                        id.clone(),
+                        building.clone(),
+                        building_construction_cost(content, simulation, id, building),
+                    )
+                })
                 .expect("converted initial technology unlocks a placeable building")
         };
         let actor_id = StableId::new("twitch:debug_viewer").unwrap();
@@ -4342,7 +4718,7 @@ mod tests {
             let resource_id = StableId::new(resource).unwrap();
             assert_eq!(
                 town_resource_amount(simulation, resource),
-                5_000 - available_building.1.cost[&resource_id]
+                5_000 - available_building.2[&resource_id]
             );
         }
         assert_eq!(

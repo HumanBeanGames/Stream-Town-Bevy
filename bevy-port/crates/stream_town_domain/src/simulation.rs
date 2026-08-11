@@ -168,13 +168,30 @@ impl WorldSimulation {
     }
 
     pub fn deposit_all(&mut self, actor: &StableId) -> Result<u32, SimulationError> {
+        self.deposit_all_with_capacities(actor, &BTreeMap::new())
+    }
+
+    /// Deposits inventory without allowing configured town storage to overflow.
+    /// Resources without an entry remain unbounded for backwards-compatible domain callers.
+    pub fn deposit_all_with_capacities(
+        &mut self,
+        actor: &StableId,
+        capacities: &BTreeMap<StableId, u32>,
+    ) -> Result<u32, SimulationError> {
         let inventory = std::mem::take(&mut self.actor_mut(actor)?.inventory);
         let mut total = 0_u32;
+        let mut overflow = BTreeMap::new();
         for (resource, amount) in inventory {
-            total = total.saturating_add(amount);
-            let current = self.town_resources.entry(resource).or_default();
-            *current = current.saturating_add(amount);
+            let current = self.town_resources.entry(resource.clone()).or_default();
+            let capacity = capacities.get(&resource).copied().unwrap_or(u32::MAX);
+            let deposited = amount.min(capacity.saturating_sub(*current));
+            *current = current.saturating_add(deposited);
+            total = total.saturating_add(deposited);
+            if deposited < amount {
+                overflow.insert(resource, amount - deposited);
+            }
         }
+        self.actor_mut(actor)?.inventory = overflow;
         Ok(total)
     }
 
@@ -462,5 +479,21 @@ mod tests {
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
         );
+    }
+
+    #[test]
+    fn capped_deposit_preserves_inventory_overflow() {
+        let mut simulation = WorldSimulation::new(42);
+        let player = id("twitch:viewer");
+        let wood = id("resource:wood");
+        assert!(simulation.join_player(player.clone(), GridPos { x: 0, z: 0 }));
+        simulation.gather(&player, wood.clone(), 25).unwrap();
+        simulation.town_resources.insert(wood.clone(), 90);
+        let deposited = simulation
+            .deposit_all_with_capacities(&player, &BTreeMap::from([(wood.clone(), 100)]))
+            .unwrap();
+        assert_eq!(deposited, 10);
+        assert_eq!(simulation.town_resources[&wood], 100);
+        assert_eq!(simulation.actors[&player].inventory[&wood], 15);
     }
 }
