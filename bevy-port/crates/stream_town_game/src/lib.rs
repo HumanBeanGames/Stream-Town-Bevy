@@ -144,10 +144,13 @@ struct Agent {
     id: StableId,
     kind: ActorKind,
     goal: AgentGoal,
+    spawn: GridPos,
     origin: GridPos,
     path: Vec<GridPos>,
     path_index: usize,
     target: GridPos,
+    action_cooldown_seconds: f32,
+    respawn_seconds: f32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -156,6 +159,7 @@ enum AgentGoal {
     Wander,
     Gather(StableId),
     Deposit,
+    Attack(StableId),
 }
 
 #[derive(Component, Clone, Copy)]
@@ -844,124 +848,128 @@ fn generate_and_spawn_world(
     if let Some(weather) = debug_weather_override() {
         simulation.weather = weather;
     }
-    'cells: for z in 0..generated.navigation.height() {
-        for x in 0..generated.navigation.width() {
-            let position = GridPos { x, z };
-            if !generated.navigation.is_walkable(position) || position == town_hall_position {
-                continue;
-            }
-            let target = GridPos {
-                x: generated.navigation.width() - 1 - x,
-                z: generated.navigation.height() - 1 - z,
-            };
-            let target = nearest_walkable(&generated, target).unwrap_or(centre);
-            let world_position = grid_to_world_on_surface(position, &config.0, &generated);
-            let (actor_id, initial_role) = initial_actor_identity(spawned);
-            let actor_id = StableId::new(actor_id).expect("generated ID");
-            let kind = if spawned == 0 {
-                ActorKind::Enemy
-            } else {
-                ActorKind::Player
-            };
-            simulation.join_player(actor_id.clone(), position);
-            if let Some(role) = initial_role {
-                let _ = simulation.assign_role(
-                    &actor_id,
-                    StableId::new(role).expect("starting role IDs are valid"),
-                );
-            }
-            let real_archetype = if spawned == 0 {
-                archetype_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
-            } else if spawned == 1 {
-                archetype_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
-            } else {
-                None
-            };
-            let real_scene = real_archetype
-                .and_then(default_archetype_scene)
-                .filter(|scene| {
-                    asset_server.is_some()
-                        && converted_asset_exists(&asset_root.0, &scene.asset_path)
-                });
-            let native_animation = real_archetype
-                .zip(real_scene)
-                .and_then(|(archetype, scene)| {
-                    native_animation_spec(
-                        archetype,
-                        scene,
-                        &presentation.0,
-                        asset_server.as_deref(),
-                        animation_graphs.as_deref_mut(),
-                    )
-                });
-            let converted_animation = native_animation
-                .is_none()
-                .then(|| {
-                    real_archetype
-                        .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
-                })
-                .flatten();
-            let base_scale = if real_scene.is_some() {
-                Vec3::splat(config.0.world.cell_size / 2.0)
-            } else {
-                Vec3::new(
-                    config.0.world.cell_size * 0.3,
-                    config.0.world.cell_size * 0.55,
-                    config.0.world.cell_size * 0.3,
+    let spawn_positions = connected_actor_positions(
+        &generated,
+        centre,
+        town_hall_position,
+        config.0.gameplay.initial_agents,
+    );
+    for position in spawn_positions {
+        let x = position.x;
+        let z = position.z;
+        let target = GridPos {
+            x: generated.navigation.width() - 1 - x,
+            z: generated.navigation.height() - 1 - z,
+        };
+        let target = nearest_walkable(&generated, target).unwrap_or(centre);
+        let world_position = grid_to_world_on_surface(position, &config.0, &generated);
+        let (actor_id, initial_role) = initial_actor_identity(spawned);
+        let actor_id = StableId::new(actor_id).expect("generated ID");
+        let kind = if spawned == 0 {
+            ActorKind::Enemy
+        } else {
+            ActorKind::Player
+        };
+        simulation.join_player(actor_id.clone(), position);
+        if let Some(role) = initial_role {
+            let _ = simulation.assign_role(
+                &actor_id,
+                StableId::new(role).expect("starting role IDs are valid"),
+            );
+        }
+        let real_archetype = if spawned == 0 {
+            archetype_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
+        } else if spawned == 1 {
+            archetype_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
+        } else {
+            None
+        };
+        let real_scene = real_archetype
+            .and_then(default_archetype_scene)
+            .filter(|scene| {
+                asset_server.is_some() && converted_asset_exists(&asset_root.0, &scene.asset_path)
+            });
+        let native_animation = real_archetype
+            .zip(real_scene)
+            .and_then(|(archetype, scene)| {
+                native_animation_spec(
+                    archetype,
+                    scene,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                    animation_graphs.as_deref_mut(),
                 )
-            };
-            let visual_height = if real_scene.is_some() {
-                world_position.y
-            } else {
-                world_position.y + base_scale.y * 0.5
-            };
-            let mut entity = commands.spawn((
-                WorldEntity,
-                GridLocation(position),
-                Agent {
-                    id: actor_id,
-                    kind: kind.clone(),
-                    goal: AgentGoal::Wander,
-                    origin: position,
-                    path: Vec::new(),
-                    path_index: 0,
-                    target,
-                },
-                AgentAnimation {
-                    base_scale,
-                    native: native_animation.is_some() || converted_animation.is_some(),
-                    ..default()
-                },
-                Transform::from_xyz(world_position.x, visual_height, world_position.z)
-                    .with_scale(base_scale),
+            });
+        let converted_animation = native_animation
+            .is_none()
+            .then(|| {
+                real_archetype
+                    .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
+            })
+            .flatten();
+        let base_scale = if real_scene.is_some() {
+            Vec3::splat(config.0.world.cell_size / 2.0)
+        } else {
+            Vec3::new(
+                config.0.world.cell_size * 0.3,
+                config.0.world.cell_size * 0.55,
+                config.0.world.cell_size * 0.3,
+            )
+        };
+        let visual_height = if real_scene.is_some() {
+            world_position.y
+        } else {
+            world_position.y + base_scale.y * 0.5
+        };
+        let mut entity = commands.spawn((
+            WorldEntity,
+            GridLocation(position),
+            Agent {
+                id: actor_id,
+                kind: kind.clone(),
+                goal: AgentGoal::Wander,
+                spawn: position,
+                origin: position,
+                path: Vec::new(),
+                path_index: 0,
+                target,
+                action_cooldown_seconds: 0.0,
+                respawn_seconds: 0.0,
+            },
+            AgentAnimation {
+                base_scale,
+                native: native_animation.is_some() || converted_animation.is_some(),
+                ..default()
+            },
+            Transform::from_xyz(world_position.x, visual_height, world_position.z)
+                .with_scale(base_scale),
+        ));
+        if let Some(scene) = real_scene {
+            entity.insert(WorldAssetRoot(
+                asset_server
+                    .as_deref()
+                    .expect("asset server checked above")
+                    .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
             ));
-            if let Some(scene) = real_scene {
-                entity.insert(WorldAssetRoot(
-                    asset_server
-                        .as_deref()
-                        .expect("asset server checked above")
-                        .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
-                ));
-                if let Some(native_animation) = native_animation {
-                    entity.insert(native_animation);
-                } else if let Some(converted_animation) = converted_animation {
-                    entity.insert(converted_animation);
-                }
-                if let Some(material) = real_archetype.and_then(|archetype| {
-                    prefab_material_handle(archetype, &presentation.0, &render)
-                }) {
-                    entity.insert(MaterialOverrideSpec(material));
-                }
-            } else {
-                entity.insert((
-                    Mesh3d(render.cube.clone()),
-                    MeshMaterial3d(actor_material(&render, &kind, false)),
-                ));
+            if let Some(native_animation) = native_animation {
+                entity.insert(native_animation);
+            } else if let Some(converted_animation) = converted_animation {
+                entity.insert(converted_animation);
             }
-            spawned += 1;
-            if spawned >= config.0.gameplay.initial_agents {
-                break 'cells;
+            if let Some(material) = real_archetype
+                .and_then(|archetype| prefab_material_handle(archetype, &presentation.0, &render))
+            {
+                entity.insert(MaterialOverrideSpec(material));
             }
+        } else {
+            entity.insert((
+                Mesh3d(render.cube.clone()),
+                MeshMaterial3d(actor_material(&render, &kind, false)),
+            ));
+        }
+        spawned += 1;
+        if spawned >= config.0.gameplay.initial_agents {
+            break;
         }
     }
 
@@ -1155,6 +1163,50 @@ fn initial_actor_position(
     None
 }
 
+fn connected_actor_positions(
+    world: &GeneratedWorld,
+    start: GridPos,
+    excluded: GridPos,
+    count: u16,
+) -> Vec<GridPos> {
+    let mut positions = Vec::with_capacity(usize::from(count));
+    let mut visited = BTreeSet::new();
+    let mut queue = VecDeque::from([start]);
+    while let Some(position) = queue.pop_front() {
+        if !visited.insert(position) || !world.navigation.is_walkable(position) {
+            continue;
+        }
+        if position != excluded {
+            positions.push(position);
+            if positions.len() >= usize::from(count) {
+                break;
+            }
+        }
+        let neighbors = [
+            position
+                .x
+                .checked_add(1)
+                .filter(|x| *x < world.navigation.width())
+                .map(|x| GridPos { x, z: position.z }),
+            position
+                .x
+                .checked_sub(1)
+                .map(|x| GridPos { x, z: position.z }),
+            position
+                .z
+                .checked_add(1)
+                .filter(|z| *z < world.navigation.height())
+                .map(|z| GridPos { x: position.x, z }),
+            position
+                .z
+                .checked_sub(1)
+                .map(|z| GridPos { x: position.x, z }),
+        ];
+        queue.extend(neighbors.into_iter().flatten());
+    }
+    positions
+}
+
 fn resource_for_role(role: &StableId) -> Option<StableId> {
     let resource = match role.as_str() {
         "role:logger" => "resource:wood",
@@ -1163,6 +1215,19 @@ fn resource_for_role(role: &StableId) -> Option<StableId> {
         _ => return None,
     };
     Some(StableId::new(resource).expect("role resource IDs are valid"))
+}
+
+fn is_combat_role(role: &StableId) -> bool {
+    matches!(
+        role.as_str(),
+        "role:defender"
+            | "role:necromancer"
+            | "role:paladin"
+            | "role:ranger"
+            | "role:ruler"
+            | "role:soldier"
+            | "role:wizard"
+    )
 }
 
 fn town_hall_grid_position(config: &GameConfig) -> GridPos {
@@ -1183,6 +1248,42 @@ fn next_agent_goal(
     let Some(actor) = simulation.actors.get(actor_id) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
     };
+    if !actor.alive {
+        return (AgentGoal::Wander, current);
+    }
+    let combat_target = if actor.role.as_str() == "role:enemy" {
+        simulation
+            .actors
+            .values()
+            .filter(|target| target.alive && target.role.as_str() == "role:defender")
+            .min_by_key(|target| {
+                (
+                    target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
+                    target.id.clone(),
+                )
+            })
+    } else if is_combat_role(&actor.role) {
+        simulation
+            .actors
+            .values()
+            .filter(|target| target.alive && target.role.as_str() == "role:enemy")
+            .min_by_key(|target| {
+                (
+                    target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
+                    target.id.clone(),
+                )
+            })
+    } else {
+        None
+    };
+    if let Some(target) = combat_target {
+        let destination = if actor.role.as_str() == "role:enemy" {
+            current
+        } else {
+            target.position
+        };
+        return (AgentGoal::Attack(target.id.clone()), destination);
+    }
     let carried = actor
         .inventory
         .values()
@@ -1218,6 +1319,7 @@ fn complete_agent_goal(
     world: &mut GeneratedWorld,
     actor_id: &StableId,
     goal: &AgentGoal,
+    current: GridPos,
 ) {
     const GATHER_AMOUNT: u32 = 5;
     match goal {
@@ -1242,7 +1344,38 @@ fn complete_agent_goal(
                 warn!(actor = %actor_id, %error, "resource deposit action failed");
             }
         }
+        AgentGoal::Attack(target_id) => {
+            let Some(attacker) = simulation.actors.get(actor_id) else {
+                return;
+            };
+            let Some(target) = simulation.actors.get(target_id) else {
+                return;
+            };
+            if !attacker.alive
+                || !target.alive
+                || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z) > 1
+            {
+                return;
+            }
+            let damage = if attacker.role.as_str() == "role:enemy" {
+                12
+            } else {
+                25
+            };
+            if let Err(error) = simulation.damage_actor(target_id, damage) {
+                warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
+            }
+        }
         AgentGoal::Wander => {}
+    }
+}
+
+fn action_cooldown(goal: &AgentGoal) -> f32 {
+    match goal {
+        AgentGoal::Attack(_) => 1.0,
+        AgentGoal::Gather(_) => 0.75,
+        AgentGoal::Deposit => 0.25,
+        AgentGoal::Wander => 0.0,
     }
 }
 
@@ -1265,16 +1398,51 @@ fn move_agents(
         simulation.0.weather = weather;
     }
     for (mut agent, mut location, animation, mut transform) in &mut agents {
+        agent.action_cooldown_seconds =
+            (agent.action_cooldown_seconds - time.delta_secs()).max(0.0);
+        let alive = simulation
+            .0
+            .actors
+            .get(&agent.id)
+            .is_some_and(|actor| actor.alive);
+        if alive {
+            agent.respawn_seconds = 0.0;
+        } else {
+            agent.path.clear();
+            agent.goal = AgentGoal::Wander;
+            if agent.respawn_seconds <= 0.0 {
+                agent.respawn_seconds = 5.0;
+            }
+            agent.respawn_seconds = (agent.respawn_seconds - time.delta_secs()).max(0.0);
+            if agent.respawn_seconds > 0.0 {
+                continue;
+            }
+            let spawn = nearest_walkable(&world.generated, agent.spawn).unwrap_or(agent.spawn);
+            if simulation.0.respawn_actor(&agent.id, spawn).is_err() {
+                continue;
+            }
+            let mut world_position = grid_to_world_on_surface(spawn, &config.0, &world.generated);
+            if !animation.native {
+                world_position.y += animation.base_scale.y * 0.5;
+            }
+            transform.translation = world_position;
+            location.0 = spawn;
+            agent.origin = spawn;
+            agent.target = mirrored_target(&world.generated, spawn);
+            agent.action_cooldown_seconds = 0.0;
+        }
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
                 stats.paths_completed += 1;
-                if location.0 == agent.target {
+                if location.0 == agent.target && agent.action_cooldown_seconds <= f32::EPSILON {
                     complete_agent_goal(
                         &mut simulation.0,
                         &mut world.generated,
                         &agent.id,
                         &agent.goal,
+                        location.0,
                     );
+                    agent.action_cooldown_seconds = action_cooldown(&agent.goal);
                 }
             }
             agent.origin = location.0;
@@ -2523,10 +2691,14 @@ fn load_input(
             world_position.y += animation.base_scale.y * 0.5;
         }
         agent.kind = saved.kind.clone();
+        agent.goal = AgentGoal::Wander;
+        agent.spawn = position;
         agent.origin = position;
         agent.path.clear();
         agent.path_index = 0;
         agent.target = mirrored_target(&world.generated, position);
+        agent.action_cooldown_seconds = 0.0;
+        agent.respawn_seconds = 0.0;
         location.0 = position;
         transform.translation = world_position;
         restored_ids.insert(saved.id.clone());
@@ -2551,10 +2723,13 @@ fn load_input(
                 id: saved.id.clone(),
                 kind: saved.kind.clone(),
                 goal: AgentGoal::Wander,
+                spawn: position,
                 origin: position,
                 path: Vec::new(),
                 path_index: 0,
                 target: mirrored_target(&world.generated, position),
+                action_cooldown_seconds: 0.0,
+                respawn_seconds: 0.0,
             },
             AgentAnimation {
                 base_scale,
@@ -2857,10 +3032,13 @@ fn process_injected_commands(
                                 id: actor_id.clone(),
                                 kind: ActorKind::Player,
                                 goal: AgentGoal::Wander,
+                                spawn: position,
                                 origin: position,
                                 path: Vec::new(),
                                 path_index: 0,
                                 target,
+                                action_cooldown_seconds: 0.0,
+                                respawn_seconds: 0.0,
                             },
                             AgentAnimation {
                                 base_scale,
@@ -3032,8 +3210,18 @@ fn update_hud(
         .iter()
         .filter(|agent| agent.goal == AgentGoal::Deposit)
         .count();
+    let attacking = agents
+        .iter()
+        .filter(|agent| matches!(agent.goal, AgentGoal::Attack(_)))
+        .count();
+    let dead = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| !actor.alive)
+        .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit | combat {attacking} attack/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -3091,7 +3279,11 @@ fn snapshot_world(
                     .navigation
                     .height_at(location.0)
                     .unwrap_or_default(),
-                health: 100,
+                health: simulation
+                    .0
+                    .actors
+                    .get(&agent.id)
+                    .map_or(100, |actor| actor.health),
             })
             .collect(),
         simulation: simulation.0.clone(),
@@ -3306,7 +3498,13 @@ mod tests {
         let starting_amount = resource.amount;
         let gather = AgentGoal::Gather(resource.id.clone());
         for _ in 0..5 {
-            complete_agent_goal(&mut simulation, &mut world, &actor_id, &gather);
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &actor_id,
+                &gather,
+                resource.position,
+            );
         }
         assert_eq!(
             world
@@ -3320,9 +3518,53 @@ mod tests {
         assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 25);
         let (goal, _) = next_agent_goal(&simulation, &world, &config, &actor_id, resource.position);
         assert_eq!(goal, AgentGoal::Deposit);
-        complete_agent_goal(&mut simulation, &mut world, &actor_id, &AgentGoal::Deposit);
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &actor_id,
+            &AgentGoal::Deposit,
+            resource.position,
+        );
         assert!(simulation.actors[&actor_id].inventory.is_empty());
         assert_eq!(simulation.town_resources[&resource.kind], 25);
+    }
+
+    #[test]
+    fn combat_goal_damages_kills_and_respawns() {
+        let config = GameConfig::default();
+        let mut world = generate_world(&config.world);
+        let defender_position = GridPos { x: 32, z: 32 };
+        let enemy_position = nearest_walkable(&world, GridPos { x: 33, z: 32 }).unwrap();
+        let defender = StableId::new("npc:defender_test").unwrap();
+        let enemy = StableId::new("actor:enemy_test").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(defender.clone(), defender_position));
+        assert!(simulation.join_player(enemy.clone(), enemy_position));
+        simulation
+            .assign_role(&defender, StableId::new("role:defender").unwrap())
+            .unwrap();
+        simulation
+            .assign_role(&enemy, StableId::new("role:enemy").unwrap())
+            .unwrap();
+        let (goal, target) =
+            next_agent_goal(&simulation, &world, &config, &defender, defender_position);
+        assert_eq!(goal, AgentGoal::Attack(enemy.clone()));
+        assert_eq!(target, enemy_position);
+        for _ in 0..4 {
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &defender,
+                &goal,
+                defender_position,
+            );
+        }
+        assert!(!simulation.actors[&enemy].alive);
+        assert_eq!(simulation.actors[&enemy].health, 0);
+        simulation.respawn_actor(&enemy, enemy_position).unwrap();
+        assert!(simulation.actors[&enemy].alive);
+        assert_eq!(simulation.actors[&enemy].health, 100);
+        assert!((action_cooldown(&goal) - 1.0).abs() <= f32::EPSILON);
     }
 
     #[test]
