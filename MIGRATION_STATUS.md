@@ -35,10 +35,15 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable Town Hall approach, and deposit into the authoritative town economy;
-  exhausted resource visuals are hidden. Content schema 7 converts each role's
-  resource affinity, action rate/range, health/regeneration/defense, movement
-  speed, and carry capacity. Live gathering, construction, combat range/damage,
-  health, cooldowns, and movement use those bases plus technology percentages.
+  exhausted resource visuals are hidden. Content schema 8 converts each role's
+  resource affinity, XP multiplier, level curves, action rate/range,
+  health/regeneration/defense, movement speed, and carry capacity. Successful
+  actions award the same modified XP as Unity, role progress persists across
+  role changes and native saves, levels cap at 99 on Unity's authored curve,
+  and level-ups heal to the recalculated maximum. Live gathering, construction,
+  combat range/damage, health regeneration, cooldowns, movement, and carrying
+  use those leveled values plus technology percentages. `!experience`/`!exp`
+  reports the current role, level, XP, and next threshold.
 - Combat roles acquire living enemies while the Goblin holds its ground and
   retaliates. Both sides path into range, attack on a one-second cadence, apply
   deterministic role-specific damage, enter the controller's Death state at
@@ -51,7 +56,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 7 also promotes Unity `Placeable` and all six technology effect
+  Content schema 8 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -69,6 +74,7 @@ mistaken for production-ready systems.
   boosts apply to those contributions, and capped deposits retain overflow in
   actor inventory.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
+  role-experience reporting,
   catalog-priced building placement and upgrades, eligible technology voting,
   mapped events, atomic saves, and help. Commands validate catalog references
   and prerequisites, return HUD/Twitch feedback, and use the authoritative
@@ -111,8 +117,8 @@ mistaken for production-ready systems.
   model scene variants, 15 roles, and the shipping 363-node, 362-edge technology
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, promotes construction/upgrade balance and
-  all 413 authored technology effects, role base stats, and building storage
-  contributions into content schema 7, preserves the remaining typed Unity
+  all 413 authored technology effects, role base stats and level curves, and
+  building storage contributions into content schema 8, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -183,11 +189,9 @@ mistaken for production-ready systems.
   projectiles/area attacks/healing beyond the live melee combat loop, building
   station activation and derived level-up effects beyond the live construction/
   upgrade loop, and every reachable balance rule from the Unity scenes.
-- Role level/progression curves are not yet semantically converted. Technology
-  percentages, role level-one bases, and building-derived storage are
-  authoritative for the live Bevy rules, but health-regeneration ticking and
-  age changes for the always-present Town Hall still require their underlying
-  systems.
+- Age changes for the always-present Town Hall still require its underlying
+  runtime presentation path; constructed buildings already switch to age-two
+  variants when technology applies the authored effect.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
@@ -197,8 +201,8 @@ mistaken for production-ready systems.
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
   legacy target/station/pet/customization data. The importer currently preserves
-  or maps gameplay-critical world, entity, inventory, economy, and technology
-  fields; unsupported presentation/relationship fields are consumed and
+  or maps gameplay-critical world, entity, inventory, current-role progression,
+  economy, and technology fields; unsupported presentation/relationship fields are consumed and
   validated but not represented in the native runtime yet.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
   layout, live runtime bridging, release packaging, frame capture, and profiling

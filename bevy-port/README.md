@@ -50,9 +50,9 @@ catalog of 26 production buildings, 215 prefab archetypes, 288 model scene
 variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
-authored technology effects plus every shipping role's level-one action,
-health, defense, movement, carry, resource-affinity, and all four reachable
-building storage components in content schema 7, and follows nested prefabs to
+authored technology effects plus every shipping role's action, XP multiplier,
+level curves, health, defense, movement, carry, resource-affinity, and all four
+reachable building storage components in content schema 8, and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
@@ -93,7 +93,7 @@ broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
-stable chat grammar executes `!join`, `!role`, `!build`, `!upgrade`, `!vote`,
+stable chat grammar executes `!join`, `!role`, `!experience`/`!exp`, `!build`, `!upgrade`, `!vote`,
 `!event`, `!save`, and `!help` with catalog/prerequisite validation and
 HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
@@ -116,9 +116,12 @@ The Unity starting NPC roster is present as stable Defender, Logger, Miner,
 Gatherer, and Builder actors. Resource roles select their authored resource and
 the nearest matching generated node, gather using `BaseActionAmount`, carry the
 authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
-into the town balances shown by the HUD. Movement, action cadence/range, health,
-defense, and construction/combat amounts likewise use converted role bases plus
-the unlocked technology percentages.
+into the town balances shown by the HUD. Successful actions award Unity-scaled
+role XP; per-role progress survives role changes and saves, levels follow the
+Unity curve through level 99, and action amount/cadence/range, health and
+regeneration, defense, movement, and carrying use converted level curves plus
+the unlocked technology percentages. `!experience` reports the active role's
+current level and XP threshold.
 Food, ore, and wood start with Unity's 15,000-unit capacity, recruit capacity
 starts at five, and gold is unbounded. Completed Food/Ore/Wood Storage buildings
 add the authored level-scaled capacity; Houses add recruit slots. A capped
