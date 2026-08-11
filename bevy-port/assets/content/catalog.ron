@@ -1,5 +1,5 @@
 (
-    schema_version: 5,
+    schema_version: 6,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -7461,6 +7461,15 @@
         "role:blacksmith": (
             display_name: "Blacksmith",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 0,
+            base_action_milliseconds: 0,
+            base_action_range_milli_cells: 0,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:other",
             ],
@@ -7468,6 +7477,15 @@
         "role:builder": (
             display_name: "Builder",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 1000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:healer",
                 "station:buildings",
@@ -7476,6 +7494,15 @@
         "role:defender": (
             display_name: "Defender",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 2000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",
@@ -7485,6 +7512,15 @@
         "role:farmer": (
             display_name: "Farmer",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 3000,
+            base_action_range_milli_cells: 0,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 10,
+            resource: Some("resource:food"),
             granted_abilities: [
                 "resource:food",
                 "role_flag:resource",
@@ -7495,6 +7531,15 @@
         "role:fisher": (
             display_name: "Fisher",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 1000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 10,
+            resource: Some("resource:food"),
             granted_abilities: [
                 "resource:food",
                 "role_flag:resource",
@@ -7505,6 +7550,15 @@
         "role:gatherer": (
             display_name: "Gatherer",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 1300,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 10,
+            resource: Some("resource:food"),
             granted_abilities: [
                 "resource:food",
                 "role_flag:resource",
@@ -7515,6 +7569,15 @@
         "role:logger": (
             display_name: "Logger",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 1300,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 10,
+            resource: Some("resource:wood"),
             granted_abilities: [
                 "resource:wood",
                 "role_flag:resource",
@@ -7525,6 +7588,15 @@
         "role:miner": (
             display_name: "Miner",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 1800,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 10,
+            resource: Some("resource:ore"),
             granted_abilities: [
                 "resource:ore",
                 "role_flag:resource",
@@ -7535,6 +7607,15 @@
         "role:necromancer": (
             display_name: "Necromancer",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 5,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 8000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",
@@ -7544,6 +7625,15 @@
         "role:paladin": (
             display_name: "Paladin",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 1000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",
@@ -7553,6 +7643,15 @@
         "role:priest": (
             display_name: "Priest",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 2,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 12000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:healer",
                 "station:combat",
@@ -7562,6 +7661,15 @@
         "role:ranger": (
             display_name: "Ranger",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 1,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 12000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",
@@ -7571,6 +7679,15 @@
         "role:ruler": (
             display_name: "Ruler",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 7,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 2000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",
@@ -7580,6 +7697,15 @@
         "role:soldier": (
             display_name: "Soldier",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 5,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 2000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",
@@ -7589,6 +7715,15 @@
         "role:wizard": (
             display_name: "Wizard",
             movement_speed_multiplier_per_thousand: 3000,
+            base_action_amount: 5,
+            base_action_milliseconds: 1000,
+            base_action_range_milli_cells: 12000,
+            base_health: 100,
+            base_health_regen_per_second: 0,
+            base_damage_reduction_percent: 0,
+            base_movement_speed_milli_cells_per_second: 3000,
+            base_carry_capacity: 0,
+            resource: None,
             granted_abilities: [
                 "role_flag:damage",
                 "station:combat",

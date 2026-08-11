@@ -1234,14 +1234,14 @@ fn connected_actor_positions(
     positions
 }
 
-fn resource_for_role(role: &StableId) -> Option<StableId> {
-    let resource = match role.as_str() {
-        "role:logger" => "resource:wood",
-        "role:miner" => "resource:ore",
-        "role:farmer" | "role:fisher" | "role:gatherer" => "resource:food",
-        _ => return None,
-    };
-    Some(StableId::new(resource).expect("role resource IDs are valid"))
+fn resource_for_role(content: &ContentCatalog, role: &StableId) -> Option<StableId> {
+    content.roles.get(role)?.resource.clone()
+}
+
+fn role_action_range_cells(content: &ContentCatalog, role: &StableId) -> u16 {
+    content.roles.get(role).map_or(1, |role| {
+        u16::try_from(role.base_action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
+    })
 }
 
 fn is_combat_role(role: &StableId) -> bool {
@@ -1322,7 +1322,6 @@ fn next_agent_goal(
     actor_id: &StableId,
     current: GridPos,
 ) -> (AgentGoal, GridPos) {
-    const CARRY_CAPACITY: u32 = 25;
     let Some(actor) = simulation.actors.get(actor_id) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
     };
@@ -1355,7 +1354,11 @@ fn next_agent_goal(
         None
     };
     if let Some(target) = combat_target {
-        let destination = if actor.role.as_str() == "role:enemy" {
+        let distance =
+            target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
+        let destination = if actor.role.as_str() == "role:enemy"
+            || distance <= role_action_range_cells(content, &actor.role)
+        {
             current
         } else {
             target.position
@@ -1387,12 +1390,18 @@ fn next_agent_goal(
         .values()
         .copied()
         .fold(0_u32, u32::saturating_add);
-    if carried >= CARRY_CAPACITY {
+    let carry_capacity = content
+        .roles
+        .get(&actor.role)
+        .map(|role| role.base_carry_capacity)
+        .filter(|capacity| *capacity > 0)
+        .unwrap_or(25);
+    if carried >= carry_capacity {
         let town_hall = town_hall_grid_position(config);
         let target = nearest_walkable(world, town_hall).unwrap_or(current);
         return (AgentGoal::Deposit, target);
     }
-    let Some(resource_kind) = resource_for_role(&actor.role) else {
+    let Some(resource_kind) = resource_for_role(content, &actor.role) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
     };
     let resource = world
@@ -1433,7 +1442,13 @@ fn complete_agent_goal(
         &role,
         &StableId::new("stat:action_amount").expect("static ID"),
     );
-    let action_amount = |base| percentage_adjusted(base, action_amount_percent);
+    let action_amount = percentage_adjusted(
+        content
+            .roles
+            .get(&role)
+            .map_or(1, |definition| definition.base_action_amount),
+        action_amount_percent,
+    );
     match goal {
         AgentGoal::Gather(resource_id) => {
             let Some(resource) = world
@@ -1443,7 +1458,7 @@ fn complete_agent_goal(
             else {
                 return;
             };
-            let amount = resource.amount.min(action_amount(5));
+            let amount = resource.amount.min(action_amount);
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
             if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
@@ -1477,28 +1492,37 @@ fn complete_agent_goal(
             };
             if !attacker.alive
                 || !target.alive
-                || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z) > 1
+                || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
+                    > role_action_range_cells(content, &attacker.role)
             {
                 return;
             }
-            let base_damage = if attacker.role.as_str() == "role:enemy" {
+            let damage = if attacker.role.as_str() == "role:enemy" {
                 12
             } else {
-                25
+                action_amount
             };
-            let defense = technology_stat_boost_percent(
+            let defense_modifier = technology_stat_boost_percent(
                 content,
                 simulation,
                 &target.role,
                 &StableId::new("stat:defense").expect("static ID"),
             );
-            let damage = percentage_reduced(action_amount(base_damage), defense);
+            let base_defense = content
+                .roles
+                .get(&target.role)
+                .map_or(0, |role| role.base_damage_reduction_percent);
+            let defense = percentage_adjusted(
+                u32::try_from(base_defense.max(0)).unwrap_or_default(),
+                defense_modifier,
+            );
+            let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
             if let Err(error) = simulation.damage_actor(target_id, damage) {
                 warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
             }
         }
         AgentGoal::Construct(building_id) => {
-            if let Err(error) = simulation.work_on_building(building_id, action_amount(25)) {
+            if let Err(error) = simulation.work_on_building(building_id, action_amount) {
                 warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
             }
         }
@@ -1512,7 +1536,7 @@ fn action_cooldown(
     actor: &StableId,
     goal: &AgentGoal,
 ) -> f32 {
-    let base = match goal {
+    let fallback = match goal {
         AgentGoal::Attack(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) => 0.75,
@@ -1520,7 +1544,17 @@ fn action_cooldown(
         AgentGoal::Wander => 0.0,
     };
     let Some(role) = simulation.actors.get(actor).map(|actor| &actor.role) else {
-        return base;
+        return fallback;
+    };
+    let base = if matches!(
+        goal,
+        AgentGoal::Attack(_) | AgentGoal::Construct(_) | AgentGoal::Gather(_)
+    ) {
+        content.roles.get(role).map_or(fallback, |definition| {
+            milli_units_as_f32(definition.base_action_milliseconds).max(0.1)
+        })
+    } else {
+        fallback
     };
     let percent = technology_stat_boost_percent(
         content,
@@ -1569,7 +1603,12 @@ fn move_agents(
                 &role,
                 &StableId::new("stat:health").expect("static ID"),
             );
-            let desired_max = i32::try_from(percentage_adjusted(100, health_percent))
+            let base_health = content
+                .0
+                .roles
+                .get(&role)
+                .map_or(100, |definition| definition.base_health);
+            let desired_max = i32::try_from(percentage_adjusted(base_health, health_percent))
                 .unwrap_or(i32::MAX)
                 .max(1);
             if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
@@ -1651,20 +1690,28 @@ fn move_agents(
             target.y += animation.base_scale.y * 0.5;
         }
         let distance = target - transform.translation;
-        let movement_percent = simulation
-            .0
-            .actors
-            .get(&agent.id)
-            .map(|actor| {
-                technology_stat_boost_percent(
-                    &content.0,
-                    &simulation.0,
-                    &actor.role,
-                    &StableId::new("stat:movement_speed").expect("static ID"),
+        let (base_speed, movement_percent) = simulation.0.actors.get(&agent.id).map_or(
+            (config.0.gameplay.agent_speed_cells_per_second, 0),
+            |actor| {
+                (
+                    content.0.roles.get(&actor.role).map_or(
+                        config.0.gameplay.agent_speed_cells_per_second,
+                        |definition| {
+                            milli_units_as_f32(
+                                definition.base_movement_speed_milli_cells_per_second,
+                            )
+                        },
+                    ),
+                    technology_stat_boost_percent(
+                        &content.0,
+                        &simulation.0,
+                        &actor.role,
+                        &StableId::new("stat:movement_speed").expect("static ID"),
+                    ),
                 )
-            })
-            .unwrap_or_default();
-        let step = config.0.gameplay.agent_speed_cells_per_second
+            },
+        );
+        let step = base_speed
             * (1.0 + percentage_as_f32(movement_percent) / 100.0).max(0.0)
             * config.0.world.cell_size
             * time.delta_secs();
@@ -3251,6 +3298,11 @@ fn percentage_as_f32(percent: i32) -> f32 {
     )
 }
 
+fn milli_units_as_f32(value: u32) -> f32 {
+    f32::from(u16::try_from(value.min(u32::from(u16::MAX))).expect("clamped milli-unit fits u16"))
+        / 1_000.0
+}
+
 const BASE_RESOURCE_STORAGE: u32 = 10_000;
 
 fn resource_storage_capacity(
@@ -4052,7 +4104,7 @@ mod tests {
             .unwrap();
         let starting_amount = resource.amount;
         let gather = AgentGoal::Gather(resource.id.clone());
-        for _ in 0..5 {
+        for _ in 0..10 {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
@@ -4069,9 +4121,9 @@ mod tests {
                 .find(|candidate| candidate.id == resource.id)
                 .unwrap()
                 .amount,
-            starting_amount - 25
+            starting_amount - 10
         );
-        assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 25);
+        assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 10);
         let (goal, _) = next_agent_goal(
             &simulation,
             &world,
@@ -4090,7 +4142,7 @@ mod tests {
             resource.position,
         );
         assert!(simulation.actors[&actor_id].inventory.is_empty());
-        assert_eq!(simulation.town_resources[&resource.kind], 25);
+        assert_eq!(simulation.town_resources[&resource.kind], 10);
     }
 
     #[test]
@@ -4120,8 +4172,8 @@ mod tests {
             defender_position,
         );
         assert_eq!(goal, AgentGoal::Attack(enemy.clone()));
-        assert_eq!(target, enemy_position);
-        for _ in 0..4 {
+        assert_eq!(target, defender_position);
+        for _ in 0..100 {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
@@ -4199,7 +4251,7 @@ mod tests {
         );
         assert_eq!(goal, AgentGoal::Construct(runtime_id.clone()));
         assert_eq!(target, builder_position);
-        for _ in 0..18 {
+        for _ in 0..450 {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
@@ -4459,6 +4511,16 @@ mod tests {
         assert_eq!(content.roles.len(), 15);
         assert_eq!(content.technology.nodes.len(), 363);
         assert_eq!(content.technology.groups.len(), 20);
+        let logger = &content.roles[&StableId::new("role:logger").unwrap()];
+        assert_eq!(logger.base_action_amount, 1);
+        assert_eq!(logger.base_action_milliseconds, 1_000);
+        assert_eq!(logger.base_carry_capacity, 10);
+        assert_eq!(
+            logger.resource.as_ref().map(StableId::as_str),
+            Some("resource:wood")
+        );
+        let ranger = &content.roles[&StableId::new("role:ranger").unwrap()];
+        assert_eq!(ranger.base_action_range_milli_cells, 12_000);
     }
 
     #[test]

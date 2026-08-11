@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 5;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 6;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -80,6 +80,16 @@ pub struct BuildingDef {
 pub struct RoleDef {
     pub display_name: String,
     pub movement_speed_multiplier_per_thousand: u16,
+    pub base_action_amount: u32,
+    pub base_action_milliseconds: u32,
+    pub base_action_range_milli_cells: u32,
+    pub base_health: u32,
+    pub base_health_regen_per_second: i32,
+    pub base_damage_reduction_percent: i32,
+    pub base_movement_speed_milli_cells_per_second: u32,
+    pub base_carry_capacity: u32,
+    #[serde(default)]
+    pub resource: Option<StableId>,
     pub granted_abilities: Vec<StableId>,
 }
 

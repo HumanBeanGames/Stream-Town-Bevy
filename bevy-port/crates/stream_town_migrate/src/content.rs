@@ -266,6 +266,10 @@ fn convert_export(
         let base_speed = required_u32(asset, "BaseMovementSpeed")?;
         let movement_speed_multiplier_per_thousand = u16::try_from(base_speed.saturating_mul(1000))
             .with_context(|| format!("{} BaseMovementSpeed is out of range", asset.path))?;
+        let resource = optional_enum(asset, "Resource")?
+            .filter(|resource| resource != "None")
+            .map(|resource| stable_id("resource", &slug(&resource)))
+            .transpose()?;
         let mut granted_abilities = Vec::new();
         for (field, prefix) in [
             ("RoleFlags", "role_flag"),
@@ -287,6 +291,18 @@ fn convert_export(
             RoleDef {
                 display_name,
                 movement_speed_multiplier_per_thousand,
+                base_action_amount: required_u32(asset, "BaseActionAmount")?,
+                base_action_milliseconds: required_milli(asset, "BaseActionSpeed")?,
+                base_action_range_milli_cells: required_milli(asset, "BaseActionRange")?,
+                base_health: required_u32(asset, "BaseHealth")?,
+                base_health_regen_per_second: required_i32(asset, "BaseHealthRegen")?,
+                base_damage_reduction_percent: required_i32(asset, "BaseDamageReduction")?,
+                base_movement_speed_milli_cells_per_second: required_milli(
+                    asset,
+                    "BaseMovementSpeed",
+                )?,
+                base_carry_capacity: required_u32(asset, "BaseMaxResource")?,
+                resource,
                 granted_abilities,
             },
         );
@@ -895,6 +911,12 @@ fn required_i64(asset: &UnityAsset, path: &str) -> Result<i64> {
         .with_context(|| format!("{} is missing integer field {path}", asset.path))
 }
 
+fn required_i32(asset: &UnityAsset, path: &str) -> Result<i32> {
+    required_i64(asset, path)?
+        .try_into()
+        .with_context(|| format!("{} field {path} is outside the i32 range", asset.path))
+}
+
 fn required_u32(asset: &UnityAsset, path: &str) -> Result<u32> {
     required_i64(asset, path)?
         .try_into()
@@ -905,6 +927,26 @@ fn required_f64(asset: &UnityAsset, path: &str) -> Result<f64> {
     field_value(asset, path)
         .and_then(Value::as_f64)
         .with_context(|| format!("{} is missing numeric field {path}", asset.path))
+}
+
+fn required_milli(asset: &UnityAsset, path: &str) -> Result<u32> {
+    let value = required_f64(asset, path)?;
+    if !value.is_finite() || value < 0.0 {
+        bail!(
+            "{} field {path} must be finite and non-negative",
+            asset.path
+        );
+    }
+    (value * 1000.0)
+        .round()
+        .to_string()
+        .parse()
+        .with_context(|| {
+            format!(
+                "{} field {path} is outside the milli-unit range",
+                asset.path
+            )
+        })
 }
 
 fn required_bool(asset: &UnityAsset, path: &str) -> Result<bool> {
@@ -1441,7 +1483,15 @@ mod tests {
                     ROLE_TYPE,
                     vec![
                         field("Role", enum_value("Builder")),
+                        field("Resource", enum_value("None")),
+                        field("BaseActionAmount", Value::from(1)),
+                        field("BaseActionSpeed", Value::from(1.0)),
+                        field("BaseActionRange", Value::from(1.0)),
+                        field("BaseHealth", Value::from(100)),
+                        field("BaseHealthRegen", Value::from(0)),
+                        field("BaseDamageReduction", Value::from(0)),
                         field("BaseMovementSpeed", Value::from(3)),
+                        field("BaseMaxResource", Value::from(0)),
                         field("StationFlags", enum_value("Buildings")),
                     ],
                 ),
@@ -1471,6 +1521,14 @@ mod tests {
         assert_eq!(report.technology_edges, 1);
         assert_eq!(report.technology_roots, 1);
         assert_eq!(catalog.source_records.len(), 4);
+        let builder = StableId::new("role:builder").unwrap();
+        assert_eq!(catalog.roles[&builder].base_action_amount, 1);
+        assert_eq!(catalog.roles[&builder].base_action_milliseconds, 1_000);
+        assert_eq!(catalog.roles[&builder].base_health, 100);
+        assert_eq!(
+            catalog.roles[&builder].base_movement_speed_milli_cells_per_second,
+            3_000
+        );
         let town_hall = StableId::new("building:townhall").unwrap();
         assert_eq!(catalog.buildings[&town_hall].footprint, [4, 2]);
         assert!(catalog.buildings[&town_hall].can_level);
