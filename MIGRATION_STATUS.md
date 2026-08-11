@@ -43,6 +43,11 @@ mistaken for production-ready systems.
   containers to select 27 buildings, 15 roles, and the shipping 363-node,
   362-edge technology DAG. It preserves typed Unity fields as provenance,
   validates stable IDs/references/cycles, and reloads its own RON output.
+- A pinned Blender 4.2.0 headless FBX-to-GLB pipeline with atomic outputs and
+  independent hash/header validation. All 253 model sources convert: 820 meshes,
+  43 skins, 33 embedded animations, 253 materials, one embedded image, and
+  95,464,376 output bytes. Converted binaries remain reproducible package inputs
+  rather than duplicating them in Git.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. The World + Navigation tab has a working deterministic
   seed preview; several other tabs are presently diagnostic/authoring shells.
@@ -51,8 +56,8 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Semantic prefab/archetype conversion, accurate building footprints,
-  animation controller translation, and the Blender-to-GLB conversion pipeline.
+- Semantic prefab/archetype conversion, accurate building footprints, runtime
+  GLB selection/loading, and animation controller/standalone-clip translation.
   The neutral Unity export preserves prefab source/override records rather than
   claiming those records are already production Bevy archetypes.
 - The production terrain renderer, production-grade actor steering, complete

@@ -2800,8 +2800,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/main.rs": {
-    "mtime": 1786464940.9638686,
-    "ast_hash": "6a52bbedd3ab82d1fc8d8c5eeef7cb40",
+    "mtime": 1786465657.8144777,
+    "ast_hash": "fc269013e93b6407adf9a8bf534cfd55",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
@@ -2810,8 +2810,8 @@
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786465112.3263235,
-    "ast_hash": "5e4ab849e722250ca4a087eff0029086",
+    "mtime": 1786465757.605064,
+    "ast_hash": "38d0f5cac7e3341bd85f1c4bc79d92a3",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786464911.1774929,
-    "ast_hash": "cc884feaa02e80fe9ba24706970f5917",
+    "mtime": 1786465657.8169782,
+    "ast_hash": "a45b1e82898c08780e4e4315c4c2ce5b",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786464911.1790307,
-    "ast_hash": "7a1abf6e13eac4e09886c2b68167500e",
+    "mtime": 1786465657.8174894,
+    "ast_hash": "a2433f3248b2bfbb288fa93153bd1a11",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -3632,6 +3632,26 @@
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
     "mtime": 1786465060.2546413,
     "ast_hash": "45fc4178c83a88a9f47d4651c4bf24ab",
+    "semantic_hash": ""
+  },
+  "bevy-port/crates/stream_town_migrate/src/models.rs": {
+    "mtime": 1786465657.8134677,
+    "ast_hash": "f136040b418a8f1a81e158fddc57b281",
+    "semantic_hash": ""
+  },
+  "bevy-port/scripts/blender/convert_fbx_to_glb.py": {
+    "mtime": 1786465460.0123293,
+    "ast_hash": "2a8c890e83ac4ee80cecd7ce44d93283",
+    "semantic_hash": ""
+  },
+  "bevy-port/scripts/convert-models.ps1": {
+    "mtime": 1786465657.8129635,
+    "ast_hash": "b07f91b892acb4aa46916fe08b144262",
+    "semantic_hash": ""
+  },
+  "bevy-port/blender-version.txt": {
+    "mtime": 1786465657.8119628,
+    "ast_hash": "3d3e24f7cb6d5ffc50e20a45dc94a52e",
     "semantic_hash": ""
   }
 }

@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 
 mod content;
 mod legacy;
+mod models;
 
 #[derive(Debug, Parser)]
 #[command(about = "Read-only migration tooling for the Stream Town Unity project")]
@@ -38,6 +39,14 @@ enum Command {
         export: PathBuf,
         #[arg(long)]
         out_dir: PathBuf,
+    },
+    /// Validate hashes and glTF metadata emitted by the Blender model converter.
+    ValidateModels {
+        report: PathBuf,
+        #[arg(long, default_value = "..")]
+        repository_root: PathBuf,
+        #[arg(long)]
+        expected_count: Option<usize>,
     },
     /// Inspect a legacy JSON or STSV binary save without modifying it.
     InspectSave { save: PathBuf },
@@ -124,6 +133,14 @@ fn main() -> Result<()> {
         Command::ConvertContent { export, out_dir } => {
             let report = content::convert(&export, &out_dir)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::ValidateModels {
+            report,
+            repository_root,
+            expected_count,
+        } => {
+            let summary = models::validate(&report, &repository_root, expected_count)?;
+            println!("{}", serde_json::to_string_pretty(&summary)?);
         }
         Command::InspectSave { save } => {
             let info = inspect_legacy_save(&save)

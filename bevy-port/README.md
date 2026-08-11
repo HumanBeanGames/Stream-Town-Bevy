@@ -24,6 +24,7 @@ cargo run -p stream_town_tools
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
 cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
+cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 ```
 
@@ -42,6 +43,18 @@ overrides, ScriptableObject data, and the four shipping scene hierarchies. Its
 migration-only A* types are inert compile stubs and are not navigation code.
 The content conversion selects the active Unity containers and emits a validated
 catalog of 27 buildings, 15 roles, and the 363-node shipping technology graph.
+
+Convert all FBX models with the pinned Blender version, then validate every
+source/output hash and GLB header:
+
+```powershell
+.\bevy-port\scripts\convert-models.ps1
+cd bevy-port
+cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
+```
+
+Converted GLBs are reproducible local/package inputs under
+`assets/migrated/models` and are intentionally ignored by Git.
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 Legacy Unity saves are never modified by migration tools.

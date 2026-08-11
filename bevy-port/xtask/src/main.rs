@@ -45,6 +45,30 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", content_path.display()))?;
     content.validate()?;
+    let model_baseline_path = Path::new("assets/content/model-conversion-baseline.json");
+    let model_baseline: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(model_baseline_path)
+            .with_context(|| format!("failed to read {}", model_baseline_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", model_baseline_path.display()))?;
+    for (field, expected) in [
+        ("/schema_version", 1_u64),
+        ("/models", 253),
+        ("/bytes", 95_464_376),
+        ("/meshes", 820),
+        ("/skins", 43),
+        ("/animations", 33),
+        ("/materials", 253),
+        ("/images", 1),
+    ] {
+        if model_baseline
+            .pointer(field)
+            .and_then(serde_json::Value::as_u64)
+            != Some(expected)
+        {
+            bail!("model conversion baseline field {field} changed");
+        }
+    }
     let technology_edges: usize = content
         .technology
         .nodes
@@ -95,7 +119,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration and 405 semantic content records valid; checked {checked_json} generated JSON files"
+        "Configuration, 405 semantic records, and the 253-model conversion baseline are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }
