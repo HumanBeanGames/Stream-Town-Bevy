@@ -46,10 +46,17 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 4 also promotes Unity `Placeable` and `Unlock Building` effects:
-  the four authored starting technologies expose Lumbermill, Stonemason, Tower,
-  and Windmill, later technology votes expose their referenced buildings, and
-  commands reject locked or non-placeable definitions.
+  Content schema 5 also promotes Unity `Placeable` and all six technology effect
+  categories. The `Unlock Building` effects make the four authored starting
+  technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
+  technology votes expose their referenced buildings, and commands reject
+  locked or non-placeable definitions. The catalog's 413 authored effects are
+  typed rather than left in provenance: those 28 unlocks, 177 level caps, 104
+  role/global stat boosts, 80 building-cost reductions, 12 storage boosts, and
+  12 age upgrades.
+  Unlocked effects now reduce placement and upgrade costs, cap deposits against
+  technology-expanded storage, modify health/movement/action/combat rules, and
+  switch constructed GLBs to their age-two scene variants.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
   catalog-priced building placement and upgrades, eligible technology voting,
   mapped events, atomic saves, and help. Commands validate catalog references
@@ -93,9 +100,10 @@ mistaken for production-ready systems.
   model scene variants, 15 roles, and the shipping 363-node, 362-edge technology
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, promotes construction/upgrade balance and
-  technology level caps into content schema 3, preserves typed Unity fields as
-  provenance in content schema 4, validates stable IDs/references/cycles, and
-  reloads its own RON output.
+  all 413 authored technology effects into content schema 5, preserves the
+  remaining typed Unity fields as provenance, validates stable IDs, referenced
+  buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
+  output.
 - A versioned presentation RON converter and YAML fallback that packages all
   133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
   materials with shader source, PBR approximations, texture slots, and custom
@@ -163,8 +171,10 @@ mistaken for production-ready systems.
   projectiles/area attacks/healing beyond the live melee combat loop, building
   station activation and derived level-up effects beyond the live construction/
   upgrade loop, and every reachable balance rule from the Unity scenes.
-- Technology effects beyond building availability and maximum levels, including
-  stat boosts, build-cost reductions, storage boosts, and building age changes.
+- Building-derived storage contributions and role base-stat curves are not yet
+  semantically converted. Technology percentages are authoritative for the live
+  Bevy rules, but health regeneration/action range and age changes for the
+  always-present Town Hall still require those underlying building/role systems.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
@@ -232,7 +242,8 @@ bindings, runtime PBR material reconstruction, simulation-driven season/weather
 presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
-Builder construction, and technology-gated upgrades. It is still missing nested
+Builder construction, technology-gated upgrades, and typed technology discounts,
+storage, stat, and building-age effects. It is still missing nested
 controller layers and complete gameplay action emitters,
 production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
