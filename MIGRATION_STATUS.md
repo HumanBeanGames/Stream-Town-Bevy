@@ -18,8 +18,10 @@ mistaken for production-ready systems.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
   grounding data, and repeatable world hashes.
 - A runnable 300-agent ECS simulation with one enemy, dynamic obstacles, path
-  following, a town hall, resources, a status HUD, pan/zoom camera controls,
-  click-to-select grid picking, and an explicit idle/moving visual state machine.
+  following, a town hall, resources, a status HUD, orthographic 3D pan/zoom
+  camera controls, ray/ground click picking, screenshot capture, directional
+  lighting, converted representative GLB scenes with primitive fallbacks, and
+  an explicit idle/moving visual state machine.
 - An injected `!join` vertical slice that goes through the shipping command
   parser and creates both the stable domain actor and its visible ECS entity.
 - Engine-independent gathering, depositing, construction, roles, technology
@@ -40,36 +42,38 @@ mistaken for production-ready systems.
 - Explicit migration-only A* API stubs sufficient to compile and run the editor
   exporter. They are intentionally inert and are not used by the Bevy runtime.
 - A deterministic semantic RON converter that follows the active Unity
-  containers to select 27 buildings, 15 roles, and the shipping 363-node,
-  362-edge technology DAG. It preserves typed Unity fields as provenance,
+  containers to select 26 production buildings, 215 prefab archetypes, 288
+  model scene variants, 15 roles, and the shipping 363-node, 362-edge technology
+  DAG. It resolves nested prefab/model dependencies, derives building footprints
+  from the authored grid sizes, preserves typed Unity fields as provenance,
   validates stable IDs/references/cycles, and reloads its own RON output.
 - A pinned Blender 4.2.0 headless FBX-to-GLB pipeline with atomic outputs and
-  independent hash/header validation. All 253 model sources convert: 820 meshes,
-  43 skins, 33 embedded animations, 253 materials, one embedded image, and
-  95,464,376 output bytes. Converted binaries remain reproducible package inputs
-  rather than duplicating them in Git.
+  independent hash/header/unit validation. Unity renderer bounds normalize the
+  imported geometry, rigs, and translation curves. All 253 GLBs are reproducible
+  and tracked with Git LFS: 820 meshes, 43 skins, 33 embedded animations, 253
+  materials, one embedded image, and 95,464,596 output bytes.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalog, browses stable building and
-  role references, provides grouped technology search/topology plus validated
-  metadata/prerequisite editing with undo/redo, and renders deterministic world
-  occupancy, resources, and planned paths. Runtime and Twitch remain diagnostic
-  shells rather than connected control surfaces.
+  role references plus prefab archetypes and their GLB variants, provides grouped
+  technology search/topology plus validated metadata/prerequisite editing with
+  undo/redo, and renders deterministic world occupancy, resources, and planned
+  paths. Runtime and Twitch remain diagnostic shells rather than connected
+  control surfaces.
 - Windows CI covering formatting, compilation, Clippy, tests, and repository
   validation.
 
 ## Not yet at parity
 
-- Semantic prefab/archetype conversion, accurate building footprints, runtime
-  GLB selection/loading, and animation controller/standalone-clip translation.
-  The neutral Unity export preserves prefab source/override records rather than
-  claiming those records are already production Bevy archetypes.
+- Translation of Animator controllers and standalone clips into explicit Bevy
+  animation graphs, including per-prefab renderer activation for the player role
+  and equipment variants currently co-located in source FBX files.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
   reachable balance rule from the Unity scenes.
 - Twitch IRC/OAuth networking, reconnect and rate limiting, and OS credential
   storage. The command grammar and deterministic injection path exist only.
-- Animation graph/controller conversion, rigged production models, WGSL shader
-  ports, VFX, UI parity, post-processing, replacement audio, and accessibility.
+- WGSL shader ports, VFX, material/texture reconstruction, UI parity,
+  post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
   legacy target/station/pet/customization data. The importer currently preserves
   or maps gameplay-critical world, entity, inventory, economy, and technology
@@ -120,7 +124,8 @@ cargo run -p stream_town_migrate -- convert-content generated/unity-export.json 
 ## Milestone interpretation
 
 Foundation is substantially implemented. The vertical slice is runnable and its
-deterministic 300-agent navigation gate passes, but it is still missing rigged
-production animation, connected Twitch transport, converted content, and the
+deterministic 300-agent navigation gate passes with semantically converted
+prefabs and representative production GLBs, but it is still missing rigged
+production animation, connected Twitch transport, production materials, and the
 recorded reference-machine GPU measurement required to close that milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
