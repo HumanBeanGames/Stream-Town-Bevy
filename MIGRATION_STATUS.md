@@ -29,6 +29,11 @@ mistaken for production-ready systems.
   level, an Avian trimesh collider mirrors the visible surface, and actors,
   resources, buildings, save restores, joins, paths, and selection markers are
   grounded to deterministic centimetre heights.
+- Unity's five-member starting NPC roster (Defender, Logger, Miner, Gatherer,
+  Builder) is restored. Resource workers choose role-matched stable nodes,
+  path to them, gather/deplete five units per visit, carry 25 units, return to a
+  walkable Town Hall approach, and deposit into the authoritative town economy;
+  exhausted resource visuals are hidden.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
   catalog-priced building placement, eligible technology voting, mapped events,
   atomic saves, and help. Commands validate catalog references and prerequisites,
@@ -49,7 +54,9 @@ mistaken for production-ready systems.
   distance fog, plus deterministic rain and snow fields with no second clock.
 - Checksummed native RON saves written atomically with backup recovery, plus
   in-game F5/F9 save/load that restores stable actors, constructed buildings,
-  dynamic navigation occupancy, resources, votes, events, and simulation state.
+  dynamic navigation occupancy, town resources, per-node depletion, carried
+  inventories, votes, events, and simulation state. Empty depletion maps are
+  omitted so native format-1 checksum serialization remains compatible.
 - A one-time legacy importer for JSON and the exact Unity binary field order in
   schemas 1-3, including container/compression/bounds/trailer validation, named
   backup recovery, schema-1 mesh retention, seed-based Bevy regeneration,
@@ -132,8 +139,9 @@ mistaken for production-ready systems.
   in source FBX files also remains.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete role/
-  building/resource/station/inventory/equipment behavior, and every reachable
-  balance rule from the Unity scenes.
+  station/inventory/equipment behavior beyond the live resource-worker loop,
+  building construction phases/upgrades, and every reachable balance rule from
+  the Unity scenes.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
@@ -199,7 +207,8 @@ retargeting, a typed controller interpreter, 19-clip Player blend-graph playback
 the generated heightfield/water/collider surface, inherited prefab material
 bindings, runtime PBR material reconstruction, simulation-driven season/weather
 presentation, and the live stable command grammar with constructed-building
-persistence. It is still missing nested controller layers and complete gameplay
+persistence, plus autonomous role-driven gathering/deposit and persistent node
+depletion. It is still missing nested controller layers and complete gameplay
 action emitters, production terrain/foliage shaders beyond the new environment
 palettes and particle fields, exact curve tangents and multi-slot/custom-shader
 parity, the broader Unity-only command surface, and the recorded reference-

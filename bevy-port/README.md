@@ -94,6 +94,12 @@ spawn the converted building GLB, and round-trip through native saves. A
 semicolon-delimited `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
 
+The Unity starting NPC roster is present as stable Defender, Logger, Miner,
+Gatherer, and Builder actors. Resource roles select the nearest matching
+generated node, gather and deplete it in five-unit actions, carry 25 units, then
+path back to the Town Hall and deposit into the town balances shown by the HUD.
+Node depletion and carried inventories are part of native save/load state.
+
 The vertical slice renders the deterministic navigation height field as a colored
 4,225-vertex terrain mesh, a water surface at the authored level, an Avian
 trimesh collider used for surface picking, lighting, converted GLB scenes for
