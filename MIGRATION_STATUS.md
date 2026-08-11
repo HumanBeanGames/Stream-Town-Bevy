@@ -24,7 +24,8 @@ mistaken for production-ready systems.
   parser and creates both the stable domain actor and its visible ECS entity.
 - Engine-independent gathering, depositing, construction, roles, technology
   voting, trade, combat, death/respawn, timed events, days, seasons, and weather.
-- Checksummed native RON saves written atomically with backup recovery.
+- Checksummed native RON saves written atomically with backup recovery, plus
+  in-game F5/F9 save/load that restores stable actors and simulation state.
 - Read-only recognition of legacy JSON and binary schemas 1-3, including header,
   compression, bounds, trailer, and payload validation. Legacy input is never
   modified.

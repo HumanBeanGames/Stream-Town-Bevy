@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    path::PathBuf,
+    time::Duration,
+};
 
 use avian3d::prelude::PhysicsPlugins;
 use bevy::{
@@ -120,6 +124,8 @@ impl Plugin for StreamTownGamePlugin {
                     camera_controls,
                     select_grid_cell,
                     game_input,
+                    save_input,
+                    load_input,
                     process_injected_commands,
                     update_hud,
                 )
@@ -325,7 +331,7 @@ fn generate_and_spawn_world(
         WorldEntity,
         Hud,
         Text::new(format!(
-            "{} agents | world {}\nF5 Save | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu",
+            "{} agents | world {}\nF5 Save | F9 Load | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu",
             spawned,
             &generated.deterministic_hash[..12]
         )),
@@ -357,16 +363,26 @@ fn actor_color(kind: &ActorKind, moving: bool) -> Color {
 }
 
 fn nearest_walkable(world: &GeneratedWorld, desired: GridPos) -> Option<GridPos> {
+    let desired = GridPos {
+        x: desired.x.min(world.navigation.width() - 1),
+        z: desired.z.min(world.navigation.height() - 1),
+    };
     if world.navigation.is_walkable(desired) {
         return Some(desired);
     }
     let limit = world.navigation.width().max(world.navigation.height());
     for radius in 1..limit {
         for z in desired.z.saturating_sub(radius)
-            ..=(desired.z + radius).min(world.navigation.height() - 1)
+            ..=desired
+                .z
+                .saturating_add(radius)
+                .min(world.navigation.height() - 1)
         {
             for x in desired.x.saturating_sub(radius)
-                ..=(desired.x + radius).min(world.navigation.width() - 1)
+                ..=desired
+                    .x
+                    .saturating_add(radius)
+                    .min(world.navigation.width() - 1)
             {
                 let candidate = GridPos { x, z };
                 if world.navigation.is_walkable(candidate) {
@@ -520,28 +536,132 @@ fn select_grid_cell(
 fn game_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<GameState>>,
-    save: Res<SaveRuntime>,
-    world: Res<WorldRuntime>,
-    stats: Res<SessionStats>,
-    simulation: Res<SimulationRuntime>,
-    agents: Query<(&Agent, &GridLocation)>,
     mut injected: ResMut<InjectedCommands>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
         next_state.set(GameState::MainMenu);
-    }
-    if keyboard.just_pressed(KeyCode::F5) {
-        let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
-        match save.store.write(&snapshot) {
-            Ok(()) => info!(path = %save.store.path().display(), "native save written"),
-            Err(error) => error!(%error, "native save failed"),
-        }
     }
     if keyboard.just_pressed(KeyCode::KeyJ) {
         injected
             .0
             .push_back("!join".parse().expect("static chat command"));
     }
+}
+
+fn save_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    save: Res<SaveRuntime>,
+    world: Res<WorldRuntime>,
+    stats: Res<SessionStats>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<(&Agent, &GridLocation)>,
+) {
+    if !keyboard.just_pressed(KeyCode::F5) {
+        return;
+    }
+    let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
+    match save.store.write(&snapshot) {
+        Ok(()) => info!(path = %save.store.path().display(), "native save written"),
+        Err(error) => error!(%error, "native save failed"),
+    }
+}
+
+fn load_input(
+    mut ecs: Commands,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    save: Res<SaveRuntime>,
+    world: Res<WorldRuntime>,
+    config: Res<RuntimeConfig>,
+    mut stats: ResMut<SessionStats>,
+    mut simulation: ResMut<SimulationRuntime>,
+    mut agents: Query<(Entity, &mut Agent, &mut GridLocation, &mut Transform)>,
+) {
+    if !keyboard.just_pressed(KeyCode::F9) {
+        return;
+    }
+    let snapshot = match save.store.load() {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            error!(%error, "native load failed");
+            return;
+        }
+    };
+    if snapshot.world_seed != world.generated.seed
+        || snapshot.generator_version != world.generated.generator_version
+        || snapshot.world_hash != world.generated.deterministic_hash
+    {
+        error!(
+            saved_seed = snapshot.world_seed,
+            runtime_seed = world.generated.seed,
+            "native save world identity does not match the loaded world"
+        );
+        return;
+    }
+
+    let saved_by_id: BTreeMap<StableId, SavedActor> = snapshot
+        .actors
+        .iter()
+        .cloned()
+        .map(|actor| (actor.id.clone(), actor))
+        .collect();
+    let mut restored_ids = BTreeSet::new();
+    for (entity, mut agent, mut location, mut transform) in &mut agents {
+        let Some(saved) = saved_by_id.get(&agent.id) else {
+            ecs.entity(entity).despawn();
+            continue;
+        };
+        let position =
+            nearest_walkable(&world.generated, saved.grid_position).unwrap_or(saved.grid_position);
+        let world_position = grid_to_world(position, &config.0);
+        agent.kind = saved.kind.clone();
+        agent.origin = position;
+        agent.path.clear();
+        agent.path_index = 0;
+        agent.target = mirrored_target(&world.generated, position);
+        location.0 = position;
+        transform.translation.x = world_position.x;
+        transform.translation.y = world_position.y;
+        restored_ids.insert(saved.id.clone());
+    }
+
+    for saved in saved_by_id.values() {
+        if restored_ids.contains(&saved.id) {
+            continue;
+        }
+        let position =
+            nearest_walkable(&world.generated, saved.grid_position).unwrap_or(saved.grid_position);
+        let world_position = grid_to_world(position, &config.0);
+        ecs.spawn((
+            WorldEntity,
+            GridLocation(position),
+            Agent {
+                id: saved.id.clone(),
+                kind: saved.kind.clone(),
+                origin: position,
+                path: Vec::new(),
+                path_index: 0,
+                target: mirrored_target(&world.generated, position),
+            },
+            AgentAnimation::default(),
+            Sprite::from_color(
+                actor_color(&saved.kind, false),
+                Vec2::splat(config.0.world.cell_size * 0.35),
+            ),
+            Transform::from_xyz(world_position.x, world_position.y, 2.0),
+        ));
+    }
+    stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
+    stats.paths_completed = 0;
+    simulation.0 = snapshot.simulation;
+    info!(path = %save.store.path().display(), "native save loaded and applied");
+}
+
+fn mirrored_target(world: &GeneratedWorld, position: GridPos) -> GridPos {
+    let desired = GridPos {
+        x: world.navigation.width() - 1 - position.x,
+        z: world.navigation.height() - 1 - position.z,
+    };
+    nearest_walkable(world, desired).unwrap_or(position)
 }
 
 fn process_injected_commands(
@@ -635,7 +755,7 @@ fn update_hud(
         .next()
         .map_or("none", |agent| agent.id.as_str());
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?}\nF5 Save | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?}\nF5 Save | F9 Load | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
