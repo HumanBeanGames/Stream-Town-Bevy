@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -61,6 +62,8 @@ pub struct WorldSnapshot {
     pub elapsed_seconds: u64,
     pub actors: Vec<SavedActor>,
     pub simulation: WorldSimulation,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resource_nodes: BTreeMap<StableId, u32>,
     #[serde(default)]
     pub legacy_terrain_mesh: Option<SavedTerrainMesh>,
     #[serde(default)]
@@ -273,6 +276,7 @@ mod tests {
             elapsed_seconds: 42,
             actors: vec![],
             simulation: WorldSimulation::new(seed),
+            resource_nodes: BTreeMap::new(),
             legacy_terrain_mesh: None,
             legacy_migration: None,
         }
@@ -283,9 +287,20 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
         store.write(&snapshot(1)).unwrap();
-        store.write(&snapshot(2)).unwrap();
-        assert_eq!(store.load().unwrap().world_seed, 2);
+        let mut latest = snapshot(2);
+        latest
+            .resource_nodes
+            .insert(StableId::new("resource:1:2").unwrap(), 17);
+        store.write(&latest).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.world_seed, 2);
+        assert_eq!(loaded.resource_nodes, latest.resource_nodes);
         assert!(store.backup_path().exists());
+        assert!(
+            !ron::to_string(&snapshot(3))
+                .unwrap()
+                .contains("resource_nodes")
+        );
     }
 
     #[test]

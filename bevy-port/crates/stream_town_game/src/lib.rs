@@ -143,14 +143,28 @@ struct WorldEntity;
 struct Agent {
     id: StableId,
     kind: ActorKind,
+    goal: AgentGoal,
     origin: GridPos,
     path: Vec<GridPos>,
     path_index: usize,
     target: GridPos,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+enum AgentGoal {
+    #[default]
+    Wander,
+    Gather(StableId),
+    Deposit,
+}
+
 #[derive(Component, Clone, Copy)]
 struct GridLocation(GridPos);
+
+#[derive(Component)]
+struct ResourceNode {
+    id: StableId,
+}
 
 #[derive(Component)]
 struct Hud;
@@ -288,6 +302,7 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     move_agents,
+                    sync_resource_nodes.after(move_agents),
                     animate_agents,
                     attach_native_animations,
                     attach_converted_animations,
@@ -629,6 +644,18 @@ fn parse_weather(value: &str) -> Option<Weather> {
     }
 }
 
+fn initial_actor_identity(index: u16) -> (String, Option<&'static str>) {
+    match index {
+        0 => ("actor:enemy_0000".to_owned(), Some("role:enemy")),
+        1 => ("npc:starting_defender".to_owned(), Some("role:defender")),
+        2 => ("npc:starting_logger".to_owned(), Some("role:logger")),
+        3 => ("npc:starting_miner".to_owned(), Some("role:miner")),
+        4 => ("npc:starting_gatherer".to_owned(), Some("role:gatherer")),
+        5 => ("npc:starting_builder".to_owned(), Some("role:builder")),
+        _ => (format!("actor:viewer_{index:04}"), None),
+    }
+}
+
 fn generate_and_spawn_world(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
@@ -729,6 +756,9 @@ fn generate_and_spawn_world(
         let scale = config.0.world.cell_size * 0.55;
         commands.spawn((
             WorldEntity,
+            ResourceNode {
+                id: resource.id.clone(),
+            },
             GridLocation(resource.position),
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(material),
@@ -826,21 +856,19 @@ fn generate_and_spawn_world(
             };
             let target = nearest_walkable(&generated, target).unwrap_or(centre);
             let world_position = grid_to_world_on_surface(position, &config.0, &generated);
-            let actor_id = StableId::new(if spawned == 0 {
-                "actor:enemy_0000".to_owned()
-            } else {
-                format!("actor:viewer_{spawned:04}")
-            })
-            .expect("generated ID");
+            let (actor_id, initial_role) = initial_actor_identity(spawned);
+            let actor_id = StableId::new(actor_id).expect("generated ID");
             let kind = if spawned == 0 {
                 ActorKind::Enemy
             } else {
                 ActorKind::Player
             };
             simulation.join_player(actor_id.clone(), position);
-            if kind == ActorKind::Enemy {
-                let _ = simulation
-                    .assign_role(&actor_id, StableId::new("role:enemy").expect("static ID"));
+            if let Some(role) = initial_role {
+                let _ = simulation.assign_role(
+                    &actor_id,
+                    StableId::new(role).expect("starting role IDs are valid"),
+                );
             }
             let real_archetype = if spawned == 0 {
                 archetype_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
@@ -893,6 +921,7 @@ fn generate_and_spawn_world(
                 Agent {
                     id: actor_id,
                     kind: kind.clone(),
+                    goal: AgentGoal::Wander,
                     origin: position,
                     path: Vec::new(),
                     path_index: 0,
@@ -1126,10 +1155,101 @@ fn initial_actor_position(
     None
 }
 
+fn resource_for_role(role: &StableId) -> Option<StableId> {
+    let resource = match role.as_str() {
+        "role:logger" => "resource:wood",
+        "role:miner" => "resource:ore",
+        "role:farmer" | "role:fisher" | "role:gatherer" => "resource:food",
+        _ => return None,
+    };
+    Some(StableId::new(resource).expect("role resource IDs are valid"))
+}
+
+fn town_hall_grid_position(config: &GameConfig) -> GridPos {
+    GridPos {
+        x: (config.world.width / 2 + 4).min(config.world.width - 2),
+        z: config.world.height / 2,
+    }
+}
+
+fn next_agent_goal(
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    actor_id: &StableId,
+    current: GridPos,
+) -> (AgentGoal, GridPos) {
+    const CARRY_CAPACITY: u32 = 25;
+    let Some(actor) = simulation.actors.get(actor_id) else {
+        return (AgentGoal::Wander, mirrored_target(world, current));
+    };
+    let carried = actor
+        .inventory
+        .values()
+        .copied()
+        .fold(0_u32, u32::saturating_add);
+    if carried >= CARRY_CAPACITY {
+        let town_hall = town_hall_grid_position(config);
+        let target = nearest_walkable(world, town_hall).unwrap_or(current);
+        return (AgentGoal::Deposit, target);
+    }
+    let Some(resource_kind) = resource_for_role(&actor.role) else {
+        return (AgentGoal::Wander, mirrored_target(world, current));
+    };
+    let resource = world
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == resource_kind && resource.amount > 0)
+        .min_by_key(|resource| {
+            (
+                resource.position.x.abs_diff(current.x) + resource.position.z.abs_diff(current.z),
+                resource.position.z,
+                resource.position.x,
+            )
+        });
+    resource.map_or_else(
+        || (AgentGoal::Wander, mirrored_target(world, current)),
+        |resource| (AgentGoal::Gather(resource.id.clone()), resource.position),
+    )
+}
+
+fn complete_agent_goal(
+    simulation: &mut WorldSimulation,
+    world: &mut GeneratedWorld,
+    actor_id: &StableId,
+    goal: &AgentGoal,
+) {
+    const GATHER_AMOUNT: u32 = 5;
+    match goal {
+        AgentGoal::Gather(resource_id) => {
+            let Some(resource) = world
+                .resources
+                .iter_mut()
+                .find(|resource| resource.id == *resource_id && resource.amount > 0)
+            else {
+                return;
+            };
+            let amount = resource.amount.min(GATHER_AMOUNT);
+            resource.amount -= amount;
+            let resource_kind = resource.kind.clone();
+            if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
+                warn!(actor = %actor_id, %error, "resource gather action failed");
+                resource.amount = resource.amount.saturating_add(amount);
+            }
+        }
+        AgentGoal::Deposit => {
+            if let Err(error) = simulation.deposit_all(actor_id) {
+                warn!(actor = %actor_id, %error, "resource deposit action failed");
+            }
+        }
+        AgentGoal::Wander => {}
+    }
+}
+
 fn move_agents(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
-    world: Res<WorldRuntime>,
+    mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
     mut agents: Query<(
@@ -1148,10 +1268,25 @@ fn move_agents(
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
                 stats.paths_completed += 1;
-                let previous_target = agent.target;
-                agent.target = agent.origin;
-                agent.origin = previous_target;
+                if location.0 == agent.target {
+                    complete_agent_goal(
+                        &mut simulation.0,
+                        &mut world.generated,
+                        &agent.id,
+                        &agent.goal,
+                    );
+                }
             }
+            agent.origin = location.0;
+            let (goal, target) = next_agent_goal(
+                &simulation.0,
+                &world.generated,
+                &config.0,
+                &agent.id,
+                location.0,
+            );
+            agent.goal = goal;
+            agent.target = target;
             agent.path = world
                 .generated
                 .navigation
@@ -1180,6 +1315,28 @@ fn move_agents(
         } else {
             transform.translation += distance.normalize_or_zero() * step;
         }
+    }
+}
+
+fn sync_resource_nodes(
+    world: Res<WorldRuntime>,
+    mut resources: Query<(&ResourceNode, &mut Visibility)>,
+) {
+    if !world.is_changed() {
+        return;
+    }
+    for (node, mut visibility) in &mut resources {
+        let available = world
+            .generated
+            .resources
+            .iter()
+            .find(|resource| resource.id == node.id)
+            .is_some_and(|resource| resource.amount > 0);
+        *visibility = if available {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -2278,6 +2435,13 @@ fn load_input(
     }
 
     let mut restored_world = generate_world(&config.0.world);
+    if !snapshot.resource_nodes.is_empty() {
+        for resource in &mut restored_world.resources {
+            if let Some(remaining) = snapshot.resource_nodes.get(&resource.id) {
+                resource.amount = *remaining;
+            }
+        }
+    }
     let centre = GridPos {
         x: config.0.world.width / 2,
         z: config.0.world.height / 2,
@@ -2386,6 +2550,7 @@ fn load_input(
             Agent {
                 id: saved.id.clone(),
                 kind: saved.kind.clone(),
+                goal: AgentGoal::Wander,
                 origin: position,
                 path: Vec::new(),
                 path_index: 0,
@@ -2545,6 +2710,10 @@ fn find_building_site(
                         z: cell_z,
                     })
                 })
+            }) && !world.resources.iter().any(|resource| {
+                resource.amount > 0
+                    && (region.min.x..=region.max.x).contains(&resource.position.x)
+                    && (region.min.z..=region.max.z).contains(&resource.position.z)
             });
             if available {
                 candidates.push(position);
@@ -2687,6 +2856,7 @@ fn process_injected_commands(
                             Agent {
                                 id: actor_id.clone(),
                                 kind: ActorKind::Player,
+                                goal: AgentGoal::Wander,
                                 origin: position,
                                 path: Vec::new(),
                                 path_index: 0,
@@ -2854,8 +3024,16 @@ fn update_hud(
         .iter()
         .next()
         .map_or("none", |agent| agent.id.as_str());
+    let gathering = agents
+        .iter()
+        .filter(|agent| matches!(agent.goal, AgentGoal::Gather(_)))
+        .count();
+    let depositing = agents
+        .iter()
+        .filter(|agent| agent.goal == AgentGoal::Deposit)
+        .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -2896,7 +3074,7 @@ fn snapshot_world(
     agents: &Query<(&Agent, &GridLocation)>,
 ) -> WorldSnapshot {
     WorldSnapshot {
-        schema_version: 1,
+        schema_version: 2,
         world_seed: world.generated.seed,
         generator_version: world.generated.generator_version,
         world_hash: world.generated.deterministic_hash.clone(),
@@ -2917,6 +3095,12 @@ fn snapshot_world(
             })
             .collect(),
         simulation: simulation.0.clone(),
+        resource_nodes: world
+            .generated
+            .resources
+            .iter()
+            .map(|resource| (resource.id.clone(), resource.amount))
+            .collect(),
         legacy_terrain_mesh: None,
         legacy_migration: None,
     }
@@ -3098,6 +3282,48 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn role_driven_resource_loop_depletes_and_deposits() {
+        let config = GameConfig::default();
+        let mut world = generate_world(&config.world);
+        let resource = world
+            .resources
+            .first()
+            .expect("default world contains resources")
+            .clone();
+        let role = match resource.kind.as_str() {
+            "resource:wood" => "role:logger",
+            "resource:ore" => "role:miner",
+            _ => "role:gatherer",
+        };
+        let actor_id = StableId::new("npc:test_worker").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), resource.position));
+        simulation
+            .assign_role(&actor_id, StableId::new(role).unwrap())
+            .unwrap();
+        let starting_amount = resource.amount;
+        let gather = AgentGoal::Gather(resource.id.clone());
+        for _ in 0..5 {
+            complete_agent_goal(&mut simulation, &mut world, &actor_id, &gather);
+        }
+        assert_eq!(
+            world
+                .resources
+                .iter()
+                .find(|candidate| candidate.id == resource.id)
+                .unwrap()
+                .amount,
+            starting_amount - 25
+        );
+        assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 25);
+        let (goal, _) = next_agent_goal(&simulation, &world, &config, &actor_id, resource.position);
+        assert_eq!(goal, AgentGoal::Deposit);
+        complete_agent_goal(&mut simulation, &mut world, &actor_id, &AgentGoal::Deposit);
+        assert!(simulation.actors[&actor_id].inventory.is_empty());
+        assert_eq!(simulation.town_resources[&resource.kind], 25);
+    }
 
     #[test]
     fn environment_palette_covers_every_season_and_weather() {
