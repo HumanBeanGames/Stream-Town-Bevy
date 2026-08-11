@@ -1,9 +1,12 @@
+pub mod twitch;
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::{Context, Result as AnyResult};
 use avian3d::prelude::PhysicsPlugins;
 use bevy::{
     asset::AssetPlugin,
@@ -17,6 +20,7 @@ use stream_town_domain::{
     GeneratedWorld, GridPos, NativeSaveStore, SavedActor, StableId, TownEvent, WorldSimulation,
     WorldSnapshot, generate_world,
 };
+use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
 pub enum GameState {
@@ -57,8 +61,34 @@ struct SessionStats {
     commands_processed: u64,
 }
 
+#[derive(Clone, Debug)]
+struct PendingChatCommand {
+    actor_id: StableId,
+    display_name: String,
+    command: ChatCommand,
+}
+
 #[derive(Resource, Default)]
-struct InjectedCommands(VecDeque<ChatCommand>);
+struct InjectedCommands(VecDeque<PendingChatCommand>);
+
+#[derive(Resource)]
+struct TwitchConnection {
+    transport: Option<TwitchTransport>,
+    status: TwitchStatus,
+    broadcaster_authorized: bool,
+    connect_code: String,
+}
+
+impl Default for TwitchConnection {
+    fn default() -> Self {
+        Self {
+            transport: None,
+            status: TwitchStatus::Disabled,
+            broadcaster_authorized: false,
+            connect_code: generate_connect_code(),
+        }
+    }
+}
 
 #[derive(Resource, Default)]
 struct SelectedCell(Option<GridPos>);
@@ -139,15 +169,17 @@ impl Plugin for StreamTownGamePlugin {
         app.init_state::<GameState>()
             .init_resource::<SessionStats>()
             .init_resource::<InjectedCommands>()
+            .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
                     PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
                 ),
             })
-            .add_systems(Startup, setup_rendering)
+            .add_systems(Startup, (setup_rendering, start_twitch_transport))
             .add_systems(OnEnter(GameState::Boot), finish_boot)
             .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
+            .add_systems(Update, (poll_twitch_transport, twitch_connection_input))
             .add_systems(
                 Update,
                 main_menu_input.run_if(in_state(GameState::MainMenu)),
@@ -205,6 +237,25 @@ pub fn run(config: GameConfig) {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
+}
+
+pub fn load_runtime_config() -> AnyResult<GameConfig> {
+    let configured = std::env::var_os("STREAM_TOWN_CONFIG").map(PathBuf::from);
+    let user_config = PathBuf::from(".stream-town").join("config.ron");
+    let encoded = if let Some(path) = configured {
+        std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read runtime config {}", path.display()))?
+    } else if user_config.is_file() {
+        std::fs::read_to_string(&user_config)
+            .with_context(|| format!("failed to read runtime config {}", user_config.display()))?
+    } else {
+        include_str!("../../../assets/config/game.ron").to_owned()
+    };
+    let config: GameConfig = ron::from_str(&encoded).context("runtime config is invalid RON")?;
+    config
+        .validate()
+        .context("runtime config failed validation")?;
+    Ok(config)
 }
 
 fn locate_asset_root() -> PathBuf {
@@ -801,9 +852,116 @@ fn game_input(
         next_state.set(GameState::MainMenu);
     }
     if keyboard.just_pressed(KeyCode::KeyJ) {
-        injected
-            .0
-            .push_back("!join".parse().expect("static chat command"));
+        injected.0.push_back(PendingChatCommand {
+            actor_id: StableId::new("twitch:debug_viewer").expect("static ID"),
+            display_name: "debug_viewer".to_owned(),
+            command: "!join".parse().expect("static chat command"),
+        });
+    }
+}
+
+fn generate_connect_code() -> String {
+    let subsecond = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.subsec_nanos());
+    format!("{:06}", 100_000 + subsecond % 900_000)
+}
+
+fn start_twitch_transport(config: Res<RuntimeConfig>, mut connection: ResMut<TwitchConnection>) {
+    if !config.0.twitch.enabled {
+        connection.status = TwitchStatus::Disabled;
+        return;
+    }
+    connection.broadcaster_authorized = !config.0.twitch.require_broadcaster_connect;
+    connection.status = TwitchStatus::Authorizing;
+    match TwitchTransport::start(config.0.twitch.clone()) {
+        Ok(transport) => connection.transport = Some(transport),
+        Err(error) => connection.status = TwitchStatus::Error(error.to_string()),
+    }
+}
+
+fn twitch_connection_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    config: Res<RuntimeConfig>,
+    mut connection: ResMut<TwitchConnection>,
+) {
+    if keyboard.just_pressed(KeyCode::F1) {
+        if let Some(transport) = connection.transport.take() {
+            let _ = transport.send(TwitchControl::Disconnect);
+        }
+        connection.status = TwitchStatus::Disconnected;
+    } else if keyboard.just_pressed(KeyCode::F2) && config.0.twitch.enabled {
+        connection.transport = None;
+        connection.broadcaster_authorized = !config.0.twitch.require_broadcaster_connect;
+        connection.connect_code = generate_connect_code();
+        connection.status = TwitchStatus::Authorizing;
+        match TwitchTransport::start(config.0.twitch.clone()) {
+            Ok(transport) => connection.transport = Some(transport),
+            Err(error) => connection.status = TwitchStatus::Error(error.to_string()),
+        }
+    }
+}
+
+fn poll_twitch_transport(
+    mut connection: ResMut<TwitchConnection>,
+    mut injected: ResMut<InjectedCommands>,
+) {
+    let events: Vec<_> = connection
+        .transport
+        .as_ref()
+        .into_iter()
+        .flat_map(|transport| std::iter::from_fn(|| transport.try_recv()))
+        .collect();
+    for event in events {
+        handle_twitch_event(event, &mut connection, &mut injected);
+    }
+}
+
+fn handle_twitch_event(
+    event: TwitchEvent,
+    connection: &mut TwitchConnection,
+    injected: &mut InjectedCommands,
+) {
+    match event {
+        TwitchEvent::Status(status) => {
+            match &status {
+                TwitchStatus::Connected => info!("Twitch IRC connected"),
+                TwitchStatus::Error(error) => error!(%error, "Twitch transport error"),
+                _ => info!(?status, "Twitch connection state changed"),
+            }
+            connection.status = status;
+        }
+        TwitchEvent::Chat(message) => {
+            if !connection.broadcaster_authorized {
+                let mut parts = message.message.split_whitespace();
+                let is_connect = parts
+                    .next()
+                    .is_some_and(|part| part.eq_ignore_ascii_case("!connect"));
+                let valid_code = parts
+                    .next()
+                    .is_some_and(|code| code == connection.connect_code);
+                if message.is_broadcaster && is_connect && valid_code {
+                    connection.broadcaster_authorized = true;
+                    info!(broadcaster = %message.login, "Twitch broadcaster authorized this session");
+                    if let Some(transport) = &connection.transport {
+                        let _ = transport.send(TwitchControl::SendMessage(
+                            "Stream Town chat commands are now enabled.".to_owned(),
+                        ));
+                    }
+                }
+                return;
+            }
+            match message.message.parse::<ChatCommand>() {
+                Ok(command) => injected.0.push_back(PendingChatCommand {
+                    actor_id: message.actor_id,
+                    display_name: message.display_name,
+                    command,
+                }),
+                Err(parse_error) => {
+                    debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
+                }
+            }
+        }
     }
 }
 
@@ -977,11 +1135,12 @@ fn process_injected_commands(
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
 ) {
-    let debug_viewer = StableId::new("twitch:debug_viewer").expect("static ID");
-    while let Some(command) = queue.0.pop_front() {
+    while let Some(pending) = queue.0.pop_front() {
+        let actor_id = pending.actor_id;
+        let command = pending.command;
         match &command {
             ChatCommand::Join => {
-                if !simulation.0.actors.contains_key(&debug_viewer) {
+                if !simulation.0.actors.contains_key(&actor_id) {
                     let desired = GridPos {
                         x: world.generated.navigation.width() / 2,
                         z: world.generated.navigation.height() / 2,
@@ -996,7 +1155,7 @@ fn process_injected_commands(
                         )
                         .unwrap_or(position);
                         let world_position = grid_to_world(position, &config.0);
-                        simulation.0.join_player(debug_viewer.clone(), position);
+                        simulation.0.join_player(actor_id.clone(), position);
                         let base_scale = Vec3::new(
                             config.0.world.cell_size * 0.3,
                             config.0.world.cell_size * 0.55,
@@ -1006,7 +1165,7 @@ fn process_injected_commands(
                             WorldEntity,
                             GridLocation(position),
                             Agent {
-                                id: debug_viewer.clone(),
+                                id: actor_id.clone(),
                                 kind: ActorKind::Player,
                                 origin: position,
                                 path: Vec::new(),
@@ -1030,7 +1189,7 @@ fn process_injected_commands(
                 }
             }
             ChatCommand::SelectRole(role) => {
-                let _ = simulation.0.assign_role(&debug_viewer, role.clone());
+                let _ = simulation.0.assign_role(&actor_id, role.clone());
             }
             ChatCommand::Build(archetype) => {
                 let building_id = StableId::random("building");
@@ -1045,25 +1204,26 @@ fn process_injected_commands(
                 if simulation.0.active_vote.is_none() {
                     let _ = simulation.0.start_technology_vote(technology.clone(), 30.0);
                 }
-                let _ = simulation.0.cast_vote(&debug_viewer, true);
+                let _ = simulation.0.cast_vote(&actor_id, true);
             }
             ChatCommand::TriggerEvent(_) => {
                 simulation.0.trigger_event(TownEvent::Festival);
             }
             ChatCommand::Save | ChatCommand::Help => {}
         }
-        info!(?command, "processed injected Twitch command");
+        info!(user = %pending.display_name, ?command, "processed Twitch command");
         stats.commands_processed += 1;
     }
 }
 
 fn update_hud(
     stats: Res<SessionStats>,
+    twitch: Res<TwitchConnection>,
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
-    if !stats.is_changed() {
+    if !stats.is_changed() && !twitch.is_changed() {
         return;
     }
     let first_id = agents
@@ -1071,14 +1231,26 @@ fn update_hud(
         .next()
         .map_or("none", |agent| agent.id.as_str());
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?}\nF5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?} | Twitch: {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
         stats.commands_processed,
         simulation.0.season,
         simulation.0.weather,
+        twitch_status_text(&twitch),
     );
+}
+
+fn twitch_status_text(connection: &TwitchConnection) -> String {
+    if matches!(connection.status, TwitchStatus::Connected) && !connection.broadcaster_authorized {
+        format!("awaiting broadcaster !connect {}", connection.connect_code)
+    } else {
+        match &connection.status {
+            TwitchStatus::Error(error) => format!("error: {error}"),
+            status => format!("{status:?}"),
+        }
+    }
 }
 
 fn snapshot_world(
@@ -1206,6 +1378,39 @@ mod tests {
     }
 
     #[test]
+    fn broadcaster_gate_precedes_twitch_command_dispatch() {
+        let viewer = |message: &str, is_broadcaster| {
+            TwitchEvent::Chat(twitch::TwitchChatEnvelope {
+                actor_id: StableId::new("twitch:42").unwrap(),
+                user_id: "42".to_owned(),
+                login: "viewer".to_owned(),
+                display_name: "Viewer".to_owned(),
+                message: message.to_owned(),
+                is_broadcaster,
+                is_moderator: false,
+            })
+        };
+        let mut connection = TwitchConnection {
+            connect_code: "123456".to_owned(),
+            ..default()
+        };
+        let mut commands = InjectedCommands::default();
+
+        handle_twitch_event(viewer("!join", false), &mut connection, &mut commands);
+        assert!(commands.0.is_empty());
+        handle_twitch_event(
+            viewer("!connect 123456", true),
+            &mut connection,
+            &mut commands,
+        );
+        assert!(connection.broadcaster_authorized);
+        handle_twitch_event(viewer("!join", false), &mut connection, &mut commands);
+        let dispatched = commands.0.pop_front().unwrap();
+        assert_eq!(dispatched.actor_id, StableId::new("twitch:42").unwrap());
+        assert_eq!(dispatched.command, ChatCommand::Join);
+    }
+
+    #[test]
     fn headless_vertical_slice_spawns_three_hundred_agents() {
         let config = GameConfig::default();
         let expected = usize::from(config.gameplay.initial_agents);
@@ -1245,7 +1450,11 @@ mod tests {
         app.world_mut()
             .resource_mut::<InjectedCommands>()
             .0
-            .push_back("!join".parse().unwrap());
+            .push_back(PendingChatCommand {
+                actor_id: StableId::new("twitch:debug_viewer").unwrap(),
+                display_name: "debug_viewer".to_owned(),
+                command: "!join".parse().unwrap(),
+            });
         app.update();
         let joined_count = app
             .world_mut()

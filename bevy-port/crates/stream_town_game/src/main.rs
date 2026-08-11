@@ -1,11 +1,6 @@
-use stream_town_domain::GameConfig;
-use stream_town_game::run;
+use stream_town_game::{load_runtime_config, run};
 
 fn main() {
-    let config = ron::from_str::<GameConfig>(include_str!("../../../assets/config/game.ron"))
-        .expect("embedded game configuration must be valid RON");
-    config
-        .validate()
-        .expect("embedded game configuration must pass validation");
+    let config = load_runtime_config().expect("game configuration must load and validate");
     run(config);
 }

@@ -10,7 +10,7 @@ pub mod simulation;
 pub mod world;
 
 pub use command::{ChatCommand, CommandParseError};
-pub use config::{GameConfig, GameplayConfig, WindowConfig, WorldGenConfig};
+pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, ContentCatalog, RoleDef, TechGroup, TechNode, TechTree,

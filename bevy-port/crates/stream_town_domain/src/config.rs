@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_CONFIG_SCHEMA: u32 = 1;
+pub const CURRENT_CONFIG_SCHEMA: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GameConfig {
@@ -9,6 +9,7 @@ pub struct GameConfig {
     pub window: WindowConfig,
     pub world: WorldGenConfig,
     pub gameplay: GameplayConfig,
+    pub twitch: TwitchConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -36,6 +37,17 @@ pub struct GameplayConfig {
     pub repath_interval_seconds: f32,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TwitchConfig {
+    /// Twitch stays opt-in so tests, tools, and offline play never make network requests.
+    pub enabled: bool,
+    /// Public-client identifier. Tokens and refresh tokens are stored in the OS vault.
+    pub client_id: String,
+    pub bot_login: String,
+    pub channel_login: String,
+    pub require_broadcaster_connect: bool,
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ConfigError {
     #[error("unsupported config schema {0}")]
@@ -50,6 +62,10 @@ pub enum ConfigError {
     ResourceDensity,
     #[error("initial agent count must be between 1 and 5000")]
     AgentCount,
+    #[error("enabled Twitch integration requires a public client ID")]
+    TwitchClientId,
+    #[error("Twitch bot and channel logins must be lowercase ASCII names")]
+    TwitchLogin,
 }
 
 impl Default for GameConfig {
@@ -75,6 +91,13 @@ impl Default for GameConfig {
                 agent_speed_cells_per_second: 4.0,
                 repath_interval_seconds: 1.0,
             },
+            twitch: TwitchConfig {
+                enabled: false,
+                client_id: String::new(),
+                bot_login: "humanbeanbot".to_owned(),
+                channel_login: "humanbeangames".to_owned(),
+                require_broadcaster_connect: true,
+            },
         }
     }
 }
@@ -99,8 +122,23 @@ impl GameConfig {
         if !(1..=5_000).contains(&self.gameplay.initial_agents) {
             return Err(ConfigError::AgentCount);
         }
+        if self.twitch.enabled && self.twitch.client_id.trim().is_empty() {
+            return Err(ConfigError::TwitchClientId);
+        }
+        if !valid_twitch_login(&self.twitch.bot_login)
+            || !valid_twitch_login(&self.twitch.channel_login)
+        {
+            return Err(ConfigError::TwitchLogin);
+        }
         Ok(())
     }
+}
+
+fn valid_twitch_login(login: &str) -> bool {
+    (3..=25).contains(&login.len())
+        && login
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 #[cfg(test)]
@@ -113,5 +151,16 @@ mod tests {
         config.validate().unwrap();
         let encoded = ron::to_string(&config).unwrap();
         assert_eq!(ron::from_str::<GameConfig>(&encoded).unwrap(), config);
+    }
+
+    #[test]
+    fn enabled_twitch_requires_public_configuration() {
+        let mut config = GameConfig::default();
+        config.twitch.enabled = true;
+        assert_eq!(config.validate(), Err(ConfigError::TwitchClientId));
+        config.twitch.client_id = "public-client-id".to_owned();
+        assert!(config.validate().is_ok());
+        config.twitch.channel_login = "MixedCase".to_owned();
+        assert_eq!(config.validate(), Err(ConfigError::TwitchLogin));
     }
 }

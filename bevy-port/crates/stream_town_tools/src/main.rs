@@ -1,10 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex, mpsc},
+    thread,
+};
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
     ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, StableId, generate_world,
+};
+use stream_town_game::twitch::{
+    CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -63,6 +70,18 @@ struct ToolState {
     technology_draft: Option<TechnologyDraft>,
     undo_catalogs: Vec<ContentCatalog>,
     redo_catalogs: Vec<ContentCatalog>,
+    twitch_auth_events: Option<Arc<Mutex<mpsc::Receiver<TwitchToolEvent>>>>,
+    twitch_device: Option<DeviceAuthorization>,
+    twitch_validation: Option<TokenValidation>,
+}
+
+#[derive(Debug)]
+enum TwitchToolEvent {
+    Device(DeviceAuthorization),
+    Authorized(TokenValidation),
+    Diagnostic(TokenValidation),
+    Cleared,
+    Error(String),
 }
 
 #[derive(Clone)]
@@ -91,7 +110,7 @@ impl Default for ToolState {
             unity_root: "..".to_owned(),
             command: "!join".to_owned(),
             status: "Ready. Migration operations are read-only by default.".to_owned(),
-            config: GameConfig::default(),
+            config: stream_town_game::load_runtime_config().unwrap_or_default(),
             catalog,
             generated_world: None,
             preview_path: Vec::new(),
@@ -102,6 +121,9 @@ impl Default for ToolState {
             technology_draft: None,
             undo_catalogs: Vec::new(),
             redo_catalogs: Vec::new(),
+            twitch_auth_events: None,
+            twitch_device: None,
+            twitch_validation: None,
         }
     }
 }
@@ -140,6 +162,7 @@ fn tools_ui(
     mut state: ResMut<ToolState>,
     mut inspector: ResMut<ToolInspector>,
 ) -> Result {
+    poll_twitch_tool_events(&mut state);
     let context = contexts.ctx_mut()?;
     let mut viewport_ui = egui::Ui::new(
         context.clone(),
@@ -169,7 +192,7 @@ fn tools_ui(
         ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::World => world_tab(ui, &mut state),
         ToolTab::Runtime => runtime_tab(ui, &mut state),
-        ToolTab::Twitch => twitch_tab(ui),
+        ToolTab::Twitch => twitch_tab(ui, &mut state),
         ToolTab::Validation => validation_tab(ui, &mut state),
         ToolTab::Inspector => inspector_tab(ui),
     });
@@ -481,13 +504,279 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.label("Save/load, spawn, vote/event injection, frame capture, and profiling will connect through the runtime bridge.");
 }
 
-fn twitch_tab(ui: &mut egui::Ui) {
+fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Twitch setup and diagnostics");
-    ui.label("Device authorization requires a deployment-specific Twitch client ID and OS credential-vault integration.");
+    ui.label("Public-client settings are separate from OAuth tokens. Tokens live only in the operating-system credential vault.");
+    ui.checkbox(
+        &mut state.config.twitch.enabled,
+        "Enable Twitch in the game",
+    );
+    ui.horizontal(|ui| {
+        ui.label("Client ID");
+        ui.text_edit_singleline(&mut state.config.twitch.client_id);
+    });
+    ui.horizontal(|ui| {
+        ui.label("Bot login");
+        ui.text_edit_singleline(&mut state.config.twitch.bot_login);
+    });
+    ui.horizontal(|ui| {
+        ui.label("Channel login");
+        ui.text_edit_singleline(&mut state.config.twitch.channel_login);
+    });
+    ui.checkbox(
+        &mut state.config.twitch.require_broadcaster_connect,
+        "Require the broadcaster's per-session !connect code",
+    );
+    ui.horizontal(|ui| {
+        if ui.button("Save runtime config").clicked() {
+            state.status = match save_runtime_config(&state.config) {
+                Ok(path) => format!("Saved public runtime configuration to {}", path.display()),
+                Err(error) => format!("Could not save runtime configuration: {error:#}"),
+            };
+        }
+        let busy = state.twitch_auth_events.is_some();
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Authorize bot"),
+            )
+            .clicked()
+        {
+            start_twitch_authorization(state);
+        }
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Check vault"),
+            )
+            .clicked()
+        {
+            start_twitch_diagnostic(state);
+        }
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Forget token"),
+            )
+            .clicked()
+        {
+            start_twitch_clear(state);
+        }
+    });
+    if let Some(device) = &state.twitch_device {
+        ui.separator();
+        ui.heading("Authorization pending");
+        ui.label(format!("Enter code: {}", device.user_code));
+        ui.hyperlink_to("Open Twitch activation page", &device.verification_uri);
+        ui.label(format!(
+            "This request expires in {} minutes; polling every {} seconds.",
+            device.expires_in.div_ceil(60),
+            device.interval
+        ));
+    }
+    if let Some(validation) = &state.twitch_validation {
+        ui.separator();
+        ui.label(format!(
+            "Validated bot '{}' (user {}) for client {}",
+            validation.login, validation.user_id, validation.client_id
+        ));
+        ui.label(format!("Scopes: {}", validation.scopes.join(", ")));
+        ui.label(format!(
+            "Access token valid for {} seconds",
+            validation.expires_in
+        ));
+    }
     ui.colored_label(
         egui::Color32::LIGHT_BLUE,
         "No credentials are stored in repository assets.",
     );
+}
+
+fn poll_twitch_tool_events(state: &mut ToolState) {
+    let events: Vec<_> = state
+        .twitch_auth_events
+        .as_ref()
+        .and_then(|receiver| receiver.lock().ok())
+        .map(|receiver| receiver.try_iter().collect())
+        .unwrap_or_default();
+    let mut finished = false;
+    for event in events {
+        match event {
+            TwitchToolEvent::Device(device) => {
+                "Twitch is waiting for device authorization".clone_into(&mut state.status);
+                state.twitch_device = Some(device);
+            }
+            TwitchToolEvent::Authorized(validation) => {
+                state.status = format!(
+                    "Authorized and securely stored Twitch bot '{}'",
+                    validation.login
+                );
+                state.twitch_validation = Some(validation);
+                state.twitch_device = None;
+                finished = true;
+            }
+            TwitchToolEvent::Diagnostic(validation) => {
+                state.status = format!("Twitch token for '{}' is valid", validation.login);
+                state.twitch_validation = Some(validation);
+                finished = true;
+            }
+            TwitchToolEvent::Cleared => {
+                "Removed the Twitch token from the OS credential vault"
+                    .clone_into(&mut state.status);
+                state.twitch_validation = None;
+                state.twitch_device = None;
+                finished = true;
+            }
+            TwitchToolEvent::Error(error) => {
+                state.status = format!("Twitch setup failed: {error}");
+                state.twitch_device = None;
+                finished = true;
+            }
+        }
+    }
+    if finished {
+        state.twitch_auth_events = None;
+    }
+}
+
+fn twitch_event_channel(state: &mut ToolState) -> mpsc::Sender<TwitchToolEvent> {
+    let (sender, receiver) = mpsc::channel();
+    state.twitch_auth_events = Some(Arc::new(Mutex::new(receiver)));
+    sender
+}
+
+fn start_twitch_authorization(state: &mut ToolState) {
+    state.twitch_device = None;
+    state.twitch_validation = None;
+    "Starting Twitch device authorization...".clone_into(&mut state.status);
+    let config = state.config.twitch.clone();
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-oauth".to_owned())
+        .spawn(move || {
+            let outcome = (|| -> anyhow::Result<()> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(async {
+                    let oauth = OAuthClient::new(config.client_id.clone())?;
+                    let authorization = oauth.begin_device_authorization().await?;
+                    sender
+                        .send(TwitchToolEvent::Device(authorization.clone()))
+                        .map_err(|_| anyhow::anyhow!("Twitch setup window closed"))?;
+                    let token = oauth.complete_device_authorization(&authorization).await?;
+                    let validation = oauth.validate(&token).await?;
+                    anyhow::ensure!(
+                        validation.login == config.bot_login,
+                        "authorized account '{}' does not match configured bot '{}'",
+                        validation.login,
+                        config.bot_login
+                    );
+                    CredentialVault::new(&config.client_id, &config.bot_login).save(&token)?;
+                    sender
+                        .send(TwitchToolEvent::Authorized(validation))
+                        .map_err(|_| anyhow::anyhow!("Twitch setup window closed"))?;
+                    Ok(())
+                })
+            })();
+            if let Err(error) = outcome {
+                let _ = sender.send(TwitchToolEvent::Error(format!("{error:#}")));
+            }
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start Twitch authorization worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn start_twitch_diagnostic(state: &mut ToolState) {
+    "Checking Twitch token in the OS credential vault...".clone_into(&mut state.status);
+    let config = state.config.twitch.clone();
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-twitch-check".to_owned())
+        .spawn(move || {
+            let outcome = (|| -> anyhow::Result<TokenValidation> {
+                let vault = CredentialVault::new(&config.client_id, &config.bot_login);
+                let mut token = vault
+                    .load()?
+                    .ok_or_else(|| anyhow::anyhow!("no token is stored for this bot and client"))?;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(async {
+                    let oauth = OAuthClient::new(config.client_id.clone())?;
+                    let validation = if let Ok(validation) = oauth.validate(&token).await {
+                        validation
+                    } else {
+                        token = oauth.refresh(&token).await?;
+                        vault.save(&token)?;
+                        oauth.validate(&token).await?
+                    };
+                    anyhow::ensure!(
+                        validation.login == config.bot_login,
+                        "stored token belongs to '{}', expected '{}'",
+                        validation.login,
+                        config.bot_login
+                    );
+                    Ok(validation)
+                })
+            })();
+            let event = outcome.map_or_else(
+                |error| TwitchToolEvent::Error(format!("{error:#}")),
+                TwitchToolEvent::Diagnostic,
+            );
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start Twitch diagnostic worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn start_twitch_clear(state: &mut ToolState) {
+    "Removing Twitch token from the OS credential vault...".clone_into(&mut state.status);
+    let config = state.config.twitch.clone();
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-twitch-clear".to_owned())
+        .spawn(move || {
+            let event = CredentialVault::new(&config.client_id, &config.bot_login)
+                .clear()
+                .map_or_else(
+                    |error| TwitchToolEvent::Error(format!("{error:#}")),
+                    |()| TwitchToolEvent::Cleared,
+                );
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start Twitch credential cleanup worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn save_runtime_config(config: &GameConfig) -> anyhow::Result<std::path::PathBuf> {
+    config.validate()?;
+    let directory = std::path::Path::new(".stream-town");
+    std::fs::create_dir_all(directory)?;
+    let path = directory.join("config.ron");
+    let temporary = directory.join("config.ron.tmp");
+    let backup = directory.join("config.ron.bak");
+    let pretty = ron::ser::PrettyConfig::new().struct_names(true);
+    std::fs::write(&temporary, ron::ser::to_string_pretty(config, pretty)?)?;
+    if path.is_file() {
+        if backup.is_file() {
+            std::fs::remove_file(&backup)?;
+        }
+        std::fs::rename(&path, &backup)?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, &path) {
+        if backup.is_file() {
+            let _ = std::fs::rename(&backup, &path);
+        }
+        return Err(error.into());
+    }
+    Ok(path)
 }
 
 fn validation_tab(ui: &mut egui::Ui, state: &mut ToolState) {

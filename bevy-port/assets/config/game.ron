@@ -1,5 +1,5 @@
 (
-    schema_version: 1,
+    schema_version: 2,
     window: (
         title: "Stream Town — Bevy Migration",
         width: 1920,
@@ -18,5 +18,12 @@
         initial_agents: 300,
         agent_speed_cells_per_second: 4.0,
         repath_interval_seconds: 1.0,
+    ),
+    twitch: (
+        enabled: false,
+        client_id: "",
+        bot_login: "humanbeanbot",
+        channel_login: "humanbeangames",
+        require_broadcaster_connect: true,
     ),
 )

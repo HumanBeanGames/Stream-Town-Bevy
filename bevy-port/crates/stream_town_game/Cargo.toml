@@ -8,9 +8,16 @@ rust-version.workspace = true
 
 [dependencies]
 avian3d.workspace = true
+anyhow.workspace = true
 bevy.workspace = true
+keyring.workspace = true
+reqwest.workspace = true
 ron.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 stream_town_domain = { path = "../stream_town_domain" }
+tokio.workspace = true
+twitch-irc.workspace = true
 
 [lints]
 workspace = true

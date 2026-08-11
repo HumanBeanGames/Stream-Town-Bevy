@@ -7,11 +7,14 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 bevy.workspace = true
 bevy-inspector-egui.workspace = true
 bevy_egui.workspace = true
 ron.workspace = true
 stream_town_domain = { path = "../stream_town_domain" }
+stream_town_game = { path = "../stream_town_game" }
+tokio.workspace = true
 
 [lints]
 workspace = true
