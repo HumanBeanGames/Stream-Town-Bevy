@@ -52,7 +52,9 @@ building footprints from Unity's authored two-unit grid sizes and follows nested
 prefabs to their source FBX models. The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 165 transitions, and inherited
-prefab/controller/model bindings. Renderer inheritance resolves to 141 prefab
+prefab/controller/model bindings. The YAML fallback converts 57 standalone
+`.anim` files into 1,196 stable transform tracks; four property/UI-only clips do
+not contain transform curves. Renderer inheritance resolves to 141 prefab
 material bindings and 181 material slots. The known missing Necrolands camera
 clip is an explicit validated record.
 
@@ -86,11 +88,14 @@ vertical slice renders a 3D terrain plane,
 lighting, converted GLB scenes for the representative town hall and actors, and
 primitive fallbacks when an asset is unavailable.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
-Goblin path). Converted renderer descendants receive a cached Bevy PBR
-approximation of their first inherited Unity material, including PNG/TGA base
-textures, color, emission, metallic, smoothness, and alpha settings. Standalone
-Unity `.anim` conversion, exact multi-slot assignment, and custom WGSL shader
-parity remain presentation work.
+Goblin path). The Player locomotion controller uses converted Unity Idle/Walk
+tracks retargeted onto 23 bones in the Player GLB rest pose, switching with the
+agent's idle/moving state. Converted renderer descendants receive a cached Bevy
+PBR approximation of their first inherited Unity material, including PNG/TGA
+base textures, color, emission, metallic, smoothness, and alpha settings. Full
+controller action/trigger transitions, exact Unity curve tangents, property/UI
+animation, exact multi-slot assignment, and custom WGSL shader parity remain
+presentation work.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

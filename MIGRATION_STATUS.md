@@ -58,8 +58,11 @@ mistaken for production-ready systems.
   materials with shader source, PBR approximations, texture slots, and custom
   shader properties, and translates all 31 Animator controllers into 94 stable
   states, 165 transitions, parameter schemas, layer defaults, and 75 referenced
-  clip records. It resolves inherited prefab/controller/model dependencies into
-  22 animation bindings and resolves inherited renderer dependencies into 141
+  clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
+  files into 1,196 stable transform tracks with rig-relative reference poses;
+  the remaining four clips contain property/UI animation rather than transform
+  curves. It resolves inherited prefab/controller/model dependencies into 22
+  animation bindings and resolves inherited renderer dependencies into 141
   prefab material bindings containing 181 slots; 18 animation bindings have an
   embedded GLB animation available. The sole dangling Unity motion GUID in the
   Necrolands camera controller is retained and checked as an explicit
@@ -71,10 +74,12 @@ mistaken for production-ready systems.
   materials, one embedded image, and 95,464,596 output bytes.
 - Bevy runtime animation binding for compatible converted scenes. The shipping
   Goblin prefab inherits its controller/model relationship through the nested
-  model prefab, builds a native Bevy `AnimationGraph` for GLB animation zero,
-  attaches it to the spawned `AnimationPlayer`, and suppresses the primitive
-  pulse fallback. Scenes without a compatible embedded clip keep the explicit
-  idle/moving fallback.
+  model prefab and plays GLB animation zero. The Player locomotion controller
+  resolves stable Idle and Walk clip IDs, builds Bevy `AnimationClip` assets
+  from the converted Unity tracks, retargets curve deltas onto the converted
+  GLB rest pose, and drives a native `AnimationGraph` across 23 bone targets as
+  the agent changes between idle and moving. Scenes without a compatible
+  embedded or converted clip keep the explicit visual fallback.
 - Bevy runtime material reconstruction for converted scenes. Unity base color,
   primary texture, emission, metallic, smoothness, and alpha settings are mapped
   into cached `StandardMaterial` assets, with PNG and TGA decoding enabled. The
@@ -93,11 +98,12 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Conversion of the 61 standalone Unity `.anim` assets into skeleton-compatible
-  GLB clips, state-driven blending across the translated controller graphs, and
-  per-prefab renderer activation for the player role/equipment variants that are
-  co-located in source FBX files. Controller semantics are now preserved in RON,
-  but only compatible embedded GLB animation zero is played natively today.
+- The four standalone property/UI animation clips, non-transform event/property
+  curves, full controller transition/trigger/action-state execution, and exact
+  Unity tangent/cubic interpolation semantics. The runtime currently selects
+  Player Idle/Walk locomotion directly; it does not yet reproduce controller
+  blend timing or action-state transitions. Per-prefab renderer activation for
+  player role/equipment variants co-located in source FBX files also remains.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
   reachable balance rule from the Unity scenes.
@@ -160,9 +166,10 @@ Foundation is substantially implemented. The vertical slice is runnable and its
 deterministic 300-agent navigation gate passes with semantically converted
 prefabs, representative production GLBs, and connected Twitch transport, but it
 now also has complete presentation metadata, packaged textures, native Goblin
-animation binding, inherited prefab material bindings, and runtime PBR material
-reconstruction. It is still missing converted standalone clips, state-driven
-animation blending, exact multi-slot/custom-shader parity, full command parity,
-and the recorded reference-machine GPU measurement required to close the
-milestone.
+animation binding, 57 converted standalone transform clips, Player locomotion
+retargeting/state selection, inherited prefab material bindings, and runtime PBR
+material reconstruction. It is still missing complete controller/action
+semantics, exact curve tangents and multi-slot/custom-shader parity, full command
+parity, and the recorded reference-machine GPU measurement required to close
+the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
