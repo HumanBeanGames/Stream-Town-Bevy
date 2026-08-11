@@ -8,6 +8,8 @@ use thiserror::Error;
 
 use crate::{GridPos, StableId};
 
+pub const BUILDING_MAX_HEALTH: i32 = 500;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Season {
     Spring,
@@ -84,6 +86,12 @@ pub enum SimulationError {
     ActorDead(StableId),
     #[error("building {0} already exists")]
     DuplicateBuilding(StableId),
+    #[error("building {0} does not exist")]
+    MissingBuilding(StableId),
+    #[error("building {0} is still under construction")]
+    BuildingIncomplete(StableId),
+    #[error("building {building} is already at maximum level {max_level}")]
+    BuildingMaxLevel { building: StableId, max_level: u16 },
     #[error("town lacks {resource}: required {required}, available {available}")]
     InsufficientResource {
         resource: StableId,
@@ -180,26 +188,7 @@ impl WorldSimulation {
         if self.buildings.contains_key(&id) {
             return Err(SimulationError::DuplicateBuilding(id));
         }
-        for (resource, required) in cost {
-            let available = self
-                .town_resources
-                .get(resource)
-                .copied()
-                .unwrap_or_default();
-            if available < *required {
-                return Err(SimulationError::InsufficientResource {
-                    resource: resource.clone(),
-                    required: *required,
-                    available,
-                });
-            }
-        }
-        for (resource, required) in cost {
-            *self
-                .town_resources
-                .get_mut(resource)
-                .expect("validated resource cost") -= *required;
-        }
+        self.spend_resources(cost)?;
         self.buildings.insert(
             id.clone(),
             BuildingState {
@@ -207,11 +196,61 @@ impl WorldSimulation {
                 archetype,
                 position,
                 level: 1,
-                health: 500,
-                complete: true,
+                health: BUILDING_MAX_HEALTH / 10,
+                complete: false,
             },
         );
         Ok(())
+    }
+
+    pub fn work_on_building(
+        &mut self,
+        building: &StableId,
+        amount: u32,
+    ) -> Result<bool, SimulationError> {
+        let state = self
+            .buildings
+            .get_mut(building)
+            .ok_or_else(|| SimulationError::MissingBuilding(building.clone()))?;
+        if state.complete {
+            return Ok(true);
+        }
+        let amount = i32::try_from(amount).unwrap_or(i32::MAX);
+        state.health = state
+            .health
+            .saturating_add(amount)
+            .clamp(0, BUILDING_MAX_HEALTH);
+        state.complete = state.health >= BUILDING_MAX_HEALTH;
+        Ok(state.complete)
+    }
+
+    pub fn upgrade_building(
+        &mut self,
+        building: &StableId,
+        max_level: u16,
+        cost: &BTreeMap<StableId, u32>,
+    ) -> Result<u16, SimulationError> {
+        let state = self
+            .buildings
+            .get(building)
+            .ok_or_else(|| SimulationError::MissingBuilding(building.clone()))?;
+        if !state.complete {
+            return Err(SimulationError::BuildingIncomplete(building.clone()));
+        }
+        if state.level >= max_level {
+            return Err(SimulationError::BuildingMaxLevel {
+                building: building.clone(),
+                max_level,
+            });
+        }
+        self.spend_resources(cost)?;
+        let state = self
+            .buildings
+            .get_mut(building)
+            .expect("building was validated before spending resources");
+        state.level = state.level.saturating_add(1).min(max_level);
+        state.health = BUILDING_MAX_HEALTH;
+        Ok(state.level)
     }
 
     pub fn damage_actor(&mut self, actor: &StableId, damage: u32) -> Result<bool, SimulationError> {
@@ -330,6 +369,30 @@ impl WorldSimulation {
         self.actors
             .get_mut(actor)
             .ok_or_else(|| SimulationError::MissingActor(actor.clone()))
+    }
+
+    fn spend_resources(&mut self, cost: &BTreeMap<StableId, u32>) -> Result<(), SimulationError> {
+        for (resource, required) in cost {
+            let available = self
+                .town_resources
+                .get(resource)
+                .copied()
+                .unwrap_or_default();
+            if available < *required {
+                return Err(SimulationError::InsufficientResource {
+                    resource: resource.clone(),
+                    required: *required,
+                    available,
+                });
+            }
+        }
+        for (resource, required) in cost {
+            *self
+                .town_resources
+                .get_mut(resource)
+                .expect("validated resource cost") -= *required;
+        }
+        Ok(())
     }
 }
 

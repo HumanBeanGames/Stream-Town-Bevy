@@ -213,6 +213,7 @@ fn convert_export(
             )
         })?;
         let mut cost = BTreeMap::new();
+        let mut level_cost = BTreeMap::new();
         for (name, field) in [
             ("wood", "BuildResourceCost.WoodCost"),
             ("ore", "BuildResourceCost.OreCost"),
@@ -221,6 +222,26 @@ fn convert_export(
         ] {
             cost.insert(stable_id("resource", name)?, required_u32(asset, field)?);
         }
+        for (name, field) in [
+            ("wood", "LevelResourceCost.WoodCost"),
+            ("ore", "LevelResourceCost.OreCost"),
+            ("food", "LevelResourceCost.FoodCost"),
+            ("gold", "LevelResourceCost.GoldCost"),
+        ] {
+            level_cost.insert(stable_id("resource", name)?, required_u32(asset, field)?);
+        }
+        let level_multiplier = required_f64(asset, "CostIncreasePerLevelMultiplier")?;
+        if !level_multiplier.is_finite() || level_multiplier <= 0.0 {
+            bail!(
+                "{} has invalid CostIncreasePerLevelMultiplier {level_multiplier}",
+                asset.path
+            );
+        }
+        let level_cost_multiplier_per_thousand = (level_multiplier * 1000.0)
+            .round()
+            .to_string()
+            .parse::<u32>()
+            .with_context(|| format!("{} level multiplier is out of range", asset.path))?;
         buildings.insert(
             id.clone(),
             BuildingDef {
@@ -228,6 +249,9 @@ fn convert_export(
                 archetype: archetype.clone(),
                 footprint: *footprint,
                 cost,
+                can_level: required_bool(asset, "CanLevel")?,
+                level_cost,
+                level_cost_multiplier_per_thousand,
             },
         );
         insert_source_record(&mut source_records, id, asset)?;
@@ -322,6 +346,7 @@ fn convert_export(
                     .into_iter()
                     .collect(),
                 unlocks,
+                building_level_caps: building_level_caps(asset)?,
                 objectives,
                 group: Some(group_id),
                 age: required_enum(asset, "<Age>k__BackingField")?,
@@ -343,7 +368,7 @@ fn convert_export(
         .filter(|node| node.prerequisites.is_empty())
         .count();
     let catalog = ContentCatalog {
-        schema_version: 2,
+        schema_version: stream_town_domain::CURRENT_CONTENT_SCHEMA,
         archetypes,
         buildings,
         roles,
@@ -865,6 +890,12 @@ fn required_u32(asset: &UnityAsset, path: &str) -> Result<u32> {
         .with_context(|| format!("{} field {path} is outside the u32 range", asset.path))
 }
 
+fn required_f64(asset: &UnityAsset, path: &str) -> Result<f64> {
+    field_value(asset, path)
+        .and_then(Value::as_f64)
+        .with_context(|| format!("{} is missing numeric field {path}", asset.path))
+}
+
 fn required_bool(asset: &UnityAsset, path: &str) -> Result<bool> {
     field_value(asset, path)
         .and_then(Value::as_bool)
@@ -877,6 +908,27 @@ fn generated_record_ids(asset: &UnityAsset, prefix: &str, kind: &str) -> Result<
     (0..size)
         .map(|index| StableId::new(format!("{kind}:{}:{index}", asset.guid)).map_err(Into::into))
         .collect()
+}
+
+fn building_level_caps(asset: &UnityAsset) -> Result<BTreeMap<StableId, u16>> {
+    let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
+    let mut caps = BTreeMap::new();
+    for index in 0..size {
+        let prefix = format!("<Unlocks>k__BackingField.Array.data[{index}]");
+        if required_enum(asset, &format!("{prefix}.<TechType>k__BackingField"))?
+            != "Upgrade Building"
+        {
+            continue;
+        }
+        let building = required_enum(asset, &format!("{prefix}.<BuildingType>k__BackingField"))?;
+        let cap = u16::try_from(required_u32(
+            asset,
+            &format!("{prefix}.<IntValue>k__BackingField"),
+        )?)
+        .with_context(|| format!("{} building level cap is out of range", asset.path))?;
+        caps.insert(stable_id("building", &slug(&building))?, cap.max(1));
+    }
+    Ok(caps)
 }
 
 fn technology_group_name(path: &str) -> String {
@@ -1073,6 +1125,22 @@ mod tests {
                     reference_value(child, TECH_NODE_TYPE),
                 ));
             }
+            if name == "Root" {
+                fields.extend([
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[0].<TechType>k__BackingField",
+                        enum_value("Upgrade Building"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[0].<BuildingType>k__BackingField",
+                        enum_value("Townhall"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[0].<IntValue>k__BackingField",
+                        Value::from(3),
+                    ),
+                ]);
+            }
             fields
         };
         let mut placer = asset(
@@ -1165,6 +1233,12 @@ mod tests {
                         field("BuildResourceCost.OreCost", Value::from(50)),
                         field("BuildResourceCost.FoodCost", Value::from(0)),
                         field("BuildResourceCost.GoldCost", Value::from(10)),
+                        field("CanLevel", Value::Bool(true)),
+                        field("LevelResourceCost.WoodCost", Value::from(80)),
+                        field("LevelResourceCost.OreCost", Value::from(40)),
+                        field("LevelResourceCost.FoodCost", Value::from(0)),
+                        field("LevelResourceCost.GoldCost", Value::from(8)),
+                        field("CostIncreasePerLevelMultiplier", Value::from(2.0)),
                     ],
                 ),
                 asset(
@@ -1205,11 +1279,20 @@ mod tests {
         assert_eq!(catalog.source_records.len(), 4);
         let town_hall = StableId::new("building:townhall").unwrap();
         assert_eq!(catalog.buildings[&town_hall].footprint, [4, 2]);
+        assert!(catalog.buildings[&town_hall].can_level);
+        assert_eq!(
+            catalog.buildings[&town_hall].level_cost_multiplier_per_thousand,
+            2_000
+        );
         let archetype = &catalog.archetypes[&catalog.buildings[&town_hall].archetype];
         assert_eq!(archetype.scenes[0].age, Some(1));
         assert!(archetype.scenes[0].is_default);
         let root = StableId::new(format!("tech:{ROOT_GUID}")).unwrap();
         let child = StableId::new(format!("tech:{CHILD_GUID}")).unwrap();
+        assert_eq!(
+            catalog.technology.nodes[&root].building_level_caps[&town_hall],
+            3
+        );
         assert_eq!(catalog.technology.nodes[&child].prerequisites, vec![root]);
         catalog.validate().unwrap();
 

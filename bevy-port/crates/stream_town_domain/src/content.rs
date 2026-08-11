@@ -8,6 +8,8 @@ use thiserror::Error;
 
 use crate::StableId;
 
+pub const CURRENT_CONTENT_SCHEMA: u32 = 3;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
     pub schema_version: u32,
@@ -68,6 +70,9 @@ pub struct BuildingDef {
     pub archetype: StableId,
     pub footprint: [u16; 2],
     pub cost: BTreeMap<StableId, u32>,
+    pub can_level: bool,
+    pub level_cost: BTreeMap<StableId, u32>,
+    pub level_cost_multiplier_per_thousand: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -91,6 +96,9 @@ pub struct TechNode {
     pub description: String,
     pub prerequisites: Vec<StableId>,
     pub unlocks: Vec<StableId>,
+    /// Authored `Upgrade Building` effects, keyed by the affected building.
+    #[serde(default)]
+    pub building_level_caps: BTreeMap<StableId, u16>,
     pub objectives: Vec<StableId>,
     #[serde(default)]
     pub group: Option<StableId>,
@@ -134,6 +142,8 @@ pub enum AuthoredValue {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ContentError {
+    #[error("unsupported content schema version {0}")]
+    Schema(u32),
     #[error("technology {node} references missing prerequisite {prerequisite}")]
     MissingPrerequisite {
         node: StableId,
@@ -148,6 +158,8 @@ pub enum ContentError {
         building: StableId,
         archetype: StableId,
     },
+    #[error("building {0} has an invalid zero level-cost multiplier")]
+    InvalidLevelCostMultiplier(StableId),
     #[error("archetype {0} has an empty footprint")]
     EmptyArchetypeFootprint(StableId),
     #[error("archetype {archetype} has invalid scene asset path {path}")]
@@ -163,6 +175,9 @@ pub enum ContentError {
 
 impl ContentCatalog {
     pub fn validate(&self) -> Result<(), ContentError> {
+        if self.schema_version != CURRENT_CONTENT_SCHEMA {
+            return Err(ContentError::Schema(self.schema_version));
+        }
         for (id, archetype) in &self.archetypes {
             if archetype.footprint[0] == 0 || archetype.footprint[1] == 0 {
                 return Err(ContentError::EmptyArchetypeFootprint(id.clone()));
@@ -202,6 +217,9 @@ impl ContentCatalog {
                     building: id.clone(),
                     archetype: building.archetype.clone(),
                 });
+            }
+            if building.level_cost_multiplier_per_thousand == 0 {
+                return Err(ContentError::InvalidLevelCostMultiplier(id.clone()));
             }
         }
         self.technology.validate()

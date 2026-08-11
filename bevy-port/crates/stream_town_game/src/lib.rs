@@ -25,10 +25,11 @@ use bevy::{
 };
 use stream_town_domain::{
     ActorKind, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
-    AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, ChatCommand,
-    ContentCatalog, GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode,
-    MaterialDef, NativeSaveStore, PresentationCatalog, SavedActor, Season, StableId, TownEvent,
-    Weather, WorldSimulation, WorldSnapshot, generate_world,
+    AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
+    BuildingDef, BuildingState, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, PresentationCatalog,
+    SavedActor, Season, StableId, TownEvent, Weather, WorldSimulation, WorldSnapshot,
+    generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -123,6 +124,7 @@ struct RenderAssets {
     ore: Handle<StandardMaterial>,
     food: Handle<StandardMaterial>,
     building: Handle<StandardMaterial>,
+    construction: Handle<StandardMaterial>,
     enemy_idle: Handle<StandardMaterial>,
     enemy_moving: Handle<StandardMaterial>,
     player_idle: Handle<StandardMaterial>,
@@ -160,6 +162,7 @@ enum AgentGoal {
     Gather(StableId),
     Deposit,
     Attack(StableId),
+    Construct(StableId),
 }
 
 #[derive(Component, Clone, Copy)]
@@ -179,6 +182,15 @@ struct TownHall;
 #[derive(Component)]
 struct RuntimeBuilding {
     id: StableId,
+}
+
+#[derive(Component)]
+struct BuildingPresentation {
+    base_translation: Vec3,
+    base_scale: Vec3,
+    base_height_offset: f32,
+    applied_stage: u8,
+    applied_level: u16,
 }
 
 #[derive(Component)]
@@ -307,6 +319,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     move_agents,
                     sync_resource_nodes.after(move_agents),
+                    sync_building_presentation.after(move_agents),
                     animate_agents,
                     attach_native_animations,
                     attach_converted_animations,
@@ -503,6 +516,11 @@ fn setup_rendering(
         ore: materials.add(Color::srgb(0.46, 0.50, 0.55)),
         food: materials.add(Color::srgb(0.74, 0.64, 0.18)),
         building: materials.add(Color::srgb(0.42, 0.26, 0.12)),
+        construction: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.72, 0.51, 0.24),
+            perceptual_roughness: 0.88,
+            ..default()
+        }),
         enemy_idle: materials.add(Color::srgb(0.72, 0.12, 0.12)),
         enemy_moving: materials.add(Color::srgb(1.0, 0.28, 0.22)),
         player_idle: materials.add(Color::srgb(0.35, 0.72, 0.95)),
@@ -1237,10 +1255,61 @@ fn town_hall_grid_position(config: &GameConfig) -> GridPos {
     }
 }
 
+fn building_def_for_archetype<'a>(
+    content: &'a ContentCatalog,
+    archetype: &StableId,
+) -> Option<&'a BuildingDef> {
+    content
+        .buildings
+        .values()
+        .find(|building| building.archetype == *archetype)
+}
+
+fn building_approach(
+    world: &GeneratedWorld,
+    position: GridPos,
+    footprint: [u16; 2],
+    from: GridPos,
+) -> Option<GridPos> {
+    let region = building_region(position, footprint, world)?;
+    let min_x = region.min.x.saturating_sub(1);
+    let min_z = region.min.z.saturating_sub(1);
+    let max_x = region
+        .max
+        .x
+        .saturating_add(1)
+        .min(world.navigation.width() - 1);
+    let max_z = region
+        .max
+        .z
+        .saturating_add(1)
+        .min(world.navigation.height() - 1);
+    let mut approaches = Vec::new();
+    for z in min_z..=max_z {
+        for x in min_x..=max_x {
+            let candidate = GridPos { x, z };
+            let outside =
+                x < region.min.x || x > region.max.x || z < region.min.z || z > region.max.z;
+            if outside && world.navigation.is_walkable(candidate) {
+                approaches.push(candidate);
+            }
+        }
+    }
+    approaches.sort_by_key(|candidate| {
+        (
+            candidate.x.abs_diff(from.x) + candidate.z.abs_diff(from.z),
+            candidate.z,
+            candidate.x,
+        )
+    });
+    approaches.into_iter().next()
+}
+
 fn next_agent_goal(
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
     config: &GameConfig,
+    content: &ContentCatalog,
     actor_id: &StableId,
     current: GridPos,
 ) -> (AgentGoal, GridPos) {
@@ -1283,6 +1352,26 @@ fn next_agent_goal(
             target.position
         };
         return (AgentGoal::Attack(target.id.clone()), destination);
+    }
+    if actor.role.as_str() == "role:builder" {
+        let construction = simulation
+            .buildings
+            .values()
+            .filter(|building| !building.complete)
+            .filter_map(|building| {
+                let definition = building_def_for_archetype(content, &building.archetype)?;
+                let approach =
+                    building_approach(world, building.position, definition.footprint, current)?;
+                Some((
+                    approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
+                    building.id.clone(),
+                    approach,
+                ))
+            })
+            .min_by_key(|(distance, id, _)| (*distance, id.clone()));
+        if let Some((_, building, approach)) = construction {
+            return (AgentGoal::Construct(building), approach);
+        }
     }
     let carried = actor
         .inventory
@@ -1366,6 +1455,11 @@ fn complete_agent_goal(
                 warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
             }
         }
+        AgentGoal::Construct(building_id) => {
+            if let Err(error) = simulation.work_on_building(building_id, 25) {
+                warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
+            }
+        }
         AgentGoal::Wander => {}
     }
 }
@@ -1373,6 +1467,7 @@ fn complete_agent_goal(
 fn action_cooldown(goal: &AgentGoal) -> f32 {
     match goal {
         AgentGoal::Attack(_) => 1.0,
+        AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) => 0.75,
         AgentGoal::Deposit => 0.25,
         AgentGoal::Wander => 0.0,
@@ -1382,6 +1477,7 @@ fn action_cooldown(goal: &AgentGoal) -> f32 {
 fn move_agents(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
@@ -1450,6 +1546,7 @@ fn move_agents(
                 &simulation.0,
                 &world.generated,
                 &config.0,
+                &content.0,
                 &agent.id,
                 location.0,
             );
@@ -1505,6 +1602,59 @@ fn sync_resource_nodes(
         } else {
             Visibility::Hidden
         };
+    }
+}
+
+fn building_construction_stage(health: i32, complete: bool) -> u8 {
+    if complete || health >= BUILDING_MAX_HEALTH {
+        3
+    } else if health > BUILDING_MAX_HEALTH * 66 / 100 {
+        2
+    } else {
+        u8::from(health > BUILDING_MAX_HEALTH * 33 / 100)
+    }
+}
+
+fn sync_building_presentation(
+    simulation: Res<SimulationRuntime>,
+    render: Res<RenderAssets>,
+    mut buildings: Query<(
+        &RuntimeBuilding,
+        &mut BuildingPresentation,
+        &mut Transform,
+        Option<&mut MeshMaterial3d<StandardMaterial>>,
+    )>,
+) {
+    for (runtime, mut presentation, mut transform, material) in &mut buildings {
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let construction_stage = building_construction_stage(state.health, state.complete);
+        if presentation.applied_stage == construction_stage
+            && presentation.applied_level == state.level
+        {
+            continue;
+        }
+        let stage_scale = match construction_stage {
+            0 => 0.35,
+            1 => 0.55,
+            2 => 0.75,
+            _ => 1.0,
+        };
+        let level_scale = 1.0 + f32::from(state.level.saturating_sub(1)) * 0.05;
+        let scale = stage_scale * level_scale;
+        transform.scale = presentation.base_scale * scale;
+        transform.translation = presentation.base_translation
+            - Vec3::Y * presentation.base_height_offset * (1.0 - stage_scale);
+        if let Some(mut material) = material {
+            material.0 = if state.complete {
+                render.building.clone()
+            } else {
+                render.construction.clone()
+            };
+        }
+        presentation.applied_stage = construction_stage;
+        presentation.applied_level = state.level;
     }
 }
 
@@ -2663,7 +2813,7 @@ fn load_input(
             asset_server.as_deref(),
             &asset_root.0,
             &render,
-            saved.id.clone(),
+            saved,
             &content.0.archetypes[&building.archetype],
             saved.position,
             building.footprint,
@@ -2758,7 +2908,16 @@ fn capture_screenshot(
     mut elapsed: Local<f32>,
     mut automatic_complete: Local<bool>,
     mut counter: Local<u32>,
+    mut exit_delay: Local<Option<f32>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
+    if let Some(remaining) = exit_delay.as_mut() {
+        *remaining -= time.delta_secs();
+        if *remaining <= 0.0 {
+            exit.write(AppExit::Success);
+            *exit_delay = None;
+        }
+    }
     *elapsed += time.delta_secs();
     let automatic_delay = std::env::var("STREAM_TOWN_SCREENSHOT_DELAY")
         .ok()
@@ -2790,6 +2949,9 @@ fn capture_screenshot(
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
+    if std::env::var_os("STREAM_TOWN_EXIT_AFTER_SCREENSHOT").is_some() {
+        *exit_delay = Some(1.0);
+    }
 }
 
 fn mirrored_target(world: &GeneratedWorld, position: GridPos) -> GridPos {
@@ -2836,6 +2998,35 @@ fn resolve_technology_id(content: &ContentCatalog, requested: &StableId) -> Opti
         .iter()
         .find(|(_, technology)| normalized_content_name(&technology.display_name) == requested_name)
         .map(|(id, _)| id.clone())
+}
+
+fn maximum_building_level(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building: &StableId,
+) -> u16 {
+    simulation
+        .unlocked_technology
+        .iter()
+        .filter_map(|technology| content.technology.nodes.get(technology))
+        .filter_map(|technology| technology.building_level_caps.get(building).copied())
+        .max()
+        .unwrap_or(1)
+}
+
+fn building_upgrade_cost(building: &BuildingDef, current_level: u16) -> BTreeMap<StableId, u32> {
+    let level_squared = u64::from(current_level).saturating_pow(2);
+    building
+        .level_cost
+        .iter()
+        .map(|(resource, base)| {
+            let scaled = u64::from(*base)
+                .saturating_mul(level_squared)
+                .saturating_mul(u64::from(building.level_cost_multiplier_per_thousand))
+                / 1_000;
+            (resource.clone(), u32::try_from(scaled).unwrap_or(u32::MAX))
+        })
+        .collect()
 }
 
 fn town_event_from_id(requested: &StableId) -> Option<TownEvent> {
@@ -2924,7 +3115,7 @@ fn spawn_runtime_building(
     asset_server: Option<&AssetServer>,
     asset_root: &Path,
     render: &RenderAssets,
-    id: StableId,
+    building: &BuildingState,
     archetype: &ArchetypeDef,
     position: GridPos,
     footprint: [u16; 2],
@@ -2936,21 +3127,30 @@ fn spawn_runtime_building(
     let world_position = grid_to_world_on_surface(centre, config, world);
     let mut entity = commands.spawn((
         WorldEntity,
-        RuntimeBuilding { id },
+        RuntimeBuilding {
+            id: building.id.clone(),
+        },
         GridLocation(position),
         Transform::from_translation(world_position),
     ));
     if let Some(scene) = default_archetype_scene(archetype).filter(|scene| {
         asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
     }) {
+        let base_scale = Vec3::splat(config.world.cell_size / 2.0);
         entity.insert((
             WorldAssetRoot(
                 asset_server
                     .expect("asset server checked above")
                     .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
             ),
-            Transform::from_translation(world_position)
-                .with_scale(Vec3::splat(config.world.cell_size / 2.0)),
+            BuildingPresentation {
+                base_translation: world_position,
+                base_scale,
+                base_height_offset: 0.0,
+                applied_stage: u8::MAX,
+                applied_level: u16::MAX,
+            },
+            Transform::from_translation(world_position).with_scale(base_scale),
         ));
         if let Some(material) = prefab_material_handle(archetype, presentation, render) {
             entity.insert(MaterialOverrideSpec(material));
@@ -2961,10 +3161,22 @@ fn spawn_runtime_building(
             config.world.cell_size * 1.25,
             f32::from(footprint[1]) * config.world.cell_size * 0.88,
         );
+        let base_translation = world_position + Vec3::Y * size.y * 0.5;
         entity.insert((
+            BuildingPresentation {
+                base_translation,
+                base_scale: size,
+                base_height_offset: size.y * 0.5,
+                applied_stage: u8::MAX,
+                applied_level: u16::MAX,
+            },
             Mesh3d(render.cube.clone()),
-            MeshMaterial3d(render.building.clone()),
-            Transform::from_translation(world_position + Vec3::Y * size.y * 0.5).with_scale(size),
+            MeshMaterial3d(if building.complete {
+                render.building.clone()
+            } else {
+                render.construction.clone()
+            }),
+            Transform::from_translation(base_translation).with_scale(size),
         ));
     }
 }
@@ -3112,12 +3324,42 @@ fn process_injected_commands(
                         asset_server.as_deref(),
                         &asset_root.0,
                         &render,
-                        runtime_id,
+                        &simulation.0.buildings[&runtime_id],
                         &content.0.archetypes[&building.archetype],
                         position,
                         building.footprint,
                     );
-                    Ok(format!("built {}", building.display_name))
+                    Ok(format!("placed {} construction", building.display_name))
+                })
+            }
+            ChatCommand::Upgrade(requested) => {
+                let building_id = prefixed_id(requested, "building:")
+                    .filter(|building| content.0.buildings.contains_key(building))
+                    .ok_or_else(|| format!("unknown building {}", requested.as_str()));
+                building_id.and_then(|building_id| {
+                    let definition = &content.0.buildings[&building_id];
+                    if !definition.can_level {
+                        return Err(format!("{} cannot be upgraded", definition.display_name));
+                    }
+                    let candidate = simulation
+                        .0
+                        .buildings
+                        .values()
+                        .filter(|building| {
+                            building.archetype == definition.archetype && building.complete
+                        })
+                        .min_by_key(|building| (building.level, building.id.clone()))
+                        .map(|building| (building.id.clone(), building.level))
+                        .ok_or_else(|| {
+                            format!("no completed {} is available", definition.display_name)
+                        })?;
+                    let max_level = maximum_building_level(&content.0, &simulation.0, &building_id);
+                    let cost = building_upgrade_cost(definition, candidate.1);
+                    simulation
+                        .0
+                        .upgrade_building(&candidate.0, max_level, &cost)
+                        .map(|level| format!("upgraded {} to level {level}", definition.display_name))
+                        .map_err(|error| error.to_string())
                 })
             }
             ChatCommand::Vote(requested) => {
@@ -3172,7 +3414,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !build <building>, !vote <technology>, !event <event>, !save, !help"
+                "commands: !join, !role <role>, !build <building>, !upgrade <building>, !vote <technology>, !event <event>, !save, !help"
                     .to_owned(),
             ),
         };
@@ -3214,6 +3456,22 @@ fn update_hud(
         .iter()
         .filter(|agent| matches!(agent.goal, AgentGoal::Attack(_)))
         .count();
+    let constructing = agents
+        .iter()
+        .filter(|agent| matches!(agent.goal, AgentGoal::Construct(_)))
+        .count();
+    let incomplete_buildings = simulation
+        .0
+        .buildings
+        .values()
+        .filter(|building| !building.complete)
+        .count();
+    let building_levels = simulation
+        .0
+        .buildings
+        .values()
+        .map(|building| u64::from(building.level))
+        .sum::<u64>();
     let dead = simulation
         .0
         .actors
@@ -3221,7 +3479,7 @@ fn update_hud(
         .filter(|actor| !actor.alive)
         .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit | combat {attacking} attack/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -3478,6 +3736,7 @@ mod tests {
     #[test]
     fn role_driven_resource_loop_depletes_and_deposits() {
         let config = GameConfig::default();
+        let content = embedded_content();
         let mut world = generate_world(&config.world);
         let resource = world
             .resources
@@ -3516,7 +3775,14 @@ mod tests {
             starting_amount - 25
         );
         assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 25);
-        let (goal, _) = next_agent_goal(&simulation, &world, &config, &actor_id, resource.position);
+        let (goal, _) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &actor_id,
+            resource.position,
+        );
         assert_eq!(goal, AgentGoal::Deposit);
         complete_agent_goal(
             &mut simulation,
@@ -3532,6 +3798,7 @@ mod tests {
     #[test]
     fn combat_goal_damages_kills_and_respawns() {
         let config = GameConfig::default();
+        let content = embedded_content();
         let mut world = generate_world(&config.world);
         let defender_position = GridPos { x: 32, z: 32 };
         let enemy_position = nearest_walkable(&world, GridPos { x: 33, z: 32 }).unwrap();
@@ -3546,8 +3813,14 @@ mod tests {
         simulation
             .assign_role(&enemy, StableId::new("role:enemy").unwrap())
             .unwrap();
-        let (goal, target) =
-            next_agent_goal(&simulation, &world, &config, &defender, defender_position);
+        let (goal, target) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &defender,
+            defender_position,
+        );
         assert_eq!(goal, AgentGoal::Attack(enemy.clone()));
         assert_eq!(target, enemy_position);
         for _ in 0..4 {
@@ -3565,6 +3838,109 @@ mod tests {
         assert!(simulation.actors[&enemy].alive);
         assert_eq!(simulation.actors[&enemy].health, 100);
         assert!((action_cooldown(&goal) - 1.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn builder_completes_and_upgrades_authored_construction() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let building_id = StableId::new("building:house").unwrap();
+        let definition = &content.buildings[&building_id];
+        let position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            definition.footprint,
+        )
+        .unwrap();
+        let runtime_id = StableId::new("building:test_house").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        for resource in definition.cost.keys().chain(definition.level_cost.keys()) {
+            simulation
+                .town_resources
+                .insert(resource.clone(), 1_000_000);
+        }
+        simulation
+            .construct(
+                runtime_id.clone(),
+                definition.archetype.clone(),
+                position,
+                &definition.cost,
+            )
+            .unwrap();
+        assert!(!simulation.buildings[&runtime_id].complete);
+        assert_eq!(
+            building_construction_stage(
+                simulation.buildings[&runtime_id].health,
+                simulation.buildings[&runtime_id].complete,
+            ),
+            0
+        );
+        let region = building_region(position, definition.footprint, &world).unwrap();
+        world.navigation.set_blocked(region, true).unwrap();
+        let builder_position =
+            building_approach(&world, position, definition.footprint, position).unwrap();
+        let builder = StableId::new("npc:builder_test").unwrap();
+        assert!(simulation.join_player(builder.clone(), builder_position));
+        simulation
+            .assign_role(&builder, StableId::new("role:builder").unwrap())
+            .unwrap();
+        let (goal, target) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &builder,
+            builder_position,
+        );
+        assert_eq!(goal, AgentGoal::Construct(runtime_id.clone()));
+        assert_eq!(target, builder_position);
+        for _ in 0..18 {
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &builder,
+                &goal,
+                builder_position,
+            );
+        }
+        assert!(simulation.buildings[&runtime_id].complete);
+        assert_eq!(
+            simulation.buildings[&runtime_id].health,
+            BUILDING_MAX_HEALTH
+        );
+        assert_eq!(
+            building_construction_stage(
+                simulation.buildings[&runtime_id].health,
+                simulation.buildings[&runtime_id].complete,
+            ),
+            3
+        );
+
+        let (technology, authored_cap) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                node.building_level_caps
+                    .get(&building_id)
+                    .copied()
+                    .map(|cap| (technology.clone(), cap))
+            })
+            .expect("Unity technology graph contains a House level-cap effect");
+        simulation.unlocked_technology.insert(technology);
+        let max_level = maximum_building_level(&content, &simulation, &building_id);
+        assert_eq!(max_level, authored_cap);
+        let upgrade_cost = building_upgrade_cost(definition, 1);
+        assert_eq!(
+            simulation
+                .upgrade_building(&runtime_id, max_level, &upgrade_cost)
+                .unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -3882,6 +4258,9 @@ mod tests {
         let simulation = &app.world().resource::<SimulationRuntime>().0;
         assert_eq!(simulation.actors[&actor_id].role.as_str(), "role:builder");
         assert_eq!(simulation.buildings.len(), 1);
+        let placed_building = simulation.buildings.values().next().unwrap().clone();
+        assert!(!placed_building.complete);
+        assert_eq!(placed_building.health, BUILDING_MAX_HEALTH / 10);
         assert_eq!(town_resource_amount(simulation, "resource:food"), 4_500);
         assert_eq!(town_resource_amount(simulation, "resource:gold"), 4_750);
         assert_eq!(town_resource_amount(simulation, "resource:ore"), 4_500);
@@ -3898,8 +4277,13 @@ mod tests {
             .iter(app.world())
             .map(|building| building.id.clone())
             .collect();
-        assert_eq!(runtime_building_ids, vec![saved_building_id]);
+        assert_eq!(runtime_building_ids, vec![saved_building_id.clone()]);
         assert!(save_path.is_file());
+        let saved = NativeSaveStore::new(&save_path).load().unwrap();
+        assert_eq!(
+            saved.simulation.buildings[&saved_building_id],
+            placed_building
+        );
         assert!(
             app.world()
                 .resource::<CommandFeedback>()

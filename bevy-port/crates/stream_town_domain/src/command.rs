@@ -10,6 +10,7 @@ pub enum ChatCommand {
     Join,
     SelectRole(StableId),
     Build(StableId),
+    Upgrade(StableId),
     Vote(StableId),
     TriggerEvent(StableId),
     Save,
@@ -50,6 +51,7 @@ impl FromStr for ChatCommand {
             "help" => no_argument(argument, Self::Help),
             "role" => with_id(&command, argument, Self::SelectRole),
             "build" => with_id(&command, argument, Self::Build),
+            "upgrade" | "level" => with_id(&command, argument, Self::Upgrade),
             "vote" => with_id(&command, argument, Self::Vote),
             "event" => with_id(&command, argument, Self::TriggerEvent),
             _ => Err(CommandParseError::Unknown(command)),
@@ -91,6 +93,10 @@ mod tests {
         assert_eq!(
             "!build building:house".parse(),
             Ok(ChatCommand::Build(StableId::new("building:house").unwrap()))
+        );
+        assert_eq!(
+            "!upgrade house".parse(),
+            Ok(ChatCommand::Upgrade(StableId::new("house").unwrap()))
         );
         assert!(matches!(
             "build house".parse::<ChatCommand>(),
