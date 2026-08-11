@@ -1,0 +1,31 @@
+# Stream Town Bevy
+
+This workspace is the engine-independent rewrite of Stream Town. The Unity
+project at the repository root is frozen migration input; new runtime work lives
+here.
+
+## Binaries
+
+- `stream_town_game`: shipping Bevy application and the 300-agent vertical slice.
+- `stream_town_tools`: focused content, migration, world-generation, navigation,
+  Twitch, validation, and runtime tooling shell.
+- `stream_town_migrate`: Unity metadata/YAML inventory and legacy-save inspection.
+- `xtask`: repository validation and repeatable developer automation.
+
+## Commands
+
+```powershell
+cd bevy-port
+cargo xtask validate
+cargo test --workspace
+cargo run -p stream_town_game
+cargo run -p stream_town_tools
+cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
+```
+
+The first native save is written to `.stream-town/StreamTownSave.stbevy`.
+Legacy Unity saves are never modified by migration tools.
+
+This is an early migration milestone, not a parity release. The repository-level
+[`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
+remaining work.

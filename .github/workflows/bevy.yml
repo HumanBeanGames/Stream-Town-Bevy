@@ -1,0 +1,29 @@
+name: Bevy
+
+on:
+  push:
+    branches: [main, codex/bevy-migration]
+    paths: ["bevy-port/**", ".github/workflows/bevy.yml"]
+  pull_request:
+    paths: ["bevy-port/**", ".github/workflows/bevy.yml"]
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: bevy-port
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bevy-port
+      - run: cargo fmt --all --check
+      - run: cargo check --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace

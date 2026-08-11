@@ -1,0 +1,22 @@
+(
+    schema_version: 1,
+    window: (
+        title: "Stream Town — Bevy Migration",
+        width: 1920,
+        height: 1080,
+    ),
+    world: (
+        seed: 1592606758,
+        width: 64,
+        height: 64,
+        cell_size: 12.0,
+        height_scale_centimetres: 800,
+        water_level_centimetres: -180,
+        resource_density_per_thousand: 38,
+    ),
+    gameplay: (
+        initial_agents: 300,
+        agent_speed_cells_per_second: 4.0,
+        repath_interval_seconds: 1.0,
+    ),
+)

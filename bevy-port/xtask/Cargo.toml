@@ -1,0 +1,18 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+ron.workspace = true
+stream_town_domain = { path = "../crates/stream_town_domain" }
+walkdir.workspace = true
+
+[lints]
+workspace = true

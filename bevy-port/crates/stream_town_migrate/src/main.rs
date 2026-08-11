@@ -1,0 +1,325 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
+use stream_town_domain::inspect_legacy_save;
+use walkdir::WalkDir;
+
+#[derive(Debug, Parser)]
+#[command(about = "Read-only migration tooling for the Stream Town Unity project")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Inventory Unity metadata and YAML references without changing the source tree.
+    Inventory {
+        unity_root: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Validate an existing migration manifest.
+    ValidateManifest { manifest: PathBuf },
+    /// Inspect a legacy JSON or STSV binary save without modifying it.
+    InspectSave { save: PathBuf },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct MigrationManifest {
+    schema_version: u32,
+    source_root: String,
+    entries: Vec<ManifestEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ManifestEntry {
+    source: String,
+    source_guid: Option<String>,
+    kind: AssetKind,
+    bytes: u64,
+    destination_id: String,
+    referenced_guids: Vec<String>,
+    status: MigrationStatus,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MigrationStatus {
+    Discovered,
+    Converted,
+    ManualReview,
+    Packaged,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AssetKind {
+    Scene,
+    Prefab,
+    ScriptableAsset,
+    Model,
+    Animation,
+    AnimatorController,
+    Material,
+    Shader,
+    Texture,
+    Vfx,
+    Other,
+}
+
+fn main() -> Result<()> {
+    match Cli::parse().command {
+        Command::Inventory { unity_root, out } => {
+            let manifest = inventory(&unity_root)?;
+            write_manifest(&out, &manifest)?;
+            println!(
+                "Inventoried {} assets into {}",
+                manifest.entries.len(),
+                out.display()
+            );
+        }
+        Command::ValidateManifest { manifest } => {
+            let encoded = fs::read_to_string(&manifest)
+                .with_context(|| format!("failed to read {}", manifest.display()))?;
+            let manifest: MigrationManifest = serde_json::from_str(&encoded)
+                .with_context(|| format!("failed to parse {}", manifest.display()))?;
+            let warnings = validate_manifest(&manifest)?;
+            println!("Manifest valid: {} entries", manifest.entries.len());
+            for warning in warnings {
+                println!("warning: {warning}");
+            }
+        }
+        Command::InspectSave { save } => {
+            let info = inspect_legacy_save(&save)
+                .with_context(|| format!("failed to inspect {}", save.display()))?;
+            println!("{}", serde_json::to_string_pretty(&info)?);
+        }
+    }
+    Ok(())
+}
+
+fn inventory(unity_root: &Path) -> Result<MigrationManifest> {
+    let root = unity_root
+        .canonicalize()
+        .with_context(|| format!("Unity root {} does not exist", unity_root.display()))?;
+    let assets = root.join("Assets");
+    if !assets.is_dir() || !root.join("ProjectSettings").is_dir() {
+        bail!("{} is not a Unity project root", root.display());
+    }
+
+    let mut entries = Vec::new();
+    for entry in WalkDir::new(&assets)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !is_excluded(entry.path()))
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file()
+            || path
+                .extension()
+                .is_some_and(|extension| extension == "meta")
+        {
+            continue;
+        }
+        let Some(kind) = classify(path) else {
+            continue;
+        };
+        let relative = path.strip_prefix(&root).expect("asset is below root");
+        let metadata_path = PathBuf::from(format!("{}.meta", path.display()));
+        let source_guid = read_guid(&metadata_path)?;
+        let referenced_guids = if is_yaml_kind(kind) {
+            read_yaml_references(path)?
+        } else {
+            Vec::new()
+        };
+        let mut warnings = Vec::new();
+        if source_guid.is_none() {
+            warnings.push("missing Unity .meta GUID".to_owned());
+        }
+        if matches!(
+            kind,
+            AssetKind::Shader | AssetKind::Vfx | AssetKind::AnimatorController
+        ) {
+            warnings.push("requires engine-specific manual conversion".to_owned());
+        }
+        entries.push(ManifestEntry {
+            source: normalize_path(relative),
+            source_guid,
+            kind,
+            bytes: entry.metadata()?.len(),
+            destination_id: destination_id(relative),
+            referenced_guids,
+            status: MigrationStatus::Discovered,
+            warnings,
+        });
+    }
+    entries.sort_by(|left, right| left.source.cmp(&right.source));
+    Ok(MigrationManifest {
+        schema_version: 1,
+        source_root: normalize_path(&root),
+        entries,
+    })
+}
+
+fn validate_manifest(manifest: &MigrationManifest) -> Result<Vec<String>> {
+    if manifest.schema_version != 1 {
+        bail!(
+            "unsupported migration manifest schema {}",
+            manifest.schema_version
+        );
+    }
+    let mut by_guid = BTreeMap::<&str, &str>::new();
+    let mut destination_ids = BTreeSet::<&str>::new();
+    for entry in &manifest.entries {
+        if !destination_ids.insert(&entry.destination_id) {
+            bail!("duplicate destination ID {}", entry.destination_id);
+        }
+        if let Some(guid) = entry.source_guid.as_deref()
+            && let Some(previous) = by_guid.insert(guid, &entry.source)
+        {
+            bail!(
+                "duplicate Unity GUID {guid} in {previous} and {}",
+                entry.source
+            );
+        }
+    }
+    let known_guids: BTreeSet<_> = by_guid.keys().copied().collect();
+    let mut warnings = Vec::new();
+    for entry in &manifest.entries {
+        for reference in &entry.referenced_guids {
+            if !known_guids.contains(reference.as_str()) {
+                warnings.push(format!(
+                    "{} references external or excluded GUID {reference}",
+                    entry.source
+                ));
+            }
+        }
+    }
+    Ok(warnings)
+}
+
+fn write_manifest(path: &Path, manifest: &MigrationManifest) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let encoded = serde_json::to_string_pretty(manifest)?;
+    fs::write(path, encoded).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn read_guid(metadata_path: &Path) -> Result<Option<String>> {
+    if !metadata_path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(metadata_path)?;
+    Ok(contents
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("guid: "))
+        .map(str::to_owned))
+}
+
+fn read_yaml_references(path: &Path) -> Result<Vec<String>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut references = BTreeSet::new();
+    for segment in contents.split("guid: ").skip(1) {
+        let guid: String = segment
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect();
+        if guid.len() == 32 && guid != "00000000000000000000000000000000" {
+            references.insert(guid);
+        }
+    }
+    Ok(references.into_iter().collect())
+}
+
+fn classify(path: &Path) -> Option<AssetKind> {
+    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match extension.as_str() {
+        "unity" => Some(AssetKind::Scene),
+        "prefab" => Some(AssetKind::Prefab),
+        "asset" => Some(AssetKind::ScriptableAsset),
+        "fbx" | "obj" | "blend" => Some(AssetKind::Model),
+        "anim" => Some(AssetKind::Animation),
+        "controller" | "overridecontroller" => Some(AssetKind::AnimatorController),
+        "mat" => Some(AssetKind::Material),
+        "shader" | "shadergraph" => Some(AssetKind::Shader),
+        "png" | "tga" | "jpg" | "jpeg" | "psd" => Some(AssetKind::Texture),
+        "vfx" => Some(AssetKind::Vfx),
+        "wav" | "ogg" | "mp3" | "json" | "txt" | "bytes" => Some(AssetKind::Other),
+        _ => None,
+    }
+}
+
+fn is_yaml_kind(kind: AssetKind) -> bool {
+    matches!(
+        kind,
+        AssetKind::Scene
+            | AssetKind::Prefab
+            | AssetKind::ScriptableAsset
+            | AssetKind::Animation
+            | AssetKind::AnimatorController
+            | AssetKind::Material
+            | AssetKind::Shader
+            | AssetKind::Vfx
+    )
+}
+
+fn is_excluded(path: &Path) -> bool {
+    let normalized = normalize_path(path).to_ascii_lowercase();
+    [
+        "/assets/plugins/",
+        "/assets/textmesh pro/",
+        "/assets/astarpathfindingproject/",
+        "/assets/reflexoverride/",
+    ]
+    .iter()
+    .any(|excluded| normalized.contains(excluded))
+}
+
+fn destination_id(path: &Path) -> String {
+    let without_extension = path.with_extension("");
+    let mut value = normalize_path(&without_extension).to_ascii_lowercase();
+    value = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else if character == '/' {
+                ':'
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("asset:{value}")
+}
+
+fn normalize_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destination_ids_are_platform_independent() {
+        assert_eq!(
+            destination_id(Path::new("Assets/Models/Town Hall.fbx")),
+            "asset:assets:models:town_hall"
+        );
+    }
+}

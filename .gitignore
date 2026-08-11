@@ -89,3 +89,11 @@ crashlytics-build.properties
 /graphify-out/graph.html
 /graphify-out/cost.json
 /graphify-out/query-results.jsonl
+
+# Rust / Bevy migration workspace
+/bevy-port/target/
+/bevy-port/.stream-town/
+/bevy-port/generated/
+/bevy-port/assets/migrated/
+*.stbevy
+*.stbevy.bak
