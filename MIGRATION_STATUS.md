@@ -34,6 +34,11 @@ mistaken for production-ready systems.
   path to them, gather/deplete five units per visit, carry 25 units, return to a
   walkable Town Hall approach, and deposit into the authoritative town economy;
   exhausted resource visuals are hidden.
+- Combat roles acquire living enemies while the Goblin holds its ground and
+  retaliates. Both sides path into range, attack on a one-second cadence, apply
+  deterministic role-specific damage, enter the controller's Death state at
+  zero health, wait five seconds, respawn on a connected stable cell, and emit
+  the Revive transition. Actor health is captured in native snapshots.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
   catalog-priced building placement, eligible technology voting, mapped events,
   atomic saves, and help. Commands validate catalog references and prerequisites,
@@ -140,8 +145,9 @@ mistaken for production-ready systems.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete role/
   station/inventory/equipment behavior beyond the live resource-worker loop,
-  building construction phases/upgrades, and every reachable balance rule from
-  the Unity scenes.
+  projectiles/area attacks/healing beyond the live melee combat loop, building
+  construction phases/upgrades, and every reachable balance rule from the Unity
+  scenes.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
@@ -208,9 +214,10 @@ the generated heightfield/water/collider surface, inherited prefab material
 bindings, runtime PBR material reconstruction, simulation-driven season/weather
 presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
-depletion. It is still missing nested controller layers and complete gameplay
-action emitters, production terrain/foliage shaders beyond the new environment
-palettes and particle fields, exact curve tangents and multi-slot/custom-shader
-parity, the broader Unity-only command surface, and the recorded reference-
-machine GPU measurement required to close the milestone.
+depletion, connected actor spawning, and live combat/death/respawn. It is still
+missing nested controller layers and complete gameplay action emitters,
+production terrain/foliage shaders beyond the new environment palettes and
+particle fields, exact curve tangents and multi-slot/custom-shader parity, the
+broader Unity-only command surface, and the recorded reference-machine GPU
+measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

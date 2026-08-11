@@ -99,6 +99,11 @@ Gatherer, and Builder actors. Resource roles select the nearest matching
 generated node, gather and deplete it in five-unit actions, carry 25 units, then
 path back to the Town Hall and deposit into the town balances shown by the HUD.
 Node depletion and carried inventories are part of native save/load state.
+The starting Defender and Goblin also run a live melee loop: acquire a living
+target, path into range, exchange deterministic damage once per second, trigger
+Death at zero health, and respawn/Revive after five seconds. Initial actors are
+placed by a deterministic flood fill from the connected town centre so combat
+and work targets are reachable rather than stranded on isolated land cells.
 
 The vertical slice renders the deterministic navigation height field as a colored
 4,225-vertex terrain mesh, a water surface at the authored level, an Avian
