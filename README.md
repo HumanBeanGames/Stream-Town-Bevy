@@ -1,4 +1,18 @@
-# Stream-Town-Public
+# Stream Town: Bevy Migration
+
+This repository preserves the original Unity project as the migration oracle and
+contains the active Bevy rewrite in [`bevy-port`](bevy-port/README.md). The
+`unity-baseline` tag marks the frozen Unity starting point; new implementation
+work is developed on `codex/bevy-migration` until it is ready to replace the
+legacy runtime.
+
+The current implementation is an early, compiling migration milestone rather
+than a complete gameplay-parity release. See
+[`MIGRATION_STATUS.md`](MIGRATION_STATUS.md) for what is working, what remains,
+and the validation commands.
+
+## Original project notes
+
 This is the public repo of Stream Town.
 
 Please remember that this was a student project and that things may not be to an industry standard, this project was only ever an educational or personal development project.
