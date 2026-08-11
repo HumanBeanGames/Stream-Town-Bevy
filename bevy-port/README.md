@@ -52,8 +52,9 @@ building footprints from Unity's authored two-unit grid sizes and follows nested
 prefabs to their source FBX models. The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 165 transitions, and inherited
-prefab/controller/model bindings. The known missing Necrolands camera clip is an
-explicit validated record.
+prefab/controller/model bindings. Renderer inheritance resolves to 141 prefab
+material bindings and 181 material slots. The known missing Necrolands camera
+clip is an explicit validated record.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:
@@ -85,8 +86,11 @@ vertical slice renders a 3D terrain plane,
 lighting, converted GLB scenes for the representative town hall and actors, and
 primitive fallbacks when an asset is unavailable.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
-Goblin path); standalone Unity `.anim` conversion and custom shader/material
-application remain presentation work.
+Goblin path). Converted renderer descendants receive a cached Bevy PBR
+approximation of their first inherited Unity material, including PNG/TGA base
+textures, color, emission, metallic, smoothness, and alpha settings. Standalone
+Unity `.anim` conversion, exact multi-slot assignment, and custom WGSL shader
+parity remain presentation work.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

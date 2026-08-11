@@ -59,9 +59,11 @@ mistaken for production-ready systems.
   shader properties, and translates all 31 Animator controllers into 94 stable
   states, 165 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. It resolves inherited prefab/controller/model dependencies into
-  22 bindings; 18 have an embedded GLB animation available. The sole dangling
-  Unity motion GUID in the Necrolands camera controller is retained and checked
-  as an explicit missing-source baseline instead of being discarded.
+  22 animation bindings and resolves inherited renderer dependencies into 141
+  prefab material bindings containing 181 slots; 18 animation bindings have an
+  embedded GLB animation available. The sole dangling Unity motion GUID in the
+  Necrolands camera controller is retained and checked as an explicit
+  missing-source baseline instead of being discarded.
 - A pinned Blender 4.2.0 headless FBX-to-GLB pipeline with atomic outputs and
   independent hash/header/unit validation. Unity renderer bounds normalize the
   imported geometry, rigs, and translation curves. All 253 GLBs are reproducible
@@ -73,6 +75,11 @@ mistaken for production-ready systems.
   attaches it to the spawned `AnimationPlayer`, and suppresses the primitive
   pulse fallback. Scenes without a compatible embedded clip keep the explicit
   idle/moving fallback.
+- Bevy runtime material reconstruction for converted scenes. Unity base color,
+  primary texture, emission, metallic, smoothness, and alpha settings are mapped
+  into cached `StandardMaterial` assets, with PNG and TGA decoding enabled. The
+  first inherited prefab material is applied to spawned GLB renderer descendants;
+  the Town Hall path is covered by the DirectX 12 GPU smoke capture.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -98,9 +105,8 @@ mistaken for production-ready systems.
   production outbound response wording. The authenticated IRC path currently
   dispatches the stable Bevy command grammar and relies on `twitch-irc` for
   reconnect and chat rate limiting.
-- WGSL shader ports, applying the packaged material/texture bindings to converted
-  GLB renderers, VFX, UI parity,
-  post-processing, replacement audio, and accessibility.
+- WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
+  parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
   legacy target/station/pet/customization data. The importer currently preserves
   or maps gameplay-critical world, entity, inventory, economy, and technology
@@ -153,9 +159,10 @@ cargo run -p stream_town_migrate -- convert-content generated/unity-export.json 
 Foundation is substantially implemented. The vertical slice is runnable and its
 deterministic 300-agent navigation gate passes with semantically converted
 prefabs, representative production GLBs, and connected Twitch transport, but it
-now also has complete presentation metadata, packaged textures, and native Goblin
-animation binding. It is still missing converted standalone clips, state-driven
-animation blending, applied production shader/material parity, full command
-parity, and the recorded reference-machine GPU measurement required to close the
+now also has complete presentation metadata, packaged textures, native Goblin
+animation binding, inherited prefab material bindings, and runtime PBR material
+reconstruction. It is still missing converted standalone clips, state-driven
+animation blending, exact multi-slot/custom-shader parity, full command parity,
+and the recorded reference-machine GPU measurement required to close the
 milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
