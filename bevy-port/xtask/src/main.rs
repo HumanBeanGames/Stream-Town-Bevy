@@ -146,7 +146,13 @@ fn validate() -> Result<()> {
         presentation_transitions,
         presentation.prefab_bindings.len(),
         native_animation_bindings,
-    ) != (1, 133, 33, 75, 31, 94, 165, 22, 18)
+        presentation.prefab_materials.len(),
+        presentation
+            .prefab_materials
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+    ) != (1, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }

@@ -18,6 +18,9 @@ pub struct PresentationCatalog {
     pub controllers: BTreeMap<StableId, AnimationControllerDef>,
     #[serde(default)]
     pub prefab_bindings: BTreeMap<String, PrefabPresentationBinding>,
+    /// Effective material dependencies after following nested prefab/model sources.
+    #[serde(default)]
+    pub prefab_materials: BTreeMap<String, Vec<StableId>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -173,6 +176,11 @@ pub enum PresentationError {
     },
     #[error("prefab {prefab_guid} has invalid animated scene path {path}")]
     InvalidAnimatedScene { prefab_guid: String, path: String },
+    #[error("prefab {prefab_guid} references missing material {material}")]
+    MissingPrefabMaterial {
+        prefab_guid: String,
+        material: StableId,
+    },
 }
 
 impl PresentationCatalog {
@@ -272,6 +280,16 @@ impl PresentationCatalog {
                     prefab_guid: prefab_guid.clone(),
                     path: path.clone(),
                 });
+            }
+        }
+        for (prefab_guid, materials) in &self.prefab_materials {
+            for material in materials {
+                if !self.materials.contains_key(material) {
+                    return Err(PresentationError::MissingPrefabMaterial {
+                        prefab_guid: prefab_guid.clone(),
+                        material: material.clone(),
+                    });
+                }
             }
         }
         Ok(())

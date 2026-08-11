@@ -21,6 +21,8 @@ pub struct PresentationConversionReport {
     pub texture_bytes: u64,
     pub materials: usize,
     pub custom_shader_materials: usize,
+    pub material_prefab_bindings: usize,
+    pub material_slots: usize,
     pub clips: usize,
     pub converted_clips: usize,
     pub missing_clip_sources: usize,
@@ -116,6 +118,7 @@ pub fn convert(
 
     let (textures, texture_bytes) = convert_textures(&export, &root, out_dir)?;
     let materials = convert_materials(&export, &assets_by_path)?;
+    let prefab_materials = convert_prefab_materials(&export, &assets_by_path, &materials);
     let mut clips = convert_clips(&export)?;
     let controllers = convert_controllers(&export, &root, &assets_by_guid, &mut clips)?;
     let prefab_bindings = convert_prefab_bindings(&export, &assets_by_path, &controllers);
@@ -126,6 +129,7 @@ pub fn convert(
         clips,
         controllers,
         prefab_bindings,
+        prefab_materials,
     };
     catalog
         .validate()
@@ -145,6 +149,8 @@ pub fn convert(
             .values()
             .filter(|material| !material.custom_properties.is_empty())
             .count(),
+        material_prefab_bindings: catalog.prefab_materials.len(),
+        material_slots: catalog.prefab_materials.values().map(Vec::len).sum(),
         clips: catalog.clips.len(),
         converted_clips: catalog
             .clips
@@ -560,6 +566,35 @@ fn convert_prefab_bindings(
     bindings
 }
 
+fn convert_prefab_materials(
+    export: &UnityExport,
+    assets_by_path: &BTreeMap<&str, &UnityAsset>,
+    materials: &BTreeMap<StableId, MaterialDef>,
+) -> BTreeMap<String, Vec<StableId>> {
+    let material_paths: BTreeMap<_, _> = materials
+        .iter()
+        .map(|(id, material)| (material.source_path.as_str(), id))
+        .collect();
+    let mut bindings = BTreeMap::new();
+    for prefab in export.assets.iter().filter(|asset| asset.kind == "prefab") {
+        let mut dependency_paths = BTreeSet::new();
+        collect_prefab_dependencies(
+            prefab,
+            assets_by_path,
+            &mut BTreeSet::new(),
+            &mut dependency_paths,
+        );
+        let material_ids: Vec<_> = dependency_paths
+            .iter()
+            .filter_map(|path| material_paths.get(path.as_str()).copied().cloned())
+            .collect();
+        if !material_ids.is_empty() {
+            bindings.insert(prefab.guid.clone(), material_ids);
+        }
+    }
+    bindings
+}
+
 fn collect_prefab_dependencies(
     asset: &UnityAsset,
     assets_by_path: &BTreeMap<&str, &UnityAsset>,
@@ -575,7 +610,7 @@ fn collect_prefab_dependencies(
         };
         dependencies.insert(path.to_owned());
         if let Some(dependency_asset) = assets_by_path.get(path)
-            && dependency_asset.kind == "prefab"
+            && matches!(dependency_asset.kind.as_str(), "prefab" | "model")
         {
             collect_prefab_dependencies(dependency_asset, assets_by_path, visited, dependencies);
         }

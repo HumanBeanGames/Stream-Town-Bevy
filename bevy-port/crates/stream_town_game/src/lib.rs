@@ -12,14 +12,16 @@ use bevy::{
     animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
     asset::AssetPlugin,
     camera::ScalingMode,
+    color::LinearRgba,
     prelude::*,
     render::view::screenshot::{Screenshot, save_to_disk},
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
     ActorKind, ArchetypeDef, ArchetypeKind, ArchetypeScene, ChatCommand, ContentCatalog,
-    GameConfig, GeneratedWorld, GridPos, NativeSaveStore, PresentationCatalog, SavedActor,
-    StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
+    GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
+    NativeSaveStore, PresentationCatalog, SavedActor, StableId, TownEvent, WorldSimulation,
+    WorldSnapshot, generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -110,6 +112,7 @@ struct RenderAssets {
     player_idle: Handle<StandardMaterial>,
     player_moving: Handle<StandardMaterial>,
     selection: Handle<StandardMaterial>,
+    presentation_materials: BTreeMap<StableId, Handle<StandardMaterial>>,
 }
 
 #[derive(Component)]
@@ -164,6 +167,12 @@ struct NativeAnimationSpec {
     node: AnimationNodeIndex,
 }
 
+#[derive(Component, Clone)]
+struct MaterialOverrideSpec(Handle<StandardMaterial>);
+
+#[derive(Component)]
+struct MaterialOverrideApplied;
+
 pub struct StreamTownGamePlugin;
 
 impl Plugin for StreamTownGamePlugin {
@@ -206,6 +215,7 @@ impl Plugin for StreamTownGamePlugin {
                     move_agents,
                     animate_agents,
                     attach_native_animations,
+                    apply_material_overrides,
                     camera_controls,
                     select_grid_cell,
                     game_input,
@@ -312,6 +322,8 @@ fn embedded_presentation() -> PresentationCatalog {
 
 fn setup_rendering(
     mut commands: Commands,
+    presentation: Res<RuntimePresentation>,
+    asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
@@ -319,12 +331,13 @@ fn setup_rendering(
         commands.insert_resource(RenderAssets::default());
         return;
     };
+    let smoke_closeup = std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
         Projection::from(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: 520.0,
+                viewport_height: if smoke_closeup { 96.0 } else { 520.0 },
             },
             ..OrthographicProjection::default_3d()
         }),
@@ -338,6 +351,21 @@ fn setup_rendering(
         },
         Transform::from_xyz(250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    let presentation_materials = presentation
+        .0
+        .materials
+        .iter()
+        .map(|(id, material)| {
+            (
+                id.clone(),
+                materials.add(standard_material(
+                    material,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                )),
+            )
+        })
+        .collect();
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         ground: materials.add(Color::srgb(0.09, 0.22, 0.12)),
@@ -355,7 +383,65 @@ fn setup_rendering(
             unlit: true,
             ..default()
         }),
+        presentation_materials,
     });
+}
+
+fn standard_material(
+    material: &MaterialDef,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> StandardMaterial {
+    let base_color_texture = asset_server.and_then(|asset_server| {
+        primary_material_texture(material, presentation)
+            .map(|path| asset_server.load(path.to_owned()))
+    });
+    let alpha_mode = match material.alpha_mode {
+        AuthoredAlphaMode::Opaque => AlphaMode::Opaque,
+        AuthoredAlphaMode::Mask => AlphaMode::Mask(0.5),
+        AuthoredAlphaMode::Blend => AlphaMode::Blend,
+    };
+    StandardMaterial {
+        base_color: Color::srgba(
+            material.base_color[0],
+            material.base_color[1],
+            material.base_color[2],
+            material.base_color[3],
+        ),
+        base_color_texture,
+        emissive: LinearRgba::new(
+            material.emissive[0],
+            material.emissive[1],
+            material.emissive[2],
+            material.emissive[3],
+        ),
+        metallic: material.metallic,
+        perceptual_roughness: material.perceptual_roughness,
+        alpha_mode,
+        ..default()
+    }
+}
+
+fn primary_material_texture<'a>(
+    material: &'a MaterialDef,
+    presentation: &'a PresentationCatalog,
+) -> Option<&'a str> {
+    const PRIORITY: [&str; 8] = [
+        "_BaseMap",
+        "_BaseColorMap",
+        "_MainTexture",
+        "_MainTex",
+        "_Texture0",
+        "_characterTexture",
+        "_BaseColorRGBOutlineWidthA",
+        "_BaseColorRGBSmoothnessA",
+    ];
+    PRIORITY
+        .iter()
+        .filter_map(|slot| material.textures.get(*slot))
+        .chain(material.textures.values())
+        .find_map(|id| presentation.textures.get(id))
+        .map(|texture| texture.asset_path.as_str())
 }
 
 fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
@@ -415,9 +501,6 @@ fn generate_and_spawn_world(
 ) {
     let mut animation_graphs = animation_graphs;
     selected.0 = None;
-    if let Ok(mut camera) = cameras.single_mut() {
-        *camera = Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y);
-    }
     let mut generated = generate_world(&config.0.world);
     let centre = GridPos {
         x: config.0.world.width / 2,
@@ -427,6 +510,15 @@ fn generate_and_spawn_world(
         x: (centre.x + 4).min(config.0.world.width - 2),
         z: centre.z,
     };
+    if let Ok(mut camera) = cameras.single_mut() {
+        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
+            let focus = grid_to_world(town_hall_position, &config.0);
+            Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0)
+                .looking_at(Vec3::new(focus.x, 0.0, focus.z), Vec3::Y)
+        } else {
+            Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
+        };
+    }
     let _ = generated.navigation.set_blocked(
         stream_town_domain::DirtyRegion {
             min: town_hall_position,
@@ -492,6 +584,11 @@ fn generate_and_spawn_world(
             Transform::from_xyz(hall.x, 0.0, hall.z)
                 .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
         ));
+        if let Some(material) = town_hall
+            .and_then(|archetype| prefab_material_handle(archetype, &presentation.0, &render))
+        {
+            hall_entity.insert(MaterialOverrideSpec(material));
+        }
     } else {
         let footprint = town_hall.map_or([2, 2], |archetype| archetype.footprint);
         let size = Vec3::new(
@@ -616,6 +713,11 @@ fn generate_and_spawn_world(
                 if let Some(native_animation) = native_animation {
                     entity.insert(native_animation);
                 }
+                if let Some(material) = real_archetype.and_then(|archetype| {
+                    prefab_material_handle(archetype, &presentation.0, &render)
+                }) {
+                    entity.insert(MaterialOverrideSpec(material));
+                }
             } else {
                 entity.insert((
                     Mesh3d(render.cube.clone()),
@@ -717,6 +819,19 @@ fn native_animation_spec(
         graph: animation_graphs.add(graph),
         node,
     })
+}
+
+fn prefab_material_handle(
+    archetype: &ArchetypeDef,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+) -> Option<Handle<StandardMaterial>> {
+    presentation
+        .prefab_materials
+        .get(&archetype.source_guid)?
+        .iter()
+        .find_map(|id| render.presentation_materials.get(id))
+        .cloned()
 }
 
 fn converted_asset_exists(asset_root: &Path, asset_path: &str) -> bool {
@@ -854,6 +969,31 @@ fn attach_native_animations(
                     .entity(entity)
                     .insert(AnimationGraphHandle(spec.graph.clone()));
                 player.play(spec.node).repeat();
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+    }
+}
+
+fn apply_material_overrides(
+    mut commands: Commands,
+    specs: Query<&MaterialOverrideSpec>,
+    parents: Query<&ChildOf>,
+    mut renderers: Query<
+        (Entity, &mut MeshMaterial3d<StandardMaterial>),
+        Without<MaterialOverrideApplied>,
+    >,
+) {
+    for (entity, mut material) in &mut renderers {
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            if let Ok(spec) = specs.get(ancestor) {
+                material.0 = spec.0.clone();
+                commands.entity(entity).insert(MaterialOverrideApplied);
                 break;
             }
             let Ok(parent) = parents.get(ancestor) else {
@@ -1492,6 +1632,16 @@ mod tests {
             Some(scene.asset_path.as_str())
         );
         assert_eq!(binding.gltf_animation_index, Some(0));
+        let materials = presentation
+            .prefab_materials
+            .get(&archetype.source_guid)
+            .unwrap();
+        assert!(!materials.is_empty());
+        assert!(
+            materials
+                .iter()
+                .all(|material| presentation.materials.contains_key(material))
+        );
     }
 
     #[test]

@@ -223,12 +223,13 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     }
     ui.separator();
     ui.label(format!(
-        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} materials, {} controllers, {} source records",
+        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} materials, {} material-bound prefabs, {} controllers, {} source records",
         state.catalog.archetypes.len(),
         state.catalog.buildings.len(),
         state.catalog.roles.len(),
         state.catalog.technology.nodes.len(),
         state.presentation.materials.len(),
+        state.presentation.prefab_materials.len(),
         state.presentation.controllers.len(),
         state.catalog.source_records.len()
     ));
@@ -260,9 +261,10 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} clips / {} controllers",
+            "Presentation: {} textures / {} materials / {} material-bound prefabs / {} clips / {} controllers",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
+            state.presentation.prefab_materials.len(),
             state.presentation.clips.len(),
             state.presentation.controllers.len()
         ));
@@ -287,6 +289,20 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             "variant"
                         };
                         ui.monospace(format!("{marker}: {}", scene.asset_path));
+                    }
+                    if let Some(materials) = state
+                        .presentation
+                        .prefab_materials
+                        .get(&archetype.source_guid)
+                    {
+                        for material_id in materials {
+                            let name = state
+                                .presentation
+                                .materials
+                                .get(material_id)
+                                .map_or("missing", |material| material.display_name.as_str());
+                            ui.monospace(format!("material: {name} ({material_id})"));
+                        }
                     }
                 });
             }

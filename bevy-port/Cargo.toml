@@ -18,7 +18,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 anyhow = "1.0.100"
 avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f32", "parry-f32", "parallel", "collider-from-mesh", "bevy_scene", "bevy_picking"] }
-bevy = "0.19.0"
+bevy = { version = "0.19.0", features = ["tga"] }
 bevy-inspector-egui = "0.37.0"
 bevy_egui = "0.41.1"
 bevy_hanabi = { version = "0.19.0", default-features = false, features = ["2d", "3d"] }

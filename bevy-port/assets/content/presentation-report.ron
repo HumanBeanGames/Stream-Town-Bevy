@@ -4,6 +4,8 @@
     texture_bytes: 19291847,
     materials: 33,
     custom_shader_materials: 33,
+    material_prefab_bindings: 141,
+    material_slots: 181,
     clips: 75,
     converted_clips: 0,
     missing_clip_sources: 1,
