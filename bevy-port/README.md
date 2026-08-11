@@ -92,6 +92,11 @@ trimesh collider used for surface picking, lighting, converted GLB scenes for
 the representative town hall and actors, and primitive fallbacks when an asset
 is unavailable. Actors, resources, buildings, movement, joins, save restores,
 and selection markers use the same centimetre height data as navigation.
+Seasons and weather drive terrain/water tint, clear color, directional and
+ambient lighting, distance fog, and deterministic rain/snow fields from the
+authoritative simulation. For repeatable rendering diagnostics,
+`STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
+`STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
 Goblin path). The Player controller builds 19 converted clips retargeted onto 23
 bones in the Player GLB rest pose. An engine-independent interpreter evaluates

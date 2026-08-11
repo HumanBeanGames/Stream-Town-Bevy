@@ -37,6 +37,9 @@ mistaken for production-ready systems.
   token without displaying or writing credentials to repository files.
 - Engine-independent gathering, depositing, construction, roles, technology
   voting, trade, combat, death/respawn, timed events, days, seasons, and weather.
+- Runtime season and weather presentation driven by that simulation state:
+  seasonal terrain/water palettes, clear color, sun and ambient lighting,
+  distance fog, plus deterministic rain and snow fields with no second clock.
 - Checksummed native RON saves written atomically with backup recovery, plus
   in-game F5/F9 save/load that restores stable actors and simulation state.
 - A one-time legacy importer for JSON and the exact Unity binary field order in
@@ -185,9 +188,10 @@ now also has complete presentation metadata, packaged textures, native Goblin
 animation binding, 57 converted standalone transform clips, Player locomotion
 retargeting, a typed controller interpreter, 19-clip Player blend-graph playback,
 the generated heightfield/water/collider surface, inherited prefab material
-bindings, and runtime PBR material reconstruction. It is still missing nested
-controller layers and complete gameplay action emitters, terrain/foliage shader
-parity, exact curve tangents and multi-slot/custom-shader parity, full command
-parity, and the recorded reference-machine GPU measurement required to close
-the milestone.
+bindings, runtime PBR material reconstruction, and simulation-driven season/
+weather presentation. It is still missing nested controller layers and complete
+gameplay action emitters, production terrain/foliage shaders beyond the new
+environment palettes and particle fields, exact curve tangents and multi-slot/
+custom-shader parity, full command parity, and the recorded reference-machine
+GPU measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
