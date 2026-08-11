@@ -8,7 +8,9 @@ here.
 
 - `stream_town_game`: shipping Bevy application and the 300-agent vertical slice.
 - `stream_town_tools`: focused content, migration, world-generation, navigation,
-  Twitch, validation, and runtime tooling shell.
+  Twitch, validation, and runtime tooling. Its catalog browser, validated
+  technology editor with undo/redo, and occupancy/path lab are functional;
+  runtime and Twitch panels remain diagnostic shells.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.

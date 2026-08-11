@@ -1,7 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
-use stream_town_domain::{ChatCommand, GameConfig, GeneratedWorld, generate_world};
+use stream_town_domain::{
+    ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, StableId, generate_world,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ToolTab {
@@ -49,18 +53,55 @@ struct ToolState {
     command: String,
     status: String,
     config: GameConfig,
+    catalog: ContentCatalog,
     generated_world: Option<GeneratedWorld>,
+    preview_path: Vec<GridPos>,
+    path_start: GridPos,
+    path_goal: GridPos,
+    technology_search: String,
+    selected_group: Option<StableId>,
+    technology_draft: Option<TechnologyDraft>,
+    undo_catalogs: Vec<ContentCatalog>,
+    redo_catalogs: Vec<ContentCatalog>,
+}
+
+#[derive(Clone)]
+struct TechnologyDraft {
+    id: StableId,
+    display_name: String,
+    description: String,
+    age: String,
+    tier: i32,
+    prerequisites: String,
+    initially_unlocked: bool,
+    unavailable: bool,
 }
 
 impl Default for ToolState {
     fn default() -> Self {
+        let catalog: ContentCatalog =
+            ron::from_str(include_str!("../../../assets/content/catalog.ron"))
+                .expect("checked-in content catalog must parse");
+        catalog
+            .validate()
+            .expect("checked-in content catalog must validate");
+        let selected_group = catalog.technology.groups.keys().next().cloned();
         Self {
             tab: ToolTab::default(),
             unity_root: "..".to_owned(),
             command: "!join".to_owned(),
             status: "Ready. Migration operations are read-only by default.".to_owned(),
             config: GameConfig::default(),
+            catalog,
             generated_world: None,
+            preview_path: Vec::new(),
+            path_start: GridPos { x: 20, z: 32 },
+            path_goal: GridPos { x: 44, z: 32 },
+            technology_search: String::new(),
+            selected_group,
+            technology_draft: None,
+            undo_catalogs: Vec::new(),
+            redo_catalogs: Vec::new(),
         }
     }
 }
@@ -119,15 +160,13 @@ fn tools_ui(
             }
         });
     });
-
     egui::Panel::bottom("status").show(&mut viewport_ui, |ui| {
         ui.label(&state.status);
     });
-
     egui::CentralPanel::default().show(&mut viewport_ui, |ui| match state.tab {
         ToolTab::Migration => migration_tab(ui, &mut state),
-        ToolTab::Content => content_tab(ui),
-        ToolTab::Technology => technology_tab(ui),
+        ToolTab::Content => content_tab(ui, &state),
+        ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::World => world_tab(ui, &mut state),
         ToolTab::Runtime => runtime_tab(ui, &mut state),
         ToolTab::Twitch => twitch_tab(ui),
@@ -151,24 +190,207 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         );
     }
     ui.separator();
-    ui.label("Manifest stages: discovered → referenced → converted → manually reviewed → packaged");
-}
-
-fn content_tab(ui: &mut egui::Ui) {
-    ui.heading("Content catalog and archetypes");
+    ui.label(format!(
+        "Active catalog: {} buildings, {} roles, {} technologies, {} source records",
+        state.catalog.buildings.len(),
+        state.catalog.roles.len(),
+        state.catalog.technology.nodes.len(),
+        state.catalog.source_records.len()
+    ));
+    ui.monospace(".\\bevy-port\\scripts\\export-unity.ps1");
+    ui.monospace(".\\bevy-port\\scripts\\convert-models.ps1");
     ui.label(
-        "Versioned RON catalogs use stable IDs. Unity GUIDs exist only in migration manifests.",
+        "Manifest stages: discovered -> referenced -> converted -> manually reviewed -> packaged",
     );
-    ui.label("Editors for buildings, roles, events, equipment, and archetypes attach here.");
 }
 
-fn technology_tab(ui: &mut egui::Ui) {
-    ui.heading("Technology graph");
-    ui.label("Node/group editing, cycle detection, dangling-reference diagnostics, minimap, and undo/redo share one graph asset.");
-    ui.colored_label(
-        egui::Color32::YELLOW,
-        "Graph canvas wiring is scaffolded; catalog import supplies the initial nodes.",
+fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
+    ui.heading("Content catalog and stable references");
+    ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
+    ui.horizontal(|ui| {
+        ui.label(format!("Buildings: {}", state.catalog.buildings.len()));
+        ui.separator();
+        ui.label(format!("Roles: {}", state.catalog.roles.len()));
+        ui.separator();
+        ui.label(format!(
+            "Technology: {}",
+            state.catalog.technology.nodes.len()
+        ));
+        ui.separator();
+        ui.label(format!(
+            "Provenance: {}",
+            state.catalog.source_records.len()
+        ));
+    });
+    ui.separator();
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.collapsing("Buildings", |ui| {
+            for (id, building) in &state.catalog.buildings {
+                ui.collapsing(format!("{}  ({id})", building.display_name), |ui| {
+                    ui.monospace(format!("Archetype: {}", building.archetype));
+                    ui.label(format!(
+                        "Footprint: {} x {}",
+                        building.footprint[0], building.footprint[1]
+                    ));
+                    for (resource, amount) in &building.cost {
+                        ui.label(format!("{resource}: {amount}"));
+                    }
+                });
+            }
+        });
+        ui.collapsing("Roles", |ui| {
+            for (id, role) in &state.catalog.roles {
+                ui.collapsing(format!("{}  ({id})", role.display_name), |ui| {
+                    ui.label(format!(
+                        "Movement: {} per-thousand",
+                        role.movement_speed_multiplier_per_thousand
+                    ));
+                    for ability in &role.granted_abilities {
+                        ui.monospace(ability.to_string());
+                    }
+                });
+            }
+        });
+    });
+}
+
+fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Technology graph editor");
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(!state.undo_catalogs.is_empty(), egui::Button::new("Undo"))
+            .clicked()
+            && let Some(previous) = state.undo_catalogs.pop()
+        {
+            state.redo_catalogs.push(state.catalog.clone());
+            state.catalog = previous;
+            refresh_technology_draft(state);
+            "Technology edit undone".clone_into(&mut state.status);
+        }
+        if ui
+            .add_enabled(!state.redo_catalogs.is_empty(), egui::Button::new("Redo"))
+            .clicked()
+            && let Some(next) = state.redo_catalogs.pop()
+        {
+            state.undo_catalogs.push(state.catalog.clone());
+            state.catalog = next;
+            refresh_technology_draft(state);
+            "Technology edit redone".clone_into(&mut state.status);
+        }
+        if ui.button("Validate graph").clicked() {
+            state.status = match state.catalog.validate() {
+                Ok(()) => format!(
+                    "Technology graph valid: {} nodes in {} groups",
+                    state.catalog.technology.nodes.len(),
+                    state.catalog.technology.groups.len()
+                ),
+                Err(error) => format!("Technology graph error: {error}"),
+            };
+        }
+        ui.label("Search");
+        ui.text_edit_singleline(&mut state.technology_search);
+    });
+
+    let groups: Vec<_> = state
+        .catalog
+        .technology
+        .groups
+        .iter()
+        .map(|(id, group)| (id.clone(), group.display_name.clone()))
+        .collect();
+    let selected_label = state
+        .selected_group
+        .as_ref()
+        .and_then(|selected| {
+            groups
+                .iter()
+                .find(|(id, _)| id == selected)
+                .map(|(_, name)| name.as_str())
+        })
+        .unwrap_or("Select group");
+    egui::ComboBox::from_label("Group")
+        .selected_text(selected_label)
+        .show_ui(ui, |ui| {
+            for (id, name) in &groups {
+                ui.selectable_value(&mut state.selected_group, Some(id.clone()), name);
+            }
+        });
+    technology_minimap(
+        ui,
+        &state.catalog,
+        state.selected_group.as_ref(),
+        state.technology_draft.as_ref().map(|draft| &draft.id),
     );
+
+    let search = state.technology_search.to_ascii_lowercase();
+    let node_choices: Vec<_> = state
+        .selected_group
+        .as_ref()
+        .and_then(|group| state.catalog.technology.groups.get(group))
+        .map(|group| {
+            group
+                .nodes
+                .iter()
+                .filter_map(|id| {
+                    let node = state.catalog.technology.nodes.get(id)?;
+                    let matches = search.is_empty()
+                        || node.display_name.to_ascii_lowercase().contains(&search)
+                        || id.as_str().contains(&search);
+                    matches.then(|| (id.clone(), node.display_name.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut selected = None;
+    egui::ScrollArea::vertical()
+        .max_height(170.0)
+        .show(ui, |ui| {
+            for (id, name) in &node_choices {
+                let is_selected = state
+                    .technology_draft
+                    .as_ref()
+                    .is_some_and(|draft| draft.id == *id);
+                if ui
+                    .selectable_label(is_selected, format!("{name}  ({id})"))
+                    .clicked()
+                {
+                    selected = Some(id.clone());
+                }
+            }
+        });
+    if let Some(selected) = selected {
+        state.technology_draft = technology_draft(&state.catalog, &selected);
+    }
+
+    let mut apply = false;
+    if let Some(draft) = state.technology_draft.as_mut() {
+        ui.separator();
+        ui.monospace(draft.id.to_string());
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut draft.display_name);
+            ui.label("Age");
+            ui.text_edit_singleline(&mut draft.age);
+            ui.add(egui::DragValue::new(&mut draft.tier).prefix("Tier "));
+        });
+        ui.label("Description");
+        ui.text_edit_multiline(&mut draft.description);
+        ui.label("Prerequisite stable IDs (comma separated)");
+        ui.text_edit_singleline(&mut draft.prerequisites);
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut draft.initially_unlocked, "Initially unlocked");
+            ui.checkbox(&mut draft.unavailable, "Unavailable");
+            apply = ui.button("Apply validated edit").clicked();
+        });
+    } else {
+        ui.label("Select a technology node to edit its metadata and references.");
+    }
+    if apply {
+        state.status = match apply_technology_draft(state) {
+            Ok(()) => "Technology edit applied; graph remains valid".to_owned(),
+            Err(error) => format!("Technology edit rejected: {error}"),
+        };
+    }
 }
 
 fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
@@ -179,18 +401,44 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     if ui.button("Generate deterministic preview").clicked() {
         let world = generate_world(&state.config.world);
         state.status = format!(
-            "Generated {}×{} world with {} resources; hash {}",
+            "Generated {}x{} world with {} resources; hash {}",
             world.navigation.width(),
             world.navigation.height(),
             world.resources.len(),
             &world.deterministic_hash[..16]
         );
         state.generated_world = Some(world);
+        state.preview_path.clear();
     }
+    ui.horizontal(|ui| {
+        ui.add(egui::DragValue::new(&mut state.path_start.x).prefix("Start x "));
+        ui.add(egui::DragValue::new(&mut state.path_start.z).prefix("z "));
+        ui.add(egui::DragValue::new(&mut state.path_goal.x).prefix("Goal x "));
+        ui.add(egui::DragValue::new(&mut state.path_goal.z).prefix("z "));
+        if ui.button("Plan path").clicked() {
+            let result = state.generated_world.as_ref().map(|world| {
+                world
+                    .navigation
+                    .find_path(state.path_start, state.path_goal)
+            });
+            match result {
+                Some(Ok(path)) => {
+                    state.status = format!("Planned {} navigation steps", path.len());
+                    state.preview_path = path;
+                }
+                Some(Err(error)) => {
+                    state.status = format!("Navigation error: {error}");
+                    state.preview_path.clear();
+                }
+                None => "Generate a world before planning a path".clone_into(&mut state.status),
+            }
+        }
+    });
     if let Some(world) = &state.generated_world {
         ui.monospace(format!("Hash: {}", world.deterministic_hash));
         ui.label(format!("Resources: {}", world.resources.len()));
         ui.label(format!("Generator version: {}", world.generator_version));
+        draw_world_preview(ui, world, &state.preview_path);
     }
 }
 
@@ -205,12 +453,12 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             };
         }
     });
-    ui.label("Live play/pause, spawn, vote/event injection, frame capture, save/load, and profiling connect to the game bridge here.");
+    ui.label("Save/load, spawn, vote/event injection, frame capture, and profiling will connect through the runtime bridge.");
 }
 
 fn twitch_tab(ui: &mut egui::Ui) {
     ui.heading("Twitch setup and diagnostics");
-    ui.label("Device authorization, account/scope validation, reconnect status, revoke, and OS credential storage.");
+    ui.label("Device authorization requires a deployment-specific Twitch client ID and OS credential-vault integration.");
     ui.colored_label(
         egui::Color32::LIGHT_BLUE,
         "No credentials are stored in repository assets.",
@@ -219,16 +467,212 @@ fn twitch_tab(ui: &mut egui::Ui) {
 
 fn validation_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Asset validator and packager");
-    if ui.button("Validate current configuration").clicked() {
-        state.status = match state.config.validate() {
-            Ok(()) => "Configuration valid".to_owned(),
-            Err(error) => format!("Configuration error: {error}"),
+    if ui.button("Validate configuration and catalog").clicked() {
+        state.status = match (state.config.validate(), state.catalog.validate()) {
+            (Ok(()), Ok(())) => format!(
+                "Configuration and catalog valid: {} semantic records",
+                state.catalog.source_records.len()
+            ),
+            (Err(error), _) => format!("Configuration error: {error}"),
+            (_, Err(error)) => format!("Catalog error: {error}"),
         };
     }
-    ui.label("Checks: duplicate IDs, missing references, orphan content, GLB clips/skins/materials, shader/effect compatibility, and release manifest.");
+    ui.label("Checks include stable IDs, dangling references, technology cycles, GLB hashes/headers, and deterministic baselines.");
 }
 
 fn inspector_tab(ui: &mut egui::Ui) {
     ui.heading("ECS/resource inspector");
     ui.label("The inspector window is enabled while this tab is selected.");
+}
+
+fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<TechnologyDraft> {
+    let node = catalog.technology.nodes.get(id)?;
+    Some(TechnologyDraft {
+        id: id.clone(),
+        display_name: node.display_name.clone(),
+        description: node.description.clone(),
+        age: node.age.clone(),
+        tier: node.tier,
+        prerequisites: node
+            .prerequisites
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        initially_unlocked: node.initially_unlocked,
+        unavailable: node.unavailable,
+    })
+}
+
+fn refresh_technology_draft(state: &mut ToolState) {
+    let selected = state
+        .technology_draft
+        .as_ref()
+        .map(|draft| draft.id.clone());
+    state.technology_draft = selected
+        .as_ref()
+        .and_then(|id| technology_draft(&state.catalog, id));
+}
+
+fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .technology_draft
+        .clone()
+        .ok_or_else(|| "no technology selected".to_owned())?;
+    let prerequisites = draft
+        .prerequisites
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| StableId::new(value.to_owned()).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut candidate = state.catalog.clone();
+    let node = candidate
+        .technology
+        .nodes
+        .get_mut(&draft.id)
+        .ok_or_else(|| format!("missing technology {}", draft.id))?;
+    node.display_name = draft.display_name;
+    node.description = draft.description;
+    node.age = draft.age;
+    node.tier = draft.tier;
+    node.prerequisites = prerequisites;
+    node.initially_unlocked = draft.initially_unlocked;
+    node.unavailable = draft.unavailable;
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.undo_catalogs.push(state.catalog.clone());
+    state.redo_catalogs.clear();
+    state.catalog = candidate;
+    refresh_technology_draft(state);
+    Ok(())
+}
+
+fn technology_minimap(
+    ui: &mut egui::Ui,
+    catalog: &ContentCatalog,
+    group_id: Option<&StableId>,
+    selected: Option<&StableId>,
+) {
+    let Some(group) = group_id.and_then(|id| catalog.technology.groups.get(id)) else {
+        return;
+    };
+    let desired = egui::vec2(ui.available_width(), 180.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 28, 34));
+    let mut tiers = BTreeMap::<i32, Vec<StableId>>::new();
+    for id in &group.nodes {
+        if let Some(node) = catalog.technology.nodes.get(id) {
+            tiers.entry(node.tier).or_default().push(id.clone());
+        }
+    }
+    let tier_count = bounded_ui_index(tiers.len().max(1));
+    let mut positions = BTreeMap::new();
+    for (tier_index, nodes) in tiers.values_mut().enumerate() {
+        nodes.sort();
+        let node_count = bounded_ui_index(nodes.len().max(1));
+        for (row, id) in nodes.iter().enumerate() {
+            let position = egui::pos2(
+                rect.left() + (bounded_ui_index(tier_index) + 0.5) * rect.width() / tier_count,
+                rect.top() + (bounded_ui_index(row) + 0.5) * rect.height() / node_count,
+            );
+            positions.insert(id.clone(), position);
+        }
+    }
+    for id in &group.nodes {
+        let Some(node) = catalog.technology.nodes.get(id) else {
+            continue;
+        };
+        let Some(target) = positions.get(id) else {
+            continue;
+        };
+        for prerequisite in &node.prerequisites {
+            if let Some(source) = positions.get(prerequisite) {
+                ui.painter().line_segment(
+                    [*source, *target],
+                    egui::Stroke::new(1.0, egui::Color32::DARK_GRAY),
+                );
+            }
+        }
+    }
+    for (id, position) in positions {
+        let color = if selected == Some(&id) {
+            egui::Color32::YELLOW
+        } else {
+            egui::Color32::from_rgb(92, 180, 130)
+        };
+        ui.painter().circle_filled(position, 3.5, color);
+    }
+}
+
+fn bounded_ui_index(value: usize) -> f32 {
+    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
+}
+
+fn draw_world_preview(ui: &mut egui::Ui, world: &GeneratedWorld, path: &[GridPos]) {
+    let width = world.navigation.width();
+    let height = world.navigation.height();
+    let desired_width = ui.available_width().min(720.0);
+    let desired = egui::vec2(
+        desired_width,
+        desired_width * f32::from(height) / f32::from(width),
+    );
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    let stride = usize::from(width.max(height)).div_ceil(96).max(1);
+    let stride_u16 = u16::try_from(stride).unwrap_or(u16::MAX);
+    let path: BTreeSet<_> = path.iter().copied().collect();
+    let resources: BTreeSet<_> = world.resources.iter().map(|item| item.position).collect();
+    for z in (0..height).step_by(stride) {
+        for x in (0..width).step_by(stride) {
+            let position = GridPos { x, z };
+            let left = rect.left() + f32::from(x) * rect.width() / f32::from(width);
+            let right = rect.left()
+                + f32::from(x.saturating_add(stride_u16).min(width)) * rect.width()
+                    / f32::from(width);
+            let top = rect.top() + f32::from(z) * rect.height() / f32::from(height);
+            let bottom = rect.top()
+                + f32::from(z.saturating_add(stride_u16).min(height)) * rect.height()
+                    / f32::from(height);
+            let color = if path.contains(&position) {
+                egui::Color32::YELLOW
+            } else if resources.contains(&position) {
+                egui::Color32::from_rgb(205, 150, 55)
+            } else if world.navigation.is_walkable(position) {
+                egui::Color32::from_rgb(55, 115, 65)
+            } else {
+                egui::Color32::from_rgb(35, 70, 105)
+            };
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
+                0.0,
+                color,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn technology_editor_rejects_cycles_without_mutating_catalog() {
+        let mut state = ToolState::default();
+        let (node_id, prerequisite) = state
+            .catalog
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(id, node)| {
+                node.prerequisites
+                    .first()
+                    .map(|parent| (id.clone(), parent.clone()))
+            })
+            .expect("shipping graph has an edge");
+        state.technology_draft = technology_draft(&state.catalog, &prerequisite);
+        state.technology_draft.as_mut().unwrap().prerequisites = node_id.to_string();
+        let before = state.catalog.clone();
+        assert!(apply_technology_draft(&mut state).is_err());
+        assert_eq!(state.catalog, before);
+    }
 }

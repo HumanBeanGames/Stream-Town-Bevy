@@ -49,8 +49,11 @@ mistaken for production-ready systems.
   95,464,376 output bytes. Converted binaries remain reproducible package inputs
   rather than duplicating them in Git.
 - A focused Bevy/egui tool application with the planned eight work areas and an
-  embedded ECS inspector. The World + Navigation tab has a working deterministic
-  seed preview; several other tabs are presently diagnostic/authoring shells.
+  embedded ECS inspector. It loads the real catalog, browses stable building and
+  role references, provides grouped technology search/topology plus validated
+  metadata/prerequisite editing with undo/redo, and renders deterministic world
+  occupancy, resources, and planned paths. Runtime and Twitch remain diagnostic
+  shells rather than connected control surfaces.
 - Windows CI covering formatting, compilation, Clippy, tests, and repository
   validation.
 
@@ -72,8 +75,9 @@ mistaken for production-ready systems.
   or maps gameplay-critical world, entity, inventory, economy, and technology
   fields; unsupported presentation/relationship fields are consumed and
   validated but not represented in the native runtime yet.
-- Full technology-graph editing, undo/redo, minimap interaction, live runtime
-  bridging, release packaging, frame capture, and profiling controls.
+- Persistent catalog writes, node/group creation and deletion, interactive graph
+  layout, live runtime bridging, release packaging, frame capture, and profiling
+  controls.
 - The reference-machine 60 FPS GPU gate, screenshot baselines, launch-through-
   credits gameplay acceptance suite, and Windows release artifacts.
 
