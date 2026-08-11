@@ -84,6 +84,9 @@ struct PendingChatCommand {
 #[derive(Resource, Default)]
 struct InjectedCommands(VecDeque<PendingChatCommand>);
 
+#[derive(Resource, Default)]
+struct CommandFeedback(String);
+
 #[derive(Resource)]
 struct TwitchConnection {
     transport: Option<TwitchTransport>,
@@ -154,6 +157,11 @@ struct Hud;
 
 #[derive(Component)]
 struct TownHall;
+
+#[derive(Component)]
+struct RuntimeBuilding {
+    id: StableId,
+}
 
 #[derive(Component)]
 struct SelectionMarker;
@@ -257,6 +265,7 @@ impl Plugin for StreamTownGamePlugin {
         app.init_state::<GameState>()
             .init_resource::<SessionStats>()
             .init_resource::<InjectedCommands>()
+            .init_resource::<CommandFeedback>()
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
             .init_resource::<EnvironmentPresentation>()
@@ -293,7 +302,7 @@ impl Plugin for StreamTownGamePlugin {
                     save_input,
                     load_input,
                     capture_screenshot,
-                    process_injected_commands,
+                    process_injected_commands.after(game_input),
                     update_hud,
                 )
                     .run_if(in_state(GameState::InGame)),
@@ -788,6 +797,16 @@ fn generate_and_spawn_world(
 
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
+    simulation.town_resources = config.0.gameplay.starting_town_resources.clone();
+    simulation.unlocked_technology.extend(
+        content
+            .0
+            .technology
+            .nodes
+            .iter()
+            .filter(|(_, technology)| technology.initially_unlocked)
+            .map(|(id, _)| id.clone()),
+    );
     if let Some(day) = debug_start_day() {
         simulation.elapsed_seconds = f64::from(day) * 120.0;
         simulation.tick(0.0);
@@ -2062,6 +2081,7 @@ fn game_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<GameState>>,
     mut injected: ResMut<InjectedCommands>,
+    mut injected_debug_commands: Local<bool>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
         next_state.set(GameState::MainMenu);
@@ -2072,6 +2092,21 @@ fn game_input(
             display_name: "debug_viewer".to_owned(),
             command: "!join".parse().expect("static chat command"),
         });
+    }
+    if !*injected_debug_commands {
+        *injected_debug_commands = true;
+        if let Some(commands) = std::env::var_os("STREAM_TOWN_DEBUG_COMMANDS") {
+            for command in commands.to_string_lossy().split(';') {
+                match command.trim().parse() {
+                    Ok(command) => injected.0.push_back(PendingChatCommand {
+                        actor_id: StableId::new("twitch:debug_viewer").expect("static ID"),
+                        display_name: "debug_viewer".to_owned(),
+                        command,
+                    }),
+                    Err(error) => warn!(command, %error, "ignored invalid debug command"),
+                }
+            }
+        }
     }
 }
 
@@ -2202,9 +2237,13 @@ fn load_input(
     mut ecs: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     save: Res<SaveRuntime>,
-    world: Res<WorldRuntime>,
+    mut world: ResMut<WorldRuntime>,
     config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
     mut agents: Query<(
@@ -2214,6 +2253,7 @@ fn load_input(
         &AgentAnimation,
         &mut Transform,
     )>,
+    runtime_buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
     if !keyboard.just_pressed(KeyCode::F9) {
         return;
@@ -2236,6 +2276,68 @@ fn load_input(
         );
         return;
     }
+
+    let mut restored_world = generate_world(&config.0.world);
+    let centre = GridPos {
+        x: config.0.world.width / 2,
+        z: config.0.world.height / 2,
+    };
+    let town_hall_position = GridPos {
+        x: (centre.x + 4).min(config.0.world.width - 2),
+        z: centre.z,
+    };
+    let _ = restored_world.navigation.set_blocked(
+        stream_town_domain::DirtyRegion {
+            min: town_hall_position,
+            max: GridPos {
+                x: town_hall_position.x + 1,
+                z: town_hall_position.z + 1,
+            },
+        },
+        true,
+    );
+    for (entity, building) in &runtime_buildings {
+        debug!(building = %building.id, "despawning runtime building before native load");
+        ecs.entity(entity).despawn();
+    }
+    for saved in snapshot.simulation.buildings.values() {
+        let Some(building) = content
+            .0
+            .buildings
+            .values()
+            .find(|building| building.archetype == saved.archetype)
+        else {
+            error!(
+                building = %saved.id,
+                archetype = %saved.archetype,
+                "native save references an unknown building archetype"
+            );
+            return;
+        };
+        let Some(region) = building_region(saved.position, building.footprint, &restored_world)
+        else {
+            error!(building = %saved.id, "native save building lies outside the world");
+            return;
+        };
+        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
+            error!(building = %saved.id, %error, "native save building could not update navigation");
+            return;
+        }
+        spawn_runtime_building(
+            &mut ecs,
+            &config.0,
+            &restored_world,
+            &presentation.0,
+            asset_server.as_deref(),
+            &asset_root.0,
+            &render,
+            saved.id.clone(),
+            &content.0.archetypes[&building.archetype],
+            saved.position,
+            building.footprint,
+        );
+    }
+    world.generated = restored_world;
 
     let saved_by_id: BTreeMap<StableId, SavedActor> = snapshot
         .actors
@@ -2358,21 +2460,206 @@ fn mirrored_target(world: &GeneratedWorld, position: GridPos) -> GridPos {
     nearest_walkable(world, desired).unwrap_or(position)
 }
 
+fn prefixed_id(requested: &StableId, prefix: &str) -> Option<StableId> {
+    if requested.as_str().starts_with(prefix) {
+        Some(requested.clone())
+    } else {
+        StableId::new(format!("{prefix}{}", requested.as_str())).ok()
+    }
+}
+
+fn normalized_content_name(value: &str) -> String {
+    value
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_lowercase())
+            } else if character == ' ' || character == '-' || character == '_' {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_owned()
+}
+
+fn resolve_technology_id(content: &ContentCatalog, requested: &StableId) -> Option<StableId> {
+    if content.technology.nodes.contains_key(requested) {
+        return Some(requested.clone());
+    }
+    let requested_name = normalized_content_name(requested.as_str());
+    content
+        .technology
+        .nodes
+        .iter()
+        .find(|(_, technology)| normalized_content_name(&technology.display_name) == requested_name)
+        .map(|(id, _)| id.clone())
+}
+
+fn town_event_from_id(requested: &StableId) -> Option<TownEvent> {
+    match requested.as_str().trim_start_matches("event:") {
+        "festival" => Some(TownEvent::Festival),
+        "raid" | "enemy_raid" => Some(TownEvent::EnemyRaid),
+        "harsh_weather" | "weather" => Some(TownEvent::HarshWeather),
+        "resource_boom" | "wood_boom" => Some(TownEvent::ResourceBoom(
+            StableId::new("resource:wood").expect("static ID"),
+        )),
+        _ => None,
+    }
+}
+
+fn building_region(
+    position: GridPos,
+    footprint: [u16; 2],
+    world: &GeneratedWorld,
+) -> Option<stream_town_domain::DirtyRegion> {
+    let max_x = position.x.checked_add(footprint[0].checked_sub(1)?)?;
+    let max_z = position.z.checked_add(footprint[1].checked_sub(1)?)?;
+    if max_x >= world.navigation.width() || max_z >= world.navigation.height() {
+        return None;
+    }
+    Some(stream_town_domain::DirtyRegion {
+        min: position,
+        max: GridPos { x: max_x, z: max_z },
+    })
+}
+
+fn find_building_site(
+    world: &GeneratedWorld,
+    near: GridPos,
+    footprint: [u16; 2],
+) -> Option<GridPos> {
+    let mut candidates = Vec::new();
+    for z in 0..world.navigation.height() {
+        for x in 0..world.navigation.width() {
+            let position = GridPos { x, z };
+            let Some(region) = building_region(position, footprint, world) else {
+                continue;
+            };
+            let available = (region.min.z..=region.max.z).all(|cell_z| {
+                (region.min.x..=region.max.x).all(|cell_x| {
+                    world.navigation.is_walkable(GridPos {
+                        x: cell_x,
+                        z: cell_z,
+                    })
+                })
+            });
+            if available {
+                candidates.push(position);
+            }
+        }
+    }
+    candidates.sort_by_key(|position| {
+        (
+            position.x.abs_diff(near.x) + position.z.abs_diff(near.z),
+            position.z,
+            position.x,
+        )
+    });
+    candidates.into_iter().next()
+}
+
+fn runtime_building_id(simulation: &WorldSimulation) -> StableId {
+    for sequence in simulation.buildings.len()..usize::MAX {
+        let candidate = StableId::new(format!("building:runtime_{sequence:08}"))
+            .expect("runtime building IDs are valid");
+        if !simulation.buildings.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("runtime building identifier space exhausted")
+}
+
+fn spawn_runtime_building(
+    commands: &mut Commands,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+    render: &RenderAssets,
+    id: StableId,
+    archetype: &ArchetypeDef,
+    position: GridPos,
+    footprint: [u16; 2],
+) {
+    let centre = GridPos {
+        x: position.x + footprint[0] / 2,
+        z: position.z + footprint[1] / 2,
+    };
+    let world_position = grid_to_world_on_surface(centre, config, world);
+    let mut entity = commands.spawn((
+        WorldEntity,
+        RuntimeBuilding { id },
+        GridLocation(position),
+        Transform::from_translation(world_position),
+    ));
+    if let Some(scene) = default_archetype_scene(archetype).filter(|scene| {
+        asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
+    }) {
+        entity.insert((
+            WorldAssetRoot(
+                asset_server
+                    .expect("asset server checked above")
+                    .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+            ),
+            Transform::from_translation(world_position)
+                .with_scale(Vec3::splat(config.world.cell_size / 2.0)),
+        ));
+        if let Some(material) = prefab_material_handle(archetype, presentation, render) {
+            entity.insert(MaterialOverrideSpec(material));
+        }
+    } else {
+        let size = Vec3::new(
+            f32::from(footprint[0]) * config.world.cell_size * 0.88,
+            config.world.cell_size * 1.25,
+            f32::from(footprint[1]) * config.world.cell_size * 0.88,
+        );
+        entity.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.building.clone()),
+            Transform::from_translation(world_position + Vec3::Y * size.y * 0.5).with_scale(size),
+        ));
+    }
+}
+
+fn send_command_feedback(connection: &TwitchConnection, display_name: &str, message: &str) {
+    if let Some(transport) = &connection.transport {
+        let _ = transport.send(TwitchControl::SendMessage(format!(
+            "@{display_name} {message}"
+        )));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn process_injected_commands(
     mut ecs: Commands,
     mut queue: ResMut<InjectedCommands>,
     config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
-    world: Res<WorldRuntime>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    save: Res<SaveRuntime>,
+    selected: Res<SelectedCell>,
+    connection: Res<TwitchConnection>,
+    mut feedback: ResMut<CommandFeedback>,
+    mut world: ResMut<WorldRuntime>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
+    agents: Query<(&Agent, &GridLocation)>,
 ) {
     while let Some(pending) = queue.0.pop_front() {
         let actor_id = pending.actor_id;
         let command = pending.command;
-        match &command {
+        let result: Result<String, String> = match &command {
             ChatCommand::Join => {
-                if !simulation.0.actors.contains_key(&actor_id) {
+                if simulation.0.actors.contains_key(&actor_id) {
+                    Ok("you are already in town".to_owned())
+                } else {
                     let desired = GridPos {
                         x: world.generated.navigation.width() / 2,
                         z: world.generated.navigation.height() / 2,
@@ -2418,33 +2705,136 @@ fn process_injected_commands(
                             )
                             .with_scale(base_scale),
                         ));
+                        Ok("welcome to Stream Town".to_owned())
+                    } else {
+                        Err("no walkable join position is available".to_owned())
                     }
                 }
             }
             ChatCommand::SelectRole(role) => {
-                let _ = simulation.0.assign_role(&actor_id, role.clone());
+                let role = prefixed_id(role, "role:")
+                    .filter(|role| content.0.roles.contains_key(role))
+                    .ok_or_else(|| format!("unknown role {}", role.as_str()));
+                role.and_then(|role| {
+                    simulation
+                        .0
+                        .assign_role(&actor_id, role.clone())
+                        .map(|()| format!("role changed to {role}"))
+                        .map_err(|error| error.to_string())
+                })
             }
-            ChatCommand::Build(archetype) => {
-                let building_id = StableId::random("building");
-                let _ = simulation.0.construct(
-                    building_id,
-                    archetype.clone(),
-                    GridPos { x: 36, z: 32 },
-                    &std::collections::BTreeMap::new(),
-                );
+            ChatCommand::Build(requested) => {
+                let building_id = prefixed_id(requested, "building:")
+                    .filter(|building| content.0.buildings.contains_key(building))
+                    .ok_or_else(|| format!("unknown building {}", requested.as_str()));
+                building_id.and_then(|building_id| {
+                    let building = &content.0.buildings[&building_id];
+                    let near = selected.0.or_else(|| {
+                        simulation
+                            .0
+                            .actors
+                            .get(&actor_id)
+                            .map(|actor| actor.position)
+                    });
+                    let near = near.ok_or_else(|| "join before building".to_owned())?;
+                    let position = find_building_site(&world.generated, near, building.footprint)
+                        .ok_or_else(|| "no valid building site is available".to_owned())?;
+                    let runtime_id = runtime_building_id(&simulation.0);
+                    simulation
+                        .0
+                        .construct(
+                            runtime_id.clone(),
+                            building.archetype.clone(),
+                            position,
+                            &building.cost,
+                        )
+                        .map_err(|error| error.to_string())?;
+                    let region = building_region(position, building.footprint, &world.generated)
+                        .ok_or_else(|| "selected building site left the world".to_owned())?;
+                    world
+                        .generated
+                        .navigation
+                        .set_blocked(region, true)
+                        .map_err(|error| error.to_string())?;
+                    spawn_runtime_building(
+                        &mut ecs,
+                        &config.0,
+                        &world.generated,
+                        &presentation.0,
+                        asset_server.as_deref(),
+                        &asset_root.0,
+                        &render,
+                        runtime_id,
+                        &content.0.archetypes[&building.archetype],
+                        position,
+                        building.footprint,
+                    );
+                    Ok(format!("built {}", building.display_name))
+                })
             }
-            ChatCommand::Vote(technology) => {
+            ChatCommand::Vote(requested) => {
+                let technology = resolve_technology_id(&content.0, requested)
+                    .ok_or_else(|| format!("unknown technology {}", requested.as_str()));
+                technology.and_then(|technology| {
+                    let node = &content.0.technology.nodes[&technology];
+                    if node.unavailable {
+                        return Err(format!("{} is unavailable", node.display_name));
+                    }
+                    if simulation.0.unlocked_technology.contains(&technology) {
+                        return Err(format!("{} is already unlocked", node.display_name));
+                    }
+                    if let Some(prerequisite) = node
+                        .prerequisites
+                        .iter()
+                        .find(|required| !simulation.0.unlocked_technology.contains(*required))
+                    {
+                        return Err(format!("missing prerequisite {prerequisite}"));
+                    }
+                    if simulation
+                        .0
+                        .active_vote
+                        .as_ref()
+                        .is_some_and(|vote| vote.technology != technology)
+                    {
+                        return Err("another technology vote is active".to_owned());
+                    }
                 if simulation.0.active_vote.is_none() {
                     let _ = simulation.0.start_technology_vote(technology.clone(), 30.0);
                 }
-                let _ = simulation.0.cast_vote(&actor_id, true);
+                    simulation
+                        .0
+                        .cast_vote(&actor_id, true)
+                        .map(|()| format!("voted for {}", node.display_name))
+                        .map_err(|error| error.to_string())
+                })
             }
-            ChatCommand::TriggerEvent(_) => {
-                simulation.0.trigger_event(TownEvent::Festival);
+            ChatCommand::TriggerEvent(event) => {
+                town_event_from_id(event)
+                    .ok_or_else(|| format!("unknown event {}", event.as_str()))
+                    .map(|event| {
+                        simulation.0.trigger_event(event);
+                        "event started".to_owned()
+                    })
             }
-            ChatCommand::Save | ChatCommand::Help => {}
-        }
-        info!(user = %pending.display_name, ?command, "processed Twitch command");
+            ChatCommand::Save => {
+                let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
+                save.store
+                    .write(&snapshot)
+                    .map(|()| "town saved".to_owned())
+                    .map_err(|error| format!("save failed: {error}"))
+            }
+            ChatCommand::Help => Ok(
+                "commands: !join, !role <role>, !build <building>, !vote <technology>, !event <event>, !save, !help"
+                    .to_owned(),
+            ),
+        };
+        let message = match result {
+            Ok(message) => message,
+            Err(error) => format!("command rejected: {error}"),
+        };
+        feedback.0 = format!("{}: {message}", pending.display_name);
+        send_command_feedback(&connection, &pending.display_name, &message);
+        info!(user = %pending.display_name, ?command, result = %message, "processed Twitch command");
         stats.commands_processed += 1;
     }
 }
@@ -2453,10 +2843,11 @@ fn update_hud(
     stats: Res<SessionStats>,
     twitch: Res<TwitchConnection>,
     simulation: Res<SimulationRuntime>,
+    feedback: Res<CommandFeedback>,
     agents: Query<&Agent>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
-    if !stats.is_changed() && !twitch.is_changed() {
+    if !stats.is_changed() && !twitch.is_changed() && !feedback.is_changed() {
         return;
     }
     let first_id = agents
@@ -2464,7 +2855,7 @@ fn update_hud(
         .next()
         .map_or("none", |agent| agent.id.as_str());
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?} | Twitch: {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -2472,7 +2863,19 @@ fn update_hud(
         simulation.0.season,
         simulation.0.weather,
         twitch_status_text(&twitch),
+        town_resource_amount(&simulation.0, "resource:food"),
+        town_resource_amount(&simulation.0, "resource:gold"),
+        town_resource_amount(&simulation.0, "resource:ore"),
+        town_resource_amount(&simulation.0, "resource:wood"),
+        feedback.0,
     );
+}
+
+fn town_resource_amount(simulation: &WorldSimulation, resource: &str) -> u32 {
+    StableId::new(resource)
+        .ok()
+        .and_then(|resource| simulation.town_resources.get(&resource).copied())
+        .unwrap_or_default()
 }
 
 fn twitch_status_text(connection: &TwitchConnection) -> String {
@@ -2908,6 +3311,8 @@ mod tests {
     fn headless_vertical_slice_spawns_three_hundred_agents() {
         let config = GameConfig::default();
         let expected = usize::from(config.gameplay.initial_agents);
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("command-save.stbevy");
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -2916,6 +3321,9 @@ mod tests {
         ))
         .insert_resource(RuntimeConfig(config))
         .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(&save_path),
+        });
 
         app.update();
         app.update();
@@ -2962,6 +3370,73 @@ mod tests {
                 .0
                 .actors
                 .contains_key(&StableId::new("twitch:debug_viewer").unwrap())
+        );
+
+        let eligible_technology = {
+            let content = &app.world().resource::<RuntimeContent>().0;
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            content
+                .technology
+                .nodes
+                .iter()
+                .find(|(id, node)| {
+                    !simulation.unlocked_technology.contains(*id)
+                        && !node.unavailable
+                        && node
+                            .prerequisites
+                            .iter()
+                            .all(|required| simulation.unlocked_technology.contains(required))
+                })
+                .map(|(id, _)| id.clone())
+                .expect("converted catalog has a vote-eligible technology")
+        };
+        let actor_id = StableId::new("twitch:debug_viewer").unwrap();
+        let commands = [
+            ChatCommand::SelectRole(StableId::new("builder").unwrap()),
+            ChatCommand::Build(StableId::new("house").unwrap()),
+            ChatCommand::Vote(eligible_technology.clone()),
+            ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),
+            ChatCommand::Save,
+            ChatCommand::Help,
+        ];
+        for command in commands {
+            app.world_mut()
+                .resource_mut::<InjectedCommands>()
+                .0
+                .push_back(PendingChatCommand {
+                    actor_id: actor_id.clone(),
+                    display_name: "debug_viewer".to_owned(),
+                    command,
+                });
+        }
+        app.update();
+
+        let simulation = &app.world().resource::<SimulationRuntime>().0;
+        assert_eq!(simulation.actors[&actor_id].role.as_str(), "role:builder");
+        assert_eq!(simulation.buildings.len(), 1);
+        assert_eq!(town_resource_amount(simulation, "resource:food"), 4_500);
+        assert_eq!(town_resource_amount(simulation, "resource:gold"), 4_750);
+        assert_eq!(town_resource_amount(simulation, "resource:ore"), 4_500);
+        assert_eq!(town_resource_amount(simulation, "resource:wood"), 4_500);
+        assert_eq!(
+            simulation.active_vote.as_ref().map(|vote| &vote.technology),
+            Some(&eligible_technology)
+        );
+        assert_eq!(simulation.active_event, Some(TownEvent::Festival));
+        let saved_building_id = simulation.buildings.keys().next().unwrap().clone();
+        let runtime_building_ids: Vec<_> = app
+            .world_mut()
+            .query::<&RuntimeBuilding>()
+            .iter(app.world())
+            .map(|building| building.id.clone())
+            .collect();
+        assert_eq!(runtime_building_ids, vec![saved_building_id]);
+        assert!(save_path.is_file());
+        assert!(
+            app.world()
+                .resource::<CommandFeedback>()
+                .0
+                .contains("commands: !join")
         );
     }
 

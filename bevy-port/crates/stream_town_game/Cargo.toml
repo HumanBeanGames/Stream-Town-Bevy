@@ -19,5 +19,8 @@ stream_town_domain = { path = "../stream_town_domain" }
 tokio.workspace = true
 twitch-irc.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

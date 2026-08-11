@@ -6768,6 +6768,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stream_town_domain",
+ "tempfile",
  "tokio",
  "twitch-irc",
 ]

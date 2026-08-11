@@ -1,7 +1,11 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_CONFIG_SCHEMA: u32 = 2;
+use crate::StableId;
+
+pub const CURRENT_CONFIG_SCHEMA: u32 = 3;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GameConfig {
@@ -35,6 +39,7 @@ pub struct GameplayConfig {
     pub initial_agents: u16,
     pub agent_speed_cells_per_second: f32,
     pub repath_interval_seconds: f32,
+    pub starting_town_resources: BTreeMap<StableId, u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -90,6 +95,13 @@ impl Default for GameConfig {
                 initial_agents: 300,
                 agent_speed_cells_per_second: 4.0,
                 repath_interval_seconds: 1.0,
+                starting_town_resources: BTreeMap::from([
+                    (stable_id("resource:food"), 5_000),
+                    (stable_id("resource:gold"), 5_000),
+                    (stable_id("resource:ore"), 5_000),
+                    (stable_id("resource:recruit"), 0),
+                    (stable_id("resource:wood"), 5_000),
+                ]),
             },
             twitch: TwitchConfig {
                 enabled: false,
@@ -100,6 +112,10 @@ impl Default for GameConfig {
             },
         }
     }
+}
+
+fn stable_id(value: &str) -> StableId {
+    StableId::new(value).expect("built-in configuration IDs are valid")
 }
 
 impl GameConfig {
