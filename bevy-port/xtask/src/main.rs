@@ -2,7 +2,7 @@ use std::{fs, path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use stream_town_domain::{GameConfig, GridPos, generate_world};
+use stream_town_domain::{ContentCatalog, GameConfig, GridPos, generate_world};
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -38,6 +38,37 @@ fn validate() -> Result<()> {
     )?;
     config.validate()?;
 
+    let content_path = Path::new("assets/content/catalog.ron");
+    let content: ContentCatalog = ron::from_str(
+        &fs::read_to_string(content_path)
+            .with_context(|| format!("failed to read {}", content_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", content_path.display()))?;
+    content.validate()?;
+    let technology_edges: usize = content
+        .technology
+        .nodes
+        .values()
+        .map(|node| node.prerequisites.len())
+        .sum();
+    let technology_roots = content
+        .technology
+        .nodes
+        .values()
+        .filter(|node| node.prerequisites.is_empty())
+        .count();
+    if (
+        content.buildings.len(),
+        content.roles.len(),
+        content.technology.nodes.len(),
+        content.technology.groups.len(),
+        technology_edges,
+        technology_roots,
+    ) != (27, 15, 363, 20, 362, 1)
+    {
+        bail!("authored content counts differ from the verified Unity baseline");
+    }
+
     let mut checked_json = 0_usize;
     for entry in WalkDir::new("generated").into_iter().filter_map(Result::ok) {
         if entry
@@ -63,7 +94,9 @@ fn validate() -> Result<()> {
     {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
-    println!("Configuration valid; checked {checked_json} generated JSON files");
+    println!(
+        "Configuration and 405 semantic content records valid; checked {checked_json} generated JSON files"
+    );
     Ok(())
 }
 

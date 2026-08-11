@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use stream_town_domain::inspect_legacy_save;
 use walkdir::WalkDir;
 
+mod content;
 mod legacy;
 
 #[derive(Debug, Parser)]
@@ -32,6 +33,12 @@ enum Command {
     ValidateManifest { manifest: PathBuf },
     /// Validate the neutral JSON emitted by the Unity editor exporter.
     ValidateUnityExport { export: PathBuf },
+    /// Convert active Unity buildings, roles, and `TechTreeV2` into versioned RON.
+    ConvertContent {
+        export: PathBuf,
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
     /// Inspect a legacy JSON or STSV binary save without modifying it.
     InspectSave { save: PathBuf },
     /// Convert a legacy JSON or schema 1-3 binary save into a validated native save.
@@ -113,6 +120,10 @@ fn main() -> Result<()> {
         Command::ValidateUnityExport { export } => {
             let summary = validate_unity_export(&export)?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Command::ConvertContent { export, out_dir } => {
+            let report = content::convert(&export, &out_dir)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::InspectSave { save } => {
             let info = inspect_legacy_save(&save)

@@ -1,7 +1,6 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
@@ -101,7 +100,6 @@ namespace StreamTown.Migration
                 SchemaVersion = SchemaVersion,
                 UnityVersion = Application.unityVersion,
                 ProjectName = Application.productName,
-                ExportedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
                 Assets = assets,
                 Warnings = warnings
             };
@@ -543,7 +541,6 @@ namespace StreamTown.Migration
             public int SchemaVersion;
             public string UnityVersion;
             public string ProjectName;
-            public string ExportedAtUtc;
             public List<NeutralAsset> Assets;
             public List<string> Warnings;
         }

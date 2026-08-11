@@ -10,8 +10,8 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
-    ActorKind, ChatCommand, GameConfig, GeneratedWorld, GridPos, NativeSaveStore, SavedActor,
-    StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
+    ActorKind, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, NativeSaveStore,
+    SavedActor, StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
@@ -26,6 +26,9 @@ pub enum GameState {
 
 #[derive(Resource)]
 pub struct RuntimeConfig(pub GameConfig);
+
+#[derive(Resource)]
+pub struct RuntimeContent(pub ContentCatalog);
 
 #[derive(Resource)]
 struct WorldRuntime {
@@ -139,11 +142,13 @@ impl Plugin for StreamTownGamePlugin {
 }
 
 pub fn run(config: GameConfig) {
+    let content = embedded_content();
     let resolution = WindowResolution::new(config.window.width, config.window.height);
     let title = config.window.title.clone();
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.04, 0.055)))
         .insert_resource(RuntimeConfig(config))
+        .insert_resource(RuntimeContent(content))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title,
@@ -155,6 +160,16 @@ pub fn run(config: GameConfig) {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
+}
+
+fn embedded_content() -> ContentCatalog {
+    let content: ContentCatalog =
+        ron::from_str(include_str!("../../../assets/content/catalog.ron"))
+            .expect("checked-in Stream Town content catalog must parse");
+    content
+        .validate()
+        .expect("checked-in Stream Town content catalog must validate");
+    content
 }
 
 fn setup_camera(mut commands: Commands) {
@@ -871,6 +886,15 @@ mod tests {
         assert!(config.gameplay.initial_agents >= 300);
         let world = generate_world(&config.world);
         assert_eq!(world.navigation.width(), config.world.width);
+    }
+
+    #[test]
+    fn embedded_unity_content_catalog_is_valid() {
+        let content = embedded_content();
+        assert_eq!(content.buildings.len(), 27);
+        assert_eq!(content.roles.len(), 15);
+        assert_eq!(content.technology.nodes.len(), 363);
+        assert_eq!(content.technology.groups.len(), 20);
     }
 
     #[test]

@@ -23,6 +23,7 @@ cargo run -p stream_town_game
 cargo run -p stream_town_tools
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
+cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 ```
 
@@ -33,11 +34,14 @@ exact editor version recorded by the project:
 .\bevy-port\scripts\export-unity.ps1
 cd bevy-port
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
+cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
 ```
 
 The editor exporter resolves GUIDs, object references, prefab sources and
 overrides, ScriptableObject data, and the four shipping scene hierarchies. Its
 migration-only A* types are inert compile stubs and are not navigation code.
+The content conversion selects the active Unity containers and emits a validated
+catalog of 27 buildings, 15 roles, and the 363-node shipping technology graph.
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 Legacy Unity saves are never modified by migration tools.

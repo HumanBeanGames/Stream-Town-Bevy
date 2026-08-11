@@ -34,10 +34,15 @@ mistaken for production-ready systems.
 - A Unity asset inventory/validator that resolves `.meta` GUIDs and YAML
   references, plus a Unity 6000.5.6f1 editor exporter for serialized fields,
   object references, prefab sources and overrides, and the four shipping scene
-  hierarchies. The verified export contains 1,429 assets; 61 legacy animation
-  clips require the YAML fallback because Unity did not expose a main object.
+  hierarchies. The verified export contains 1,429 assets; 61 obsolete or
+  missing-script ScriptableObjects require the YAML fallback because Unity did
+  not expose a main object.
 - Explicit migration-only A* API stubs sufficient to compile and run the editor
   exporter. They are intentionally inert and are not used by the Bevy runtime.
+- A deterministic semantic RON converter that follows the active Unity
+  containers to select 27 buildings, 15 roles, and the shipping 363-node,
+  362-edge technology DAG. It preserves typed Unity fields as provenance,
+  validates stable IDs/references/cycles, and reloads its own RON output.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. The World + Navigation tab has a working deterministic
   seed preview; several other tabs are presently diagnostic/authoring shells.
@@ -46,9 +51,9 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- RON content generation, semantic prefab/archetype conversion, animation
-  controller translation, and the Blender-to-GLB conversion pipeline. The
-  neutral Unity export preserves prefab source/override records rather than
+- Semantic prefab/archetype conversion, accurate building footprints,
+  animation controller translation, and the Blender-to-GLB conversion pipeline.
+  The neutral Unity export preserves prefab source/override records rather than
   claiming those records are already production Bevy archetypes.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
@@ -100,6 +105,7 @@ Generate and validate the ignored, machine-local editor export with:
 .\bevy-port\scripts\export-unity.ps1
 cd bevy-port
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
+cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
 ```
 
 ## Milestone interpretation
