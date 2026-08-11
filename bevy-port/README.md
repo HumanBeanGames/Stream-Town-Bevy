@@ -54,9 +54,11 @@ textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 165 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
 `.anim` files into 1,196 stable transform tracks; four property/UI-only clips do
-not contain transform curves. Renderer inheritance resolves to 141 prefab
-material bindings and 181 material slots. The known missing Necrolands camera
-clip is an explicit validated record.
+not contain transform curves. It also retains 11 authored 1D blend states and
+typed transition conditions; the stale `Slam` and `Swipe` conditions become
+provenance-marked inferred parameters. Renderer inheritance resolves to 141
+prefab material bindings and 181 material slots. The known missing Necrolands
+camera clip is an explicit validated record.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:
@@ -88,14 +90,16 @@ vertical slice renders a 3D terrain plane,
 lighting, converted GLB scenes for the representative town hall and actors, and
 primitive fallbacks when an asset is unavailable.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
-Goblin path). The Player locomotion controller uses converted Unity Idle/Walk
-tracks retargeted onto 23 bones in the Player GLB rest pose, switching with the
-agent's idle/moving state. Converted renderer descendants receive a cached Bevy
-PBR approximation of their first inherited Unity material, including PNG/TGA
-base textures, color, emission, metallic, smoothness, and alpha settings. Full
-controller action/trigger transitions, exact Unity curve tangents, property/UI
-animation, exact multi-slot assignment, and custom WGSL shader parity remain
-presentation work.
+Goblin path). The Player controller builds 19 converted clips retargeted onto 23
+bones in the Player GLB rest pose. An engine-independent interpreter evaluates
+typed parameters, trigger consumption, direct transitions, exit gates, and 1D
+threshold blending; runtime movement feeds the authored velocity/5 `Move Speed`
+parameter into Idle/Walk/Run. Converted renderer descendants receive a cached
+Bevy PBR approximation of their first inherited Unity material, including
+PNG/TGA base textures, color, emission, metallic, smoothness, and alpha settings.
+Nested controller layers/state machines, complete gameplay action emitters,
+exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
+and custom WGSL shader parity remain presentation work.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

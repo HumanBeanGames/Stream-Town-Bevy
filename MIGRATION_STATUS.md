@@ -61,12 +61,15 @@ mistaken for production-ready systems.
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
   files into 1,196 stable transform tracks with rig-relative reference poses;
   the remaining four clips contain property/UI animation rather than transform
-  curves. It resolves inherited prefab/controller/model dependencies into 22
-  animation bindings and resolves inherited renderer dependencies into 141
-  prefab material bindings containing 181 slots; 18 animation bindings have an
-  embedded GLB animation available. The sole dangling Unity motion GUID in the
-  Necrolands camera controller is retained and checked as an explicit
-  missing-source baseline instead of being discarded.
+  curves. Eleven authored 1D blend states retain their driving parameters and
+  thresholds, and transition conditions use typed Unity modes. The stale `Slam`
+  and `Swipe` conditions are retained as two inferred Boolean parameters rather
+  than silently discarded. It resolves inherited prefab/controller/model
+  dependencies into 22 animation bindings and resolves inherited renderer
+  dependencies into 141 prefab material bindings containing 181 slots; 18
+  animation bindings have an embedded GLB animation available. The sole
+  dangling Unity motion GUID in the Necrolands camera controller is retained
+  and checked as an explicit missing-source baseline instead of being discarded.
 - A pinned Blender 4.2.0 headless FBX-to-GLB pipeline with atomic outputs and
   independent hash/header/unit validation. Unity renderer bounds normalize the
   imported geometry, rigs, and translation curves. All 253 GLBs are reproducible
@@ -77,9 +80,14 @@ mistaken for production-ready systems.
   model prefab and plays GLB animation zero. The Player locomotion controller
   resolves stable Idle and Walk clip IDs, builds Bevy `AnimationClip` assets
   from the converted Unity tracks, retargets curve deltas onto the converted
-  GLB rest pose, and drives a native `AnimationGraph` across 23 bone targets as
-  the agent changes between idle and moving. Scenes without a compatible
-  embedded or converted clip keep the explicit visual fallback.
+  GLB rest pose, and drives a native `AnimationGraph` across 23 bone targets.
+  The engine-independent controller runtime initializes typed Float/Integer/
+  Boolean/Trigger parameters, evaluates AnyState and state transitions with
+  exit-time gates, consumes triggers, and produces threshold-weighted two-clip
+  blend selections. The Player runtime builds 19 compatible controller clips,
+  feeds Unity's velocity/5 `Move Speed` convention into the Idle/Walk/Run blend
+  state, and maps actor alive-state changes to Death/Revive triggers. Scenes
+  without a compatible embedded or converted clip keep the visual fallback.
 - Bevy runtime material reconstruction for converted scenes. Unity base color,
   primary texture, emission, metallic, smoothness, and alpha settings are mapped
   into cached `StandardMaterial` assets, with PNG and TGA decoding enabled. The
@@ -99,11 +107,13 @@ mistaken for production-ready systems.
 ## Not yet at parity
 
 - The four standalone property/UI animation clips, non-transform event/property
-  curves, full controller transition/trigger/action-state execution, and exact
-  Unity tangent/cubic interpolation semantics. The runtime currently selects
-  Player Idle/Walk locomotion directly; it does not yet reproduce controller
-  blend timing or action-state transitions. Per-prefab renderer activation for
-  player role/equipment variants co-located in source FBX files also remains.
+  curves, nested layer/state-machine routing, transition-duration crossfades,
+  layer masks, and exact Unity tangent/cubic interpolation semantics. The
+  controller interpreter can execute direct state transitions, but gameplay
+  systems still need to emit every gathering/building/combat/equipment action
+  parameter and nested state-machine exits currently fall back to Locomotion.
+  Per-prefab renderer activation for player role/equipment variants co-located
+  in source FBX files also remains.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
   reachable balance rule from the Unity scenes.
@@ -167,9 +177,10 @@ deterministic 300-agent navigation gate passes with semantically converted
 prefabs, representative production GLBs, and connected Twitch transport, but it
 now also has complete presentation metadata, packaged textures, native Goblin
 animation binding, 57 converted standalone transform clips, Player locomotion
-retargeting/state selection, inherited prefab material bindings, and runtime PBR
-material reconstruction. It is still missing complete controller/action
-semantics, exact curve tangents and multi-slot/custom-shader parity, full command
-parity, and the recorded reference-machine GPU measurement required to close
-the milestone.
+retargeting, a typed controller interpreter, 19-clip Player blend-graph playback,
+inherited prefab material bindings, and runtime PBR material reconstruction. It
+is still missing nested controller layers and complete gameplay action emitters,
+exact curve tangents and multi-slot/custom-shader parity, full command parity,
+and the recorded reference-machine GPU measurement required to close the
+milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
