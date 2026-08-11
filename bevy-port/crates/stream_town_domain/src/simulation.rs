@@ -9,6 +9,22 @@ use thiserror::Error;
 use crate::{GridPos, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
+pub const MAX_ROLE_LEVEL: u16 = 99;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RoleProgress {
+    pub level: u16,
+    pub experience: u32,
+}
+
+impl Default for RoleProgress {
+    fn default() -> Self {
+        Self {
+            level: 1,
+            experience: 0,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Season {
@@ -43,6 +59,8 @@ pub struct ActorState {
     pub max_health: i32,
     pub alive: bool,
     pub inventory: BTreeMap<StableId, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_progression: BTreeMap<StableId, RoleProgress>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -141,6 +159,10 @@ impl WorldSimulation {
                 max_health: 100,
                 alive: true,
                 inventory: BTreeMap::new(),
+                role_progression: BTreeMap::from([(
+                    StableId::new("role:villager").expect("static stable ID"),
+                    RoleProgress::default(),
+                )]),
             },
         );
         true
@@ -148,8 +170,41 @@ impl WorldSimulation {
 
     pub fn assign_role(&mut self, actor: &StableId, role: StableId) -> Result<(), SimulationError> {
         let actor_state = self.actor_mut(actor)?;
-        actor_state.role = role;
+        actor_state.role = role.clone();
+        actor_state.role_progression.entry(role).or_default();
         Ok(())
+    }
+
+    pub fn grant_role_experience(
+        &mut self,
+        actor: &StableId,
+        amount: u32,
+        multiplier_per_thousand: u32,
+    ) -> Result<u16, SimulationError> {
+        let actor_state = self.actor_mut(actor)?;
+        let progress = actor_state
+            .role_progression
+            .entry(actor_state.role.clone())
+            .or_default();
+        if progress.level >= MAX_ROLE_LEVEL {
+            progress.experience = 0;
+            return Ok(0);
+        }
+
+        let adjusted = u64::from(amount).saturating_mul(u64::from(multiplier_per_thousand)) / 1_000;
+        let adjusted = u32::try_from(adjusted).unwrap_or(u32::MAX).max(1);
+        progress.experience = progress.experience.saturating_add(adjusted);
+        let mut levels_gained = 0_u16;
+        while progress.level < MAX_ROLE_LEVEL {
+            let required = required_role_experience(progress.level);
+            if progress.experience < required {
+                break;
+            }
+            progress.experience -= required;
+            progress.level += 1;
+            levels_gained += 1;
+        }
+        Ok(levels_gained)
     }
 
     pub fn gather(
@@ -413,6 +468,16 @@ impl WorldSimulation {
     }
 }
 
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn required_role_experience(level: u16) -> u32 {
+    if level == 0 || level >= MAX_ROLE_LEVEL {
+        return 100_000;
+    }
+    let t = f32::from(level.saturating_add(1)) / 100.0;
+    ((1.0 - (1.0 - t * t).sqrt()) * 100_000.0) as u32
+}
+
 fn deterministic_weather(seed: u64, day: u32, season: Season) -> Weather {
     let mut value = seed ^ u64::from(day).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -428,6 +493,26 @@ fn deterministic_weather(seed: u64, day: u32, season: Season) -> Weather {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn role_progression_matches_unity_curve_and_carries_excess() {
+        let actor = StableId::new("actor:test").unwrap();
+        let role = StableId::new("role:builder").unwrap();
+        let mut simulation = WorldSimulation::new(7);
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
+        simulation.assign_role(&actor, role.clone()).unwrap();
+
+        assert_eq!(required_role_experience(1), 20);
+        assert_eq!(required_role_experience(99), 100_000);
+        assert_eq!(simulation.grant_role_experience(&actor, 8, 3_000), Ok(1));
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&role],
+            RoleProgress {
+                level: 2,
+                experience: 4,
+            }
+        );
+    }
 
     fn id(value: &str) -> StableId {
         StableId::new(value).unwrap()

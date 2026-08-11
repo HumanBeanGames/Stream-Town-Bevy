@@ -24,7 +24,7 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
-    ActorKind, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
+    ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
     BuildingDef, BuildingState, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
     MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, PresentationCatalog,
@@ -153,6 +153,7 @@ struct Agent {
     target: GridPos,
     action_cooldown_seconds: f32,
     respawn_seconds: f32,
+    health_regen_accumulator: f64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -954,6 +955,7 @@ fn generate_and_spawn_world(
                 target,
                 action_cooldown_seconds: 0.0,
                 respawn_seconds: 0.0,
+                health_regen_accumulator: 0.0,
             },
             AgentAnimation {
                 base_scale,
@@ -1238,9 +1240,133 @@ fn resource_for_role(content: &ContentCatalog, role: &StableId) -> Option<Stable
     content.roles.get(role)?.resource.clone()
 }
 
-fn role_action_range_cells(content: &ContentCatalog, role: &StableId) -> u16 {
-    content.roles.get(role).map_or(1, |role| {
-        u16::try_from(role.base_action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EffectiveRoleStats {
+    level: u16,
+    experience: u32,
+    required_experience: u32,
+    experience_multiplier_per_thousand: u32,
+    action_amount: u32,
+    action_milliseconds: u32,
+    action_range_milli_cells: u32,
+    max_health: u32,
+    health_regen_milli_per_second: i64,
+    damage_reduction_percent: u32,
+    movement_speed_milli_cells_per_second: u32,
+    carry_capacity: u32,
+}
+
+fn leveled_whole_stat(base: u32, per_level_milli: u32, level: u16) -> u32 {
+    let increase =
+        u64::from(per_level_milli).saturating_mul(u64::from(level.saturating_sub(1))) / 1_000;
+    base.saturating_add(u32::try_from(increase).unwrap_or(u32::MAX))
+}
+
+fn role_progress(actor: &ActorState) -> stream_town_domain::RoleProgress {
+    actor
+        .role_progression
+        .get(&actor.role)
+        .copied()
+        .unwrap_or_default()
+}
+
+fn effective_role_stats(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &ActorState,
+) -> Option<EffectiveRoleStats> {
+    let definition = content.roles.get(&actor.role)?;
+    let progress = role_progress(actor);
+    let levels = u32::from(progress.level.saturating_sub(1));
+    let stat = |name: &str| {
+        technology_stat_boost_percent(
+            content,
+            simulation,
+            &actor.role,
+            &StableId::new(format!("stat:{name}")).expect("static stat IDs are valid"),
+        )
+    };
+    let base_action_milliseconds = definition
+        .base_action_milliseconds
+        .saturating_sub(
+            definition
+                .action_milliseconds_reduction_per_level
+                .saturating_mul(levels),
+        )
+        .max(100);
+    let base_range = definition.base_action_range_milli_cells.saturating_add(
+        definition
+            .action_range_milli_cells_per_level
+            .saturating_mul(levels),
+    );
+    let base_movement = definition
+        .base_movement_speed_milli_cells_per_second
+        .saturating_add(
+            definition
+                .movement_speed_milli_cells_per_second_per_level
+                .saturating_mul(levels),
+        );
+    let base_defense = leveled_whole_stat(
+        u32::try_from(definition.base_damage_reduction_percent.max(0)).unwrap_or_default(),
+        definition.damage_reduction_milli_percent_per_level,
+        progress.level,
+    );
+    let base_regen = i64::from(definition.base_health_regen_per_second)
+        .saturating_mul(1_000)
+        .saturating_add(
+            i64::from(definition.health_regen_milli_per_second_per_level)
+                .saturating_mul(i64::from(levels)),
+        );
+
+    Some(EffectiveRoleStats {
+        level: progress.level,
+        experience: progress.experience,
+        required_experience: stream_town_domain::required_role_experience(progress.level),
+        experience_multiplier_per_thousand: definition.experience_multiplier_per_thousand,
+        action_amount: percentage_adjusted(
+            leveled_whole_stat(
+                definition.base_action_amount,
+                definition.action_amount_per_level_milli,
+                progress.level,
+            ),
+            stat("action_amount"),
+        ),
+        action_milliseconds: percentage_reduced(base_action_milliseconds, stat("action_speed"))
+            .max(100),
+        action_range_milli_cells: percentage_adjusted(base_range, stat("action_range")),
+        max_health: percentage_adjusted(
+            leveled_whole_stat(
+                definition.base_health,
+                definition.health_per_level_milli,
+                progress.level,
+            ),
+            stat("health"),
+        )
+        .max(1),
+        health_regen_milli_per_second: percentage_adjusted_i64(base_regen, stat("health_regen")),
+        damage_reduction_percent: percentage_adjusted(base_defense, stat("defense")),
+        movement_speed_milli_cells_per_second: percentage_adjusted(
+            base_movement,
+            stat("movement_speed"),
+        ),
+        carry_capacity: percentage_adjusted(
+            leveled_whole_stat(
+                definition.base_carry_capacity,
+                definition.carry_capacity_per_level_milli,
+                progress.level,
+            ),
+            stat("resource_carry"),
+        ),
+    })
+}
+
+fn role_action_range_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &ActorState,
+) -> u16 {
+    effective_role_stats(content, simulation, actor).map_or(1, |stats| {
+        u16::try_from(stats.action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
     })
 }
 
@@ -1357,7 +1483,7 @@ fn next_agent_goal(
         let distance =
             target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
         let destination = if actor.role.as_str() == "role:enemy"
-            || distance <= role_action_range_cells(content, &actor.role)
+            || distance <= role_action_range_cells(content, simulation, actor)
         {
             current
         } else {
@@ -1390,10 +1516,8 @@ fn next_agent_goal(
         .values()
         .copied()
         .fold(0_u32, u32::saturating_add);
-    let carry_capacity = content
-        .roles
-        .get(&actor.role)
-        .map(|role| role.base_carry_capacity)
+    let carry_capacity = effective_role_stats(content, simulation, actor)
+        .map(|stats| stats.carry_capacity)
         .filter(|capacity| *capacity > 0)
         .unwrap_or(25);
     if carried >= carry_capacity {
@@ -1430,27 +1554,15 @@ fn complete_agent_goal(
     goal: &AgentGoal,
     current: GridPos,
 ) {
-    let Some(role) = simulation
+    if !simulation.actors.contains_key(actor_id) {
+        return;
+    }
+    let stats = simulation
         .actors
         .get(actor_id)
-        .map(|actor| actor.role.clone())
-    else {
-        return;
-    };
-    let action_amount_percent = technology_stat_boost_percent(
-        content,
-        simulation,
-        &role,
-        &StableId::new("stat:action_amount").expect("static ID"),
-    );
-    let action_amount = percentage_adjusted(
-        content
-            .roles
-            .get(&role)
-            .map_or(1, |definition| definition.base_action_amount),
-        action_amount_percent,
-    );
-    match goal {
+        .and_then(|actor| effective_role_stats(content, simulation, actor));
+    let action_amount = stats.map_or(1, |stats| stats.action_amount);
+    let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
             let Some(resource) = world
                 .resources
@@ -1465,6 +1577,9 @@ fn complete_agent_goal(
             if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
                 warn!(actor = %actor_id, %error, "resource gather action failed");
                 resource.amount = resource.amount.saturating_add(amount);
+                false
+            } else {
+                amount > 0
             }
         }
         AgentGoal::Deposit => {
@@ -1480,8 +1595,12 @@ fn complete_agent_goal(
                     )
                 })
                 .collect();
-            if let Err(error) = simulation.deposit_all_with_capacities(actor_id, &capacities) {
-                warn!(actor = %actor_id, %error, "resource deposit action failed");
+            match simulation.deposit_all_with_capacities(actor_id, &capacities) {
+                Ok(amount) => amount > 0,
+                Err(error) => {
+                    warn!(actor = %actor_id, %error, "resource deposit action failed");
+                    false
+                }
             }
         }
         AgentGoal::Attack(target_id) => {
@@ -1494,7 +1613,7 @@ fn complete_agent_goal(
             if !attacker.alive
                 || !target.alive
                 || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
-                    > role_action_range_cells(content, &attacker.role)
+                    > role_action_range_cells(content, simulation, attacker)
             {
                 return;
             }
@@ -1503,31 +1622,50 @@ fn complete_agent_goal(
             } else {
                 action_amount
             };
-            let defense_modifier = technology_stat_boost_percent(
-                content,
-                simulation,
-                &target.role,
-                &StableId::new("stat:defense").expect("static ID"),
-            );
-            let base_defense = content
-                .roles
-                .get(&target.role)
-                .map_or(0, |role| role.base_damage_reduction_percent);
-            let defense = percentage_adjusted(
-                u32::try_from(base_defense.max(0)).unwrap_or_default(),
-                defense_modifier,
-            );
+            let defense = effective_role_stats(content, simulation, target)
+                .map_or(0, |stats| stats.damage_reduction_percent);
             let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
-            if let Err(error) = simulation.damage_actor(target_id, damage) {
-                warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
+            match simulation.damage_actor(target_id, damage) {
+                Ok(_) => damage > 0,
+                Err(error) => {
+                    warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
+                    false
+                }
             }
         }
         AgentGoal::Construct(building_id) => {
-            if let Err(error) = simulation.work_on_building(building_id, action_amount) {
-                warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
+            let was_incomplete = simulation
+                .buildings
+                .get(building_id)
+                .is_some_and(|building| !building.complete);
+            match simulation.work_on_building(building_id, action_amount) {
+                Ok(_) => was_incomplete && action_amount > 0,
+                Err(error) => {
+                    warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
+                    false
+                }
             }
         }
-        AgentGoal::Wander => {}
+        AgentGoal::Wander => false,
+    };
+    if action_succeeded
+        && let Some(stats) = stats
+        && let Ok(levels_gained) = simulation.grant_role_experience(
+            actor_id,
+            action_amount,
+            stats.experience_multiplier_per_thousand,
+        )
+        && levels_gained > 0
+    {
+        let max_health = simulation
+            .actors
+            .get(actor_id)
+            .and_then(|actor| effective_role_stats(content, simulation, actor))
+            .map_or(1, |stats| stats.max_health);
+        if let Some(actor) = simulation.actors.get_mut(actor_id) {
+            actor.max_health = i32::try_from(max_health).unwrap_or(i32::MAX);
+            actor.health = actor.max_health;
+        }
     }
 }
 
@@ -1544,29 +1682,23 @@ fn action_cooldown(
         AgentGoal::Deposit => 0.25,
         AgentGoal::Wander => 0.0,
     };
-    let Some(role) = simulation.actors.get(actor).map(|actor| &actor.role) else {
+    let Some(actor) = simulation.actors.get(actor) else {
         return fallback;
     };
     let base = if matches!(
         goal,
         AgentGoal::Attack(_) | AgentGoal::Construct(_) | AgentGoal::Gather(_)
     ) {
-        content.roles.get(role).map_or(fallback, |definition| {
-            milli_units_as_f32(definition.base_action_milliseconds).max(0.1)
+        effective_role_stats(content, simulation, actor).map_or(fallback, |stats| {
+            milli_units_as_f32(stats.action_milliseconds).max(0.1)
         })
     } else {
         fallback
     };
-    let percent = technology_stat_boost_percent(
-        content,
-        simulation,
-        role,
-        &StableId::new("stat:action_speed").expect("static ID"),
-    );
     if base <= f32::EPSILON {
         0.0
     } else {
-        (base * (1.0 - percentage_as_f32(percent) / 100.0)).max(0.1)
+        base.max(0.1)
     }
 }
 
@@ -1592,30 +1724,36 @@ fn move_agents(
     for (mut agent, mut location, animation, mut transform) in &mut agents {
         agent.action_cooldown_seconds =
             (agent.action_cooldown_seconds - time.delta_secs()).max(0.0);
-        if let Some(role) = simulation
+        if let Some(role_stats) = simulation
             .0
             .actors
             .get(&agent.id)
-            .map(|actor| actor.role.clone())
+            .and_then(|actor| effective_role_stats(&content.0, &simulation.0, actor))
         {
-            let health_percent = technology_stat_boost_percent(
-                &content.0,
-                &simulation.0,
-                &role,
-                &StableId::new("stat:health").expect("static ID"),
-            );
-            let base_health = content
-                .0
-                .roles
-                .get(&role)
-                .map_or(100, |definition| definition.base_health);
-            let desired_max = i32::try_from(percentage_adjusted(base_health, health_percent))
+            let desired_max = i32::try_from(role_stats.max_health)
                 .unwrap_or(i32::MAX)
                 .max(1);
+            let regen_milli = i32::try_from(
+                role_stats
+                    .health_regen_milli_per_second
+                    .clamp(0, i64::from(i32::MAX)),
+            )
+            .expect("clamped regeneration fits i32");
+            let regen_per_second = f64::from(regen_milli) / 1_000.0;
+            agent.health_regen_accumulator += regen_per_second * time.delta_secs_f64();
+            let mut regenerated = 0_i32;
+            while agent.health_regen_accumulator >= 1.0 && regenerated < desired_max {
+                agent.health_regen_accumulator -= 1.0;
+                regenerated += 1;
+            }
             if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
                 let increase = desired_max.saturating_sub(actor.max_health).max(0);
                 actor.max_health = desired_max;
-                actor.health = actor.health.saturating_add(increase).min(desired_max);
+                actor.health = actor
+                    .health
+                    .saturating_add(increase)
+                    .saturating_add(regenerated)
+                    .min(desired_max);
             }
         }
         let alive = simulation
@@ -1628,6 +1766,7 @@ fn move_agents(
         } else {
             agent.path.clear();
             agent.goal = AgentGoal::Wander;
+            agent.health_regen_accumulator = 0.0;
             if agent.respawn_seconds <= 0.0 {
                 agent.respawn_seconds = 5.0;
             }
@@ -1692,31 +1831,16 @@ fn move_agents(
             target.y += animation.base_scale.y * 0.5;
         }
         let distance = target - transform.translation;
-        let (base_speed, movement_percent) = simulation.0.actors.get(&agent.id).map_or(
-            (config.0.gameplay.agent_speed_cells_per_second, 0),
+        let speed = simulation.0.actors.get(&agent.id).map_or(
+            config.0.gameplay.agent_speed_cells_per_second,
             |actor| {
-                (
-                    content.0.roles.get(&actor.role).map_or(
-                        config.0.gameplay.agent_speed_cells_per_second,
-                        |definition| {
-                            milli_units_as_f32(
-                                definition.base_movement_speed_milli_cells_per_second,
-                            )
-                        },
-                    ),
-                    technology_stat_boost_percent(
-                        &content.0,
-                        &simulation.0,
-                        &actor.role,
-                        &StableId::new("stat:movement_speed").expect("static ID"),
-                    ),
-                )
+                effective_role_stats(&content.0, &simulation.0, actor)
+                    .map_or(config.0.gameplay.agent_speed_cells_per_second, |stats| {
+                        milli_units_as_f32(stats.movement_speed_milli_cells_per_second)
+                    })
             },
         );
-        let step = base_speed
-            * (1.0 + percentage_as_f32(movement_percent) / 100.0).max(0.0)
-            * config.0.world.cell_size
-            * time.delta_secs();
+        let step = speed * config.0.world.cell_size * time.delta_secs();
         if distance.length_squared() <= step * step {
             transform.translation = target;
             location.0 = next;
@@ -3056,6 +3180,7 @@ fn load_input(
                 target: mirrored_target(&world.generated, position),
                 action_cooldown_seconds: 0.0,
                 respawn_seconds: 0.0,
+                health_regen_accumulator: 0.0,
             },
             AgentAnimation {
                 base_scale,
@@ -3293,11 +3418,8 @@ fn percentage_reduced(base: u32, reduction_percent: i32) -> u32 {
     percentage_adjusted(base, reduction_percent.saturating_neg())
 }
 
-fn percentage_as_f32(percent: i32) -> f32 {
-    f32::from(
-        i16::try_from(percent.clamp(-10_000, 10_000))
-            .expect("clamped technology percentage fits i16"),
-    )
+fn percentage_adjusted_i64(base: i64, percent: i32) -> i64 {
+    base.saturating_add(base.saturating_mul(i64::from(percent)) / 100)
 }
 
 fn milli_units_as_f32(value: u32) -> f32 {
@@ -3615,6 +3737,7 @@ fn process_injected_commands(
                                 target,
                                 action_cooldown_seconds: 0.0,
                                 respawn_seconds: 0.0,
+                                health_regen_accumulator: 0.0,
                             },
                             AgentAnimation {
                                 base_scale,
@@ -3789,6 +3912,24 @@ fn process_injected_commands(
                         "event started".to_owned()
                     })
             }
+            ChatCommand::Experience => simulation
+                .0
+                .actors
+                .get(&actor_id)
+                .ok_or_else(|| "join before checking experience".to_owned())
+                .and_then(|actor| {
+                    effective_role_stats(&content.0, &simulation.0, actor)
+                        .map(|stats| {
+                            format!(
+                                "{} level {}/99, experience {}/{}",
+                                actor.role,
+                                stats.level,
+                                stats.experience,
+                                stats.required_experience
+                            )
+                        })
+                        .ok_or_else(|| format!("{} has no authored progression", actor.role))
+                }),
             ChatCommand::Save => {
                 let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
                 save.store
@@ -3797,7 +3938,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !build <building>, !upgrade <building>, !vote <technology>, !event <event>, !save, !help"
+                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !vote <technology>, !event <event>, !save, !help"
                     .to_owned(),
             ),
         };
@@ -4160,6 +4301,7 @@ mod tests {
             starting_amount - 10
         );
         assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 10);
+        assert_eq!(role_progress(&simulation.actors[&actor_id]).experience, 10);
         let (goal, _) = next_agent_goal(
             &simulation,
             &world,
@@ -4226,8 +4368,13 @@ mod tests {
         simulation.respawn_actor(&enemy, enemy_position).unwrap();
         assert!(simulation.actors[&enemy].alive);
         assert_eq!(simulation.actors[&enemy].health, 100);
+        let expected_cooldown =
+            effective_role_stats(&content, &simulation, &simulation.actors[&defender])
+                .map(|stats| milli_units_as_f32(stats.action_milliseconds))
+                .unwrap();
         assert!(
-            (action_cooldown(&content, &simulation, &defender, &goal) - 1.0).abs() <= f32::EPSILON
+            (action_cooldown(&content, &simulation, &defender, &goal) - expected_cooldown).abs()
+                <= f32::EPSILON
         );
     }
 
@@ -4581,14 +4728,49 @@ mod tests {
         assert_eq!(content.technology.groups.len(), 20);
         let logger = &content.roles[&StableId::new("role:logger").unwrap()];
         assert_eq!(logger.base_action_amount, 1);
+        assert_eq!(logger.experience_multiplier_per_thousand, 1_000);
+        assert_eq!(logger.action_amount_per_level_milli, 250);
         assert_eq!(logger.base_action_milliseconds, 1_000);
+        assert_eq!(logger.action_milliseconds_reduction_per_level, 5);
         assert_eq!(logger.base_carry_capacity, 10);
+        assert_eq!(logger.carry_capacity_per_level_milli, 2_000);
         assert_eq!(
             logger.resource.as_ref().map(StableId::as_str),
             Some("resource:wood")
         );
         let ranger = &content.roles[&StableId::new("role:ranger").unwrap()];
         assert_eq!(ranger.base_action_range_milli_cells, 12_000);
+    }
+
+    #[test]
+    fn authored_level_curves_drive_effective_role_stats() {
+        let content = embedded_content();
+        let actor_id = StableId::new("npc:leveled_logger").unwrap();
+        let role = StableId::new("role:logger").unwrap();
+        let mut simulation = WorldSimulation::new(9);
+        assert!(simulation.join_player(actor_id.clone(), GridPos { x: 1, z: 1 }));
+        simulation.assign_role(&actor_id, role.clone()).unwrap();
+        simulation
+            .actors
+            .get_mut(&actor_id)
+            .unwrap()
+            .role_progression
+            .insert(
+                role,
+                stream_town_domain::RoleProgress {
+                    level: 5,
+                    experience: 7,
+                },
+            );
+
+        let stats =
+            effective_role_stats(&content, &simulation, &simulation.actors[&actor_id]).unwrap();
+        assert_eq!(stats.level, 5);
+        assert_eq!(stats.experience, 7);
+        assert_eq!(stats.action_amount, 2);
+        assert_eq!(stats.action_milliseconds, 980);
+        assert_eq!(stats.movement_speed_milli_cells_per_second, 3_200);
+        assert_eq!(stats.carry_capacity, 18);
     }
 
     #[test]
@@ -4815,6 +4997,7 @@ mod tests {
         let actor_id = StableId::new("twitch:debug_viewer").unwrap();
         let commands = [
             ChatCommand::SelectRole(StableId::new("builder").unwrap()),
+            ChatCommand::Experience,
             ChatCommand::Build(available_building.0.clone()),
             ChatCommand::Vote(eligible_technology.clone()),
             ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),

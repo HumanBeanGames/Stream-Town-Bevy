@@ -298,17 +298,38 @@ fn convert_export(
             RoleDef {
                 display_name,
                 movement_speed_multiplier_per_thousand,
+                experience_multiplier_per_thousand: required_milli(asset, "ExpModifier")?,
                 base_action_amount: required_u32(asset, "BaseActionAmount")?,
+                action_amount_per_level_milli: required_milli(asset, "ActionAmountPerLevel")?,
                 base_action_milliseconds: required_milli(asset, "BaseActionSpeed")?,
+                action_milliseconds_reduction_per_level: required_milli(
+                    asset,
+                    "ActionSpeedPerLevel",
+                )?,
                 base_action_range_milli_cells: required_milli(asset, "BaseActionRange")?,
+                action_range_milli_cells_per_level: required_milli(asset, "ActionRangePerLevel")?,
                 base_health: required_u32(asset, "BaseHealth")?,
+                health_per_level_milli: required_milli(asset, "HealthPerLevel")?,
                 base_health_regen_per_second: required_i32(asset, "BaseHealthRegen")?,
+                health_regen_milli_per_second_per_level: required_milli(
+                    asset,
+                    "HealthRegenPerLevel",
+                )?,
                 base_damage_reduction_percent: required_i32(asset, "BaseDamageReduction")?,
+                damage_reduction_milli_percent_per_level: required_milli(
+                    asset,
+                    "DamageReductionPerLevel",
+                )?,
                 base_movement_speed_milli_cells_per_second: required_milli(
                     asset,
                     "BaseMovementSpeed",
                 )?,
+                movement_speed_milli_cells_per_second_per_level: required_milli(
+                    asset,
+                    "MovementSpeedPerLevel",
+                )?,
                 base_carry_capacity: required_u32(asset, "BaseMaxResource")?,
+                carry_capacity_per_level_milli: required_milli(asset, "MaxResourcePerLevel")?,
                 resource,
                 granted_abilities,
             },
@@ -1549,13 +1570,22 @@ mod tests {
                         field("Role", enum_value("Builder")),
                         field("Resource", enum_value("None")),
                         field("BaseActionAmount", Value::from(1)),
+                        field("ActionAmountPerLevel", Value::from(0.25)),
                         field("BaseActionSpeed", Value::from(1.0)),
+                        field("ActionSpeedPerLevel", Value::from(0.005)),
                         field("BaseActionRange", Value::from(1.0)),
+                        field("ActionRangePerLevel", Value::from(0.0)),
                         field("BaseHealth", Value::from(100)),
+                        field("HealthPerLevel", Value::from(2.0)),
                         field("BaseHealthRegen", Value::from(0)),
+                        field("HealthRegenPerLevel", Value::from(0.001)),
                         field("BaseDamageReduction", Value::from(0)),
+                        field("DamageReductionPerLevel", Value::from(0.005)),
                         field("BaseMovementSpeed", Value::from(3)),
+                        field("MovementSpeedPerLevel", Value::from(0.05)),
                         field("BaseMaxResource", Value::from(0)),
+                        field("MaxResourcePerLevel", Value::from(2.0)),
+                        field("ExpModifier", Value::from(3.0)),
                         field("StationFlags", enum_value("Buildings")),
                     ],
                 ),
@@ -1589,6 +1619,15 @@ mod tests {
         assert_eq!(catalog.roles[&builder].base_action_amount, 1);
         assert_eq!(catalog.roles[&builder].base_action_milliseconds, 1_000);
         assert_eq!(catalog.roles[&builder].base_health, 100);
+        assert_eq!(
+            catalog.roles[&builder].experience_multiplier_per_thousand,
+            3_000
+        );
+        assert_eq!(catalog.roles[&builder].action_amount_per_level_milli, 250);
+        assert_eq!(
+            catalog.roles[&builder].movement_speed_milli_cells_per_second_per_level,
+            50
+        );
         assert_eq!(
             catalog.roles[&builder].base_movement_speed_milli_cells_per_second,
             3_000

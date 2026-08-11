@@ -36,7 +36,7 @@ pub use save::{
     NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,
 };
 pub use simulation::{
-    ActorState, BUILDING_MAX_HEALTH, BuildingState, Season, SimulationError, TechVote, TownEvent,
-    Weather, WorldSimulation,
+    ActorState, BUILDING_MAX_HEALTH, BuildingState, MAX_ROLE_LEVEL, RoleProgress, Season,
+    SimulationError, TechVote, TownEvent, Weather, WorldSimulation, required_role_experience,
 };
 pub use world::{GeneratedResource, GeneratedWorld, generate_world};

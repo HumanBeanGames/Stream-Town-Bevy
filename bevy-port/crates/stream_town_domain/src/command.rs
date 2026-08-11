@@ -13,6 +13,7 @@ pub enum ChatCommand {
     Upgrade(StableId),
     Vote(StableId),
     TriggerEvent(StableId),
+    Experience,
     Save,
     Help,
 }
@@ -47,6 +48,7 @@ impl FromStr for ChatCommand {
         }
         match command.as_str() {
             "join" => no_argument(argument, Self::Join),
+            "experience" | "exp" => no_argument(argument, Self::Experience),
             "save" => no_argument(argument, Self::Save),
             "help" => no_argument(argument, Self::Help),
             "role" => with_id(&command, argument, Self::SelectRole),
@@ -90,6 +92,8 @@ mod tests {
     #[test]
     fn parses_shipping_command_grammar() {
         assert_eq!("!join".parse(), Ok(ChatCommand::Join));
+        assert_eq!("!experience".parse(), Ok(ChatCommand::Experience));
+        assert_eq!("!exp".parse(), Ok(ChatCommand::Experience));
         assert_eq!(
             "!build building:house".parse(),
             Ok(ChatCommand::Build(StableId::new("building:house").unwrap()))

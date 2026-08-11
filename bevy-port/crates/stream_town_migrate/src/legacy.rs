@@ -13,8 +13,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ActorKind, ActorState, BuildingState, GameConfig, GridPos, LegacyMigrationMetadata,
-    NativeSaveStore, SavedActor, SavedTerrainMesh, StableId, WorldSimulation, WorldSnapshot,
-    generate_world,
+    MAX_ROLE_LEVEL, NativeSaveStore, RoleProgress, SavedActor, SavedTerrainMesh, StableId,
+    WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAGIC: &[u8; 4] = b"STSV";
@@ -50,6 +50,7 @@ struct LegacyEntity {
     role: Option<String>,
     level: i32,
     inventory: BTreeMap<String, u32>,
+    role_progression: BTreeMap<String, RoleProgress>,
 }
 
 #[derive(Debug)]
@@ -326,6 +327,7 @@ impl<'a> BinaryParser<'a> {
                     role: None,
                     level: 0,
                     inventory: BTreeMap::new(),
+                    role_progression: BTreeMap::new(),
                 });
             }
         }
@@ -391,6 +393,7 @@ impl<'a> BinaryParser<'a> {
             role: None,
             level: 0,
             inventory: BTreeMap::new(),
+            role_progression: BTreeMap::new(),
         });
     }
 
@@ -411,6 +414,7 @@ impl<'a> BinaryParser<'a> {
                 role: None,
                 level: 0,
                 inventory: BTreeMap::new(),
+                role_progression: BTreeMap::new(),
             });
         }
         Ok(())
@@ -442,6 +446,7 @@ impl<'a> BinaryParser<'a> {
                 role: None,
                 level,
                 inventory: BTreeMap::new(),
+                role_progression: BTreeMap::new(),
             });
         }
         Ok(())
@@ -469,6 +474,7 @@ impl<'a> BinaryParser<'a> {
                 role: Some("enemy".to_owned()),
                 level: 0,
                 inventory: BTreeMap::new(),
+                role_progression: BTreeMap::new(),
             });
         }
         Ok(())
@@ -562,11 +568,19 @@ impl<'a> BinaryParser<'a> {
             let position = self.transform()?;
             let current_role = self.i32()?;
             let _previous_role = self.i32()?;
+            let mut role_progression = BTreeMap::new();
             if let Some(role_count) = self.count(MAX_SMALL_COLLECTION)? {
                 for _ in 0..role_count {
-                    let _role = self.i32()?;
-                    let _level = self.i32()?;
-                    let _experience = self.i32()?;
+                    let role = legacy_role_name(self.i32()?);
+                    let level = self.i32()?.clamp(1, i32::from(MAX_ROLE_LEVEL));
+                    let experience = nonnegative_u32(self.i32()?);
+                    role_progression.insert(
+                        role,
+                        RoleProgress {
+                            level: u16::try_from(level).unwrap_or(u16::MAX),
+                            experience,
+                        },
+                    );
                 }
             }
             let mut inventory = BTreeMap::new();
@@ -599,9 +613,12 @@ impl<'a> BinaryParser<'a> {
                 },
                 position,
                 health,
-                role: Some(format!("legacy_{current_role}")),
-                level: 0,
+                role: Some(legacy_role_name(current_role)),
+                level: role_progression
+                    .get(&legacy_role_name(current_role))
+                    .map_or(1, |progress| i32::from(progress.level)),
                 inventory,
+                role_progression,
             });
         }
         Ok(())
@@ -829,6 +846,7 @@ fn json_resources(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Result
                 role: None,
                 level: 0,
                 inventory: BTreeMap::new(),
+                role_progression: BTreeMap::new(),
             });
         }
     }
@@ -862,6 +880,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                         role: None,
                         level: 0,
                         inventory: BTreeMap::new(),
+                        role_progression: BTreeMap::new(),
                     });
                 }
             }
@@ -884,6 +903,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                     role: None,
                     level: 0,
                     inventory: BTreeMap::new(),
+                    role_progression: BTreeMap::new(),
                 });
             }
         }
@@ -908,6 +928,7 @@ fn json_enemy_camps(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Resu
             role: None,
             level: 0,
             inventory: BTreeMap::new(),
+            role_progression: BTreeMap::new(),
         });
     }
     Ok(())
@@ -930,6 +951,7 @@ fn json_buildings(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> 
             role: None,
             level: json_i32_default(building, "Level"),
             inventory: BTreeMap::new(),
+            role_progression: BTreeMap::new(),
         });
     }
     Ok(())
@@ -952,6 +974,7 @@ fn json_enemies(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             role: Some("enemy".to_owned()),
             level: 0,
             inventory: BTreeMap::new(),
+            role_progression: BTreeMap::new(),
         });
     }
     Ok(())
@@ -983,10 +1006,32 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
                 )
             })
             .collect();
-        let role = player.get("CurrentRole").map(|value| match value {
-            Value::String(role) => role.clone(),
-            _ => format!("legacy_{}", value.as_i64().unwrap_or_default()),
-        });
+        let role = player.get("CurrentRole").map(json_role_name);
+        let role_progression: BTreeMap<_, _> = player
+            .get("Roles")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|saved_role| {
+                let role = saved_role
+                    .get("Role")
+                    .map_or_else(|| "legacy_0".to_owned(), json_role_name);
+                let level =
+                    json_i32_default(saved_role, "Level").clamp(1, i32::from(MAX_ROLE_LEVEL));
+                let experience = nonnegative_u32(json_i32_default(saved_role, "Experience"));
+                (
+                    role,
+                    RoleProgress {
+                        level: u16::try_from(level).unwrap_or(u16::MAX),
+                        experience,
+                    },
+                )
+            })
+            .collect();
+        let level = role
+            .as_ref()
+            .and_then(|role| role_progression.get(role))
+            .map_or(1, |progress| i32::from(progress.level));
         entities.push(LegacyEntity {
             key: format!("player:{key}"),
             kind: ActorKind::Player,
@@ -994,8 +1039,9 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             position: json_transform(player.get("Transform").unwrap_or(&Value::Null))?,
             health: json_i32_default(player, "Health"),
             role,
-            level: 0,
+            level,
             inventory,
+            role_progression,
         });
     }
     Ok(())
@@ -1089,8 +1135,39 @@ fn json_string(value: &Value, field: &str, fallback: &str) -> String {
         .to_owned()
 }
 
+fn json_role_name(value: &Value) -> String {
+    value.as_str().map_or_else(
+        || legacy_role_name(i32::try_from(value.as_i64().unwrap_or_default()).unwrap_or_default()),
+        str::to_ascii_lowercase,
+    )
+}
+
 fn nonnegative_u32(value: i32) -> u32 {
     u32::try_from(value.max(0)).expect("nonnegative i32")
+}
+
+fn legacy_role_name(value: i32) -> String {
+    const ROLES: [&str; 15] = [
+        "logger",
+        "builder",
+        "defender",
+        "fisher",
+        "ruler",
+        "miner",
+        "ranger",
+        "farmer",
+        "soldier",
+        "gatherer",
+        "priest",
+        "wizard",
+        "necromancer",
+        "paladin",
+        "blacksmith",
+    ];
+    usize::try_from(value)
+        .ok()
+        .and_then(|index| ROLES.get(index))
+        .map_or_else(|| format!("legacy_{value}"), |role| (*role).to_owned())
 }
 
 fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnapshot, u32)> {
@@ -1148,6 +1225,18 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                     .into_iter()
                     .map(|(kind, amount)| Ok((content_id("resource", &kind)?, amount)))
                     .collect::<Result<BTreeMap<_, _>>>()?;
+                let mut role_progression = entity
+                    .role_progression
+                    .into_iter()
+                    .map(|(role, progress)| Ok((content_id("role", &role)?, progress)))
+                    .collect::<Result<BTreeMap<_, _>>>()?;
+                role_progression
+                    .entry(role.clone())
+                    .or_insert(RoleProgress {
+                        level: u16::try_from(entity.level.clamp(1, i32::from(MAX_ROLE_LEVEL)))
+                            .unwrap_or(1),
+                        experience: 0,
+                    });
                 simulation.actors.insert(
                     id.clone(),
                     ActorState {
@@ -1158,6 +1247,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         max_health: entity.health.max(1),
                         alive: entity.health > 0,
                         inventory,
+                        role_progression,
                     },
                 );
             }
@@ -1375,6 +1465,7 @@ mod tests {
                 role: Some("villager".to_owned()),
                 level: 0,
                 inventory: BTreeMap::new(),
+                role_progression: BTreeMap::new(),
             }],
             world_age_seconds: 12.0,
             town_resources: BTreeMap::new(),
@@ -1436,6 +1527,7 @@ mod tests {
                     "GUID": 9,
                     "Transform": { "Position": { "X": 0.0, "Y": 2.0, "Z": 0.0 } },
                     "CurrentRole": "Builder",
+                    "Roles": [{ "Role": "Builder", "Level": 7, "Experience": 123 }],
                     "Inventory": { "Entries": [] },
                     "Health": 80
                 }]
@@ -1446,6 +1538,23 @@ mod tests {
         assert_eq!(decoded.terrain_seed, Some(77));
         assert_eq!(decoded.entities.len(), 1);
         assert!(decoded.unlocked_technology.contains("Forestry"));
+        assert_eq!(
+            decoded.entities[0].role_progression["builder"],
+            RoleProgress {
+                level: 7,
+                experience: 123,
+            }
+        );
+        let (snapshot, _) = convert(decoded, &GameConfig::default()).unwrap();
+        let actor = snapshot.simulation.actors.values().next().unwrap();
+        assert_eq!(actor.role.as_str(), "role:builder");
+        assert_eq!(
+            actor.role_progression[&StableId::new("role:builder").unwrap()],
+            RoleProgress {
+                level: 7,
+                experience: 123,
+            }
+        );
     }
 
     fn binary_fixture(schema: u32, trailer: i32) -> Vec<u8> {
