@@ -86,9 +86,12 @@ broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
-vertical slice renders a 3D terrain plane,
-lighting, converted GLB scenes for the representative town hall and actors, and
-primitive fallbacks when an asset is unavailable.
+vertical slice renders the deterministic navigation height field as a colored
+4,225-vertex terrain mesh, a water surface at the authored level, an Avian
+trimesh collider used for surface picking, lighting, converted GLB scenes for
+the representative town hall and actors, and primitive fallbacks when an asset
+is unavailable. Actors, resources, buildings, movement, joins, save restores,
+and selection markers use the same centimetre height data as navigation.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
 Goblin path). The Player controller builds 19 converted clips retargeted onto 23
 bones in the Player GLB rest pose. An engine-independent interpreter evaluates

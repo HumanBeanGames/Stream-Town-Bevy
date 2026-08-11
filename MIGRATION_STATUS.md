@@ -16,12 +16,17 @@ mistaken for production-ready systems.
 - Validated, versioned RON configuration and stable authored/runtime IDs that do
   not expose Bevy entity identifiers.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
-  grounding data, and repeatable world hashes.
+  grounding data, repeatable world hashes, and a 4,225-vertex/8,192-triangle
+  Bevy terrain surface generated directly from that navigation height field.
 - A runnable 300-agent ECS simulation with one enemy, dynamic obstacles, path
   following, a town hall, resources, a status HUD, orthographic 3D pan/zoom
-  camera controls, ray/ground click picking, screenshot capture, directional
-  lighting, converted representative GLB scenes with primitive fallbacks, and
-  an explicit idle/moving visual state machine.
+  camera controls, collider-backed surface picking, screenshot capture,
+  directional lighting, converted representative GLB scenes with primitive
+  fallbacks, and an explicit idle/moving visual state machine. Terrain vertex
+  colors encode elevation, a translucent water surface uses the authored water
+  level, an Avian trimesh collider mirrors the visible surface, and actors,
+  resources, buildings, save restores, joins, paths, and selection markers are
+  grounded to deterministic centimetre heights.
 - An injected `!join` vertical slice that goes through the shipping command
   parser and creates both the stable domain actor and its visible ECS entity.
 - An opt-in Twitch transport using public-client device OAuth, `twitch-irc`,
@@ -114,9 +119,10 @@ mistaken for production-ready systems.
   parameter and nested state-machine exits currently fall back to Locomotion.
   Per-prefab renderer activation for player role/equipment variants co-located
   in source FBX files also remains.
-- The production terrain renderer, production-grade actor steering, complete
-  role/building/resource/station/inventory/equipment behavior, and every
-  reachable balance rule from the Unity scenes.
+- Production terrain material/shader parity, shoreline treatment, chunked LOD,
+  foliage/biome rendering, production-grade actor steering, complete role/
+  building/resource/station/inventory/equipment behavior, and every reachable
+  balance rule from the Unity scenes.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   dispatches the stable Bevy command grammar and relies on `twitch-irc` for
@@ -178,9 +184,10 @@ prefabs, representative production GLBs, and connected Twitch transport, but it
 now also has complete presentation metadata, packaged textures, native Goblin
 animation binding, 57 converted standalone transform clips, Player locomotion
 retargeting, a typed controller interpreter, 19-clip Player blend-graph playback,
-inherited prefab material bindings, and runtime PBR material reconstruction. It
-is still missing nested controller layers and complete gameplay action emitters,
-exact curve tangents and multi-slot/custom-shader parity, full command parity,
-and the recorded reference-machine GPU measurement required to close the
-milestone.
+the generated heightfield/water/collider surface, inherited prefab material
+bindings, and runtime PBR material reconstruction. It is still missing nested
+controller layers and complete gameplay action emitters, terrain/foliage shader
+parity, exact curve tangents and multi-slot/custom-shader parity, full command
+parity, and the recorded reference-machine GPU measurement required to close
+the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
