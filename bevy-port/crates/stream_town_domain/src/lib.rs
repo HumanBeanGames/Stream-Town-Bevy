@@ -1,5 +1,6 @@
 //! Engine-independent Stream Town data, deterministic simulation, and persistence.
 
+pub mod animation;
 pub mod command;
 pub mod config;
 pub mod content;
@@ -10,6 +11,10 @@ pub mod save;
 pub mod simulation;
 pub mod world;
 
+pub use animation::{
+    AnimationBlendSelection, AnimationControllerRuntime, AnimationParameterValue,
+    AnimationRuntimeError, AnimationTransitionOutcome, WeightedAnimationMotion,
+};
 pub use command::{ChatCommand, CommandParseError};
 pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{
@@ -19,10 +24,11 @@ pub use content::{
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
 pub use presentation::{
-    AnimationClipDef, AnimationConditionDef, AnimationControllerDef, AnimationMotionDef,
-    AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef,
-    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, MaterialAlphaMode,
-    MaterialDef, PrefabPresentationBinding, PresentationCatalog, PresentationError, TextureDef,
+    AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
+    AnimationMotionDef, AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe,
+    AnimationStateDef, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
+    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
+    PresentationError, TextureDef,
 };
 pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,

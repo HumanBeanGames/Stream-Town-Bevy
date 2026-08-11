@@ -22,10 +22,11 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
-    ActorKind, AnimationClipDef, AnimationTransformTrack, ArchetypeDef, ArchetypeKind,
-    ArchetypeScene, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, PresentationCatalog,
-    SavedActor, StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
+    ActorKind, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
+    AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, ChatCommand,
+    ContentCatalog, GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode,
+    MaterialDef, NativeSaveStore, PresentationCatalog, SavedActor, StableId, TownEvent,
+    WorldSimulation, WorldSnapshot, generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -174,8 +175,8 @@ struct NativeAnimationSpec {
 
 #[derive(Component, Clone)]
 struct ConvertedAnimationSpec {
-    idle: StableId,
-    moving: StableId,
+    controller: StableId,
+    state: StableId,
 }
 
 #[derive(Component)]
@@ -187,6 +188,17 @@ struct ActorAnimationDriver {
     idle: AnimationNodeIndex,
     moving: AnimationNodeIndex,
     current: MovementAnimationState,
+}
+
+#[derive(Component)]
+struct ConvertedAnimationDriver {
+    actor_root: Entity,
+    controller: StableId,
+    fallback_state: StableId,
+    runtime: AnimationControllerRuntime,
+    nodes: BTreeMap<StableId, AnimationNodeIndex>,
+    active: Vec<(AnimationNodeIndex, f32)>,
+    last_alive: Option<bool>,
 }
 
 #[derive(Component, Clone)]
@@ -239,6 +251,7 @@ impl Plugin for StreamTownGamePlugin {
                     attach_native_animations,
                     attach_converted_animations,
                     drive_native_animations,
+                    drive_converted_animations,
                     apply_material_overrides,
                     camera_controls,
                     select_grid_cell,
@@ -873,11 +886,11 @@ fn converted_animation_spec(
 ) -> Option<ConvertedAnimationSpec> {
     let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
     let controller = presentation.controllers.get(&binding.controller)?;
-    let locomotion = controller
+    let (state, locomotion) = controller
         .states
-        .values()
-        .find(|state| state.display_name.eq_ignore_ascii_case("locomotion"))?;
-    let mut motions: Vec<_> = locomotion
+        .iter()
+        .find(|(_, state)| state.display_name.eq_ignore_ascii_case("locomotion"))?;
+    let converted_motions = locomotion
         .motions
         .iter()
         .filter(|motion| {
@@ -886,20 +899,13 @@ fn converted_animation_spec(
                 .get(&motion.clip)
                 .is_some_and(|clip| !clip.transform_tracks.is_empty())
         })
-        .collect();
-    motions.sort_by(|left, right| {
-        left.threshold
-            .unwrap_or_default()
-            .total_cmp(&right.threshold.unwrap_or_default())
-            .then_with(|| left.clip.cmp(&right.clip))
-    });
-    let idle = motions.first()?.clip.clone();
-    let moving = motions
-        .get(1)
-        .unwrap_or_else(|| motions.first().unwrap())
-        .clip
-        .clone();
-    Some(ConvertedAnimationSpec { idle, moving })
+        .count();
+    (converted_motions == locomotion.motions.len() && converted_motions > 0).then(|| {
+        ConvertedAnimationSpec {
+            controller: binding.controller.clone(),
+            state: state.clone(),
+        }
+    })
 }
 
 fn prefab_material_handle(
@@ -1103,13 +1109,20 @@ fn attach_converted_animations(
         return;
     };
     for (actor_root, spec) in &specs {
-        let Some(idle) = presentation.0.clips.get(&spec.idle) else {
+        let Some(controller) = presentation.0.controllers.get(&spec.controller) else {
             continue;
         };
-        let Some(moving) = presentation.0.clips.get(&spec.moving) else {
+        let Some(state) = controller.states.get(&spec.state) else {
             continue;
         };
-        let Some(root_name) = animation_root_name(idle) else {
+        let Some(root_clip) = state
+            .motions
+            .iter()
+            .find_map(|motion| presentation.0.clips.get(&motion.clip))
+        else {
+            continue;
+        };
+        let Some(root_name) = animation_root_name(root_clip) else {
             continue;
         };
         let Some(animation_root) = find_named_descendant(actor_root, root_name, &children, &names)
@@ -1117,16 +1130,36 @@ fn attach_converted_animations(
             continue;
         };
         let targets = collect_animation_targets(animation_root, &children, &names, &transforms);
-        let Some(idle_clip) = retargeted_animation_clip(idle, &targets) else {
+        let mut clip_ids = BTreeSet::new();
+        let mut converted = Vec::new();
+        for motion in controller
+            .states
+            .values()
+            .flat_map(|state| state.motions.iter())
+        {
+            if !clip_ids.insert(motion.clip.clone()) {
+                continue;
+            }
+            let Some(source) = presentation.0.clips.get(&motion.clip) else {
+                continue;
+            };
+            let Some(clip) = retargeted_animation_clip(source, &targets) else {
+                continue;
+            };
+            converted.push((motion.clip.clone(), animation_clips.add(clip)));
+        }
+        if converted.is_empty() {
             continue;
-        };
-        let Some(moving_clip) = retargeted_animation_clip(moving, &targets) else {
-            continue;
-        };
-        let idle_handle = animation_clips.add(idle_clip);
-        let moving_handle = animation_clips.add(moving_clip);
-        let (graph, nodes) = AnimationGraph::from_clips([idle_handle, moving_handle]);
-        let [idle_node, moving_node] = nodes.as_slice() else {
+        }
+        let (graph, graph_nodes) =
+            AnimationGraph::from_clips(converted.iter().map(|(_, clip)| clip.clone()));
+        let nodes: BTreeMap<_, _> = converted
+            .iter()
+            .zip(graph_nodes)
+            .map(|((clip, _), node)| (clip.clone(), node))
+            .collect();
+        let Ok(runtime) = AnimationControllerRuntime::in_state(controller, spec.state.clone())
+        else {
             continue;
         };
         let graph = animation_graphs.add(graph);
@@ -1136,16 +1169,17 @@ fn attach_converted_animations(
                 AnimatedBy(animation_root),
             ));
         }
-        let mut player = AnimationPlayer::default();
-        player.play(*idle_node).repeat();
         commands.entity(animation_root).insert((
-            player,
+            AnimationPlayer::default(),
             AnimationGraphHandle(graph),
-            ActorAnimationDriver {
+            ConvertedAnimationDriver {
                 actor_root,
-                idle: *idle_node,
-                moving: *moving_node,
-                current: MovementAnimationState::Idle,
+                controller: spec.controller.clone(),
+                fallback_state: spec.state.clone(),
+                runtime,
+                nodes,
+                active: Vec::new(),
+                last_alive: None,
             },
         ));
         commands
@@ -1153,10 +1187,11 @@ fn attach_converted_animations(
             .insert(ConvertedAnimationApplied);
         info!(
             actor = ?actor_root,
-            idle = %spec.idle,
-            moving = %spec.moving,
+            controller = %spec.controller,
+            state = %spec.state,
+            clips = converted.len(),
             targets = targets.len(),
-            "attached converted Unity locomotion clips"
+            "attached translated Unity animation controller"
         );
     }
 }
@@ -1406,6 +1441,144 @@ fn drive_native_animations(
             "switched native animation state"
         );
     }
+}
+
+fn drive_converted_animations(
+    config: Res<RuntimeConfig>,
+    presentation: Res<RuntimePresentation>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<&Agent>,
+    mut players: Query<(&mut AnimationPlayer, &mut ConvertedAnimationDriver)>,
+) {
+    for (mut player, mut driver) in &mut players {
+        let Ok(agent) = agents.get(driver.actor_root) else {
+            continue;
+        };
+        let Some(controller) = presentation.0.controllers.get(&driver.controller) else {
+            continue;
+        };
+        let moving = !agent.path.is_empty() && agent.path_index < agent.path.len();
+        let move_speed = if moving {
+            (config.0.gameplay.agent_speed_cells_per_second / 5.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let _ = driver.runtime.set_float("Move Speed", move_speed);
+
+        if let Some(alive) = simulation.0.actors.get(&agent.id).map(|actor| actor.alive) {
+            if let Some(previous) = driver.last_alive
+                && alive != previous
+            {
+                let trigger = if alive { "Revive" } else { "Death" };
+                let _ = driver.runtime.set_trigger(trigger);
+            }
+            driver.last_alive = Some(alive);
+        }
+
+        let normalized_time = current_normalized_time(&player, &driver, &presentation.0);
+        let transition = driver
+            .runtime
+            .evaluate_transitions(controller, normalized_time)
+            .ok();
+        if matches!(
+            transition,
+            Some(stream_town_domain::AnimationTransitionOutcome::Exited)
+        ) {
+            let fallback_state = driver.fallback_state.clone();
+            let _ = driver.runtime.enter_state(controller, fallback_state);
+        }
+        if let Some(stream_town_domain::AnimationTransitionOutcome::Entered(state)) = &transition {
+            info!(
+                actor = ?driver.actor_root,
+                state = %state,
+                "translated animation controller entered state"
+            );
+        }
+
+        let Ok(Some(selection)) = driver.runtime.motion_selection(controller) else {
+            continue;
+        };
+        let desired = animation_nodes_for_selection(&selection, &driver.nodes);
+        if desired.is_empty() {
+            continue;
+        }
+        let changed = !same_animation_blend(&driver.active, &desired);
+        apply_animation_blend(&mut player, &desired);
+        if changed {
+            info!(
+                actor = ?driver.actor_root,
+                state = %driver.runtime.current_state(),
+                primary = %selection.first.clip,
+                primary_weight = selection.first.weight,
+                secondary = selection.second.as_ref().map(|motion| motion.clip.as_str()),
+                secondary_weight = selection.second.as_ref().map(|motion| motion.weight),
+                "applied translated animation blend"
+            );
+        }
+        driver.active = desired;
+    }
+}
+
+fn current_normalized_time(
+    player: &AnimationPlayer,
+    driver: &ConvertedAnimationDriver,
+    presentation: &PresentationCatalog,
+) -> f32 {
+    player
+        .playing_animations()
+        .filter_map(|(node, animation)| {
+            let clip = driver
+                .nodes
+                .iter()
+                .find_map(|(clip, candidate)| (candidate == node).then_some(clip))?;
+            let duration = presentation.clips.get(clip)?.duration_seconds;
+            (duration > f32::EPSILON).then_some(animation.elapsed() / duration)
+        })
+        .fold(0.0, f32::max)
+}
+
+fn animation_nodes_for_selection(
+    selection: &AnimationBlendSelection,
+    nodes: &BTreeMap<StableId, AnimationNodeIndex>,
+) -> Vec<(AnimationNodeIndex, f32)> {
+    let mut desired = Vec::with_capacity(2);
+    if let Some(node) = nodes.get(&selection.first.clip)
+        && selection.first.weight > f32::EPSILON
+    {
+        desired.push((*node, selection.first.weight));
+    }
+    if let Some(second) = &selection.second
+        && let Some(node) = nodes.get(&second.clip)
+        && second.weight > f32::EPSILON
+    {
+        desired.push((*node, second.weight));
+    }
+    desired
+}
+
+fn apply_animation_blend(player: &mut AnimationPlayer, desired: &[(AnimationNodeIndex, f32)]) {
+    let playing: Vec<_> = player.playing_animations().map(|(node, _)| *node).collect();
+    for node in playing {
+        if !desired.iter().any(|(desired, _)| *desired == node) {
+            player.stop(node);
+        }
+    }
+    for (node, weight) in desired {
+        player.play(*node).repeat().set_weight(*weight);
+    }
+}
+
+fn same_animation_blend(
+    left: &[(AnimationNodeIndex, f32)],
+    right: &[(AnimationNodeIndex, f32)],
+) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|((left_node, left_weight), (right_node, right_weight))| {
+                left_node == right_node && (left_weight - right_weight).abs() <= f32::EPSILON
+            })
 }
 
 fn apply_material_overrides(
@@ -2090,8 +2263,16 @@ mod tests {
             Some(player_scene.asset_path.as_str())
         );
         let spec = converted_animation_spec(player, &presentation).unwrap();
-        let idle = presentation.clips.get(&spec.idle).unwrap();
+        let controller = presentation.controllers.get(&spec.controller).unwrap();
+        let state = controller.states.get(&spec.state).unwrap();
+        assert_eq!(state.blend_parameter.as_deref(), Some("Move Speed"));
+        assert_eq!(state.motions.len(), 3);
+        let idle = presentation.clips.get(&state.motions[0].clip).unwrap();
         assert!(!idle.transform_tracks.is_empty());
+        let mut runtime = AnimationControllerRuntime::in_state(controller, spec.state).unwrap();
+        runtime.set_float("Move Speed", 0.25).unwrap();
+        let selection = runtime.motion_selection(controller).unwrap().unwrap();
+        assert!(selection.second.is_some());
         assert_eq!(
             presentation
                 .clips

@@ -8,10 +8,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stream_town_domain::{
-    AnimationClipDef, AnimationConditionDef, AnimationControllerDef, AnimationMotionDef,
-    AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef,
-    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, MaterialAlphaMode,
-    MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId, TextureDef,
+    AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
+    AnimationMotionDef, AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe,
+    AnimationStateDef, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
+    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId,
+    TextureDef,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -29,6 +30,7 @@ pub struct PresentationConversionReport {
     pub controllers: usize,
     pub controller_states: usize,
     pub controller_transitions: usize,
+    pub inferred_parameters: usize,
     pub prefab_bindings: usize,
     pub native_animation_bindings: usize,
     pub outputs: Vec<String>,
@@ -103,6 +105,12 @@ struct ParsedMotion {
     threshold: Option<f32>,
 }
 
+#[derive(Clone, Debug)]
+struct ParsedBlendTree {
+    parameter: Option<String>,
+    motions: Vec<ParsedMotion>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TransformCurveKind {
     Rotation,
@@ -165,7 +173,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 2,
+        schema_version: 3,
         textures,
         materials,
         clips,
@@ -182,7 +190,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 2,
+        schema_version: 3,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -215,6 +223,12 @@ pub fn convert(
             .values()
             .map(|controller| controller.transitions.len())
             .sum(),
+        inferred_parameters: catalog
+            .controllers
+            .values()
+            .flat_map(|controller| &controller.parameters)
+            .filter(|parameter| parameter.inferred)
+            .count(),
         prefab_bindings: catalog.prefab_bindings.len(),
         native_animation_bindings: catalog
             .prefab_bindings
@@ -609,10 +623,10 @@ fn parse_controller(
     clips: &mut BTreeMap<StableId, AnimationClipDef>,
 ) -> Result<AnimationControllerDef> {
     let documents = parse_yaml_documents(contents)?;
-    let blend_motions: BTreeMap<i64, Vec<ParsedMotion>> = documents
+    let blend_trees: BTreeMap<i64, ParsedBlendTree> = documents
         .iter()
         .filter(|document| document.class_id == 206)
-        .map(|document| (document.file_id, parse_motions(&document.lines)))
+        .map(|document| (document.file_id, parse_blend_tree(&document.lines)))
         .collect();
     let state_documents: Vec<_> = documents
         .iter()
@@ -635,9 +649,9 @@ fn parse_controller(
         for transition in parse_reference_list(&document.lines, "m_Transitions:") {
             transition_sources.insert(transition, state_id.clone());
         }
-        let motions = parse_state_motions(document, &blend_motions);
+        let parsed_motion = parse_state_motions(document, &blend_trees);
         let mut converted_motions = Vec::new();
-        for motion in motions {
+        for motion in parsed_motion.motions {
             let clip = clip_id(&motion.guid)?;
             if !clips.contains_key(&clip) {
                 let source_asset = assets_by_guid.get(motion.guid.as_str());
@@ -673,29 +687,36 @@ fn parse_controller(
                     .unwrap_or("Unnamed")
                     .to_owned(),
                 speed: scalar_f32(&document.lines, "m_Speed:").unwrap_or(1.0),
+                blend_parameter: parsed_motion.parameter,
                 motions: converted_motions,
             },
         );
     }
 
-    let transitions = documents
+    let transitions: Vec<_> = documents
         .iter()
         .filter(|document| matches!(document.class_id, 1101 | 1109))
-        .filter_map(|document| {
+        .map(|document| {
             let destination_file = reference_id(&document.lines, "m_DstState:").unwrap_or(0);
             let source = transition_sources.get(&document.file_id).cloned();
             let destination = state_ids.get(&destination_file).cloned();
             let is_exit = scalar_bool(&document.lines, "m_IsExit:").unwrap_or(false);
-            (source.is_some() || destination.is_some() || is_exit).then(|| AnimationTransitionDef {
+            if source.is_none() && destination.is_none() && !is_exit {
+                return Ok(None);
+            }
+            Ok(Some(AnimationTransitionDef {
                 source,
                 destination,
                 is_exit,
                 has_exit_time: scalar_bool(&document.lines, "m_HasExitTime:").unwrap_or(false),
                 exit_time: scalar_f32(&document.lines, "m_ExitTime:").unwrap_or(0.0),
                 duration: scalar_f32(&document.lines, "m_TransitionDuration:").unwrap_or(0.0),
-                conditions: parse_conditions(&document.lines),
-            })
+                conditions: parse_conditions(&document.lines)?,
+            }))
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
     let mut default_states: Vec<_> = documents
         .iter()
@@ -706,10 +727,11 @@ fn parse_controller(
         .collect();
     default_states.sort();
     default_states.dedup();
-    let parameters = documents
+    let mut parameters = documents
         .iter()
         .find(|document| document.class_id == 91)
         .map_or_else(Vec::new, |document| parse_parameters(&document.lines));
+    infer_missing_parameters(&states, &transitions, &mut parameters);
     Ok(AnimationControllerDef {
         display_name: asset.name.clone(),
         source_guid: asset.guid.clone(),
@@ -984,27 +1006,36 @@ fn parse_yaml_documents(contents: &str) -> Result<Vec<YamlDocument>> {
 
 fn parse_state_motions(
     state: &YamlDocument,
-    blend_motions: &BTreeMap<i64, Vec<ParsedMotion>>,
-) -> Vec<ParsedMotion> {
+    blend_trees: &BTreeMap<i64, ParsedBlendTree>,
+) -> ParsedBlendTree {
     let Some(line) = state
         .lines
         .iter()
         .find(|line| line.trim_start().starts_with("m_Motion:"))
     else {
-        return Vec::new();
+        return ParsedBlendTree {
+            parameter: None,
+            motions: Vec::new(),
+        };
     };
     if let Some(guid) = reference_guid(line) {
-        return vec![ParsedMotion {
-            guid: guid.to_owned(),
-            threshold: None,
-        }];
+        return ParsedBlendTree {
+            parameter: None,
+            motions: vec![ParsedMotion {
+                guid: guid.to_owned(),
+                threshold: None,
+            }],
+        };
     }
     inline_file_id(line)
-        .and_then(|file_id| blend_motions.get(&file_id).cloned())
-        .unwrap_or_default()
+        .and_then(|file_id| blend_trees.get(&file_id).cloned())
+        .unwrap_or(ParsedBlendTree {
+            parameter: None,
+            motions: Vec::new(),
+        })
 }
 
-fn parse_motions(lines: &[String]) -> Vec<ParsedMotion> {
+fn parse_blend_tree(lines: &[String]) -> ParsedBlendTree {
     let mut motions = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         if !line.trim_start().starts_with("m_Motion:") {
@@ -1024,16 +1055,19 @@ fn parse_motions(lines: &[String]) -> Vec<ParsedMotion> {
             threshold,
         });
     }
-    motions
+    ParsedBlendTree {
+        parameter: scalar(lines, "m_BlendParameter:").map(str::to_owned),
+        motions,
+    }
 }
 
-fn parse_conditions(lines: &[String]) -> Vec<AnimationConditionDef> {
+fn parse_conditions(lines: &[String]) -> Result<Vec<AnimationConditionDef>> {
     let mut conditions = Vec::new();
     for (index, line) in lines.iter().enumerate() {
         let Some(mode) = line
             .trim()
             .strip_prefix("- m_ConditionMode: ")
-            .and_then(|value| value.parse().ok())
+            .and_then(|value| value.parse::<u8>().ok())
         else {
             continue;
         };
@@ -1047,13 +1081,15 @@ fn parse_conditions(lines: &[String]) -> Vec<AnimationConditionDef> {
             .and_then(|line| line.trim().strip_prefix("m_EventTreshold: "))
             .and_then(|value| value.parse().ok())
             .unwrap_or(0.0);
+        let mode = AnimationConditionMode::try_from(mode)
+            .map_err(|mode| anyhow::anyhow!("unsupported Unity animation condition mode {mode}"))?;
         conditions.push(AnimationConditionDef {
             parameter,
             mode,
             threshold,
         });
     }
-    conditions
+    Ok(conditions)
 }
 
 fn parse_parameters(lines: &[String]) -> Vec<AnimationParameterDef> {
@@ -1087,10 +1123,62 @@ fn parse_parameters(lines: &[String]) -> Vec<AnimationParameterDef> {
             default_float: scalar_f32(window, "m_DefaultFloat:").unwrap_or(0.0),
             default_integer: scalar_i32(window, "m_DefaultInt:").unwrap_or(0),
             default_boolean: scalar_bool(window, "m_DefaultBool:").unwrap_or(false),
+            inferred: false,
         });
         index += 1;
     }
     parameters
+}
+
+fn infer_missing_parameters(
+    states: &BTreeMap<StableId, AnimationStateDef>,
+    transitions: &[AnimationTransitionDef],
+    parameters: &mut Vec<AnimationParameterDef>,
+) {
+    let mut known: BTreeSet<_> = parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect();
+    let mut inferred = BTreeMap::<String, AnimationParameterKind>::new();
+    for parameter in states
+        .values()
+        .filter_map(|state| state.blend_parameter.as_ref())
+    {
+        if !known.contains(parameter) {
+            inferred.insert(parameter.clone(), AnimationParameterKind::Float);
+        }
+    }
+    for condition in transitions
+        .iter()
+        .flat_map(|transition| &transition.conditions)
+    {
+        if known.contains(&condition.parameter) {
+            continue;
+        }
+        let kind = match condition.mode {
+            AnimationConditionMode::If | AnimationConditionMode::IfNot => {
+                AnimationParameterKind::Boolean
+            }
+            AnimationConditionMode::Equals | AnimationConditionMode::NotEqual => {
+                AnimationParameterKind::Integer
+            }
+            AnimationConditionMode::Greater | AnimationConditionMode::Less => {
+                AnimationParameterKind::Float
+            }
+        };
+        inferred.entry(condition.parameter.clone()).or_insert(kind);
+    }
+    for (name, kind) in inferred {
+        known.insert(name.clone());
+        parameters.push(AnimationParameterDef {
+            name,
+            kind,
+            default_float: 0.0,
+            default_integer: 0,
+            default_boolean: false,
+            inferred: true,
+        });
+    }
 }
 
 fn parse_reference_list(lines: &[String], header: &str) -> Vec<i64> {

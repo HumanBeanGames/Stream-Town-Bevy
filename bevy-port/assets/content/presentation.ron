@@ -1,5 +1,5 @@
 (
-    schema_version: 2,
+    schema_version: 3,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -81017,6 +81017,7 @@
                 "animation_state:041204ef172f5204cba091bee520a621:413563437936539907": (
                     display_name: "CreditsCutscene",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:cf9376f438a1a824faf48aa8a1c70fac",
@@ -81039,6 +81040,7 @@
                 "animation_state:09de90f93188f2c4fad99a99580e428b:4194647471290091990": (
                     display_name: "CharacterHeal",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:9cee0e27c93c52f49b8734b6bda97a4e",
@@ -81063,6 +81065,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -81070,6 +81073,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -81077,6 +81081,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -81084,6 +81089,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -81091,12 +81097,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:77e10acba41fcfc41a0bb35a7b73775d",
@@ -81107,6 +81115,7 @@
                 "animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:77e10acba41fcfc41a0bb35a7b73775d",
@@ -81117,6 +81126,7 @@
                 "animation_state:11894e4d53fa75c43971148df4df241f:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:77e10acba41fcfc41a0bb35a7b73775d",
@@ -81144,7 +81154,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81159,7 +81169,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -81174,7 +81184,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -81189,7 +81199,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -81204,7 +81214,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81219,7 +81229,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -81234,7 +81244,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81249,7 +81259,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81271,6 +81281,7 @@
                     default_float: 0.5,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "WoodCutting",
@@ -81278,6 +81289,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -81285,6 +81297,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Build",
@@ -81292,6 +81305,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "BowShoot",
@@ -81299,6 +81313,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Casting",
@@ -81306,6 +81321,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Farming",
@@ -81313,6 +81329,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Fishing",
@@ -81320,6 +81337,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Gathering",
@@ -81327,6 +81345,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "HammerAttack",
@@ -81334,6 +81353,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Heal",
@@ -81341,6 +81361,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Mining",
@@ -81348,6 +81369,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "SpearAttack",
@@ -81355,6 +81377,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "StaffAttack",
@@ -81362,6 +81385,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "StaffMagicAttack",
@@ -81369,6 +81393,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "LongSword",
@@ -81376,6 +81401,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "CarryWood",
@@ -81383,6 +81409,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "CarryHip",
@@ -81390,6 +81417,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -81397,6 +81425,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -81404,6 +81433,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "ActionSpeed",
@@ -81411,6 +81441,7 @@
                     default_float: 1.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Death",
@@ -81418,6 +81449,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Revive",
@@ -81425,12 +81457,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-4585270874795264890": (
                     display_name: "Casting",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81441,6 +81475,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-5907716185917496487": (
                     display_name: "StaffMagicAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81451,6 +81486,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-6047760710946103107": (
                     display_name: "CarryHip",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81461,11 +81497,13 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292": (
                     display_name: "New State",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [],
                 ),
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-668142833587296785": (
                     display_name: "Build",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81476,6 +81514,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-6768860081427168832": (
                     display_name: "LongSword",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81486,6 +81525,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-7115390245036259605": (
                     display_name: "Heal",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81496,6 +81536,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-9145738538020517605": (
                     display_name: "StaffAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81506,6 +81547,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:1496302043766372189": (
                     display_name: "WoodCutting",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81516,6 +81558,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:1644469110650211957": (
                     display_name: "BowShoot",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81526,6 +81569,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2357848882567628719": (
                     display_name: "Farming",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81536,6 +81580,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2533881044001281034": (
                     display_name: "Gathering",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81546,6 +81591,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2640698774737220190": (
                     display_name: "Death",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81556,6 +81602,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2763599478350897752": (
                     display_name: "Mining",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81566,6 +81613,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:3667806019712904990": (
                     display_name: "HammerAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81576,6 +81624,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:4348375068617833615": (
                     display_name: "StaffMagicAttack 0",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81586,6 +81635,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:5007872066999187050": (
                     display_name: "Carry",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81596,6 +81646,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:875246227926086247": (
                     display_name: "SpearAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81606,6 +81657,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:8917572871720449332": (
                     display_name: "Fishing",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81616,6 +81668,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:9055311312826162671": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -81643,7 +81696,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81658,7 +81711,7 @@
                     conditions: [
                         (
                             parameter: "Mining",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81673,7 +81726,7 @@
                     conditions: [
                         (
                             parameter: "Casting",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81688,7 +81741,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81703,7 +81756,7 @@
                     conditions: [
                         (
                             parameter: "LongSword",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81718,7 +81771,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81733,7 +81786,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81748,7 +81801,7 @@
                     conditions: [
                         (
                             parameter: "Revive",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81763,7 +81816,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81778,7 +81831,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81793,7 +81846,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81808,7 +81861,7 @@
                     conditions: [
                         (
                             parameter: "CarryWood",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81823,7 +81876,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81838,7 +81891,7 @@
                     conditions: [
                         (
                             parameter: "StaffMagicAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81853,7 +81906,7 @@
                     conditions: [
                         (
                             parameter: "HammerAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81868,7 +81921,7 @@
                     conditions: [
                         (
                             parameter: "Heal",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81883,7 +81936,7 @@
                     conditions: [
                         (
                             parameter: "Farming",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81898,7 +81951,7 @@
                     conditions: [
                         (
                             parameter: "Fishing",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81913,7 +81966,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81928,7 +81981,7 @@
                     conditions: [
                         (
                             parameter: "Death",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81943,7 +81996,7 @@
                     conditions: [
                         (
                             parameter: "StaffAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81958,7 +82011,7 @@
                     conditions: [
                         (
                             parameter: "BowShoot",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -81973,7 +82026,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -81988,7 +82041,7 @@
                     conditions: [
                         (
                             parameter: "SpearAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82003,7 +82056,7 @@
                     conditions: [
                         (
                             parameter: "CarryHip",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82018,7 +82071,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82033,7 +82086,7 @@
                     conditions: [
                         (
                             parameter: "CarryWood",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82048,7 +82101,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82063,7 +82116,7 @@
                     conditions: [
                         (
                             parameter: "Build",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82078,7 +82131,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82093,7 +82146,7 @@
                     conditions: [
                         (
                             parameter: "WoodCutting",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82108,7 +82161,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82123,7 +82176,7 @@
                     conditions: [
                         (
                             parameter: "CarryHip",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82138,7 +82191,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82162,7 +82215,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82177,7 +82230,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82192,7 +82245,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82207,7 +82260,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82222,7 +82275,7 @@
                     conditions: [
                         (
                             parameter: "Gathering",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82245,6 +82298,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Close",
@@ -82252,12 +82306,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8065497220322364103": (
                     display_name: "Close",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:6044028c853e9264581828c7c9b4c309",
@@ -82268,6 +82324,7 @@
                 "animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8543212823551753415": (
                     display_name: "Open",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:2fd3e85eec3fe5f4fbd20eed7b86bcb0",
@@ -82296,7 +82353,7 @@
                     conditions: [
                         (
                             parameter: "Close",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82311,7 +82368,7 @@
                     conditions: [
                         (
                             parameter: "Open",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82332,6 +82389,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Close",
@@ -82339,12 +82397,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:2ddf69683616b2e43b31be96ca9624d5:-8065497220322364103": (
                     display_name: "Close",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:8dd9c8e90e5a461438018d7c5282de36",
@@ -82355,6 +82415,7 @@
                 "animation_state:2ddf69683616b2e43b31be96ca9624d5:-8543212823551753415": (
                     display_name: "Open",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:f96aa572eebb2d441801f91692ab643c",
@@ -82383,7 +82444,7 @@
                     conditions: [
                         (
                             parameter: "Close",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82398,7 +82459,7 @@
                     conditions: [
                         (
                             parameter: "Open",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82419,6 +82480,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -82426,6 +82488,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -82433,6 +82496,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -82440,6 +82504,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -82447,12 +82512,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:42cba18b4a85cf041b661dac476027e8:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:904e5e16839cc1d4e9bdaebab9a5c049",
@@ -82463,6 +82530,7 @@
                 "animation_state:42cba18b4a85cf041b661dac476027e8:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:904e5e16839cc1d4e9bdaebab9a5c049",
@@ -82490,7 +82558,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82505,7 +82573,7 @@
                     conditions: [
                         (
                             parameter: "GenericAction",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82520,7 +82588,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82535,7 +82603,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82555,6 +82623,7 @@
                 "animation_state:4e1db4df03462194ca74023e723d55c4:7166653683730185887": (
                     display_name: "CharacterIdleStretch",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:abd3e176884cc04469c804d14b36dcaf",
@@ -82577,6 +82646,7 @@
                 "animation_state:4f58634f3df7014479d4601e94f0e37c:8105513738674487379": (
                     display_name: "CreditsPopups",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:23af4c75a4fed7e41af6bc955cbf0c6e",
@@ -82599,6 +82669,7 @@
                 "animation_state:5ab8006551d81e64786fa4a3aadbbf91:-1734419594664231016": (
                     display_name: "New Animation",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:3efab8b2dfb3f994f82d137fd8cf2c18",
@@ -82621,6 +82692,7 @@
                 "animation_state:5b6b82c20ccd97c4ca9bf967f726aeef:-210849313207987297": (
                     display_name: "CharacterFishing",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:b23a7ed96a378074e8c2560b239cdb5a",
@@ -82645,6 +82717,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -82652,6 +82725,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -82659,6 +82733,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -82666,6 +82741,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -82673,12 +82749,30 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
+                ),
+                (
+                    name: "Slam",
+                    kind: boolean,
+                    default_float: 0.0,
+                    default_integer: 0,
+                    default_boolean: false,
+                    inferred: true,
+                ),
+                (
+                    name: "Swipe",
+                    kind: boolean,
+                    default_float: 0.0,
+                    default_integer: 0,
+                    default_boolean: false,
+                    inferred: true,
                 ),
             ],
             states: {
                 "animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581": (
                     display_name: "Spit",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:cce8655c81d1f1f4abd302acf92854c4",
@@ -82689,6 +82783,7 @@
                 "animation_state:635e563dc547a7a4aa4664644fcbb6b3:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:26199a30911106c43b19767f66f1f09d",
@@ -82699,6 +82794,7 @@
                 "animation_state:635e563dc547a7a4aa4664644fcbb6b3:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:cce8655c81d1f1f4abd302acf92854c4",
@@ -82722,7 +82818,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82737,7 +82833,7 @@
                     conditions: [
                         (
                             parameter: "Swipe",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82761,7 +82857,7 @@
                     conditions: [
                         (
                             parameter: "Slam",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82776,7 +82872,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82791,7 +82887,7 @@
                     conditions: [
                         (
                             parameter: "Swipe",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -82806,7 +82902,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82821,7 +82917,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -82841,6 +82937,7 @@
                 "animation_state:64308e5a4e1d9094bb4b263ff34af2de:-3464254767618854073": (
                     display_name: "CharacterSpearAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:a91dadfa56a32434491452fc1f2a5ad5",
@@ -82851,6 +82948,7 @@
                 "animation_state:64308e5a4e1d9094bb4b263ff34af2de:-8186394223475719753": (
                     display_name: "CharacterIdleBase",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:3e12a5e6865d1d74f9fe51f930afe74b",
@@ -82873,6 +82971,7 @@
                 "animation_state:7865aeda1f4d8294684eb42f22f91c3a:8774670157784232723": (
                     display_name: "EndCredits",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:a073a73c70ca6b94aae2150a473a490d",
@@ -82897,12 +82996,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:ab0c75b5063b36b4fa690dfc44d5bb5b",
@@ -82913,6 +83014,7 @@
                 "animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:57becde9a2e81ff4e98d5f313a835912",
@@ -82932,7 +83034,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 3,
+                            mode: greater,
                             threshold: 0.2,
                         ),
                     ],
@@ -82947,7 +83049,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 4,
+                            mode: less,
                             threshold: 0.2,
                         ),
                     ],
@@ -82968,12 +83070,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:7b5536b35afda8d41930f35e0e51215a:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:fb1bfbf2c580dfc44b0b54e8eed7a06f",
@@ -82984,6 +83088,7 @@
                 "animation_state:7b5536b35afda8d41930f35e0e51215a:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:54834675c64fe974cbb741b03b0d1429",
@@ -83003,7 +83108,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 3,
+                            mode: greater,
                             threshold: 0.2,
                         ),
                     ],
@@ -83018,7 +83123,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 4,
+                            mode: less,
                             threshold: 0.2,
                         ),
                     ],
@@ -83039,6 +83144,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -83046,6 +83152,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -83053,6 +83160,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -83060,6 +83168,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "HammerAttack",
@@ -83067,6 +83176,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -83074,12 +83184,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:1c1991430f98c084faf1637ec51ba728",
@@ -83090,6 +83202,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4294006374420586872": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:1c1991430f98c084faf1637ec51ba728",
@@ -83100,6 +83213,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075": (
                     display_name: "Locomotion 2H",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:1c1991430f98c084faf1637ec51ba728",
@@ -83114,6 +83228,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220": (
                     display_name: "Swipe 2",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:1c1991430f98c084faf1637ec51ba728",
@@ -83124,6 +83239,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:1c1991430f98c084faf1637ec51ba728",
@@ -83147,7 +83263,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83162,7 +83278,7 @@
                     conditions: [
                         (
                             parameter: "HammerAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 2.0,
                         ),
                     ],
@@ -83177,7 +83293,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -83192,7 +83308,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83207,7 +83323,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83222,7 +83338,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83237,7 +83353,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83252,12 +83368,12 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                         (
                             parameter: "GenericAction",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -83272,7 +83388,7 @@
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83287,7 +83403,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83302,7 +83418,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83317,7 +83433,7 @@
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83332,7 +83448,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83347,12 +83463,12 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                         (
                             parameter: "GenericAction",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -83367,7 +83483,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83382,7 +83498,7 @@
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83397,7 +83513,7 @@
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83412,7 +83528,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -83427,12 +83543,12 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                         (
                             parameter: "RunAnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83447,12 +83563,12 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                         (
                             parameter: "RunAnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83474,12 +83590,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:a1529f2d1d90b8b4198e099687f1bbea:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:e49fbae37fde9434d818cd2fc03f3d7f",
@@ -83490,6 +83608,7 @@
                 "animation_state:a1529f2d1d90b8b4198e099687f1bbea:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:e49fbae37fde9434d818cd2fc03f3d7f",
@@ -83509,7 +83628,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 3,
+                            mode: greater,
                             threshold: 0.2,
                         ),
                     ],
@@ -83524,7 +83643,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 4,
+                            mode: less,
                             threshold: 0.2,
                         ),
                     ],
@@ -83545,6 +83664,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -83552,6 +83672,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -83559,6 +83680,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -83566,6 +83688,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -83573,12 +83696,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:51541d11baa540449819d93ee7fea918",
@@ -83589,6 +83714,7 @@
                 "animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:51541d11baa540449819d93ee7fea918",
@@ -83599,6 +83725,7 @@
                 "animation_state:ae85ac85c03097d499396334dc3290b5:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:51541d11baa540449819d93ee7fea918",
@@ -83626,7 +83753,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83641,7 +83768,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83656,7 +83783,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83671,7 +83798,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83686,7 +83813,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -83701,7 +83828,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83716,7 +83843,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83731,7 +83858,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83753,6 +83880,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -83760,6 +83888,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -83767,6 +83896,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -83774,6 +83904,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -83781,12 +83912,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:26199a30911106c43b19767f66f1f09d",
@@ -83797,6 +83930,7 @@
                 "animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:26199a30911106c43b19767f66f1f09d",
@@ -83807,6 +83941,7 @@
                 "animation_state:b5ec12047dbf1314898aaf86d5270e0f:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:26199a30911106c43b19767f66f1f09d",
@@ -83834,7 +83969,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83849,7 +83984,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83864,7 +83999,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83879,7 +84014,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -83894,7 +84029,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -83909,7 +84044,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -83924,7 +84059,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83939,7 +84074,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -83961,6 +84096,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -83968,6 +84104,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -83975,6 +84112,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -83982,6 +84120,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -83989,12 +84128,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:5a0df818d90b3f04781ef671b89f7152",
@@ -84005,6 +84146,7 @@
                 "animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:5a0df818d90b3f04781ef671b89f7152",
@@ -84015,6 +84157,7 @@
                 "animation_state:bb493a66509b9984cbd36ed521970ca8:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:f8bc4cf74cb02d24794919ddb6241803",
@@ -84042,7 +84185,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84057,7 +84200,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -84072,7 +84215,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -84087,7 +84230,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 0.0,
                         ),
                     ],
@@ -84102,7 +84245,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84117,7 +84260,7 @@
                     conditions: [
                         (
                             parameter: "AnimationIndex",
-                            mode: 6,
+                            mode: equals,
                             threshold: 1.0,
                         ),
                     ],
@@ -84132,7 +84275,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84147,7 +84290,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84169,12 +84312,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:bda358ac13f989345a8f46fd230f9826:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:78795a16b09159c4a8cb5ffecce64ea6",
@@ -84185,6 +84330,7 @@
                 "animation_state:bda358ac13f989345a8f46fd230f9826:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:968b78ae003a92547bac9b82ab711365",
@@ -84204,7 +84350,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 3,
+                            mode: greater,
                             threshold: 0.2,
                         ),
                     ],
@@ -84219,7 +84365,7 @@
                     conditions: [
                         (
                             parameter: "MoveSpeed",
-                            mode: 4,
+                            mode: less,
                             threshold: 0.2,
                         ),
                     ],
@@ -84240,12 +84386,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:c11f40d5660648f46b67cfaaa37761e5:-3445430672598199653": (
                     display_name: "Idle",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:7894d0df954b1ec4ab2aec7839898276",
@@ -84256,6 +84404,7 @@
                 "animation_state:c11f40d5660648f46b67cfaaa37761e5:-4306582856393119967": (
                     display_name: "Entry",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:7894d0df954b1ec4ab2aec7839898276",
@@ -84266,6 +84415,7 @@
                 "animation_state:c11f40d5660648f46b67cfaaa37761e5:6970830186064708492": (
                     display_name: "Exit",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:7894d0df954b1ec4ab2aec7839898276",
@@ -84294,7 +84444,7 @@
                     conditions: [
                         (
                             parameter: "Exit",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84322,6 +84472,7 @@
                 "animation_state:c387476699fb49e4b995bf1d5790a6d5:-2694498729715318848": (
                     display_name: "CharacterWoodCutting",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:793f58083df73f44eb0bf227ff17e619",
@@ -84344,6 +84495,7 @@
                 "animation_state:c5097cfadae6b4b4dacfc1ba3665c8a2:-7083021751823584582": (
                     display_name: "CharacterFarming",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:9609342d8076eb441934440fa8687b6d",
@@ -84368,6 +84520,7 @@
                     default_float: 0.5,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "WoodCutting",
@@ -84375,6 +84528,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -84382,6 +84536,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Build",
@@ -84389,6 +84544,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "BowShoot",
@@ -84396,6 +84552,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Casting",
@@ -84403,6 +84560,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Farming",
@@ -84410,6 +84568,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Fishing",
@@ -84417,6 +84576,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Gathering",
@@ -84424,6 +84584,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "HammerAttack",
@@ -84431,6 +84592,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Heal",
@@ -84438,6 +84600,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Mining",
@@ -84445,6 +84608,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "SpearAttack",
@@ -84452,6 +84616,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "StaffAttack",
@@ -84459,6 +84624,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "StaffMagicAttack",
@@ -84466,6 +84632,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "LongSword",
@@ -84473,6 +84640,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "CarryWood",
@@ -84480,6 +84648,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "CarryHip",
@@ -84487,6 +84656,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -84494,6 +84664,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -84501,6 +84672,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "ActionSpeed",
@@ -84508,6 +84680,7 @@
                     default_float: 1.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Death",
@@ -84515,6 +84688,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Revive",
@@ -84522,12 +84696,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-4585270874795264890": (
                     display_name: "Casting",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:da28d06b40b1db44b9b634fce28bae59",
@@ -84538,6 +84714,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-5907716185917496487": (
                     display_name: "Summon",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:bd8166d5ad9da824387d8caec143d70e",
@@ -84548,6 +84725,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-6047760710946103107": (
                     display_name: "CarryHip",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:fe029eddfce39bd4e8f135929752f8df",
@@ -84558,11 +84736,13 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292": (
                     display_name: "New State",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [],
                 ),
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-668142833587296785": (
                     display_name: "Build",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:26ccc241cb0a52642bf1f08df472b1c9",
@@ -84573,6 +84753,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-6768860081427168832": (
                     display_name: "LongSword",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:eea2d65bc23566f4e9af11a5311e60ed",
@@ -84583,6 +84764,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-7115390245036259605": (
                     display_name: "Heal",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:6ffb469b885232245a03b03ddc02f59c",
@@ -84593,6 +84775,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-9145738538020517605": (
                     display_name: "StaffAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:da28d06b40b1db44b9b634fce28bae59",
@@ -84603,6 +84786,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:1496302043766372189": (
                     display_name: "WoodCutting",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:1019dcbb8e2f53d438450f19667ce11e",
@@ -84613,6 +84797,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:1644469110650211957": (
                     display_name: "BowShoot",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:916d638e71c364e47bb8a9cad5ab87c3",
@@ -84623,6 +84808,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2357848882567628719": (
                     display_name: "Farming",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:548d7811fccde4f4fb669a6f986fb1ec",
@@ -84633,6 +84819,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2533881044001281034": (
                     display_name: "Gathering",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:b595287d769bbc045b43a5b0e4ea5ea1",
@@ -84643,6 +84830,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2640698774737220190": (
                     display_name: "Death",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:68e3cd0183e400e43a05d4a43a89a983",
@@ -84653,6 +84841,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2763599478350897752": (
                     display_name: "Mining",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:ed016245a0a8d8d428624ea66e7bbe7c",
@@ -84663,6 +84852,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:3667806019712904990": (
                     display_name: "HammerAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:7bd822f55b7173d44a91f9b7ff9280d6",
@@ -84673,6 +84863,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:4348375068617833615": (
                     display_name: "StaffMagicAttack 0",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:0e3d4f12f10bafb4e9d525f8d0e19a00",
@@ -84683,6 +84874,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:5007872066999187050": (
                     display_name: "Carry",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:b5538cee68a20fc4ca81d690cdce0673",
@@ -84693,6 +84885,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:875246227926086247": (
                     display_name: "SpearAttack",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:14a05ac6a9927874c95a6af2f62afb07",
@@ -84703,6 +84896,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:8917572871720449332": (
                     display_name: "Fishing",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:cac12960546349e40af864bfc67e1184",
@@ -84713,6 +84907,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:9055311312826162671": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:9dd8e5f11d96dfd4a8753b3465a2e370",
@@ -84740,7 +84935,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84755,7 +84950,7 @@
                     conditions: [
                         (
                             parameter: "Mining",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84770,7 +84965,7 @@
                     conditions: [
                         (
                             parameter: "Casting",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84785,7 +84980,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84800,7 +84995,7 @@
                     conditions: [
                         (
                             parameter: "LongSword",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84815,7 +85010,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84830,7 +85025,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84845,7 +85040,7 @@
                     conditions: [
                         (
                             parameter: "Revive",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84860,7 +85055,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84875,7 +85070,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84890,7 +85085,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84905,7 +85100,7 @@
                     conditions: [
                         (
                             parameter: "CarryWood",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84920,7 +85115,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -84935,7 +85130,7 @@
                     conditions: [
                         (
                             parameter: "StaffMagicAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84950,7 +85145,7 @@
                     conditions: [
                         (
                             parameter: "HammerAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84965,7 +85160,7 @@
                     conditions: [
                         (
                             parameter: "Heal",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84980,7 +85175,7 @@
                     conditions: [
                         (
                             parameter: "Farming",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -84995,7 +85190,7 @@
                     conditions: [
                         (
                             parameter: "Fishing",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85010,7 +85205,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85025,7 +85220,7 @@
                     conditions: [
                         (
                             parameter: "Death",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85040,7 +85235,7 @@
                     conditions: [
                         (
                             parameter: "StaffAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85055,7 +85250,7 @@
                     conditions: [
                         (
                             parameter: "BowShoot",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85070,7 +85265,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85085,7 +85280,7 @@
                     conditions: [
                         (
                             parameter: "SpearAttack",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85100,7 +85295,7 @@
                     conditions: [
                         (
                             parameter: "CarryHip",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85115,7 +85310,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85130,7 +85325,7 @@
                     conditions: [
                         (
                             parameter: "CarryWood",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85145,7 +85340,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85160,7 +85355,7 @@
                     conditions: [
                         (
                             parameter: "Build",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85175,7 +85370,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85190,7 +85385,7 @@
                     conditions: [
                         (
                             parameter: "WoodCutting",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85205,7 +85400,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85220,7 +85415,7 @@
                     conditions: [
                         (
                             parameter: "CarryHip",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85235,7 +85430,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85259,7 +85454,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85274,7 +85469,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85289,7 +85484,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85304,7 +85499,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85319,7 +85514,7 @@
                     conditions: [
                         (
                             parameter: "Gathering",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85342,6 +85537,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "Action",
@@ -85349,6 +85545,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "GenericAction",
@@ -85356,6 +85553,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "AnimationIndex",
@@ -85363,6 +85561,7 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
                 (
                     name: "RunAnimationIndex",
@@ -85370,12 +85569,14 @@
                     default_float: 0.0,
                     default_integer: 0,
                     default_boolean: false,
+                    inferred: false,
                 ),
             ],
             states: {
                 "animation_state:cdc9168fa3a07d242a6603c0ae8907a3:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:5fce8feef51aa634d9ef0df6abf91333",
@@ -85386,6 +85587,7 @@
                 "animation_state:cdc9168fa3a07d242a6603c0ae8907a3:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    blend_parameter: Some("Move Speed"),
                     motions: [
                         (
                             clip: "clip:5fce8feef51aa634d9ef0df6abf91333",
@@ -85409,7 +85611,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85424,7 +85626,7 @@
                     conditions: [
                         (
                             parameter: "GenericAction",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85439,7 +85641,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 1,
+                            mode: if,
                             threshold: 0.0,
                         ),
                     ],
@@ -85454,7 +85656,7 @@
                     conditions: [
                         (
                             parameter: "Action",
-                            mode: 2,
+                            mode: if_not,
                             threshold: 0.0,
                         ),
                     ],
@@ -85474,6 +85676,7 @@
                 "animation_state:d2108fb768c361442a0ee7711e01a8b4:341253511410432608": (
                     display_name: "CreditsFireworks",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:68fbff78025f1754abfc28112d9db9ab",
@@ -85496,6 +85699,7 @@
                 "animation_state:dfb7c64074c4ebc43b5d431c09d706ce:8606254655127711802": (
                     display_name: "CharacterIdleBase",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:3e12a5e6865d1d74f9fe51f930afe74b",
@@ -85518,6 +85722,7 @@
                 "animation_state:e0fd9cb408bc0c24e90571d4c2d57127:8553764519963112405": (
                     display_name: "LevelUp_Animation",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:a39d9fc2fbeefc8479eee4b49c0194b9",
@@ -85540,6 +85745,7 @@
                 "animation_state:f4e892f266b388948b3139dd54117736:3584496465615526396": (
                     display_name: "CharacterMining",
                     speed: 1.0,
+                    blend_parameter: None,
                     motions: [
                         (
                             clip: "clip:e1dd1e8aeb225c144ae79bb4cc204990",

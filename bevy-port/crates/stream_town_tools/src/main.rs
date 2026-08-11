@@ -375,18 +375,29 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 ui.collapsing(format!("{}  ({id})", controller.display_name), |ui| {
                     ui.monospace(format!("Unity controller: {}", controller.source_path));
                     ui.label(format!(
-                        "{} parameters, {} states, {} transitions, {} layer defaults",
+                        "{} parameters ({} inferred), {} states, {} transitions, {} layer defaults",
                         controller.parameters.len(),
+                        controller
+                            .parameters
+                            .iter()
+                            .filter(|parameter| parameter.inferred)
+                            .count(),
                         controller.states.len(),
                         controller.transitions.len(),
                         controller.default_states.len()
                     ));
                     for state_def in controller.states.values() {
                         ui.label(format!(
-                            "{} (speed {:.2}, {} motions)",
+                            "{} (speed {:.2}, {} motions{})",
                             state_def.display_name,
                             state_def.speed,
-                            state_def.motions.len()
+                            state_def.motions.len(),
+                            state_def
+                                .blend_parameter
+                                .as_ref()
+                                .map_or_else(String::new, |parameter| format!(
+                                    ", 1D blend: {parameter}"
+                                ))
                         ));
                     }
                 });

@@ -127,6 +127,9 @@ pub struct AnimationParameterDef {
     pub default_float: f32,
     pub default_integer: i32,
     pub default_boolean: bool,
+    /// True when a transition referenced a parameter omitted from Unity's list.
+    #[serde(default)]
+    pub inferred: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -139,13 +142,43 @@ pub struct AnimationMotionDef {
 pub struct AnimationStateDef {
     pub display_name: String,
     pub speed: f32,
+    /// Float parameter driving a Unity 1D blend tree, when this is a blend state.
+    #[serde(default)]
+    pub blend_parameter: Option<String>,
     pub motions: Vec<AnimationMotionDef>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimationConditionMode {
+    If,
+    IfNot,
+    Greater,
+    Less,
+    Equals,
+    NotEqual,
+}
+
+impl TryFrom<u8> for AnimationConditionMode {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::If),
+            2 => Ok(Self::IfNot),
+            3 => Ok(Self::Greater),
+            4 => Ok(Self::Less),
+            6 => Ok(Self::Equals),
+            7 => Ok(Self::NotEqual),
+            value => Err(value),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AnimationConditionDef {
     pub parameter: String,
-    pub mode: u8,
+    pub mode: AnimationConditionMode,
     pub threshold: f32,
 }
 
@@ -216,6 +249,17 @@ pub enum PresentationError {
     MissingTransitionState {
         controller: StableId,
         state: StableId,
+    },
+    #[error("controller {controller} references missing animation parameter {parameter}")]
+    MissingAnimationParameter {
+        controller: StableId,
+        parameter: String,
+    },
+    #[error("controller {controller} state {state} has invalid blend tree: {reason}")]
+    InvalidBlendTree {
+        controller: StableId,
+        state: StableId,
+        reason: String,
     },
     #[error("prefab {prefab_guid} references missing controller {controller}")]
     MissingController {
@@ -292,6 +336,11 @@ impl PresentationCatalog {
             }
         }
         for (controller_id, controller) in &self.controllers {
+            let parameters: BTreeMap<_, _> = controller
+                .parameters
+                .iter()
+                .map(|parameter| (parameter.name.as_str(), parameter))
+                .collect();
             for default_state in &controller.default_states {
                 if !controller.states.contains_key(default_state) {
                     return Err(PresentationError::MissingDefaultState {
@@ -301,6 +350,29 @@ impl PresentationCatalog {
                 }
             }
             for (state_id, state) in &controller.states {
+                if let Some(blend_parameter) = &state.blend_parameter {
+                    let Some(parameter) = parameters.get(blend_parameter.as_str()) else {
+                        return Err(PresentationError::MissingAnimationParameter {
+                            controller: controller_id.clone(),
+                            parameter: blend_parameter.clone(),
+                        });
+                    };
+                    if parameter.kind != AnimationParameterKind::Float
+                        || state.motions.iter().any(|motion| {
+                            motion
+                                .threshold
+                                .is_none_or(|threshold| !threshold.is_finite())
+                        })
+                    {
+                        return Err(PresentationError::InvalidBlendTree {
+                            controller: controller_id.clone(),
+                            state: state_id.clone(),
+                            reason:
+                                "1D blend trees require a float parameter and finite thresholds"
+                                    .into(),
+                        });
+                    }
+                }
                 for motion in &state.motions {
                     if !self.clips.contains_key(&motion.clip) {
                         return Err(PresentationError::MissingClip {
@@ -312,6 +384,14 @@ impl PresentationCatalog {
                 }
             }
             for transition in &controller.transitions {
+                for condition in &transition.conditions {
+                    if !parameters.contains_key(condition.parameter.as_str()) {
+                        return Err(PresentationError::MissingAnimationParameter {
+                            controller: controller_id.clone(),
+                            parameter: condition.parameter.clone(),
+                        });
+                    }
+                }
                 for state in [transition.source.as_ref(), transition.destination.as_ref()]
                     .into_iter()
                     .flatten()

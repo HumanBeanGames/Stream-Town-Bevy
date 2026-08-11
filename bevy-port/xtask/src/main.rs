@@ -146,6 +146,18 @@ fn validate() -> Result<()> {
         .values()
         .map(|clip| clip.transform_tracks.len())
         .sum();
+    let blend_states = presentation
+        .controllers
+        .values()
+        .flat_map(|controller| controller.states.values())
+        .filter(|state| state.blend_parameter.is_some())
+        .count();
+    let inferred_parameters = presentation
+        .controllers
+        .values()
+        .flat_map(|controller| &controller.parameters)
+        .filter(|parameter| parameter.inferred)
+        .count();
     if (
         presentation.schema_version,
         presentation.textures.len(),
@@ -162,8 +174,9 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (2, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
+    ) != (3, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
+        || (blend_states, inferred_parameters) != (11, 2)
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }
