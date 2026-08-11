@@ -3014,6 +3014,18 @@ fn maximum_building_level(
         .unwrap_or(1)
 }
 
+fn building_is_unlocked(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building: &StableId,
+) -> bool {
+    simulation
+        .unlocked_technology
+        .iter()
+        .filter_map(|technology| content.technology.nodes.get(technology))
+        .any(|technology| technology.unlocked_buildings.contains(building))
+}
+
 fn building_upgrade_cost(building: &BuildingDef, current_level: u16) -> BTreeMap<StableId, u32> {
     let level_squared = u64::from(current_level).saturating_pow(2);
     building
@@ -3289,6 +3301,12 @@ fn process_injected_commands(
                     .ok_or_else(|| format!("unknown building {}", requested.as_str()));
                 building_id.and_then(|building_id| {
                     let building = &content.0.buildings[&building_id];
+                    if !building.placeable {
+                        return Err(format!("{} cannot be player-placed", building.display_name));
+                    }
+                    if !building_is_unlocked(&content.0, &simulation.0, &building_id) {
+                        return Err(format!("{} is not unlocked", building.display_name));
+                    }
                     let near = selected.0.or_else(|| {
                         simulation
                             .0
@@ -3944,6 +3962,48 @@ mod tests {
     }
 
     #[test]
+    fn technology_effects_authoritatively_gate_buildings() {
+        let content = embedded_content();
+        let mut simulation = WorldSimulation::new(42);
+        simulation.unlocked_technology.extend(
+            content
+                .technology
+                .nodes
+                .iter()
+                .filter(|(_, technology)| technology.initially_unlocked)
+                .map(|(id, _)| id.clone()),
+        );
+        let lumbermill = StableId::new("building:lumbermill").unwrap();
+        assert!(building_is_unlocked(&content, &simulation, &lumbermill));
+        let (technology, locked_building) = content
+            .technology
+            .nodes
+            .iter()
+            .filter(|(technology, _)| !simulation.unlocked_technology.contains(*technology))
+            .find_map(|(technology, node)| {
+                node.unlocked_buildings
+                    .iter()
+                    .find(|building| {
+                        content.buildings[*building].placeable
+                            && !building_is_unlocked(&content, &simulation, building)
+                    })
+                    .map(|building| (technology.clone(), building.clone()))
+            })
+            .expect("Unity technology graph contains a locked placeable building");
+        assert!(!building_is_unlocked(
+            &content,
+            &simulation,
+            &locked_building
+        ));
+        simulation.unlocked_technology.insert(technology);
+        assert!(building_is_unlocked(
+            &content,
+            &simulation,
+            &locked_building
+        ));
+    }
+
+    #[test]
     fn environment_palette_covers_every_season_and_weather() {
         assert_eq!(parse_weather("SNOW"), Some(Weather::Snow));
         assert_eq!(parse_weather("unknown"), None);
@@ -4234,10 +4294,22 @@ mod tests {
                 .map(|(id, _)| id.clone())
                 .expect("converted catalog has a vote-eligible technology")
         };
+        let available_building = {
+            let content = &app.world().resource::<RuntimeContent>().0;
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            content
+                .buildings
+                .iter()
+                .find(|(id, building)| {
+                    building.placeable && building_is_unlocked(content, simulation, id)
+                })
+                .map(|(id, building)| (id.clone(), building.clone()))
+                .expect("converted initial technology unlocks a placeable building")
+        };
         let actor_id = StableId::new("twitch:debug_viewer").unwrap();
         let commands = [
             ChatCommand::SelectRole(StableId::new("builder").unwrap()),
-            ChatCommand::Build(StableId::new("house").unwrap()),
+            ChatCommand::Build(available_building.0.clone()),
             ChatCommand::Vote(eligible_technology.clone()),
             ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),
             ChatCommand::Save,
@@ -4261,10 +4333,18 @@ mod tests {
         let placed_building = simulation.buildings.values().next().unwrap().clone();
         assert!(!placed_building.complete);
         assert_eq!(placed_building.health, BUILDING_MAX_HEALTH / 10);
-        assert_eq!(town_resource_amount(simulation, "resource:food"), 4_500);
-        assert_eq!(town_resource_amount(simulation, "resource:gold"), 4_750);
-        assert_eq!(town_resource_amount(simulation, "resource:ore"), 4_500);
-        assert_eq!(town_resource_amount(simulation, "resource:wood"), 4_500);
+        for resource in [
+            "resource:food",
+            "resource:gold",
+            "resource:ore",
+            "resource:wood",
+        ] {
+            let resource_id = StableId::new(resource).unwrap();
+            assert_eq!(
+                town_resource_amount(simulation, resource),
+                5_000 - available_building.1.cost[&resource_id]
+            );
+        }
         assert_eq!(
             simulation.active_vote.as_ref().map(|vote| &vote.technology),
             Some(&eligible_technology)

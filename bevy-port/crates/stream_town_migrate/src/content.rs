@@ -249,6 +249,7 @@ fn convert_export(
                 archetype: archetype.clone(),
                 footprint: *footprint,
                 cost,
+                placeable: required_bool(asset, "Placeable")?,
                 can_level: required_bool(asset, "CanLevel")?,
                 level_cost,
                 level_cost_multiplier_per_thousand,
@@ -347,6 +348,7 @@ fn convert_export(
                     .collect(),
                 unlocks,
                 building_level_caps: building_level_caps(asset)?,
+                unlocked_buildings: unlocked_buildings(asset)?,
                 objectives,
                 group: Some(group_id),
                 age: required_enum(asset, "<Age>k__BackingField")?,
@@ -931,6 +933,22 @@ fn building_level_caps(asset: &UnityAsset) -> Result<BTreeMap<StableId, u16>> {
     Ok(caps)
 }
 
+fn unlocked_buildings(asset: &UnityAsset) -> Result<BTreeSet<StableId>> {
+    let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
+    let mut buildings = BTreeSet::new();
+    for index in 0..size {
+        let prefix = format!("<Unlocks>k__BackingField.Array.data[{index}]");
+        if required_enum(asset, &format!("{prefix}.<TechType>k__BackingField"))?
+            != "Unlock Building"
+        {
+            continue;
+        }
+        let building = required_enum(asset, &format!("{prefix}.<BuildingType>k__BackingField"))?;
+        buildings.insert(stable_id("building", &slug(&building))?);
+    }
+    Ok(buildings)
+}
+
 fn technology_group_name(path: &str) -> String {
     path.split_once("/Groups/")
         .and_then(|(_, suffix)| suffix.split('/').next())
@@ -1110,7 +1128,7 @@ mod tests {
                 ),
                 field(
                     "<Unlocks>k__BackingField.Array.size",
-                    Value::from(u64::from(name == "Root")),
+                    Value::from(if name == "Root" { 2 } else { 0 }),
                 ),
                 field("<Objectives>k__BackingField.Array.size", Value::from(0)),
                 field("<Age>k__BackingField", enum_value("Age 1")),
@@ -1138,6 +1156,18 @@ mod tests {
                     field(
                         "<Unlocks>k__BackingField.Array.data[0].<IntValue>k__BackingField",
                         Value::from(3),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[1].<TechType>k__BackingField",
+                        enum_value("Unlock Building"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[1].<BuildingType>k__BackingField",
+                        enum_value("Townhall"),
+                    ),
+                    field(
+                        "<Unlocks>k__BackingField.Array.data[1].<IntValue>k__BackingField",
+                        Value::from(0),
                     ),
                 ]);
             }
@@ -1234,6 +1264,7 @@ mod tests {
                         field("BuildResourceCost.FoodCost", Value::from(0)),
                         field("BuildResourceCost.GoldCost", Value::from(10)),
                         field("CanLevel", Value::Bool(true)),
+                        field("Placeable", Value::Bool(true)),
                         field("LevelResourceCost.WoodCost", Value::from(80)),
                         field("LevelResourceCost.OreCost", Value::from(40)),
                         field("LevelResourceCost.FoodCost", Value::from(0)),
@@ -1292,6 +1323,11 @@ mod tests {
         assert_eq!(
             catalog.technology.nodes[&root].building_level_caps[&town_hall],
             3
+        );
+        assert!(
+            catalog.technology.nodes[&root]
+                .unlocked_buildings
+                .contains(&town_hall)
         );
         assert_eq!(catalog.technology.nodes[&child].prerequisites, vec![root]);
         catalog.validate().unwrap();

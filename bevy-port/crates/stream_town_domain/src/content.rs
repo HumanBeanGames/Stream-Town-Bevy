@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 3;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -70,6 +70,7 @@ pub struct BuildingDef {
     pub archetype: StableId,
     pub footprint: [u16; 2],
     pub cost: BTreeMap<StableId, u32>,
+    pub placeable: bool,
     pub can_level: bool,
     pub level_cost: BTreeMap<StableId, u32>,
     pub level_cost_multiplier_per_thousand: u32,
@@ -99,6 +100,9 @@ pub struct TechNode {
     /// Authored `Upgrade Building` effects, keyed by the affected building.
     #[serde(default)]
     pub building_level_caps: BTreeMap<StableId, u16>,
+    /// Authored `Unlock Building` effects applied when this technology is unlocked.
+    #[serde(default)]
+    pub unlocked_buildings: BTreeSet<StableId>,
     pub objectives: Vec<StableId>,
     #[serde(default)]
     pub group: Option<StableId>,
