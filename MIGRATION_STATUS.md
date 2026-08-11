@@ -13,8 +13,10 @@ mistaken for production-ready systems.
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
   states, with state-scoped entity cleanup.
-- Validated, versioned RON configuration and stable authored/runtime IDs that do
-  not expose Bevy entity identifiers.
+- Validated, versioned RON configuration (schema 3) and stable authored/runtime
+  IDs that do not expose Bevy entity identifiers. Gameplay configuration now
+  carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
+  recruits instead of hiding those values in runtime code.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
   grounding data, repeatable world hashes, and a 4,225-vertex/8,192-triangle
   Bevy terrain surface generated directly from that navigation height field.
@@ -27,8 +29,13 @@ mistaken for production-ready systems.
   level, an Avian trimesh collider mirrors the visible surface, and actors,
   resources, buildings, save restores, joins, paths, and selection markers are
   grounded to deterministic centimetre heights.
-- An injected `!join` vertical slice that goes through the shipping command
-  parser and creates both the stable domain actor and its visible ECS entity.
+- End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
+  catalog-priced building placement, eligible technology voting, mapped events,
+  atomic saves, and help. Commands validate catalog references and prerequisites,
+  return HUD/Twitch feedback, and use the authoritative actor/selection position.
+  Constructed buildings block the deterministic grid, spawn their converted GLB
+  with a primitive fallback, persist in native saves, and are reconstructed with
+  their navigation regions on load.
 - An opt-in Twitch transport using public-client device OAuth, `twitch-irc`,
   Tokio, Rustls, and OS credential-vault storage. It validates app/account/scopes,
   rotates public-client refresh tokens, revalidates hourly, preserves the
@@ -41,7 +48,8 @@ mistaken for production-ready systems.
   seasonal terrain/water palettes, clear color, sun and ambient lighting,
   distance fog, plus deterministic rain and snow fields with no second clock.
 - Checksummed native RON saves written atomically with backup recovery, plus
-  in-game F5/F9 save/load that restores stable actors and simulation state.
+  in-game F5/F9 save/load that restores stable actors, constructed buildings,
+  dynamic navigation occupancy, resources, votes, events, and simulation state.
 - A one-time legacy importer for JSON and the exact Unity binary field order in
   schemas 1-3, including container/compression/bounds/trailer validation, named
   backup recovery, schema-1 mesh retention, seed-based Bevy regeneration,
@@ -128,8 +136,9 @@ mistaken for production-ready systems.
   balance rule from the Unity scenes.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
-  dispatches the stable Bevy command grammar and relies on `twitch-irc` for
-  reconnect and chat rate limiting.
+  executes the complete stable Bevy grammar listed above and relies on
+  `twitch-irc` for reconnect and chat rate limiting; Unity's larger ruler,
+  game-master, player-action, trade, and event command surface still remains.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
@@ -188,10 +197,11 @@ now also has complete presentation metadata, packaged textures, native Goblin
 animation binding, 57 converted standalone transform clips, Player locomotion
 retargeting, a typed controller interpreter, 19-clip Player blend-graph playback,
 the generated heightfield/water/collider surface, inherited prefab material
-bindings, runtime PBR material reconstruction, and simulation-driven season/
-weather presentation. It is still missing nested controller layers and complete
-gameplay action emitters, production terrain/foliage shaders beyond the new
-environment palettes and particle fields, exact curve tangents and multi-slot/
-custom-shader parity, full command parity, and the recorded reference-machine
-GPU measurement required to close the milestone.
+bindings, runtime PBR material reconstruction, simulation-driven season/weather
+presentation, and the live stable command grammar with constructed-building
+persistence. It is still missing nested controller layers and complete gameplay
+action emitters, production terrain/foliage shaders beyond the new environment
+palettes and particle fields, exact curve tangents and multi-slot/custom-shader
+parity, the broader Unity-only command surface, and the recorded reference-
+machine GPU measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

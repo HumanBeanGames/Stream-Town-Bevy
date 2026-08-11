@@ -86,7 +86,15 @@ broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
-vertical slice renders the deterministic navigation height field as a colored
+stable chat grammar executes `!join`, `!role`, `!build`, `!vote`, `!event`,
+`!save`, and `!help` with catalog/prerequisite validation and HUD/Twitch
+feedback. Building commands consume the schema-3 starting resource balances,
+choose a valid site near the actor or selected cell, update grid occupancy,
+spawn the converted building GLB, and round-trip through native saves. A
+semicolon-delimited `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
+for repeatable diagnostics.
+
+The vertical slice renders the deterministic navigation height field as a colored
 4,225-vertex terrain mesh, a water surface at the authored level, an Avian
 trimesh collider used for surface picking, lighting, converted GLB scenes for
 the representative town hall and actors, and primitive fallbacks when an asset
