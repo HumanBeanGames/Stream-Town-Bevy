@@ -7,17 +7,19 @@ use std::{
 };
 
 use anyhow::{Context, Result as AnyResult};
-use avian3d::prelude::PhysicsPlugins;
+use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody, SpatialQuery, SpatialQueryFilter};
 use bevy::{
     animation::{
         AnimatedBy, AnimationClip, AnimationTargetId, animated_field,
         graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
         prelude::{AnimatableCurve, AnimatableKeyframeCurve},
     },
-    asset::AssetPlugin,
+    asset::{AssetPlugin, RenderAssetUsages},
     camera::ScalingMode,
     color::LinearRgba,
+    mesh::Indices,
     prelude::*,
+    render::render_resource::PrimitiveTopology,
     render::view::screenshot::{Screenshot, save_to_disk},
     window::{PrimaryWindow, WindowResolution},
 };
@@ -108,6 +110,7 @@ struct SelectedCell(Option<GridPos>);
 struct RenderAssets {
     cube: Handle<Mesh>,
     ground: Handle<StandardMaterial>,
+    water: Handle<StandardMaterial>,
     wood: Handle<StandardMaterial>,
     ore: Handle<StandardMaterial>,
     food: Handle<StandardMaterial>,
@@ -412,7 +415,18 @@ fn setup_rendering(
         .collect();
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
-        ground: materials.add(Color::srgb(0.09, 0.22, 0.12)),
+        ground: materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.96,
+            ..default()
+        }),
+        water: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.04, 0.24, 0.42, 0.62),
+            perceptual_roughness: 0.18,
+            metallic: 0.05,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
         wood: materials.add(Color::srgb(0.16, 0.46, 0.18)),
         ore: materials.add(Color::srgb(0.46, 0.50, 0.55)),
         food: materials.add(Color::srgb(0.74, 0.64, 0.18)),
@@ -536,6 +550,7 @@ fn generate_and_spawn_world(
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Option<Res<AssetServer>>,
     animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
     asset_root: Res<RuntimeAssetRoot>,
@@ -557,13 +572,14 @@ fn generate_and_spawn_world(
     if let Ok(mut camera) = cameras.single_mut() {
         *camera = if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
-                .map_or(Vec3::ZERO, |position| grid_to_world(position, &config.0));
+                .map_or(Vec3::ZERO, |position| {
+                    grid_to_world_on_surface(position, &config.0, &generated)
+                });
             Transform::from_xyz(focus.x + 110.0, 130.0, focus.z + 110.0)
-                .looking_at(Vec3::new(focus.x + 24.0, 0.0, focus.z + 24.0), Vec3::Y)
+                .looking_at(Vec3::new(focus.x + 24.0, focus.y, focus.z + 24.0), Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
-            let focus = grid_to_world(town_hall_position, &config.0);
-            Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0)
-                .looking_at(Vec3::new(focus.x, 0.0, focus.z), Vec3::Y)
+            let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
+            Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
         } else {
             Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
         };
@@ -583,15 +599,43 @@ fn generate_and_spawn_world(
         f32::from(config.0.world.width) * config.0.world.cell_size,
         f32::from(config.0.world.height) * config.0.world.cell_size,
     );
+    if let Some(mut meshes) = meshes {
+        let terrain_mesh = generated_terrain_mesh(&generated, &config.0);
+        let terrain_collider = Collider::trimesh_from_mesh(&terrain_mesh)
+            .expect("generated terrain mesh has indexed triangle geometry");
+        commands.spawn((
+            WorldEntity,
+            Mesh3d(meshes.add(terrain_mesh)),
+            MeshMaterial3d(render.ground.clone()),
+            terrain_collider,
+            RigidBody::Static,
+        ));
+    } else {
+        commands.spawn((
+            WorldEntity,
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.ground.clone()),
+            Transform::from_xyz(0.0, -0.15, 0.0).with_scale(Vec3::new(
+                world_size.x,
+                0.3,
+                world_size.y,
+            )),
+        ));
+    }
+    let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
     commands.spawn((
         WorldEntity,
         Mesh3d(render.cube.clone()),
-        MeshMaterial3d(render.ground.clone()),
-        Transform::from_xyz(0.0, -0.15, 0.0).with_scale(Vec3::new(world_size.x, 0.3, world_size.y)),
+        MeshMaterial3d(render.water.clone()),
+        Transform::from_xyz(0.0, water_height - 0.08, 0.0).with_scale(Vec3::new(
+            world_size.x,
+            0.12,
+            world_size.y,
+        )),
     ));
 
     for resource in &generated.resources {
-        let position = grid_to_world(resource.position, &config.0);
+        let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
         let material = match resource.kind.as_str() {
             "resource:wood" => render.wood.clone(),
             "resource:ore" => render.ore.clone(),
@@ -603,16 +647,17 @@ fn generate_and_spawn_world(
             GridLocation(resource.position),
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(material),
-            Transform::from_xyz(position.x, scale * 0.5, position.z).with_scale(Vec3::splat(scale)),
+            Transform::from_xyz(position.x, position.y + scale * 0.5, position.z)
+                .with_scale(Vec3::splat(scale)),
         ));
     }
 
-    let hall = grid_to_world(town_hall_position, &config.0);
+    let hall = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
     let mut hall_entity = commands.spawn((
         WorldEntity,
         TownHall,
         GridLocation(town_hall_position),
-        Transform::from_xyz(hall.x, 0.0, hall.z),
+        Transform::from_translation(hall),
     ));
     let town_hall_id = StableId::new("building:townhall").expect("static ID");
     let town_hall = content
@@ -630,7 +675,7 @@ fn generate_and_spawn_world(
                     .expect("asset server checked above")
                     .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
             ),
-            Transform::from_xyz(hall.x, 0.0, hall.z)
+            Transform::from_translation(hall)
                 .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
         ));
         if let Some(material) = town_hall
@@ -648,7 +693,7 @@ fn generate_and_spawn_world(
         hall_entity.insert((
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(render.building.clone()),
-            Transform::from_xyz(hall.x, size.y * 0.5, hall.z).with_scale(size),
+            Transform::from_xyz(hall.x, hall.y + size.y * 0.5, hall.z).with_scale(size),
         ));
     }
 
@@ -678,7 +723,7 @@ fn generate_and_spawn_world(
                 z: generated.navigation.height() - 1 - z,
             };
             let target = nearest_walkable(&generated, target).unwrap_or(centre);
-            let world_position = grid_to_world(position, &config.0);
+            let world_position = grid_to_world_on_surface(position, &config.0, &generated);
             let actor_id = StableId::new(if spawned == 0 {
                 "actor:enemy_0000".to_owned()
             } else {
@@ -736,9 +781,9 @@ fn generate_and_spawn_world(
                 )
             };
             let visual_height = if real_scene.is_some() {
-                0.0
+                world_position.y
             } else {
-                base_scale.y * 0.5
+                world_position.y + base_scale.y * 0.5
             };
             let mut entity = commands.spawn((
                 WorldEntity,
@@ -984,11 +1029,16 @@ fn move_agents(
     world: Res<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
-    mut agents: Query<(&mut Agent, &mut GridLocation, &mut Transform)>,
+    mut agents: Query<(
+        &mut Agent,
+        &mut GridLocation,
+        &AgentAnimation,
+        &mut Transform,
+    )>,
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation.0.tick(time.delta_secs());
-    for (mut agent, mut location, mut transform) in &mut agents {
+    for (mut agent, mut location, animation, mut transform) in &mut agents {
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
                 stats.paths_completed += 1;
@@ -1006,8 +1056,10 @@ fn move_agents(
         let Some(next) = agent.path.get(agent.path_index).copied() else {
             continue;
         };
-        let mut target = grid_to_world(next, &config.0);
-        target.y = transform.translation.y;
+        let mut target = grid_to_world_on_surface(next, &config.0, &world.generated);
+        if !animation.native {
+            target.y += animation.base_scale.y * 0.5;
+        }
         let distance = target - transform.translation;
         let step = config.0.gameplay.agent_speed_cells_per_second
             * config.0.world.cell_size
@@ -1648,13 +1700,18 @@ fn select_grid_cell(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    spatial: Option<SpatialQuery>,
     config: Res<RuntimeConfig>,
+    world: Res<WorldRuntime>,
     mut selected: ResMut<SelectedCell>,
     mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
+    let Some(spatial) = spatial else {
+        return;
+    };
     let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
         return;
     };
@@ -1664,19 +1721,23 @@ fn select_grid_cell(
     let Ok(ray) = camera.viewport_to_world(camera_transform, cursor) else {
         return;
     };
-    let Some(world_position) =
-        ray.plane_intersection_point(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))
-    else {
+    let Some(hit) = spatial.cast_ray(
+        ray.origin,
+        ray.direction,
+        2_000.0,
+        true,
+        &SpatialQueryFilter::default(),
+    ) else {
         return;
     };
+    let world_position = ray.get_point(hit.distance);
     let Some(cell) = world_to_grid(world_position, &config.0) else {
         return;
     };
     selected.0 = Some(cell);
     if let Ok((mut transform, mut visibility)) = markers.single_mut() {
-        let marker_position = grid_to_world(cell, &config.0);
-        transform.translation.x = marker_position.x;
-        transform.translation.z = marker_position.z;
+        let marker_position = grid_to_world_on_surface(cell, &config.0, &world.generated);
+        transform.translation = marker_position + Vec3::Y * 0.12;
         *visibility = Visibility::Visible;
     }
 }
@@ -1830,7 +1891,13 @@ fn load_input(
     render: Res<RenderAssets>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
-    mut agents: Query<(Entity, &mut Agent, &mut GridLocation, &mut Transform)>,
+    mut agents: Query<(
+        Entity,
+        &mut Agent,
+        &mut GridLocation,
+        &AgentAnimation,
+        &mut Transform,
+    )>,
 ) {
     if !keyboard.just_pressed(KeyCode::F9) {
         return;
@@ -1862,22 +1929,24 @@ fn load_input(
         .map(|actor| (actor.id.clone(), actor))
         .collect();
     let mut restored_ids = BTreeSet::new();
-    for (entity, mut agent, mut location, mut transform) in &mut agents {
+    for (entity, mut agent, mut location, animation, mut transform) in &mut agents {
         let Some(saved) = saved_by_id.get(&agent.id) else {
             ecs.entity(entity).despawn();
             continue;
         };
         let position =
             nearest_walkable(&world.generated, saved.grid_position).unwrap_or(saved.grid_position);
-        let world_position = grid_to_world(position, &config.0);
+        let mut world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
+        if !animation.native {
+            world_position.y += animation.base_scale.y * 0.5;
+        }
         agent.kind = saved.kind.clone();
         agent.origin = position;
         agent.path.clear();
         agent.path_index = 0;
         agent.target = mirrored_target(&world.generated, position);
         location.0 = position;
-        transform.translation.x = world_position.x;
-        transform.translation.z = world_position.z;
+        transform.translation = world_position;
         restored_ids.insert(saved.id.clone());
     }
 
@@ -1887,7 +1956,7 @@ fn load_input(
         }
         let position =
             nearest_walkable(&world.generated, saved.grid_position).unwrap_or(saved.grid_position);
-        let world_position = grid_to_world(position, &config.0);
+        let world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
         let base_scale = Vec3::new(
             config.0.world.cell_size * 0.3,
             config.0.world.cell_size * 0.55,
@@ -1910,8 +1979,12 @@ fn load_input(
             },
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(actor_material(&render, &saved.kind, false)),
-            Transform::from_xyz(world_position.x, base_scale.y * 0.5, world_position.z)
-                .with_scale(base_scale),
+            Transform::from_xyz(
+                world_position.x,
+                world_position.y + base_scale.y * 0.5,
+                world_position.z,
+            )
+            .with_scale(base_scale),
         ));
     }
     stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
@@ -1997,7 +2070,8 @@ fn process_injected_commands(
                             },
                         )
                         .unwrap_or(position);
-                        let world_position = grid_to_world(position, &config.0);
+                        let world_position =
+                            grid_to_world_on_surface(position, &config.0, &world.generated);
                         simulation.0.join_player(actor_id.clone(), position);
                         let base_scale = Vec3::new(
                             config.0.world.cell_size * 0.3,
@@ -2023,7 +2097,7 @@ fn process_injected_commands(
                             MeshMaterial3d(actor_material(&render, &ActorKind::Player, false)),
                             Transform::from_xyz(
                                 world_position.x,
-                                base_scale.y * 0.5,
+                                world_position.y + base_scale.y * 0.5,
                                 world_position.z,
                             )
                             .with_scale(base_scale),
@@ -2181,6 +2255,110 @@ fn grid_to_world(position: GridPos, config: &GameConfig) -> Vec3 {
     )
 }
 
+fn grid_to_world_on_surface(
+    position: GridPos,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+) -> Vec3 {
+    let mut position_world = grid_to_world(position, config);
+    position_world.y = terrain_height(world, position);
+    position_world
+}
+
+fn terrain_height(world: &GeneratedWorld, position: GridPos) -> f32 {
+    f32::from(world.navigation.height_at(position).unwrap_or_default()) * 0.01
+}
+
+fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
+    let width = world.navigation.width();
+    let height = world.navigation.height();
+    let columns = u32::from(width) + 1;
+    let mut positions = Vec::with_capacity(usize::from(width + 1) * usize::from(height + 1));
+    let mut colors = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    for z in 0..=height {
+        for x in 0..=width {
+            let elevation = terrain_corner_height(world, x, z);
+            positions.push([
+                (f32::from(x) - f32::from(width) * 0.5) * config.world.cell_size,
+                elevation,
+                (f32::from(z) - f32::from(height) * 0.5) * config.world.cell_size,
+            ]);
+            colors.push(terrain_vertex_color(elevation, config));
+            uvs.push([
+                f32::from(x) / f32::from(width),
+                f32::from(z) / f32::from(height),
+            ]);
+        }
+    }
+
+    let mut indices = Vec::with_capacity(usize::from(width) * usize::from(height) * 6);
+    for z in 0..u32::from(height) {
+        for x in 0..u32::from(width) {
+            let top_left = z * columns + x;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + columns;
+            let bottom_right = bottom_left + 1;
+            indices.extend_from_slice(&[
+                top_left,
+                bottom_left,
+                top_right,
+                top_right,
+                bottom_left,
+                bottom_right,
+            ]);
+        }
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices));
+    mesh.compute_smooth_normals();
+    mesh
+}
+
+fn terrain_corner_height(world: &GeneratedWorld, corner_x: u16, corner_z: u16) -> f32 {
+    let min_x = corner_x.saturating_sub(1);
+    let max_x = corner_x.min(world.navigation.width() - 1);
+    let min_z = corner_z.saturating_sub(1);
+    let max_z = corner_z.min(world.navigation.height() - 1);
+    let mut total = 0.0_f32;
+    let mut samples = 0_u16;
+    for z in min_z..=max_z {
+        for x in min_x..=max_x {
+            total += f32::from(
+                world
+                    .navigation
+                    .height_at(GridPos { x, z })
+                    .unwrap_or_default(),
+            );
+            samples += 1;
+        }
+    }
+    let average = total / f32::from(samples.max(1));
+    average * 0.01
+}
+
+fn terrain_vertex_color(elevation: f32, config: &GameConfig) -> [f32; 4] {
+    let water = f32::from(config.world.water_level_centimetres) * 0.01;
+    if elevation <= water {
+        return [0.12, 0.17, 0.13, 1.0];
+    }
+    let peak = f32::from(config.world.height_scale_centimetres).max(1.0) * 0.01;
+    let normalized = ((elevation - water) / (peak - water).max(0.01)).clamp(0.0, 1.0);
+    [
+        0.10 + normalized * 0.22,
+        0.28 + normalized * 0.25,
+        0.12 + normalized * 0.12,
+        1.0,
+    ]
+}
+
 fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
     let x = (position.x / config.world.cell_size + f32::from(config.world.width) * 0.5).floor();
     let z = (position.z / config.world.cell_size + f32::from(config.world.height) * 0.5).floor();
@@ -2201,6 +2379,32 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_terrain_mesh_matches_navigation_grid() {
+        let config = GameConfig::default();
+        let world = generate_world(&config.world);
+        let mesh = generated_terrain_mesh(&world, &config);
+        assert_eq!(mesh.count_vertices(), 65 * 65);
+        assert_eq!(mesh.indices().unwrap().len(), 64 * 64 * 6);
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().len(),
+            mesh.count_vertices()
+        );
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap().len(),
+            mesh.count_vertices()
+        );
+        let centre = GridPos {
+            x: config.world.width / 2,
+            z: config.world.height / 2,
+        };
+        assert!(
+            (grid_to_world_on_surface(centre, &config, &world).y - terrain_height(&world, centre))
+                .abs()
+                <= f32::EPSILON
+        );
+    }
 
     #[test]
     fn embedded_config_supports_vertical_slice_scale() {
