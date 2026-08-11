@@ -49,8 +49,9 @@ The content conversion selects the active Unity containers and emits a validated
 catalog of 26 production buildings, 215 prefab archetypes, 288 model scene
 variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
-and level costs, `CanLevel`, per-level multipliers, and technology-issued level
-caps in content schema 3, and follows nested prefabs to their source FBX models.
+and level costs, `Placeable`, `CanLevel`, per-level multipliers, building-unlock
+effects, and technology-issued level caps in content schema 4, and follows nested
+prefabs to their source FBX models.
 The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 165 transitions, and inherited
@@ -96,8 +97,12 @@ spawn the converted building GLB, and round-trip through native saves. New
 structures start at Unity's 10% construction health; Builder agents path to a
 reachable perimeter cell and advance the 33%/66% presentation stages to
 completion. Upgrades spend the authored level cost and multiplier and respect
-maximum levels granted by unlocked technology. A
-semicolon-delimited `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
+maximum levels granted by unlocked technology. Building placement also respects
+the converted Unity `Placeable` flag and the
+persisted technology set: the authored initial technologies expose Lumbermill,
+Stonemason, Tower, and Windmill, while later votes expose the buildings named by
+their `Unlock Building` effects. A semicolon-delimited
+`STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
 
 The Unity starting NPC roster is present as stable Defender, Logger, Miner,

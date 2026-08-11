@@ -46,10 +46,15 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
+  Content schema 4 also promotes Unity `Placeable` and `Unlock Building` effects:
+  the four authored starting technologies expose Lumbermill, Stonemason, Tower,
+  and Windmill, later technology votes expose their referenced buildings, and
+  commands reject locked or non-placeable definitions.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
   catalog-priced building placement and upgrades, eligible technology voting,
-  mapped events, atomic saves, and help. Commands validate catalog references and prerequisites,
-  return HUD/Twitch feedback, and use the authoritative actor/selection position.
+  mapped events, atomic saves, and help. Commands validate catalog references
+  and prerequisites, return HUD/Twitch feedback, and use the authoritative
+  actor/selection position.
   Constructed buildings block the deterministic grid, spawn their converted GLB
   with a primitive fallback, persist in native saves, and are reconstructed with
   their navigation regions on load.
@@ -89,7 +94,8 @@ mistaken for production-ready systems.
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, promotes construction/upgrade balance and
   technology level caps into content schema 3, preserves typed Unity fields as
-  provenance, validates stable IDs/references/cycles, and reloads its own RON output.
+  provenance in content schema 4, validates stable IDs/references/cycles, and
+  reloads its own RON output.
 - A versioned presentation RON converter and YAML fallback that packages all
   133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
   materials with shader source, PBR approximations, texture slots, and custom
@@ -157,6 +163,8 @@ mistaken for production-ready systems.
   projectiles/area attacks/healing beyond the live melee combat loop, building
   station activation and derived level-up effects beyond the live construction/
   upgrade loop, and every reachable balance rule from the Unity scenes.
+- Technology effects beyond building availability and maximum levels, including
+  stat boosts, build-cost reductions, storage boosts, and building age changes.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on

@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786485824.9996035,
-    "ast_hash": "07ad461d620c73e387a35de700cf9648",
+    "mtime": 1786486689.6355004,
+    "ast_hash": "474f577e45f183025191cb852aac19fa",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786486265.9063926,
-    "ast_hash": "81d98a04d6ca49bf5ef332241be6d336",
+    "mtime": 1786486606.1173189,
+    "ast_hash": "4c84c53f0f46432337d7562b12821eec",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2810,8 +2810,8 @@
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786485825.0021076,
-    "ast_hash": "b2211773dda95b375344890824d0dc0b",
+    "mtime": 1786486689.6370044,
+    "ast_hash": "7bc4c4d3d1ef2983f9bcc265a28cbb9e",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786486247.9070246,
-    "ast_hash": "7caa7c946fe4f259069a5c74ec9a3cad",
+    "mtime": 1786486740.7315762,
+    "ast_hash": "00284194c040681a8bf9a6ceb6bcdf05",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786486247.906025,
-    "ast_hash": "4dab10a566d837adfe80ed93c8c5e840",
+    "mtime": 1786486740.7315762,
+    "ast_hash": "58b49aae77f8a13ab7b8491fc5c1cba0",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -3630,8 +3630,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
-    "mtime": 1786485881.8709128,
-    "ast_hash": "d3f2bc7d125f4411be27b78212f9a36b",
+    "mtime": 1786486513.6015778,
+    "ast_hash": "205dd547ba600e0f90e9ea0c39b38229",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/models.rs": {
