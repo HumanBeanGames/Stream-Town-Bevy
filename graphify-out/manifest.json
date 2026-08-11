@@ -30,8 +30,8 @@
     "semantic_hash": ""
   },
   "Assets/Editor/StreamTownSessionBridge.cs": {
-    "mtime": 1786458211.5624483,
-    "ast_hash": "520f2a62a4dd058bf1eaeaab03162929",
+    "mtime": 1786463503.2814462,
+    "ast_hash": "22b861e1d75831cf0fdc21641bae5bef",
     "semantic_hash": ""
   },
   "Assets/Editor/TwitchBotSetupWindow.cs": {
@@ -2800,8 +2800,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/main.rs": {
-    "mtime": 1786462494.7476459,
-    "ast_hash": "399298eca6abda92aafe3c33dbdbd3c5",
+    "mtime": 1786464288.4967122,
+    "ast_hash": "9087d99d020e9edf2d61f8d06087a0a9",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786462927.7277043,
-    "ast_hash": "9073028653978f819885c21bac483343",
+    "mtime": 1786464223.0118165,
+    "ast_hash": "28277d0d635b74a4ead5ea4c30e8e945",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,13 +3605,28 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786462927.7277043,
-    "ast_hash": "e3ee66ad061566fb90adac663bdb6676",
+    "mtime": 1786464223.0118165,
+    "ast_hash": "c41a5de598d9949b7789e9e455534fc0",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
     "mtime": 1786462934.8941314,
     "ast_hash": "c61817eb5bc706dea6324f9e52ca8f31",
+    "semantic_hash": ""
+  },
+  "Assets/Editor/BevyMigrationExporter.cs": {
+    "mtime": 1786464129.0260766,
+    "ast_hash": "eadb3cac2c18f8403efea150d186d67b",
+    "semantic_hash": ""
+  },
+  "Assets/MigrationOnly/PathfindingMigrationStubs.cs": {
+    "mtime": 1786463532.2790747,
+    "ast_hash": "a57c541c7b649a7efa8e154937a4a903",
+    "semantic_hash": ""
+  },
+  "bevy-port/scripts/export-unity.ps1": {
+    "mtime": 1786464223.0102937,
+    "ast_hash": "fbe887b7739416c5c17d91af4073747a",
     "semantic_hash": ""
   }
 }

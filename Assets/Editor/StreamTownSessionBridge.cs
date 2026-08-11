@@ -14,7 +14,7 @@ using Processors;
 using Reflex.Core;
 using TechTree.Data;
 using UserInterface;
-using AstarPathComponent = AstarPath;
+using AstarPathComponent = Pathfinding.AstarPath;
 
 namespace StreamTown.EditorTools
 {

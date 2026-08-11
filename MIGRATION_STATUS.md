@@ -32,9 +32,12 @@ mistaken for production-ready systems.
   stable IDs, deterministic surface relocation, atomic native output, SHA-256
   provenance, and post-write reload verification. Legacy input is never modified.
 - A Unity asset inventory/validator that resolves `.meta` GUIDs and YAML
-  references. The first scan found 1,429 source assets: 61 clips, 31 animator
-  controllers, 33 materials, 253 models, 215 prefabs, 10 scenes, 654
-  ScriptableObjects, 16 shaders, 133 textures, 17 VFX assets, and 6 other files.
+  references, plus a Unity 6000.5.6f1 editor exporter for serialized fields,
+  object references, prefab sources and overrides, and the four shipping scene
+  hierarchies. The verified export contains 1,429 assets; 61 legacy animation
+  clips require the YAML fallback because Unity did not expose a main object.
+- Explicit migration-only A* API stubs sufficient to compile and run the editor
+  exporter. They are intentionally inert and are not used by the Bevy runtime.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. The World + Navigation tab has a working deterministic
   seed preview; several other tabs are presently diagnostic/authoring shells.
@@ -43,9 +46,10 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Unity prefab/ScriptableObject export with variant and override flattening, the
-  A* compatibility exporter, RON content generation, and the Blender-to-GLB
-  conversion pipeline.
+- RON content generation, semantic prefab/archetype conversion, animation
+  controller translation, and the Blender-to-GLB conversion pipeline. The
+  neutral Unity export preserves prefab source/override records rather than
+  claiming those records are already production Bevy archetypes.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
   reachable balance rule from the Unity scenes.
@@ -88,6 +92,14 @@ Generate the ignored, machine-local Unity inventory with:
 ```powershell
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
 cargo run -p stream_town_migrate -- validate-manifest generated/content-manifest.json
+```
+
+Generate and validate the ignored, machine-local editor export with:
+
+```powershell
+.\bevy-port\scripts\export-unity.ps1
+cd bevy-port
+cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
 ```
 
 ## Milestone interpretation

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::BufReader,
     path::{Path, PathBuf},
 };
 
@@ -29,6 +30,8 @@ enum Command {
     },
     /// Validate an existing migration manifest.
     ValidateManifest { manifest: PathBuf },
+    /// Validate the neutral JSON emitted by the Unity editor exporter.
+    ValidateUnityExport { export: PathBuf },
     /// Inspect a legacy JSON or STSV binary save without modifying it.
     InspectSave { save: PathBuf },
     /// Convert a legacy JSON or schema 1-3 binary save into a validated native save.
@@ -107,6 +110,10 @@ fn main() -> Result<()> {
                 println!("warning: {warning}");
             }
         }
+        Command::ValidateUnityExport { export } => {
+            let summary = validate_unity_export(&export)?;
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
         Command::InspectSave { save } => {
             let info = inspect_legacy_save(&save)
                 .with_context(|| format!("failed to inspect {}", save.display()))?;
@@ -127,6 +134,111 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct UnityExportSummary {
+    schema_version: u64,
+    unity_version: String,
+    assets: usize,
+    warnings: usize,
+    kinds: BTreeMap<String, usize>,
+    statuses: BTreeMap<String, usize>,
+    shipping_scenes: Vec<String>,
+}
+
+fn validate_unity_export(path: &Path) -> Result<UnityExportSummary> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to open Unity export {}", path.display()))?;
+    let root: serde_json::Value = serde_json::from_reader(BufReader::new(file))
+        .with_context(|| format!("failed to parse Unity export {}", path.display()))?;
+    let schema_version = root
+        .get("SchemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .context("Unity export is missing SchemaVersion")?;
+    if schema_version != 1 {
+        bail!("unsupported Unity export schema {schema_version}");
+    }
+    let unity_version = root
+        .get("UnityVersion")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("Unity export is missing UnityVersion")?
+        .to_owned();
+    let assets = root
+        .get("Assets")
+        .and_then(serde_json::Value::as_array)
+        .context("Unity export is missing Assets")?;
+    let warnings = root
+        .get("Warnings")
+        .and_then(serde_json::Value::as_array)
+        .context("Unity export is missing Warnings")?;
+
+    let expected_scenes = BTreeSet::from([
+        "Assets/Scenes/LOADER_INITIAL.unity",
+        "Assets/Scenes/Menu/Credits.unity",
+        "Assets/Scenes/Menu/Main_Menu_02.unity",
+        "Assets/Scenes/Worlds/World_Town.unity",
+    ]);
+    let mut guids = BTreeMap::<&str, &str>::new();
+    let mut paths = BTreeSet::<&str>::new();
+    let mut kinds = BTreeMap::<String, usize>::new();
+    let mut statuses = BTreeMap::<String, usize>::new();
+    let mut shipping_scenes = BTreeSet::new();
+    for asset in assets {
+        let guid = asset
+            .get("Guid")
+            .and_then(serde_json::Value::as_str)
+            .context("Unity export asset is missing Guid")?;
+        let asset_path = asset
+            .get("Path")
+            .and_then(serde_json::Value::as_str)
+            .context("Unity export asset is missing Path")?;
+        let kind = asset
+            .get("Kind")
+            .and_then(serde_json::Value::as_str)
+            .context("Unity export asset is missing Kind")?;
+        let status = asset
+            .get("Status")
+            .and_then(serde_json::Value::as_str)
+            .context("Unity export asset is missing Status")?;
+        if guid.len() != 32 || !guid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("{asset_path} has invalid Unity GUID {guid}");
+        }
+        if let Some(previous) = guids.insert(guid, asset_path) {
+            bail!("duplicate Unity GUID {guid} in {previous} and {asset_path}");
+        }
+        if !paths.insert(asset_path) {
+            bail!("duplicate Unity asset path {asset_path}");
+        }
+        if !asset_path.starts_with("Assets/") || asset_path.contains('\\') {
+            bail!("Unity asset path is not normalized: {asset_path}");
+        }
+        if !matches!(
+            status,
+            "exported" | "missing_main_object" | "reference_only"
+        ) {
+            bail!("{asset_path} has unsuccessful or unknown status {status}");
+        }
+        *kinds.entry(kind.to_owned()).or_default() += 1;
+        *statuses.entry(status.to_owned()).or_default() += 1;
+        if asset.get("Scene").is_some_and(|scene| !scene.is_null()) {
+            shipping_scenes.insert(asset_path);
+        }
+    }
+    if shipping_scenes != expected_scenes {
+        bail!("shipping scene set differs from the migration contract: {shipping_scenes:?}");
+    }
+
+    Ok(UnityExportSummary {
+        schema_version,
+        unity_version,
+        assets: assets.len(),
+        warnings: warnings.len(),
+        kinds,
+        statuses,
+        shipping_scenes: shipping_scenes.into_iter().map(str::to_owned).collect(),
+    })
 }
 
 fn inventory(unity_root: &Path) -> Result<MigrationManifest> {
