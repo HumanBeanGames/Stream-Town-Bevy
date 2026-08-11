@@ -53,14 +53,30 @@ mistaken for production-ready systems.
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, preserves typed Unity fields as provenance,
   validates stable IDs/references/cycles, and reloads its own RON output.
+- A versioned presentation RON converter and YAML fallback that packages all
+  133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
+  materials with shader source, PBR approximations, texture slots, and custom
+  shader properties, and translates all 31 Animator controllers into 94 stable
+  states, 165 transitions, parameter schemas, layer defaults, and 75 referenced
+  clip records. It resolves inherited prefab/controller/model dependencies into
+  22 bindings; 18 have an embedded GLB animation available. The sole dangling
+  Unity motion GUID in the Necrolands camera controller is retained and checked
+  as an explicit missing-source baseline instead of being discarded.
 - A pinned Blender 4.2.0 headless FBX-to-GLB pipeline with atomic outputs and
   independent hash/header/unit validation. Unity renderer bounds normalize the
   imported geometry, rigs, and translation curves. All 253 GLBs are reproducible
   and tracked with Git LFS: 820 meshes, 43 skins, 33 embedded animations, 253
   materials, one embedded image, and 95,464,596 output bytes.
+- Bevy runtime animation binding for compatible converted scenes. The shipping
+  Goblin prefab inherits its controller/model relationship through the nested
+  model prefab, builds a native Bevy `AnimationGraph` for GLB animation zero,
+  attaches it to the spawned `AnimationPlayer`, and suppresses the primitive
+  pulse fallback. Scenes without a compatible embedded clip keep the explicit
+  idle/moving fallback.
 - A focused Bevy/egui tool application with the planned eight work areas and an
-  embedded ECS inspector. It loads the real catalog, browses stable building and
-  role references plus prefab archetypes and their GLB variants, provides grouped
+  embedded ECS inspector. It loads the real catalogs, browses stable building and
+  role references plus prefab archetypes, GLB variants, materials, texture slots,
+  shader provenance, and Animator states/transitions, provides grouped
   technology search/topology plus validated metadata/prerequisite editing with
   undo/redo, and renders deterministic world occupancy, resources, and planned
   paths. Twitch setup is connected to the OS vault; the general runtime panel
@@ -70,9 +86,11 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Translation of Animator controllers and standalone clips into explicit Bevy
-  animation graphs, including per-prefab renderer activation for the player role
-  and equipment variants currently co-located in source FBX files.
+- Conversion of the 61 standalone Unity `.anim` assets into skeleton-compatible
+  GLB clips, state-driven blending across the translated controller graphs, and
+  per-prefab renderer activation for the player role/equipment variants that are
+  co-located in source FBX files. Controller semantics are now preserved in RON,
+  but only compatible embedded GLB animation zero is played natively today.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
   reachable balance rule from the Unity scenes.
@@ -80,7 +98,8 @@ mistaken for production-ready systems.
   production outbound response wording. The authenticated IRC path currently
   dispatches the stable Bevy command grammar and relies on `twitch-irc` for
   reconnect and chat rate limiting.
-- WGSL shader ports, VFX, material/texture reconstruction, UI parity,
+- WGSL shader ports, applying the packaged material/texture bindings to converted
+  GLB renderers, VFX, UI parity,
   post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
   legacy target/station/pet/customization data. The importer currently preserves
@@ -126,7 +145,7 @@ Generate and validate the ignored, machine-local editor export with:
 .\bevy-port\scripts\export-unity.ps1
 cd bevy-port
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
-cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
+cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
 ```
 
 ## Milestone interpretation
@@ -134,7 +153,9 @@ cargo run -p stream_town_migrate -- convert-content generated/unity-export.json 
 Foundation is substantially implemented. The vertical slice is runnable and its
 deterministic 300-agent navigation gate passes with semantically converted
 prefabs, representative production GLBs, and connected Twitch transport, but it
-is still missing rigged production animation, full command parity, production
-materials, and the recorded reference-machine GPU measurement required to close
-that milestone.
+now also has complete presentation metadata, packaged textures, and native Goblin
+animation binding. It is still missing converted standalone clips, state-driven
+animation blending, applied production shader/material parity, full command
+parity, and the recorded reference-machine GPU measurement required to close the
+milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

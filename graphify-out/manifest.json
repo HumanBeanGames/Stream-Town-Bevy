@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786471519.1033282,
-    "ast_hash": "a485ba0d432602fc0c90afb920dcb45f",
+    "mtime": 1786474245.0435922,
+    "ast_hash": "7d7def7e3838afa63b2c636187e167e1",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786473288.7167544,
-    "ast_hash": "ea5657e89af2232cef5ac1143fcd81d7",
+    "mtime": 1786474925.117915,
+    "ast_hash": "e60ecb3a1440455e4008dc24785fd2c6",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2800,18 +2800,18 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/main.rs": {
-    "mtime": 1786465657.8144777,
-    "ast_hash": "fc269013e93b6407adf9a8bf534cfd55",
+    "mtime": 1786474500.7484717,
+    "ast_hash": "38a88adf9521a8b3716df84ff9dde06e",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786473525.0742886,
-    "ast_hash": "e1e23fc38fa81f02a990a18838bba14e",
+    "mtime": 1786474661.5338054,
+    "ast_hash": "8f7714d0ed283fcfc2b5032db38cb831",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786470989.4055903,
-    "ast_hash": "cba39326f1ab815921c2f58a7d31a2dd",
+    "mtime": 1786474919.507865,
+    "ast_hash": "c45cc3488b6f712b8809d206779b861d",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786473069.280861,
-    "ast_hash": "167a497f527ea4cf20d8ef1883222213",
+    "mtime": 1786475197.9041386,
+    "ast_hash": "e9e3228f8fb3e0a6e25349c6acfa82ee",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786473069.2823663,
-    "ast_hash": "10cb1898a06dc5d4a1476af69ab4ac0d",
+    "mtime": 1786475197.9036345,
+    "ast_hash": "2aa855dd44a2603033efbd3f26a5bc95",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -3657,6 +3657,661 @@
   "bevy-port/crates/stream_town_game/src/twitch.rs": {
     "mtime": 1786473288.7157543,
     "ast_hash": "425c75771b741f6670dc4aae1d41930e",
+    "semantic_hash": ""
+  },
+  "bevy-port/crates/stream_town_domain/src/presentation.rs": {
+    "mtime": 1786475039.0232832,
+    "ast_hash": "48f301c85388be19723a4c0d7fa9751e",
+    "semantic_hash": ""
+  },
+  "bevy-port/crates/stream_town_migrate/src/presentation.rs": {
+    "mtime": 1786475064.7930298,
+    "ast_hash": "e6382f1608c1808748b7b350b1a1e2c6",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
+    "mtime": 1786474554.027574,
+    "ast_hash": "008bc0f37e6dd346c5a02475b0fe1675",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_Gate.png": {
+    "mtime": 1786474554.027574,
+    "ast_hash": "e1e8167cef8002cadcb3c5bed8f5d78c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_House.png": {
+    "mtime": 1786474554.028573,
+    "ast_hash": "d3be4a7852f34ad84192901d29c93bb9",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_LumberMill.png": {
+    "mtime": 1786474554.0295734,
+    "ast_hash": "65ad09cfa499abb10b2debf95fdb6279",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_OreStorage.png": {
+    "mtime": 1786474554.0295734,
+    "ast_hash": "fb227e50c034ab499203d5dbf9d861ab",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_Stonemason.png": {
+    "mtime": 1786474554.0295734,
+    "ast_hash": "97ed958f03dd83ab5aa13ad27702a7cb",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_Tower.png": {
+    "mtime": 1786474554.031077,
+    "ast_hash": "0f2c1d43c2f30442e7a7440352031438",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_TownHall.png": {
+    "mtime": 1786474554.0320816,
+    "ast_hash": "023b842b879f7f03e5ca8228466b2f23",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_Wall.png": {
+    "mtime": 1786474554.0320816,
+    "ast_hash": "0d77ed760ce079c6b99189145a1c87f3",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_Windmill.png": {
+    "mtime": 1786474554.0330806,
+    "ast_hash": "c4de511e182419a53b440f08d90f2abd",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_WoodStorage.png": {
+    "mtime": 1786474554.0340817,
+    "ast_hash": "cb7671190fd2e6dd23c425889b5a9061",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Barracks.png": {
+    "mtime": 1786474554.0340817,
+    "ast_hash": "14452b81ad591fa203a9de07347bc4f3",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Bowyard.png": {
+    "mtime": 1786474554.035587,
+    "ast_hash": "03b631d9b9633e65388d7c53043b23d5",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Castle.png": {
+    "mtime": 1786474554.0365946,
+    "ast_hash": "69c84d8ddb72fe1e372d7531d323f149",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Farm.png": {
+    "mtime": 1786474554.0375934,
+    "ast_hash": "cbeb55ecd21837bc3648243a0da203df",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_FishingHut.png": {
+    "mtime": 1786474554.0385947,
+    "ast_hash": "83d3048cc72473eef7c8e511bba47975",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_FoodStorage.png": {
+    "mtime": 1786474554.0385947,
+    "ast_hash": "987f410d7ab891bbabaa0e0b29df8c55",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Forge.png": {
+    "mtime": 1786474554.0406034,
+    "ast_hash": "115931b14fcbdb5603a3f47f928b4b62",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Fountain.png": {
+    "mtime": 1786474554.0406034,
+    "ast_hash": "2fd797cc7d5c2f835406e074e60cb767",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Gate.png": {
+    "mtime": 1786474554.0406034,
+    "ast_hash": "4fb3ce86c793332544e136f054fedfda",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_House.png": {
+    "mtime": 1786474554.0421212,
+    "ast_hash": "42632aca09161c00ba84bb7ee8d85e3c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_LumberMill.png": {
+    "mtime": 1786474554.0431275,
+    "ast_hash": "278a847f9f12164cad262e90426e7310",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Marketplace.png": {
+    "mtime": 1786474554.0431275,
+    "ast_hash": "afdbe0772408adf06dce2d7bb1f9e951",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Monastery.png": {
+    "mtime": 1786474554.044127,
+    "ast_hash": "346ca352e28e6554f00113aa7a9e63dd",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_NecroTower.png": {
+    "mtime": 1786474554.044127,
+    "ast_hash": "b136bfd3658cb583cbd9f253734c7f72",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_OreStorage.png": {
+    "mtime": 1786474554.045632,
+    "ast_hash": "76c6f891a103380bf46e39c527d9a2ac",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Statue01.png": {
+    "mtime": 1786474554.045632,
+    "ast_hash": "fb80b581a9dd079601c873ff28e84451",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Statue02.png": {
+    "mtime": 1786474554.04664,
+    "ast_hash": "68d0691b152b383d5d1f6b51f5ff18ef",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Statue03.png": {
+    "mtime": 1786474554.0506399,
+    "ast_hash": "ef0253149ac780c00832003406218c8f",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Stonemason.png": {
+    "mtime": 1786474554.0506399,
+    "ast_hash": "10715ad5dfcf8b35fd582c9a06ff85cd",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Tower.png": {
+    "mtime": 1786474554.0516388,
+    "ast_hash": "bb0fb837c00d99e1edb2bac07110af40",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_TownHall.png": {
+    "mtime": 1786474554.0526395,
+    "ast_hash": "cacc2a8fd9986b7bc3e1c70d19b6b367",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Wall.png": {
+    "mtime": 1786474554.0526395,
+    "ast_hash": "56b4220205caf1c7bf3dab6f22e70b85",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_Windmill.png": {
+    "mtime": 1786474554.0536387,
+    "ast_hash": "d76624469edf2d86cb7f90e264c2d9e2",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_WizardTower.png": {
+    "mtime": 1786474554.0566447,
+    "ast_hash": "2299851d0dc239705d77bfdffb0f9837",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age02_WoodStorage.png": {
+    "mtime": 1786474554.0566447,
+    "ast_hash": "5b5df9b3e6503a0f7158d2710f9f7237",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Blacksmith.png": {
+    "mtime": 1786474554.0581486,
+    "ast_hash": "b57d067c16fe030888bd6aa9c2121745",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Builder.png": {
+    "mtime": 1786474554.0581486,
+    "ast_hash": "5753158948d2b36c39e8cd00c753eb48",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Defender.png": {
+    "mtime": 1786474554.0591536,
+    "ast_hash": "87f45b6d95d78254440943cab9b798d9",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Farmer.png": {
+    "mtime": 1786474554.0601542,
+    "ast_hash": "66f859c253f8d0486c91bc08a4a8b553",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Fisher.png": {
+    "mtime": 1786474554.0611541,
+    "ast_hash": "d7fbffc0f16599f865b934e1443c9a87",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Gatherer.png": {
+    "mtime": 1786474554.0611541,
+    "ast_hash": "30259c70c7e6cc2aa53e240a94b832a6",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Logger.png": {
+    "mtime": 1786474554.0621545,
+    "ast_hash": "cf9795c4040107e58e0034becc420015",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Miner.png": {
+    "mtime": 1786474554.0626593,
+    "ast_hash": "74e98edba92a1955adaf7b13edb620d7",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Necromancer.png": {
+    "mtime": 1786474554.0626593,
+    "ast_hash": "85de43059690fdaf77daa8450d52a55f",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Paladin.png": {
+    "mtime": 1786474554.0636637,
+    "ast_hash": "b76faaac3ef21fc745ce7ec3e6d92f71",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Priest.png": {
+    "mtime": 1786474554.0716698,
+    "ast_hash": "57566429dc8d5934a69645e93509a60c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Ranger.png": {
+    "mtime": 1786474554.0756707,
+    "ast_hash": "03f780acbee87ed3483d1b4cbeb6f915",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Ruler.png": {
+    "mtime": 1786474554.0756707,
+    "ast_hash": "6c8e5b8094675b73c06b4e9c376c7425",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Soldier.png": {
+    "mtime": 1786474554.0776749,
+    "ast_hash": "d74feb87c38814e74e022decba2567f4",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/Characters/UI_Icon_Character_Wizard.png": {
+    "mtime": 1786474554.0776749,
+    "ast_hash": "79c671198dbabb21ae412536d22a10c2",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/UI_Icon_BuildRecruit_Background.png": {
+    "mtime": 1786474554.0776749,
+    "ast_hash": "4e12c63cf19b29b97decaad786ba6958",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Resources/Icons/UI_Icon_TechTree_Background.png": {
+    "mtime": 1786474554.0801842,
+    "ast_hash": "8d5271c2f1201f379e01f18c2a9ce604",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/BuildRecruitMenus/UI_Arrow.png": {
+    "mtime": 1786474554.081185,
+    "ast_hash": "044dd2eb677c4a492938d3b0c01dc71a",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/BuildRecruitMenus/UI_BuildRecruit_Background.png": {
+    "mtime": 1786474554.0821853,
+    "ast_hash": "47e6d31c2ede1c0f8aa628c552176df7",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/BuildRecruitMenus/UI_BuildRecruit_Tooltip_Background.png": {
+    "mtime": 1786474554.0836904,
+    "ast_hash": "82f02535ef94c8f5932f1624c648aee3",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Button.png": {
+    "mtime": 1786474554.0836904,
+    "ast_hash": "87fb446f17db5332673383344a1918f1",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Button_Disabled.png": {
+    "mtime": 1786474554.0846963,
+    "ast_hash": "ea4ca28893cf2430cdfd89831430710d",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Button_DropShadow.png": {
+    "mtime": 1786474554.0912108,
+    "ast_hash": "6ffbbaae33f559e4b1e3e6177b6d7a31",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Button_Keybind.png": {
+    "mtime": 1786474554.091714,
+    "ast_hash": "494ac607ba7520677eebb359b9145f3b",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Button_Unpressed.png": {
+    "mtime": 1786474554.0927184,
+    "ast_hash": "51a7dc1f726b145faa45a6489c2eecda",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Icon_Build_Small.png": {
+    "mtime": 1786474554.0932224,
+    "ast_hash": "b7fb322c0c3aa2d229c1de67d3718618",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Icon_Recruit_Large.png": {
+    "mtime": 1786474554.0942278,
+    "ast_hash": "fdfe4ad3d4ba667853e0306d8f86d12f",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Icon_Recruit_Small.png": {
+    "mtime": 1786474554.0957315,
+    "ast_hash": "99df8a17bfe67c66ca6f6cd2847bfa9a",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Icon_TechTree_Large.png": {
+    "mtime": 1786474554.0957315,
+    "ast_hash": "22182cfa1d5b1ed743d2ce53ea82c24c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Buttons/UI_Icon_TechTree_Small.png": {
+    "mtime": 1786474554.0972393,
+    "ast_hash": "1768befc27034fad3cb6fd50f15333ba",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/CurrentEvent/UI_CurrentEvent_Background.png": {
+    "mtime": 1786474554.0972393,
+    "ast_hash": "ae91cf8704b1aeaf97331393955bd5a8",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Filled.png": {
+    "mtime": 1786474554.0982473,
+    "ast_hash": "b2408d8ffb95f42e30b137557aefeaac",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Unfilled.png": {
+    "mtime": 1786474554.0982473,
+    "ast_hash": "1ab98a9a2b38637c2a124d2d6d01add2",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/LoadingScreen/UI_LoadingIcon.png": {
+    "mtime": 1786474554.0992463,
+    "ast_hash": "2e81773a4781366c36371993e1c90c63",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/LoadingScreen/UI_LoadingScreen.png": {
+    "mtime": 1786474554.1049287,
+    "ast_hash": "72be75a9c324f87c549fc47b9d5a7547",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/LoadingScreen/UI_loadingOverlay.png": {
+    "mtime": 1786474554.105525,
+    "ast_hash": "b024fb55efd5b4775a0d06c929f3ff96",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/Game_Icon.png": {
+    "mtime": 1786474554.1065295,
+    "ast_hash": "acb1e264d8a117c91009274e58d6ad63",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/Game_Logo.png": {
+    "mtime": 1786474554.1075296,
+    "ast_hash": "71dfdf1afcf58bd3d0133734c32aaf2e",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/Game_Logo_DropShadow.png": {
+    "mtime": 1786474554.1100407,
+    "ast_hash": "166a376d8dbf1fc4dc9ba1a7cc097a28",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/Team_Icon.png": {
+    "mtime": 1786474554.11104,
+    "ast_hash": "515f99d0abccd77fa7da76861ca7daf9",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/UI_Checkmark.png": {
+    "mtime": 1786474554.1120398,
+    "ast_hash": "850a2ffb257922d13470775b23e30cc1",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/UI_Cross.png": {
+    "mtime": 1786474554.1120398,
+    "ast_hash": "7eb04b3b74e9fe887fd65c6dd542f01a",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Miscellaneous/UI_Minimise.png": {
+    "mtime": 1786474554.1130402,
+    "ast_hash": "0dd13d6c2d14869e5c8e388a51c9e69b",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Objectives/UI_Objectives_Background.png": {
+    "mtime": 1786474554.1140404,
+    "ast_hash": "2c051e6f6e6de93e9d460526829b3a0f",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Objectives/UI_Objectives_Slider_Filled.png": {
+    "mtime": 1786474554.1155455,
+    "ast_hash": "eb61c5e75c4a5f82282c1911912fdecf",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Objectives/UI_Objectives_Slider_Unfilled.png": {
+    "mtime": 1786474554.1175702,
+    "ast_hash": "ff97ae4f58250e9a246aa02f41defd6e",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Blacksmith.png": {
+    "mtime": 1786474554.118577,
+    "ast_hash": "31e697f3403f2b025c08ea8f44ee953a",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Builder.png": {
+    "mtime": 1786474554.1190827,
+    "ast_hash": "ecc6e4d65cc354ad66c7246a2b50d607",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Defender.png": {
+    "mtime": 1786474554.1190827,
+    "ast_hash": "ac0d9d3897341c3c4f37daf9d111db70",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Farmer.png": {
+    "mtime": 1786474554.1200888,
+    "ast_hash": "21a1a4b4b673e766e76ae42e289198cb",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Fisher.png": {
+    "mtime": 1786474554.1215928,
+    "ast_hash": "15223c613e9afdffa6b00c96bf3eb4ae",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Gatherer.png": {
+    "mtime": 1786474554.1225991,
+    "ast_hash": "2cd9485acaa5a5a0a65c2e7f8c1e6783",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Logger.png": {
+    "mtime": 1786474554.1225991,
+    "ast_hash": "b9a4befcdd4e44cfb4b43291887aa9a6",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Miner.png": {
+    "mtime": 1786474554.1235998,
+    "ast_hash": "8c973858e60dfe969500aedcf9e028b4",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Necromancer.png": {
+    "mtime": 1786474554.1235998,
+    "ast_hash": "256e199d242e2f7c2d2f167d16e53577",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Paladin.png": {
+    "mtime": 1786474554.1245992,
+    "ast_hash": "477c2e58f141d3569d4bda5d0185f50c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Priest.png": {
+    "mtime": 1786474554.1245992,
+    "ast_hash": "df1928e13e380e6fc7db25d1101b383f",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Ranger.png": {
+    "mtime": 1786474554.1271098,
+    "ast_hash": "66fb1a8e429b75bcf22f21be8e09d9dd",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Recruit.png": {
+    "mtime": 1786474554.1281085,
+    "ast_hash": "2d948947caa7ba656a0a418980bcabec",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Ruler.png": {
+    "mtime": 1786474554.1291075,
+    "ast_hash": "4ea14451dd7d37ae6a1b47ac7fb5f485",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Soldier.png": {
+    "mtime": 1786474554.1296117,
+    "ast_hash": "4466e816ad328258defe8b1610b556e7",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Trader.png": {
+    "mtime": 1786474554.1306176,
+    "ast_hash": "043ba11862c9d668c84906390dbb649e",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Roles/UI_Role_Icon_Wizard.png": {
+    "mtime": 1786474554.1306176,
+    "ast_hash": "0e74e5c2ee55b8fb23dc8d6e92cf73db",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/RulerVotingMenu/UI_RulerVotingMenu_Icon.png": {
+    "mtime": 1786474554.131617,
+    "ast_hash": "6abd8c3f77347c5852de8dd8a60b8be3",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/RulerVotingMenu/UI_RulerVotingMenu_TimerSlider_Filled.png": {
+    "mtime": 1786474554.1326182,
+    "ast_hash": "5827c3b18aa48b6d422d0864a808ef69",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/RulerVotingMenu/UI_RulerVotingMenu_TimerSlider_Unfilled.png": {
+    "mtime": 1786474554.1476445,
+    "ast_hash": "363f8ca8401b582fb084e8c596299780",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/SelectionWindow/UI_SelectionWindow_GreenSlider_Filled.png": {
+    "mtime": 1786474554.1486444,
+    "ast_hash": "26b837e4aa166a0b119d4001301d2017",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/SelectionWindow/UI_SelectionWindow_RedSlider_Filled.png": {
+    "mtime": 1786474554.1486444,
+    "ast_hash": "d15c876e226a6bb01ecfd796ac195fb0",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/SelectionWindow/UI_SelectionWindow_Slider_Unfilled.png": {
+    "mtime": 1786474554.1496444,
+    "ast_hash": "07f8926abbfcf3cc20fb875c6a3e5502",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/Settings/UI_Settings_Background.png": {
+    "mtime": 1786474554.1516445,
+    "ast_hash": "5e1aa72ea90bc16d95e1ba683ba41566",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Background.png": {
+    "mtime": 1786474554.1556442,
+    "ast_hash": "c4db017b258ac88847cbf2b292f74f00",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Resources_Food.png": {
+    "mtime": 1786474554.1556442,
+    "ast_hash": "61f14c17662b197a1bfa6c85d06cc47b",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Resources_Gold.png": {
+    "mtime": 1786474554.1571476,
+    "ast_hash": "cac5d5ca29be2184ad1fd521e04c83b9",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Resources_Ore.png": {
+    "mtime": 1786474554.1571476,
+    "ast_hash": "1dba18e4091e725b783db0ea6a9d1a0f",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Resources_Wood.png": {
+    "mtime": 1786474554.1586576,
+    "ast_hash": "b92e779e4eaf45685cd6a6437d5ca6b8",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_SeasonGauge.png": {
+    "mtime": 1786474554.1586576,
+    "ast_hash": "953f3c9c5706ea9bee07395da182074c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_SeasonGauge_Meter.png": {
+    "mtime": 1786474554.1586576,
+    "ast_hash": "8583374240572e4c6d7a3984be4603d7",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Stats_Buildings.png": {
+    "mtime": 1786474554.1605372,
+    "ast_hash": "86a4bc9cf1719ba679af43df42775a0c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Stats_PlayTime.png": {
+    "mtime": 1786474554.1611664,
+    "ast_hash": "f4da46453c7cf28a302c5cbbbb067f40",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/TopBar/UI_TopBar_Stats_Players.png": {
+    "mtime": 1786474554.162167,
+    "ast_hash": "19f481ef24b3b1123a50ccbdf4f9a701",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VFX/Particle_01.png": {
+    "mtime": 1786474554.1631677,
+    "ast_hash": "8a320218302b57c9dbe2bb0505223bcf",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VFX/Particle_02.png": {
+    "mtime": 1786474554.1646712,
+    "ast_hash": "fa4f1b94f6505a49fbc32e0dcf3d8bc6",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VFX/Particle_03.png": {
+    "mtime": 1786474554.1646712,
+    "ast_hash": "c38b82a68aabaf4d53c43f41c37ab906",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_Background.png": {
+    "mtime": 1786474554.165676,
+    "ast_hash": "09cf6171a726023187bacecae4b4a5d8",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_TimerSlider_Filled.png": {
+    "mtime": 1786474554.1672156,
+    "ast_hash": "a0037a783830c3a477e166afc6bc3e92",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_TimerSlider_Unfilled.png": {
+    "mtime": 1786474554.1682198,
+    "ast_hash": "eeaa60eee941b27013116613e7f2e362",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_Timer_Icon.png": {
+    "mtime": 1786474554.1697247,
+    "ast_hash": "9293ff0670ae0701eac95a3f009ac7cd",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_VotePrompt.png": {
+    "mtime": 1786474554.1712317,
+    "ast_hash": "f8a275d27b49d0dea082bf7065dc5f81",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_VoteSlider_Filled.png": {
+    "mtime": 1786474554.1722333,
+    "ast_hash": "f1a186f67f81d68d4b17e533173afb1c",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Sprites/VotingMenu/UI_VotingMenu_VoteSlider_Unfilled.png": {
+    "mtime": 1786474554.1722333,
+    "ast_hash": "474b0ed2d27b92d38de3ec26f3048682",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Textures/SelectionMask.png": {
+    "mtime": 1786474554.177734,
+    "ast_hash": "b3e06c78d53ab3d08f40c9791da62c99",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Textures/SmallWaves.png": {
+    "mtime": 1786474554.1792667,
+    "ast_hash": "8c97caee9ca4550af7a2e316b41f55b2",
+    "semantic_hash": ""
+  },
+  "bevy-port/assets/migrated/textures/Textures/TempLeaves.png": {
+    "mtime": 1786474554.180881,
+    "ast_hash": "b76680de3a3af6696058c859d3e83a02",
     "semantic_hash": ""
   }
 }

@@ -10,8 +10,9 @@ here.
 - `stream_town_tools`: focused content, migration, world-generation, navigation,
   Twitch, validation, and runtime tooling. Its catalog browser, validated
   technology editor with undo/redo, occupancy/path lab, prefab/archetype browser,
-  and Twitch device-OAuth/vault diagnostics are functional; the runtime panel
-  remains a diagnostic shell.
+  material/texture and Animator-controller diagnostics, and Twitch
+  device-OAuth/vault diagnostics are functional; the runtime panel remains a
+  diagnostic shell.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
@@ -26,7 +27,7 @@ cargo run -p stream_town_game
 cargo run -p stream_town_tools
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
-cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
+cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
 cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 ```
@@ -38,7 +39,7 @@ exact editor version recorded by the project:
 .\bevy-port\scripts\export-unity.ps1
 cd bevy-port
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
-cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --out-dir assets/content
+cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
 ```
 
 The editor exporter resolves GUIDs, object references, prefab sources and
@@ -48,7 +49,11 @@ The content conversion selects the active Unity containers and emits a validated
 catalog of 26 production buildings, 215 prefab archetypes, 288 model scene
 variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes and follows nested
-prefabs to their source FBX models.
+prefabs to their source FBX models. The same command copies all 133 reachable
+textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
+31 controller definitions, 94 stable states, 165 transitions, and inherited
+prefab/controller/model bindings. The known missing Necrolands camera clip is an
+explicit validated record.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:
@@ -79,6 +84,9 @@ save/load, F12 to capture a screenshot, and Escape to return to the menu. The
 vertical slice renders a 3D terrain plane,
 lighting, converted GLB scenes for the representative town hall and actors, and
 primitive fallbacks when an asset is unavailable.
+Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
+Goblin path); standalone Unity `.anim` conversion and custom shader/material
+application remain presentation work.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
