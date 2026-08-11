@@ -19,7 +19,8 @@ pub use command::{ChatCommand, CommandParseError};
 pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, RoleDef, TechGroup, TechNode, TechTree,
+    BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, RoleDef, StorageContribution, TechGroup,
+    TechNode, TechTree,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};

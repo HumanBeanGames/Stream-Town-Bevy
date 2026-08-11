@@ -1,5 +1,5 @@
 (
-    schema_version: 6,
+    schema_version: 7,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -6955,6 +6955,7 @@
                 "resource:wood": 1200,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:bowyard": (
             display_name: "Bowyard",
@@ -6975,6 +6976,7 @@
                 "resource:wood": 2400,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:castle": (
             display_name: "Castle",
@@ -6995,6 +6997,7 @@
                 "resource:wood": 100000,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:farm": (
             display_name: "Farm",
@@ -7015,6 +7018,7 @@
                 "resource:wood": 4000,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:fishinghut": (
             display_name: "FishingHut",
@@ -7035,6 +7039,7 @@
                 "resource:wood": 1200,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:foodstorage": (
             display_name: "FoodStorage",
@@ -7055,6 +7060,14 @@
                 "resource:wood": 500,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [
+                (
+                    resource: "resource:food",
+                    base_amount: 1000,
+                    increment_amount: 2000,
+                    level_multiplier_per_thousand: 3000,
+                ),
+            ],
         ),
         "building:forge": (
             display_name: "Forge",
@@ -7075,6 +7088,7 @@
                 "resource:wood": 300,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:fountain": (
             display_name: "Fountain",
@@ -7095,6 +7109,7 @@
                 "resource:wood": 5000,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:gate": (
             display_name: "Gate",
@@ -7115,6 +7130,7 @@
                 "resource:wood": 750,
             },
             level_cost_multiplier_per_thousand: 4000,
+            storage: [],
         ),
         "building:house": (
             display_name: "House",
@@ -7135,6 +7151,14 @@
                 "resource:wood": 500,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [
+                (
+                    resource: "resource:recruit",
+                    base_amount: 2,
+                    increment_amount: 1,
+                    level_multiplier_per_thousand: 1000,
+                ),
+            ],
         ),
         "building:lumbermill": (
             display_name: "Lumbermill",
@@ -7155,6 +7179,7 @@
                 "resource:wood": 0,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:marketplace": (
             display_name: "Marketplace",
@@ -7175,6 +7200,7 @@
                 "resource:wood": 40000,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:monastery": (
             display_name: "Monastery",
@@ -7195,6 +7221,7 @@
                 "resource:wood": 15000,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:necrotower": (
             display_name: "Necromancer Tower",
@@ -7215,6 +7242,7 @@
                 "resource:wood": 60000,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:orestorage": (
             display_name: "Ore Storage",
@@ -7235,6 +7263,14 @@
                 "resource:wood": 500,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [
+                (
+                    resource: "resource:ore",
+                    base_amount: 1000,
+                    increment_amount: 2000,
+                    level_multiplier_per_thousand: 3000,
+                ),
+            ],
         ),
         "building:statue_1": (
             display_name: "Statue1",
@@ -7255,6 +7291,7 @@
                 "resource:wood": 2500,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:statue_2": (
             display_name: "Statue2",
@@ -7275,6 +7312,7 @@
                 "resource:wood": 2500,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:statue_3": (
             display_name: "Statue3",
@@ -7295,6 +7333,7 @@
                 "resource:wood": 2500,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:stonemason": (
             display_name: "Stonemason",
@@ -7315,6 +7354,7 @@
                 "resource:wood": 400,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:torch": (
             display_name: "Torch",
@@ -7335,6 +7375,7 @@
                 "resource:wood": 500,
             },
             level_cost_multiplier_per_thousand: 2000,
+            storage: [],
         ),
         "building:tower": (
             display_name: "Tower",
@@ -7355,6 +7396,7 @@
                 "resource:wood": 500,
             },
             level_cost_multiplier_per_thousand: 2500,
+            storage: [],
         ),
         "building:townhall": (
             display_name: "TownHall",
@@ -7375,6 +7417,7 @@
                 "resource:wood": 10000,
             },
             level_cost_multiplier_per_thousand: 5000,
+            storage: [],
         ),
         "building:wall": (
             display_name: "Wall",
@@ -7395,6 +7438,7 @@
                 "resource:wood": 250,
             },
             level_cost_multiplier_per_thousand: 4000,
+            storage: [],
         ),
         "building:windmill": (
             display_name: "Windmill",
@@ -7415,6 +7459,7 @@
                 "resource:wood": 400,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:wizardtower": (
             display_name: "Wizard Tower",
@@ -7435,6 +7480,7 @@
                 "resource:wood": 35000,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [],
         ),
         "building:woodstorage": (
             display_name: "Wood Storage",
@@ -7455,6 +7501,14 @@
                 "resource:wood": 500,
             },
             level_cost_multiplier_per_thousand: 1500,
+            storage: [
+                (
+                    resource: "resource:wood",
+                    base_amount: 1000,
+                    increment_amount: 2000,
+                    level_multiplier_per_thousand: 3000,
+                ),
+            ],
         ),
     },
     roles: {

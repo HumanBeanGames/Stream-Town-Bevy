@@ -10,7 +10,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, RoleDef, StableId, TechGroup, TechNode, TechTree,
+    BuildingDef, ContentCatalog, RoleDef, StableId, StorageContribution, TechGroup, TechNode,
+    TechTree,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -242,6 +243,11 @@ fn convert_export(
             .to_string()
             .parse::<u32>()
             .with_context(|| format!("{} level multiplier is out of range", asset.path))?;
+        let prefab = required_guid_asset(
+            &assets_by_guid,
+            &archetypes[archetype].source_guid,
+            "UnityEngine.GameObject",
+        )?;
         buildings.insert(
             id.clone(),
             BuildingDef {
@@ -253,6 +259,7 @@ fn convert_export(
                 can_level: required_bool(asset, "CanLevel")?,
                 level_cost,
                 level_cost_multiplier_per_thousand,
+                storage: storage_contributions(prefab)?,
             },
         );
         insert_source_record(&mut source_records, id, asset)?;
@@ -605,6 +612,52 @@ fn prefab_building_type(asset: &UnityAsset) -> Option<&str> {
         .find(|component| component_type(component) == "Buildings.BuildingBase")
         .and_then(|component| component_field_value(component, "_buildingType"))
         .and_then(enum_name)
+}
+
+fn storage_contributions(asset: &UnityAsset) -> Result<Vec<StorageContribution>> {
+    let mut storage = Vec::new();
+    for component in asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Buildings.ResourceStorageModifier")
+    {
+        let required = |path: &str| {
+            component_field_value(component, path)
+                .with_context(|| format!("{} storage component is missing {path}", asset.path))
+        };
+        let resource = required("_resource")?
+            .as_object()
+            .and_then(|value| value.get("Name"))
+            .and_then(Value::as_str)
+            .with_context(|| format!("{} storage component has invalid _resource", asset.path))?;
+        let u32_field = |path: &str| {
+            required(path)?
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .with_context(|| format!("{} storage field {path} is out of range", asset.path))
+        };
+        let multiplier = required("_incrementMultiPerLevel")?
+            .as_f64()
+            .with_context(|| format!("{} storage multiplier is invalid", asset.path))?;
+        if !multiplier.is_finite() || multiplier < 0.0 {
+            bail!("{} storage multiplier must be non-negative", asset.path);
+        }
+        let level_multiplier_per_thousand = (multiplier * 1000.0)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} storage multiplier is out of range", asset.path))?;
+        storage.push(StorageContribution {
+            resource: stable_id("resource", &slug(resource))?,
+            base_amount: u32_field("_baseAmount")?,
+            increment_amount: u32_field("_incrementAmount")?,
+            level_multiplier_per_thousand,
+        });
+    }
+    storage.sort_by(|left, right| left.resource.cmp(&right.resource));
+    Ok(storage)
 }
 
 fn component_type(component: &UnityComponent) -> &str {
@@ -1409,10 +1462,21 @@ mod tests {
             vec![],
         );
         prefab.game_object = Some(UnityGameObject {
-            components: vec![component(
-                "Buildings.BuildingBase, Assembly-CSharp",
-                vec![field("_buildingType", enum_value("Townhall"))],
-            )],
+            components: vec![
+                component(
+                    "Buildings.BuildingBase, Assembly-CSharp",
+                    vec![field("_buildingType", enum_value("Townhall"))],
+                ),
+                component(
+                    "Buildings.ResourceStorageModifier, Assembly-CSharp",
+                    vec![
+                        field("_resource", enum_value("Food")),
+                        field("_baseAmount", Value::from(1_000)),
+                        field("_incrementAmount", Value::from(2_000)),
+                        field("_incrementMultiPerLevel", Value::from(3.0)),
+                    ],
+                ),
+            ],
         });
         prefab.dependencies = vec![UnityReference {
             path: Some("Assets/Models/Buildings/Age01/Age01_TownHall.fbx".to_owned()),
@@ -1532,6 +1596,15 @@ mod tests {
         let town_hall = StableId::new("building:townhall").unwrap();
         assert_eq!(catalog.buildings[&town_hall].footprint, [4, 2]);
         assert!(catalog.buildings[&town_hall].can_level);
+        assert_eq!(
+            catalog.buildings[&town_hall].storage,
+            vec![StorageContribution {
+                resource: StableId::new("resource:food").unwrap(),
+                base_amount: 1_000,
+                increment_amount: 2_000,
+                level_multiplier_per_thousand: 3_000,
+            }]
+        );
         assert_eq!(
             catalog.buildings[&town_hall].level_cost_multiplier_per_thousand,
             2_000

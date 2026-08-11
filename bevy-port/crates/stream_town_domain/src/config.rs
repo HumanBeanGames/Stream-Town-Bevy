@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONFIG_SCHEMA: u32 = 3;
+pub const CURRENT_CONFIG_SCHEMA: u32 = 4;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GameConfig {
@@ -40,6 +40,8 @@ pub struct GameplayConfig {
     pub agent_speed_cells_per_second: f32,
     pub repath_interval_seconds: f32,
     pub starting_town_resources: BTreeMap<StableId, u32>,
+    /// Resources omitted from this map are intentionally unbounded.
+    pub base_town_resource_capacity: BTreeMap<StableId, u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -71,6 +73,8 @@ pub enum ConfigError {
     TwitchClientId,
     #[error("Twitch bot and channel logins must be lowercase ASCII names")]
     TwitchLogin,
+    #[error("starting resource {resource} exceeds capacity {capacity}")]
+    StartingResourceCapacity { resource: StableId, capacity: u32 },
 }
 
 impl Default for GameConfig {
@@ -101,6 +105,12 @@ impl Default for GameConfig {
                     (stable_id("resource:ore"), 5_000),
                     (stable_id("resource:recruit"), 0),
                     (stable_id("resource:wood"), 5_000),
+                ]),
+                base_town_resource_capacity: BTreeMap::from([
+                    (stable_id("resource:food"), 15_000),
+                    (stable_id("resource:ore"), 15_000),
+                    (stable_id("resource:recruit"), 5),
+                    (stable_id("resource:wood"), 15_000),
                 ]),
             },
             twitch: TwitchConfig {
@@ -137,6 +147,16 @@ impl GameConfig {
         }
         if !(1..=5_000).contains(&self.gameplay.initial_agents) {
             return Err(ConfigError::AgentCount);
+        }
+        for (resource, amount) in &self.gameplay.starting_town_resources {
+            if let Some(capacity) = self.gameplay.base_town_resource_capacity.get(resource)
+                && amount > capacity
+            {
+                return Err(ConfigError::StartingResourceCapacity {
+                    resource: resource.clone(),
+                    capacity: *capacity,
+                });
+            }
         }
         if self.twitch.enabled && self.twitch.client_id.trim().is_empty() {
             return Err(ConfigError::TwitchClientId);

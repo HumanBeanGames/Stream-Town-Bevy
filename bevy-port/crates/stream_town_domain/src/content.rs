@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 6;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 7;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -74,6 +74,16 @@ pub struct BuildingDef {
     pub can_level: bool,
     pub level_cost: BTreeMap<StableId, u32>,
     pub level_cost_multiplier_per_thousand: u32,
+    #[serde(default)]
+    pub storage: Vec<StorageContribution>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StorageContribution {
+    pub resource: StableId,
+    pub base_amount: u32,
+    pub increment_amount: u32,
+    pub level_multiplier_per_thousand: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -192,6 +202,11 @@ pub enum ContentError {
     },
     #[error("building {0} has an invalid zero level-cost multiplier")]
     InvalidLevelCostMultiplier(StableId),
+    #[error("building {building} has an invalid zero storage multiplier for {resource}")]
+    InvalidStorageMultiplier {
+        building: StableId,
+        resource: StableId,
+    },
     #[error("archetype {0} has an empty footprint")]
     EmptyArchetypeFootprint(StableId),
     #[error("archetype {archetype} has invalid scene asset path {path}")]
@@ -262,6 +277,16 @@ impl ContentCatalog {
             }
             if building.level_cost_multiplier_per_thousand == 0 {
                 return Err(ContentError::InvalidLevelCostMultiplier(id.clone()));
+            }
+            if let Some(storage) = building
+                .storage
+                .iter()
+                .find(|storage| storage.level_multiplier_per_thousand == 0)
+            {
+                return Err(ContentError::InvalidStorageMultiplier {
+                    building: id.clone(),
+                    resource: storage.resource.clone(),
+                });
             }
         }
         for (technology_id, technology) in &self.technology.nodes {

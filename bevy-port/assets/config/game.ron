@@ -1,5 +1,5 @@
 (
-    schema_version: 3,
+    schema_version: 4,
     window: (
         title: "Stream Town — Bevy Migration",
         width: 1920,
@@ -24,6 +24,12 @@
             "resource:ore": 5000,
             "resource:recruit": 0,
             "resource:wood": 5000,
+        },
+        base_town_resource_capacity: {
+            "resource:food": 15000,
+            "resource:ore": 15000,
+            "resource:recruit": 5,
+            "resource:wood": 15000,
         },
     ),
     twitch: (

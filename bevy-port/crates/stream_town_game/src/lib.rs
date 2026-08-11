@@ -1424,6 +1424,7 @@ fn next_agent_goal(
 fn complete_agent_goal(
     simulation: &mut WorldSimulation,
     world: &mut GeneratedWorld,
+    config: &GameConfig,
     content: &ContentCatalog,
     actor_id: &StableId,
     goal: &AgentGoal,
@@ -1475,7 +1476,7 @@ fn complete_agent_goal(
                 .map(|resource| {
                     (
                         resource.clone(),
-                        resource_storage_capacity(content, simulation, resource),
+                        resource_storage_capacity(config, content, simulation, resource),
                     )
                 })
                 .collect();
@@ -1655,6 +1656,7 @@ fn move_agents(
                     complete_agent_goal(
                         &mut simulation.0,
                         &mut world.generated,
+                        &config.0,
                         &content.0,
                         &agent.id,
                         &agent.goal,
@@ -3303,17 +3305,50 @@ fn milli_units_as_f32(value: u32) -> f32 {
         / 1_000.0
 }
 
-const BASE_RESOURCE_STORAGE: u32 = 10_000;
-
 fn resource_storage_capacity(
+    config: &GameConfig,
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     resource: &StableId,
 ) -> u32 {
-    percentage_adjusted(
-        BASE_RESOURCE_STORAGE,
-        storage_boost_percent(content, simulation, resource),
-    )
+    let Some(base) = config
+        .gameplay
+        .base_town_resource_capacity
+        .get(resource)
+        .copied()
+    else {
+        return u32::MAX;
+    };
+    let boost = storage_boost_percent(content, simulation, resource);
+    simulation
+        .buildings
+        .values()
+        .filter(|building| building.complete)
+        .filter_map(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            Some((definition, building.level))
+        })
+        .flat_map(|(definition, level)| {
+            definition
+                .storage
+                .iter()
+                .filter(move |storage| storage.resource == *resource)
+                .map(move |storage| {
+                    let amount = if level <= 1 {
+                        storage.base_amount
+                    } else {
+                        let scaled_level = u64::from(level)
+                            .saturating_mul(u64::from(storage.level_multiplier_per_thousand))
+                            / 1_000;
+                        u32::try_from(
+                            u64::from(storage.increment_amount).saturating_mul(scaled_level),
+                        )
+                        .unwrap_or(u32::MAX)
+                    };
+                    percentage_adjusted(amount, boost)
+                })
+        })
+        .fold(base, u32::saturating_add)
 }
 
 fn building_construction_cost(
@@ -4108,6 +4143,7 @@ mod tests {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
+                &config,
                 &content,
                 &actor_id,
                 &gather,
@@ -4136,6 +4172,7 @@ mod tests {
         complete_agent_goal(
             &mut simulation,
             &mut world,
+            &config,
             &content,
             &actor_id,
             &AgentGoal::Deposit,
@@ -4177,6 +4214,7 @@ mod tests {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
+                &config,
                 &content,
                 &defender,
                 &goal,
@@ -4255,6 +4293,7 @@ mod tests {
             complete_agent_goal(
                 &mut simulation,
                 &mut world,
+                &config,
                 &content,
                 &builder,
                 &goal,
@@ -4342,6 +4381,7 @@ mod tests {
 
     #[test]
     fn converted_technology_modifiers_change_runtime_rules() {
+        let config = GameConfig::default();
         let content = embedded_content();
         let mut simulation = WorldSimulation::new(42);
 
@@ -4379,10 +4419,38 @@ mod tests {
                     .map(|(resource, amount)| (technology.clone(), resource.clone(), *amount))
             })
             .expect("Unity technology graph contains storage boosts");
+        let storage_definition = content
+            .buildings
+            .values()
+            .find(|building| {
+                building
+                    .storage
+                    .iter()
+                    .any(|storage| storage.resource == resource)
+            })
+            .expect("converted catalog contains the boosted storage building");
+        let storage = storage_definition
+            .storage
+            .iter()
+            .find(|storage| storage.resource == resource)
+            .unwrap();
+        let runtime_storage = StableId::new("building:test_storage").unwrap();
+        simulation.buildings.insert(
+            runtime_storage.clone(),
+            BuildingState {
+                id: runtime_storage,
+                archetype: storage_definition.archetype.clone(),
+                position: GridPos { x: 1, z: 1 },
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
         simulation.unlocked_technology.insert(storage_technology);
+        let base = config.gameplay.base_town_resource_capacity[&resource];
         assert_eq!(
-            resource_storage_capacity(&content, &simulation, &resource),
-            percentage_adjusted(BASE_RESOURCE_STORAGE, boost)
+            resource_storage_capacity(&config, &content, &simulation, &resource),
+            base + percentage_adjusted(storage.base_amount, boost)
         );
 
         simulation.unlocked_technology.clear();
