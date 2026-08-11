@@ -48,8 +48,10 @@ migration-only A* types are inert compile stubs and are not navigation code.
 The content conversion selects the active Unity containers and emits a validated
 catalog of 26 production buildings, 215 prefab archetypes, 288 model scene
 variants, 15 roles, and the 363-node shipping technology graph. It derives
-building footprints from Unity's authored two-unit grid sizes and follows nested
-prefabs to their source FBX models. The same command copies all 133 reachable
+building footprints from Unity's authored two-unit grid sizes, emits typed build
+and level costs, `CanLevel`, per-level multipliers, and technology-issued level
+caps in content schema 3, and follows nested prefabs to their source FBX models.
+The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 165 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
@@ -86,11 +88,15 @@ broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
-stable chat grammar executes `!join`, `!role`, `!build`, `!vote`, `!event`,
-`!save`, and `!help` with catalog/prerequisite validation and HUD/Twitch
-feedback. Building commands consume the schema-3 starting resource balances,
+stable chat grammar executes `!join`, `!role`, `!build`, `!upgrade`, `!vote`,
+`!event`, `!save`, and `!help` with catalog/prerequisite validation and
+HUD/Twitch feedback. Building commands consume the schema-3 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
-spawn the converted building GLB, and round-trip through native saves. A
+spawn the converted building GLB, and round-trip through native saves. New
+structures start at Unity's 10% construction health; Builder agents path to a
+reachable perimeter cell and advance the 33%/66% presentation stages to
+completion. Upgrades spend the authored level cost and multiplier and respect
+maximum levels granted by unlocked technology. A
 semicolon-delimited `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
 
@@ -116,6 +122,8 @@ ambient lighting, distance fog, and deterministic rain/snow fields from the
 authoritative simulation. For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
 `STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.
+`STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
+capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
 Goblin path). The Player controller builds 19 converted clips retargeted onto 23
 bones in the Player GLB rest pose. An engine-independent interpreter evaluates

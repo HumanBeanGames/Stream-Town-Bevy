@@ -39,9 +39,16 @@ mistaken for production-ready systems.
   deterministic role-specific damage, enter the controller's Death state at
   zero health, wait five seconds, respawn on a connected stable cell, and emit
   the Revive transition. Actor health is captured in native snapshots.
+- Player-placed buildings now follow Unity's health-driven construction
+  lifecycle. They start at 10% health, Builder-role actors select a reachable
+  perimeter cell and work on the nearest incomplete structure, presentation
+  advances across the authored 33%/66% stages, and completion restores the full
+  converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
+  cost-multiplier, and technology-issued maximum-level data; health, completion,
+  level, navigation occupancy, and presentation stage round-trip through saves.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
-  catalog-priced building placement, eligible technology voting, mapped events,
-  atomic saves, and help. Commands validate catalog references and prerequisites,
+  catalog-priced building placement and upgrades, eligible technology voting,
+  mapped events, atomic saves, and help. Commands validate catalog references and prerequisites,
   return HUD/Twitch feedback, and use the authoritative actor/selection position.
   Constructed buildings block the deterministic grid, spawn their converted GLB
   with a primitive fallback, persist in native saves, and are reconstructed with
@@ -53,7 +60,8 @@ mistaken for production-ready systems.
   IDs. The tools application can authorize, diagnose, refresh, and forget the bot
   token without displaying or writing credentials to repository files.
 - Engine-independent gathering, depositing, construction, roles, technology
-  voting, trade, combat, death/respawn, timed events, days, seasons, and weather.
+  voting, authored building upgrades, trade, combat, death/respawn, timed events,
+  days, seasons, and weather.
 - Runtime season and weather presentation driven by that simulation state:
   seasonal terrain/water palettes, clear color, sun and ambient lighting,
   distance fog, plus deterministic rain and snow fields with no second clock.
@@ -79,8 +87,9 @@ mistaken for production-ready systems.
   containers to select 26 production buildings, 215 prefab archetypes, 288
   model scene variants, 15 roles, and the shipping 363-node, 362-edge technology
   DAG. It resolves nested prefab/model dependencies, derives building footprints
-  from the authored grid sizes, preserves typed Unity fields as provenance,
-  validates stable IDs/references/cycles, and reloads its own RON output.
+  from the authored grid sizes, promotes construction/upgrade balance and
+  technology level caps into content schema 3, preserves typed Unity fields as
+  provenance, validates stable IDs/references/cycles, and reloads its own RON output.
 - A versioned presentation RON converter and YAML fallback that packages all
   133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
   materials with shader source, PBR approximations, texture slots, and custom
@@ -146,8 +155,8 @@ mistaken for production-ready systems.
   foliage/biome rendering, production-grade actor steering, complete role/
   station/inventory/equipment behavior beyond the live resource-worker loop,
   projectiles/area attacks/healing beyond the live melee combat loop, building
-  construction phases/upgrades, and every reachable balance rule from the Unity
-  scenes.
+  station activation and derived level-up effects beyond the live construction/
+  upgrade loop, and every reachable balance rule from the Unity scenes.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
@@ -214,8 +223,9 @@ the generated heightfield/water/collider surface, inherited prefab material
 bindings, runtime PBR material reconstruction, simulation-driven season/weather
 presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
-depletion, connected actor spawning, and live combat/death/respawn. It is still
-missing nested controller layers and complete gameplay action emitters,
+depletion, connected actor spawning, live combat/death/respawn, health-staged
+Builder construction, and technology-gated upgrades. It is still missing nested
+controller layers and complete gameplay action emitters,
 production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
 broader Unity-only command surface, and the recorded reference-machine GPU
