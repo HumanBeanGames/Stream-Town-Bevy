@@ -77,3 +77,15 @@ crashlytics-build.properties
 # Local Twitch OAuth credentials must never be committed or shipped in StreamingAssets.
 /[Aa]ssets/[Ss]treamingAssets/twitch_secrets.json
 /[Aa]ssets/[Ss]treamingAssets/twitch_secrets.json.meta
+
+# Local Codex and graphify runtime state. Keep the portable graph, report, and
+# manifest in version control; regenerate everything below on each machine.
+/.codex/hooks.json
+/graphify-out/.graphify_*
+/graphify-out/2026-*/
+/graphify-out/authored/
+/graphify-out/cache/
+/graphify-out/reflections/
+/graphify-out/graph.html
+/graphify-out/cost.json
+/graphify-out/query-results.jsonl
