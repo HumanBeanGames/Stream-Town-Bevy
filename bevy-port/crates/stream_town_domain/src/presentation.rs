@@ -67,9 +67,48 @@ pub struct AnimationClipDef {
     pub duration_seconds: f32,
     pub sample_rate: f32,
     pub looping: bool,
+    /// Source-model rest pose used to retarget Unity-local curves to a GLB rig.
+    #[serde(default)]
+    pub rig_asset_path: Option<String>,
+    /// Engine-neutral Unity transform curves. Property-only clips have no tracks.
+    #[serde(default)]
+    pub transform_tracks: Vec<AnimationTransformTrack>,
     /// Set only when this exact clip has been converted to a GLB animation.
     pub converted_asset_path: Option<String>,
     pub gltf_animation_index: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationTransformTrack {
+    /// Slash-separated path relative to the Unity Animator / Bevy animation root.
+    pub target_path: String,
+    #[serde(default)]
+    pub reference_translation: Option<[f32; 3]>,
+    #[serde(default)]
+    pub reference_rotation: Option<[f32; 4]>,
+    #[serde(default)]
+    pub reference_scale: Option<[f32; 3]>,
+    #[serde(default)]
+    pub translation: Vec<AnimationVec3Keyframe>,
+    #[serde(default)]
+    pub rotation: Vec<AnimationQuatKeyframe>,
+    #[serde(default)]
+    pub scale: Vec<AnimationVec3Keyframe>,
+    /// Unity's Z-X-Y Euler curves, retained for non-skeletal scene animation.
+    #[serde(default)]
+    pub euler_degrees: Vec<AnimationVec3Keyframe>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationVec3Keyframe {
+    pub time: f32,
+    pub value: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationQuatKeyframe {
+    pub time: f32,
+    pub value: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -137,6 +176,9 @@ pub struct AnimationControllerDef {
 pub struct PrefabPresentationBinding {
     pub source_prefab_path: String,
     pub controller: StableId,
+    /// Default converted model scene, including rigs without embedded animations.
+    #[serde(default)]
+    pub rig_scene: Option<String>,
     /// Converted scene whose embedded animation zero can be played natively.
     pub animated_scene: Option<String>,
     pub gltf_animation_index: Option<u32>,
@@ -153,6 +195,12 @@ pub enum PresentationError {
     },
     #[error("animation clip {clip} has invalid converted path {path}")]
     InvalidClipPath { clip: StableId, path: String },
+    #[error("animation clip {clip} has invalid transform track {path}: {reason}")]
+    InvalidAnimationTrack {
+        clip: StableId,
+        path: String,
+        reason: String,
+    },
     #[error("controller {controller} state {state} references missing clip {clip}")]
     MissingClip {
         controller: StableId,
@@ -228,6 +276,20 @@ impl PresentationCatalog {
                     path: path.clone(),
                 });
             }
+            if let Some(path) = &clip.rig_asset_path
+                && (!path.starts_with("migrated/models/")
+                    || !is_glb_path(path)
+                    || path.contains("..")
+                    || path.contains('\\'))
+            {
+                return Err(PresentationError::InvalidClipPath {
+                    clip: id.clone(),
+                    path: path.clone(),
+                });
+            }
+            for track in &clip.transform_tracks {
+                validate_animation_track(id, track)?;
+            }
         }
         for (controller_id, controller) in &self.controllers {
             for default_state in &controller.default_states {
@@ -281,6 +343,17 @@ impl PresentationCatalog {
                     path: path.clone(),
                 });
             }
+            if let Some(path) = &binding.rig_scene
+                && (!path.starts_with("migrated/models/")
+                    || !is_glb_path(path)
+                    || path.contains("..")
+                    || path.contains('\\'))
+            {
+                return Err(PresentationError::InvalidAnimatedScene {
+                    prefab_guid: prefab_guid.clone(),
+                    path: path.clone(),
+                });
+            }
         }
         for (prefab_guid, materials) in &self.prefab_materials {
             for material in materials {
@@ -294,6 +367,82 @@ impl PresentationCatalog {
         }
         Ok(())
     }
+}
+
+fn validate_animation_track(
+    clip: &StableId,
+    track: &AnimationTransformTrack,
+) -> Result<(), PresentationError> {
+    if track.target_path.is_empty()
+        || track.target_path.contains('\\')
+        || track
+            .target_path
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err(PresentationError::InvalidAnimationTrack {
+            clip: clip.clone(),
+            path: track.target_path.clone(),
+            reason: "target path is not portable".into(),
+        });
+    }
+    let references_valid = track
+        .reference_translation
+        .is_none_or(|value| value.into_iter().all(f32::is_finite))
+        && track
+            .reference_rotation
+            .is_none_or(|value| value.into_iter().all(f32::is_finite))
+        && track
+            .reference_scale
+            .is_none_or(|value| value.into_iter().all(f32::is_finite));
+    let curves_valid = valid_vec3_curve(&track.translation)
+        && valid_quat_curve(&track.rotation)
+        && valid_vec3_curve(&track.scale)
+        && valid_vec3_curve(&track.euler_degrees);
+    if !references_valid || !curves_valid {
+        return Err(PresentationError::InvalidAnimationTrack {
+            clip: clip.clone(),
+            path: track.target_path.clone(),
+            reason: "keyframe times/values must be finite and monotonic".into(),
+        });
+    }
+    if track.translation.is_empty()
+        && track.rotation.is_empty()
+        && track.scale.is_empty()
+        && track.euler_degrees.is_empty()
+    {
+        return Err(PresentationError::InvalidAnimationTrack {
+            clip: clip.clone(),
+            path: track.target_path.clone(),
+            reason: "track has no transform curves".into(),
+        });
+    }
+    Ok(())
+}
+
+fn valid_vec3_curve(curve: &[AnimationVec3Keyframe]) -> bool {
+    valid_curve_times(curve.iter().map(|key| key.time))
+        && curve
+            .iter()
+            .all(|key| key.value.into_iter().all(f32::is_finite))
+}
+
+fn valid_quat_curve(curve: &[AnimationQuatKeyframe]) -> bool {
+    valid_curve_times(curve.iter().map(|key| key.time))
+        && curve
+            .iter()
+            .all(|key| key.value.into_iter().all(f32::is_finite))
+}
+
+fn valid_curve_times(times: impl Iterator<Item = f32>) -> bool {
+    let mut previous = None;
+    for time in times {
+        if !time.is_finite() || time < 0.0 || previous.is_some_and(|previous| time < previous) {
+            return false;
+        }
+        previous = Some(time);
+    }
+    true
 }
 
 fn is_glb_path(path: &str) -> bool {

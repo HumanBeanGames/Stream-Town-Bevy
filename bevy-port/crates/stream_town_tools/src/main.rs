@@ -241,6 +241,12 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 }
 
 fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
+    let converted_clips = state
+        .presentation
+        .clips
+        .values()
+        .filter(|clip| !clip.transform_tracks.is_empty())
+        .count();
     ui.heading("Content catalog and stable references");
     ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
     ui.horizontal(|ui| {
@@ -261,11 +267,12 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} material-bound prefabs / {} clips / {} controllers",
+            "Presentation: {} textures / {} materials / {} material-bound prefabs / {} clips ({} native transform) / {} controllers",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state.presentation.prefab_materials.len(),
             state.presentation.clips.len(),
+            converted_clips,
             state.presentation.controllers.len()
         ));
     });
@@ -381,6 +388,23 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             state_def.speed,
                             state_def.motions.len()
                         ));
+                    }
+                });
+            }
+        });
+        ui.collapsing("Animation clips", |ui| {
+            for (id, clip) in &state.presentation.clips {
+                ui.collapsing(format!("{}  ({id})", clip.display_name), |ui| {
+                    ui.monospace(format!("Unity clip: {}", clip.source_path));
+                    ui.label(format!(
+                        "{:.3}s at {:.1} Hz, {} transform tracks, looping: {}",
+                        clip.duration_seconds,
+                        clip.sample_rate,
+                        clip.transform_tracks.len(),
+                        clip.looping
+                    ));
+                    if let Some(rig) = &clip.rig_asset_path {
+                        ui.monospace(format!("Retarget rig: {rig}"));
                     }
                 });
             }

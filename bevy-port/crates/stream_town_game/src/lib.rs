@@ -9,7 +9,11 @@ use std::{
 use anyhow::{Context, Result as AnyResult};
 use avian3d::prelude::PhysicsPlugins;
 use bevy::{
-    animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
+    animation::{
+        AnimatedBy, AnimationClip, AnimationTargetId, animated_field,
+        graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
+        prelude::{AnimatableCurve, AnimatableKeyframeCurve},
+    },
     asset::AssetPlugin,
     camera::ScalingMode,
     color::LinearRgba,
@@ -18,10 +22,10 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
-    ActorKind, ArchetypeDef, ArchetypeKind, ArchetypeScene, ChatCommand, ContentCatalog,
-    GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
-    NativeSaveStore, PresentationCatalog, SavedActor, StableId, TownEvent, WorldSimulation,
-    WorldSnapshot, generate_world,
+    ActorKind, AnimationClipDef, AnimationTransformTrack, ArchetypeDef, ArchetypeKind,
+    ArchetypeScene, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, PresentationCatalog,
+    SavedActor, StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -164,7 +168,25 @@ struct AgentAnimation {
 #[derive(Component, Clone)]
 struct NativeAnimationSpec {
     graph: Handle<AnimationGraph>,
-    node: AnimationNodeIndex,
+    idle: AnimationNodeIndex,
+    moving: AnimationNodeIndex,
+}
+
+#[derive(Component, Clone)]
+struct ConvertedAnimationSpec {
+    idle: StableId,
+    moving: StableId,
+}
+
+#[derive(Component)]
+struct ConvertedAnimationApplied;
+
+#[derive(Component)]
+struct ActorAnimationDriver {
+    actor_root: Entity,
+    idle: AnimationNodeIndex,
+    moving: AnimationNodeIndex,
+    current: MovementAnimationState,
 }
 
 #[derive(Component, Clone)]
@@ -215,6 +237,8 @@ impl Plugin for StreamTownGamePlugin {
                     move_agents,
                     animate_agents,
                     attach_native_animations,
+                    attach_converted_animations,
+                    drive_native_animations,
                     apply_material_overrides,
                     camera_controls,
                     select_grid_cell,
@@ -331,13 +355,20 @@ fn setup_rendering(
         commands.insert_resource(RenderAssets::default());
         return;
     };
-    let smoke_closeup = std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some();
+    let material_closeup = std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some();
+    let animation_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
         Projection::from(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: if smoke_closeup { 96.0 } else { 520.0 },
+                viewport_height: if material_closeup {
+                    96.0
+                } else if animation_closeup {
+                    180.0
+                } else {
+                    520.0
+                },
             },
             ..OrthographicProjection::default_3d()
         }),
@@ -511,7 +542,12 @@ fn generate_and_spawn_world(
         z: centre.z,
     };
     if let Ok(mut camera) = cameras.single_mut() {
-        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
+        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
+            let focus = initial_actor_position(&generated, town_hall_position, 1)
+                .map_or(Vec3::ZERO, |position| grid_to_world(position, &config.0));
+            Transform::from_xyz(focus.x + 110.0, 130.0, focus.z + 110.0)
+                .looking_at(Vec3::new(focus.x + 24.0, 0.0, focus.z + 24.0), Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world(town_hall_position, &config.0);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0)
                 .looking_at(Vec3::new(focus.x, 0.0, focus.z), Vec3::Y)
@@ -670,6 +706,13 @@ fn generate_and_spawn_world(
                         animation_graphs.as_deref_mut(),
                     )
                 });
+            let converted_animation = native_animation
+                .is_none()
+                .then(|| {
+                    real_archetype
+                        .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
+                })
+                .flatten();
             let base_scale = if real_scene.is_some() {
                 Vec3::splat(config.0.world.cell_size / 2.0)
             } else {
@@ -697,7 +740,7 @@ fn generate_and_spawn_world(
                 },
                 AgentAnimation {
                     base_scale,
-                    native: native_animation.is_some(),
+                    native: native_animation.is_some() || converted_animation.is_some(),
                     ..default()
                 },
                 Transform::from_xyz(world_position.x, visual_height, world_position.z)
@@ -712,6 +755,8 @@ fn generate_and_spawn_world(
                 ));
                 if let Some(native_animation) = native_animation {
                     entity.insert(native_animation);
+                } else if let Some(converted_animation) = converted_animation {
+                    entity.insert(converted_animation);
                 }
                 if let Some(material) = real_archetype.and_then(|archetype| {
                     prefab_material_handle(archetype, &presentation.0, &render)
@@ -817,8 +862,44 @@ fn native_animation_spec(
     );
     Some(NativeAnimationSpec {
         graph: animation_graphs.add(graph),
-        node,
+        idle: node,
+        moving: node,
     })
+}
+
+fn converted_animation_spec(
+    archetype: &ArchetypeDef,
+    presentation: &PresentationCatalog,
+) -> Option<ConvertedAnimationSpec> {
+    let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
+    let controller = presentation.controllers.get(&binding.controller)?;
+    let locomotion = controller
+        .states
+        .values()
+        .find(|state| state.display_name.eq_ignore_ascii_case("locomotion"))?;
+    let mut motions: Vec<_> = locomotion
+        .motions
+        .iter()
+        .filter(|motion| {
+            presentation
+                .clips
+                .get(&motion.clip)
+                .is_some_and(|clip| !clip.transform_tracks.is_empty())
+        })
+        .collect();
+    motions.sort_by(|left, right| {
+        left.threshold
+            .unwrap_or_default()
+            .total_cmp(&right.threshold.unwrap_or_default())
+            .then_with(|| left.clip.cmp(&right.clip))
+    });
+    let idle = motions.first()?.clip.clone();
+    let moving = motions
+        .get(1)
+        .unwrap_or_else(|| motions.first().unwrap())
+        .clip
+        .clone();
+    Some(ConvertedAnimationSpec { idle, moving })
 }
 
 fn prefab_material_handle(
@@ -865,6 +946,27 @@ fn nearest_walkable(world: &GeneratedWorld, desired: GridPos) -> Option<GridPos>
                     return Some(candidate);
                 }
             }
+        }
+    }
+    None
+}
+
+fn initial_actor_position(
+    world: &GeneratedWorld,
+    excluded: GridPos,
+    actor_index: usize,
+) -> Option<GridPos> {
+    let mut found = 0;
+    for z in 0..world.navigation.height() {
+        for x in 0..world.navigation.width() {
+            let position = GridPos { x, z };
+            if position == excluded || !world.navigation.is_walkable(position) {
+                continue;
+            }
+            if found == actor_index {
+                return Some(position);
+            }
+            found += 1;
         }
     }
     None
@@ -965,10 +1067,16 @@ fn attach_native_animations(
         let mut ancestor = entity;
         for _ in 0..64 {
             if let Ok(spec) = specs.get(ancestor) {
-                commands
-                    .entity(entity)
-                    .insert(AnimationGraphHandle(spec.graph.clone()));
-                player.play(spec.node).repeat();
+                commands.entity(entity).insert((
+                    AnimationGraphHandle(spec.graph.clone()),
+                    ActorAnimationDriver {
+                        actor_root: ancestor,
+                        idle: spec.idle,
+                        moving: spec.moving,
+                        current: MovementAnimationState::Idle,
+                    },
+                ));
+                player.play(spec.idle).repeat();
                 break;
             }
             let Ok(parent) = parents.get(ancestor) else {
@@ -976,6 +1084,327 @@ fn attach_native_animations(
             };
             ancestor = parent.parent();
         }
+    }
+}
+
+fn attach_converted_animations(
+    mut commands: Commands,
+    presentation: Res<RuntimePresentation>,
+    animation_clips: Option<ResMut<Assets<AnimationClip>>>,
+    animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
+    specs: Query<(Entity, &ConvertedAnimationSpec), Without<ConvertedAnimationApplied>>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    transforms: Query<&Transform>,
+) {
+    let (Some(mut animation_clips), Some(mut animation_graphs)) =
+        (animation_clips, animation_graphs)
+    else {
+        return;
+    };
+    for (actor_root, spec) in &specs {
+        let Some(idle) = presentation.0.clips.get(&spec.idle) else {
+            continue;
+        };
+        let Some(moving) = presentation.0.clips.get(&spec.moving) else {
+            continue;
+        };
+        let Some(root_name) = animation_root_name(idle) else {
+            continue;
+        };
+        let Some(animation_root) = find_named_descendant(actor_root, root_name, &children, &names)
+        else {
+            continue;
+        };
+        let targets = collect_animation_targets(animation_root, &children, &names, &transforms);
+        let Some(idle_clip) = retargeted_animation_clip(idle, &targets) else {
+            continue;
+        };
+        let Some(moving_clip) = retargeted_animation_clip(moving, &targets) else {
+            continue;
+        };
+        let idle_handle = animation_clips.add(idle_clip);
+        let moving_handle = animation_clips.add(moving_clip);
+        let (graph, nodes) = AnimationGraph::from_clips([idle_handle, moving_handle]);
+        let [idle_node, moving_node] = nodes.as_slice() else {
+            continue;
+        };
+        let graph = animation_graphs.add(graph);
+        for (path, (entity, _)) in &targets {
+            commands.entity(*entity).insert((
+                path.split('/').collect::<AnimationTargetId>(),
+                AnimatedBy(animation_root),
+            ));
+        }
+        let mut player = AnimationPlayer::default();
+        player.play(*idle_node).repeat();
+        commands.entity(animation_root).insert((
+            player,
+            AnimationGraphHandle(graph),
+            ActorAnimationDriver {
+                actor_root,
+                idle: *idle_node,
+                moving: *moving_node,
+                current: MovementAnimationState::Idle,
+            },
+        ));
+        commands
+            .entity(actor_root)
+            .insert(ConvertedAnimationApplied);
+        info!(
+            actor = ?actor_root,
+            idle = %spec.idle,
+            moving = %spec.moving,
+            targets = targets.len(),
+            "attached converted Unity locomotion clips"
+        );
+    }
+}
+
+fn animation_root_name(clip: &AnimationClipDef) -> Option<&str> {
+    clip.transform_tracks
+        .iter()
+        .filter(|track| track.target_path != "$root")
+        .find_map(|track| track.target_path.split('/').next())
+}
+
+fn find_named_descendant(
+    root: Entity,
+    target: &str,
+    children: &Query<&Children>,
+    names: &Query<&Name>,
+) -> Option<Entity> {
+    let mut pending = vec![root];
+    while let Some(entity) = pending.pop() {
+        if names.get(entity).is_ok_and(|name| name.as_str() == target) {
+            return Some(entity);
+        }
+        if let Ok(entity_children) = children.get(entity) {
+            pending.extend(entity_children.iter().rev());
+        }
+    }
+    None
+}
+
+fn collect_animation_targets(
+    root: Entity,
+    children: &Query<&Children>,
+    names: &Query<&Name>,
+    transforms: &Query<&Transform>,
+) -> BTreeMap<String, (Entity, Transform)> {
+    let Some(root_name) = names.get(root).ok().map(Name::as_str) else {
+        return BTreeMap::new();
+    };
+    let mut targets = BTreeMap::new();
+    let mut pending = vec![(root, root_name.to_owned())];
+    while let Some((entity, path)) = pending.pop() {
+        if let Ok(transform) = transforms.get(entity) {
+            targets.insert(path.clone(), (entity, *transform));
+        }
+        if let Ok(entity_children) = children.get(entity) {
+            for child in entity_children.iter().rev() {
+                if let Ok(name) = names.get(child) {
+                    pending.push((child, format!("{path}/{}", name.as_str())));
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn retargeted_animation_clip(
+    source: &AnimationClipDef,
+    targets: &BTreeMap<String, (Entity, Transform)>,
+) -> Option<AnimationClip> {
+    let mut clip = AnimationClip::default();
+    for track in &source.transform_tracks {
+        let Some((_, rest)) = targets.get(&track.target_path) else {
+            continue;
+        };
+        let target = track.target_path.split('/').collect::<AnimationTargetId>();
+        add_translation_curve(&mut clip, target, track, rest);
+        add_rotation_curve(&mut clip, target, track, rest);
+        add_scale_curve(&mut clip, target, track, rest);
+    }
+    if clip.curves().is_empty() {
+        return None;
+    }
+    clip.set_duration(clip.duration().max(source.duration_seconds));
+    Some(clip)
+}
+
+fn add_translation_curve(
+    clip: &mut AnimationClip,
+    target: AnimationTargetId,
+    track: &AnimationTransformTrack,
+    rest: &Transform,
+) {
+    if track.translation.is_empty() {
+        return;
+    }
+    let unity_reference = track.reference_translation.map_or_else(
+        || Vec3::from_array(track.translation[0].value),
+        Vec3::from_array,
+    );
+    let unity_rotation = track
+        .reference_rotation
+        .map_or(Quat::IDENTITY, normalized_quat);
+    let basis = rest.rotation * unity_rotation.inverse();
+    let unit_scale = if unity_reference.length_squared() > 1.0e-8 {
+        rest.translation.length() / unity_reference.length()
+    } else {
+        1.0
+    };
+    let keys = ensure_two_keyframes(
+        track.translation.iter().map(|key| {
+            let delta = Vec3::from_array(key.value) - unity_reference;
+            (key.time, rest.translation + basis * delta * unit_scale)
+        }),
+        clip.duration(),
+    );
+    if let Ok(curve) = AnimatableKeyframeCurve::new(keys) {
+        clip.add_curve_to_target(
+            target,
+            AnimatableCurve::new(animated_field!(Transform::translation), curve),
+        );
+    }
+}
+
+fn add_rotation_curve(
+    clip: &mut AnimationClip,
+    target: AnimationTargetId,
+    track: &AnimationTransformTrack,
+    rest: &Transform,
+) {
+    let keys = if track.rotation.is_empty() {
+        let Some(first) = track.euler_degrees.first() else {
+            return;
+        };
+        let reference = unity_euler(first.value);
+        ensure_two_keyframes(
+            track.euler_degrees.iter().map(|key| {
+                let delta = reference.inverse() * unity_euler(key.value);
+                (key.time, (rest.rotation * delta).normalize())
+            }),
+            clip.duration(),
+        )
+    } else {
+        let reference = track
+            .reference_rotation
+            .map_or_else(|| normalized_quat(track.rotation[0].value), normalized_quat);
+        ensure_two_keyframes(
+            track.rotation.iter().map(|key| {
+                let delta = reference.inverse() * normalized_quat(key.value);
+                (key.time, (rest.rotation * delta).normalize())
+            }),
+            clip.duration(),
+        )
+    };
+    if let Ok(curve) = AnimatableKeyframeCurve::new(keys) {
+        clip.add_curve_to_target(
+            target,
+            AnimatableCurve::new(animated_field!(Transform::rotation), curve),
+        );
+    }
+}
+
+fn add_scale_curve(
+    clip: &mut AnimationClip,
+    target: AnimationTargetId,
+    track: &AnimationTransformTrack,
+    rest: &Transform,
+) {
+    if track.scale.is_empty() {
+        return;
+    }
+    let unity_reference = track
+        .reference_scale
+        .map_or_else(|| Vec3::from_array(track.scale[0].value), Vec3::from_array);
+    let keys = ensure_two_keyframes(
+        track.scale.iter().map(|key| {
+            let value = Vec3::from_array(key.value);
+            let ratio = Vec3::new(
+                safe_ratio(value.x, unity_reference.x),
+                safe_ratio(value.y, unity_reference.y),
+                safe_ratio(value.z, unity_reference.z),
+            );
+            (key.time, rest.scale * ratio)
+        }),
+        clip.duration(),
+    );
+    if let Ok(curve) = AnimatableKeyframeCurve::new(keys) {
+        clip.add_curve_to_target(
+            target,
+            AnimatableCurve::new(animated_field!(Transform::scale), curve),
+        );
+    }
+}
+
+fn ensure_two_keyframes<T: Clone>(
+    keyframes: impl Iterator<Item = (f32, T)>,
+    duration: f32,
+) -> Vec<(f32, T)> {
+    let mut keyframes: Vec<_> = keyframes.collect();
+    if keyframes.len() == 1 {
+        let (time, value) = keyframes[0].clone();
+        keyframes.push((duration.max(time + 1.0 / 60.0), value));
+    }
+    keyframes
+}
+
+fn normalized_quat(value: [f32; 4]) -> Quat {
+    let value = Quat::from_array(value);
+    if value.length_squared() > 1.0e-8 {
+        value.normalize()
+    } else {
+        Quat::IDENTITY
+    }
+}
+
+fn unity_euler(value: [f32; 3]) -> Quat {
+    Quat::from_euler(
+        EulerRot::ZXY,
+        value[2].to_radians(),
+        value[0].to_radians(),
+        value[1].to_radians(),
+    )
+}
+
+fn safe_ratio(value: f32, reference: f32) -> f32 {
+    if reference.abs() > 1.0e-6 {
+        value / reference
+    } else {
+        1.0
+    }
+}
+
+fn drive_native_animations(
+    agents: Query<&Agent>,
+    mut players: Query<(&mut AnimationPlayer, &mut ActorAnimationDriver)>,
+) {
+    for (mut player, mut driver) in &mut players {
+        let Ok(agent) = agents.get(driver.actor_root) else {
+            continue;
+        };
+        let next = if !agent.path.is_empty() && agent.path_index < agent.path.len() {
+            MovementAnimationState::Moving
+        } else {
+            MovementAnimationState::Idle
+        };
+        if next == driver.current {
+            continue;
+        }
+        driver.current = next;
+        let node = match next {
+            MovementAnimationState::Idle => driver.idle,
+            MovementAnimationState::Moving => driver.moving,
+        };
+        player.stop_all().play(node).repeat();
+        info!(
+            actor = ?driver.actor_root,
+            state = ?next,
+            "switched native animation state"
+        );
     }
 }
 
@@ -1327,7 +1756,12 @@ fn capture_screenshot(
     mut counter: Local<u32>,
 ) {
     *elapsed += time.delta_secs();
-    let automatic_path = if !*automatic_complete && *elapsed >= 3.0 {
+    let automatic_delay = std::env::var("STREAM_TOWN_SCREENSHOT_DELAY")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.25)
+        .unwrap_or(3.0);
+    let automatic_path = if !*automatic_complete && *elapsed >= automatic_delay {
         std::env::var_os("STREAM_TOWN_SCREENSHOT").map(PathBuf::from)
     } else {
         None
@@ -1614,7 +2048,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_presentation_binds_goblin_controller_and_native_clip() {
+    fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
         assert_eq!(presentation.textures.len(), 133);
@@ -1642,6 +2076,54 @@ mod tests {
                 .iter()
                 .all(|material| presentation.materials.contains_key(material))
         );
+
+        let player =
+            archetype_by_source(&content, ArchetypeKind::Player, "Player_Character.prefab")
+                .unwrap();
+        let player_scene = default_archetype_scene(player).unwrap();
+        let player_binding = presentation
+            .prefab_bindings
+            .get(&player.source_guid)
+            .unwrap();
+        assert_eq!(
+            player_binding.rig_scene.as_deref(),
+            Some(player_scene.asset_path.as_str())
+        );
+        let spec = converted_animation_spec(player, &presentation).unwrap();
+        let idle = presentation.clips.get(&spec.idle).unwrap();
+        assert!(!idle.transform_tracks.is_empty());
+        assert_eq!(
+            presentation
+                .clips
+                .values()
+                .filter(|clip| !clip.transform_tracks.is_empty())
+                .count(),
+            57
+        );
+        let targets: BTreeMap<_, _> = idle
+            .transform_tracks
+            .iter()
+            .map(|track| {
+                (
+                    track.target_path.clone(),
+                    (
+                        Entity::PLACEHOLDER,
+                        Transform {
+                            translation: track
+                                .reference_translation
+                                .map_or(Vec3::ZERO, Vec3::from_array),
+                            rotation: track
+                                .reference_rotation
+                                .map_or(Quat::IDENTITY, normalized_quat),
+                            scale: track.reference_scale.map_or(Vec3::ONE, Vec3::from_array),
+                        },
+                    ),
+                )
+            })
+            .collect();
+        let retargeted = retargeted_animation_clip(idle, &targets).unwrap();
+        assert!(!retargeted.curves().is_empty());
+        assert!(retargeted.duration() >= idle.duration_seconds);
     }
 
     #[test]

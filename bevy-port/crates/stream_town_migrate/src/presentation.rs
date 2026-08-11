@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stream_town_domain::{
     AnimationClipDef, AnimationConditionDef, AnimationControllerDef, AnimationMotionDef,
-    AnimationParameterDef, AnimationParameterKind, AnimationStateDef, AnimationTransitionDef,
-    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId,
-    TextureDef,
+    AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef,
+    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, MaterialAlphaMode,
+    MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId, TextureDef,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -54,6 +54,8 @@ struct UnityAsset {
     serialized_fields: Vec<UnityField>,
     #[serde(default)]
     dependencies: Vec<UnityReference>,
+    #[serde(default)]
+    game_object: Option<UnityGameObject>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +72,24 @@ struct UnityReference {
     path: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct UnityGameObject {
+    #[serde(default)]
+    components: Vec<UnityComponent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct UnityComponent {
+    #[serde(default)]
+    hierarchy_path: String,
+    #[serde(rename = "Type", default)]
+    type_name: Option<String>,
+    #[serde(default)]
+    fields: Vec<UnityField>,
+}
+
 #[derive(Debug)]
 struct YamlDocument {
     class_id: u32,
@@ -81,6 +101,21 @@ struct YamlDocument {
 struct ParsedMotion {
     guid: String,
     threshold: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TransformCurveKind {
+    Rotation,
+    EulerDegrees,
+    Translation,
+    Scale,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RestTransform {
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    scale: [f32; 3],
 }
 
 pub fn convert(
@@ -119,11 +154,18 @@ pub fn convert(
     let (textures, texture_bytes) = convert_textures(&export, &root, out_dir)?;
     let materials = convert_materials(&export, &assets_by_path)?;
     let prefab_materials = convert_prefab_materials(&export, &assets_by_path, &materials);
-    let mut clips = convert_clips(&export)?;
+    let mut clips = convert_clips(&export, &root)?;
     let controllers = convert_controllers(&export, &root, &assets_by_guid, &mut clips)?;
     let prefab_bindings = convert_prefab_bindings(&export, &assets_by_path, &controllers);
+    assign_clip_rigs_and_reference_poses(
+        &export,
+        &assets_by_path,
+        &controllers,
+        &prefab_bindings,
+        &mut clips,
+    );
     let catalog = PresentationCatalog {
-        schema_version: 1,
+        schema_version: 2,
         textures,
         materials,
         clips,
@@ -140,7 +182,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 1,
+        schema_version: 2,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -155,7 +197,7 @@ pub fn convert(
         converted_clips: catalog
             .clips
             .values()
-            .filter(|clip| clip.converted_asset_path.is_some())
+            .filter(|clip| clip.converted_asset_path.is_some() || !clip.transform_tracks.is_empty())
             .count(),
         missing_clip_sources: catalog
             .clips
@@ -349,7 +391,10 @@ fn convert_materials(
     Ok(materials)
 }
 
-fn convert_clips(export: &UnityExport) -> Result<BTreeMap<StableId, AnimationClipDef>> {
+fn convert_clips(
+    export: &UnityExport,
+    unity_root: &Path,
+) -> Result<BTreeMap<StableId, AnimationClipDef>> {
     let mut clips = BTreeMap::new();
     for asset in export
         .assets
@@ -366,6 +411,18 @@ fn convert_clips(export: &UnityExport) -> Result<BTreeMap<StableId, AnimationCli
             "m_AnimationClipSettings.m_StopTime",
         )
         .unwrap_or(start);
+        let transform_tracks = if Path::new(&asset.path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("anim"))
+        {
+            let source = unity_root.join(&asset.path);
+            let contents = fs::read_to_string(&source)
+                .with_context(|| format!("failed to read animation clip {}", source.display()))?;
+            parse_transform_tracks(&contents)
+                .with_context(|| format!("failed to parse animation clip {}", source.display()))?
+        } else {
+            Vec::new()
+        };
         clips.insert(
             clip_id(&asset.guid)?,
             AnimationClipDef {
@@ -379,12 +436,149 @@ fn convert_clips(export: &UnityExport) -> Result<BTreeMap<StableId, AnimationCli
                     "m_AnimationClipSettings.m_LoopTime",
                 )
                 .unwrap_or(false),
+                rig_asset_path: None,
+                transform_tracks,
                 converted_asset_path: None,
                 gltf_animation_index: None,
             },
         );
     }
     Ok(clips)
+}
+
+fn parse_transform_tracks(contents: &str) -> Result<Vec<AnimationTransformTrack>> {
+    let mut tracks = BTreeMap::<String, AnimationTransformTrack>::new();
+    let mut kind = None;
+    let mut times = Vec::<f32>::new();
+    let mut vec3_values = Vec::<[f32; 3]>::new();
+    let mut quat_values = Vec::<[f32; 4]>::new();
+    let mut pending_time = None;
+
+    for line in contents.lines() {
+        if line.starts_with("  m_") {
+            kind = match line.trim() {
+                "m_RotationCurves:" => Some(TransformCurveKind::Rotation),
+                "m_EulerCurves:" => Some(TransformCurveKind::EulerDegrees),
+                "m_PositionCurves:" => Some(TransformCurveKind::Translation),
+                "m_ScaleCurves:" => Some(TransformCurveKind::Scale),
+                _ => None,
+            };
+            continue;
+        }
+        let Some(curve_kind) = kind else {
+            continue;
+        };
+        if line == "  - curve:" {
+            times.clear();
+            vec3_values.clear();
+            quat_values.clear();
+            pending_time = None;
+            continue;
+        }
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("time: ") {
+            pending_time = Some(value.parse::<f32>()?);
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("value: ") {
+            let Some(time) = pending_time.take() else {
+                continue;
+            };
+            times.push(time.max(0.0));
+            match curve_kind {
+                TransformCurveKind::Rotation => quat_values.push(parse_inline_array(value)?),
+                TransformCurveKind::EulerDegrees
+                | TransformCurveKind::Translation
+                | TransformCurveKind::Scale => vec3_values.push(parse_inline_array(value)?),
+            }
+            continue;
+        }
+        let Some(path) = line.strip_prefix("    path:") else {
+            continue;
+        };
+        let path = path.trim();
+        let target_path = if path.is_empty() { "$root" } else { path };
+        let track =
+            tracks
+                .entry(target_path.to_owned())
+                .or_insert_with(|| AnimationTransformTrack {
+                    target_path: target_path.to_owned(),
+                    reference_translation: None,
+                    reference_rotation: None,
+                    reference_scale: None,
+                    translation: Vec::new(),
+                    rotation: Vec::new(),
+                    scale: Vec::new(),
+                    euler_degrees: Vec::new(),
+                });
+        match curve_kind {
+            TransformCurveKind::Rotation => {
+                track.rotation.extend(
+                    times
+                        .iter()
+                        .copied()
+                        .zip(quat_values.drain(..))
+                        .map(|(time, value)| AnimationQuatKeyframe { time, value }),
+                );
+            }
+            TransformCurveKind::EulerDegrees => {
+                append_vec3_keys(&mut track.euler_degrees, &times, vec3_values.drain(..));
+            }
+            TransformCurveKind::Translation => {
+                append_vec3_keys(&mut track.translation, &times, vec3_values.drain(..));
+            }
+            TransformCurveKind::Scale => {
+                append_vec3_keys(&mut track.scale, &times, vec3_values.drain(..));
+            }
+        }
+        times.clear();
+        pending_time = None;
+    }
+    Ok(tracks
+        .into_values()
+        .filter(|track| {
+            !track.translation.is_empty()
+                || !track.rotation.is_empty()
+                || !track.scale.is_empty()
+                || !track.euler_degrees.is_empty()
+        })
+        .collect())
+}
+
+fn append_vec3_keys(
+    destination: &mut Vec<AnimationVec3Keyframe>,
+    times: &[f32],
+    values: impl Iterator<Item = [f32; 3]>,
+) {
+    destination.extend(
+        times
+            .iter()
+            .copied()
+            .zip(values)
+            .map(|(time, value)| AnimationVec3Keyframe { time, value }),
+    );
+}
+
+fn parse_inline_array<const N: usize>(value: &str) -> Result<[f32; N]> {
+    let body = value
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+        .context("Unity vector value is not an inline mapping")?;
+    let parsed: Vec<f32> = body
+        .split(',')
+        .map(|component| {
+            component
+                .split_once(':')
+                .context("Unity vector component has no colon")?
+                .1
+                .trim()
+                .parse::<f32>()
+                .map_err(Into::into)
+        })
+        .collect::<Result<_>>()?;
+    parsed.try_into().map_err(|values: Vec<f32>| {
+        anyhow::anyhow!("expected {N} components, got {}", values.len())
+    })
 }
 
 fn convert_controllers(
@@ -460,6 +654,8 @@ fn parse_controller(
                         duration_seconds: 0.0,
                         sample_rate: 0.0,
                         looping: true,
+                        rig_asset_path: None,
+                        transform_tracks: Vec::new(),
                         converted_asset_path: None,
                         gltf_animation_index: None,
                     },
@@ -553,17 +749,160 @@ fn convert_prefab_bindings(
             let model = assets_by_path.get(path.as_str())?;
             (model.kind == "model" && model_has_animation(model)).then_some(path.as_str())
         });
+        let rig_model = animated_model.or_else(|| {
+            dependency_paths.iter().find_map(|path| {
+                assets_by_path
+                    .get(path.as_str())
+                    .is_some_and(|asset| asset.kind == "model")
+                    .then_some(path.as_str())
+            })
+        });
         bindings.insert(
             prefab.guid.clone(),
             PrefabPresentationBinding {
                 source_prefab_path: prefab.path.clone(),
                 controller: controller.clone(),
+                rig_scene: rig_model.map(glb_asset_path),
                 animated_scene: animated_model.map(glb_asset_path),
                 gltf_animation_index: animated_model.map(|_| 0),
             },
         );
     }
     bindings
+}
+
+fn assign_clip_rigs_and_reference_poses(
+    export: &UnityExport,
+    assets_by_path: &BTreeMap<&str, &UnityAsset>,
+    controllers: &BTreeMap<StableId, AnimationControllerDef>,
+    bindings: &BTreeMap<String, PrefabPresentationBinding>,
+    clips: &mut BTreeMap<StableId, AnimationClipDef>,
+) {
+    let mut controller_models = BTreeMap::<StableId, BTreeSet<String>>::new();
+    for binding in bindings.values() {
+        let Some(prefab) = assets_by_path.get(binding.source_prefab_path.as_str()) else {
+            continue;
+        };
+        let mut dependencies = BTreeSet::new();
+        collect_prefab_dependencies(
+            prefab,
+            assets_by_path,
+            &mut BTreeSet::new(),
+            &mut dependencies,
+        );
+        let models = controller_models
+            .entry(binding.controller.clone())
+            .or_default();
+        models.extend(dependencies.into_iter().filter(|path| {
+            assets_by_path
+                .get(path.as_str())
+                .is_some_and(|asset| asset.kind == "model")
+        }));
+    }
+
+    let mut candidate_models = BTreeMap::<StableId, BTreeSet<String>>::new();
+    for (controller_id, controller) in controllers {
+        let Some(models) = controller_models.get(controller_id) else {
+            continue;
+        };
+        for motion in controller
+            .states
+            .values()
+            .flat_map(|state| state.motions.iter())
+        {
+            candidate_models
+                .entry(motion.clip.clone())
+                .or_default()
+                .extend(models.iter().cloned());
+        }
+    }
+
+    let rest_poses: BTreeMap<_, _> = export
+        .assets
+        .iter()
+        .filter(|asset| asset.kind == "model")
+        .map(|asset| (asset.path.as_str(), model_rest_pose(asset)))
+        .collect();
+    for (clip_id, clip) in clips {
+        if clip.transform_tracks.is_empty() {
+            continue;
+        }
+        let Some(models) = candidate_models.get(clip_id) else {
+            continue;
+        };
+        let mut best: Option<(&str, &BTreeMap<String, RestTransform>, usize)> = None;
+        for model in models {
+            let Some(pose) = rest_poses.get(model.as_str()) else {
+                continue;
+            };
+            let score = clip
+                .transform_tracks
+                .iter()
+                .filter(|track| pose.contains_key(track.target_path.as_str()))
+                .count();
+            if score == 0 {
+                continue;
+            }
+            if best.is_none_or(|(best_path, _, best_score)| {
+                score > best_score || (score == best_score && model.as_str() < best_path)
+            }) {
+                best = Some((model.as_str(), pose, score));
+            }
+        }
+        let Some((model, pose, _)) = best else {
+            continue;
+        };
+        clip.rig_asset_path = Some(glb_asset_path(model));
+        for track in &mut clip.transform_tracks {
+            let Some(rest) = pose.get(track.target_path.as_str()) else {
+                continue;
+            };
+            track.reference_translation = Some(rest.translation);
+            track.reference_rotation = Some(rest.rotation);
+            track.reference_scale = Some(rest.scale);
+        }
+    }
+}
+
+fn model_rest_pose(asset: &UnityAsset) -> BTreeMap<String, RestTransform> {
+    asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| {
+            component
+                .type_name
+                .as_deref()
+                .is_some_and(|name| name.starts_with("UnityEngine.Transform"))
+        })
+        .filter_map(|component| {
+            let target_path = if component.hierarchy_path.is_empty() {
+                "$root".to_owned()
+            } else {
+                component.hierarchy_path.clone()
+            };
+            Some((
+                target_path,
+                RestTransform {
+                    translation: field_array(&component.fields, "localPosition")?,
+                    rotation: field_array(&component.fields, "localRotation")?,
+                    scale: field_array(&component.fields, "localScale")?,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn field_array<const N: usize>(fields: &[UnityField], path: &str) -> Option<[f32; N]> {
+    let value = &fields.iter().find(|field| field.path == path)?.value;
+    let keys = ["x", "y", "z", "w"];
+    keys[..N]
+        .iter()
+        .map(|key| value.get(key)?.to_string().parse::<f32>().ok())
+        .collect::<Option<Vec<_>>>()?
+        .try_into()
+        .ok()
 }
 
 fn convert_prefab_materials(
@@ -974,6 +1313,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_unity_transform_curves_without_editor_types() {
+        let yaml = r"%YAML 1.1
+--- !u!74 &7400000
+AnimationClip:
+  m_RotationCurves:
+  - curve:
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: {x: 0, y: 0, z: 0, w: 1}
+      - serializedVersion: 3
+        time: 1
+        value: {x: 0, y: 0.5, z: 0, w: 0.8660254}
+    path: pelvis
+  m_EulerCurves: []
+  m_PositionCurves:
+  - curve:
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: {x: 0, y: 1, z: 0}
+      - serializedVersion: 3
+        time: 1
+        value: {x: 1, y: 1, z: 0}
+    path: pelvis
+  m_ScaleCurves: []
+  m_FloatCurves: []
+";
+        let tracks = parse_transform_tracks(yaml).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].target_path, "pelvis");
+        assert_eq!(tracks[0].rotation.len(), 2);
+        assert_eq!(tracks[0].translation.len(), 2);
+        assert!(tracks[0].scale.is_empty());
+    }
+
+    #[test]
     fn parses_unity_controller_states_transitions_and_parameters() {
         let yaml = r"%YAML 1.1
 --- !u!1102 &10
@@ -1015,6 +1391,7 @@ AnimatorController:
             importer_fields: Vec::new(),
             serialized_fields: Vec::new(),
             dependencies: Vec::new(),
+            game_object: None,
         };
         let clip_asset = UnityAsset {
             guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
@@ -1024,6 +1401,7 @@ AnimatorController:
             importer_fields: Vec::new(),
             serialized_fields: Vec::new(),
             dependencies: Vec::new(),
+            game_object: None,
         };
         let assets = BTreeMap::from([(clip_asset.guid.as_str(), &clip_asset)]);
         let mut clips = BTreeMap::new();
@@ -1054,6 +1432,7 @@ AnimatorController:
                 },
             ],
             dependencies: Vec::new(),
+            game_object: None,
         };
         assert_eq!(
             named_values(&asset, "m_SavedProperties.m_Floats.Array.data[")["_Metallic"],

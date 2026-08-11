@@ -20,9 +20,9 @@ pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
 pub use presentation::{
     AnimationClipDef, AnimationConditionDef, AnimationControllerDef, AnimationMotionDef,
-    AnimationParameterDef, AnimationParameterKind, AnimationStateDef, AnimationTransitionDef,
-    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
-    PresentationError, TextureDef,
+    AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef,
+    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, MaterialAlphaMode,
+    MaterialDef, PrefabPresentationBinding, PresentationCatalog, PresentationError, TextureDef,
 };
 pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,

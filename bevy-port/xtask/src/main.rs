@@ -136,6 +136,16 @@ fn validate() -> Result<()> {
         .values()
         .filter(|binding| binding.gltf_animation_index.is_some())
         .count();
+    let converted_transform_clips = presentation
+        .clips
+        .values()
+        .filter(|clip| !clip.transform_tracks.is_empty())
+        .count();
+    let transform_tracks: usize = presentation
+        .clips
+        .values()
+        .map(|clip| clip.transform_tracks.len())
+        .sum();
     if (
         presentation.schema_version,
         presentation.textures.len(),
@@ -152,7 +162,8 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (1, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
+    ) != (2, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
+        || (converted_transform_clips, transform_tracks) != (57, 1196)
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }
@@ -175,6 +186,15 @@ fn validate() -> Result<()> {
         }
     }
     for (prefab_guid, binding) in &presentation.prefab_bindings {
+        if let Some(scene) = &binding.rig_scene {
+            let path = Path::new("assets").join(scene);
+            if !path.is_file() {
+                bail!(
+                    "prefab {prefab_guid} references missing rig scene {}",
+                    path.display()
+                );
+            }
+        }
         if let Some(scene) = &binding.animated_scene {
             let path = Path::new("assets").join(scene);
             if !path.is_file() {
