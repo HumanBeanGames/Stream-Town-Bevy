@@ -9,8 +9,9 @@ here.
 - `stream_town_game`: shipping Bevy application and the 300-agent vertical slice.
 - `stream_town_tools`: focused content, migration, world-generation, navigation,
   Twitch, validation, and runtime tooling. Its catalog browser, validated
-  technology editor with undo/redo, and occupancy/path lab are functional;
-  prefab/archetype browser, runtime, and Twitch panels remain diagnostic shells.
+  technology editor with undo/redo, occupancy/path lab, prefab/archetype browser,
+  and Twitch device-OAuth/vault diagnostics are functional; the runtime panel
+  remains a diagnostic shell.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
@@ -66,9 +67,16 @@ geometry, rigs, and translation animation curves.
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 Legacy Unity saves are never modified by migration tools.
 
+Twitch is disabled in the checked-in configuration. The tools application writes
+public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
+stored only in the operating-system credential vault. The game validates or
+refreshes the token before starting IRC, revalidates hourly, and keeps the Unity
+broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
+
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
-J to inject a parsed `!join`, F5/F9 to save/load, F12 to capture a screenshot,
-and Escape to return to the menu. The vertical slice renders a 3D terrain plane,
+J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
+save/load, F12 to capture a screenshot, and Escape to return to the menu. The
+vertical slice renders a 3D terrain plane,
 lighting, converted GLB scenes for the representative town hall and actors, and
 primitive fallbacks when an asset is unavailable.
 

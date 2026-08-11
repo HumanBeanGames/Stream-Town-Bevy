@@ -24,6 +24,12 @@ mistaken for production-ready systems.
   an explicit idle/moving visual state machine.
 - An injected `!join` vertical slice that goes through the shipping command
   parser and creates both the stable domain actor and its visible ECS entity.
+- An opt-in Twitch transport using public-client device OAuth, `twitch-irc`,
+  Tokio, Rustls, and OS credential-vault storage. It validates app/account/scopes,
+  rotates public-client refresh tokens, revalidates hourly, preserves the
+  broadcaster `!connect` safety gate, and derives stable actors from Twitch user
+  IDs. The tools application can authorize, diagnose, refresh, and forget the bot
+  token without displaying or writing credentials to repository files.
 - Engine-independent gathering, depositing, construction, roles, technology
   voting, trade, combat, death/respawn, timed events, days, seasons, and weather.
 - Checksummed native RON saves written atomically with backup recovery, plus
@@ -57,8 +63,8 @@ mistaken for production-ready systems.
   role references plus prefab archetypes and their GLB variants, provides grouped
   technology search/topology plus validated metadata/prerequisite editing with
   undo/redo, and renders deterministic world occupancy, resources, and planned
-  paths. Runtime and Twitch remain diagnostic shells rather than connected
-  control surfaces.
+  paths. Twitch setup is connected to the OS vault; the general runtime panel
+  remains a diagnostic shell rather than a connected control surface.
 - Windows CI covering formatting, compilation, Clippy, tests, and repository
   validation.
 
@@ -70,8 +76,10 @@ mistaken for production-ready systems.
 - The production terrain renderer, production-grade actor steering, complete
   role/building/resource/station/inventory/equipment behavior, and every
   reachable balance rule from the Unity scenes.
-- Twitch IRC/OAuth networking, reconnect and rate limiting, and OS credential
-  storage. The command grammar and deterministic injection path exist only.
+- Full Unity Twitch command coverage, per-command permissions/cooldowns, and
+  production outbound response wording. The authenticated IRC path currently
+  dispatches the stable Bevy command grammar and relies on `twitch-irc` for
+  reconnect and chat rate limiting.
 - WGSL shader ports, VFX, material/texture reconstruction, UI parity,
   post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
@@ -125,7 +133,8 @@ cargo run -p stream_town_migrate -- convert-content generated/unity-export.json 
 
 Foundation is substantially implemented. The vertical slice is runnable and its
 deterministic 300-agent navigation gate passes with semantically converted
-prefabs and representative production GLBs, but it is still missing rigged
-production animation, connected Twitch transport, production materials, and the
-recorded reference-machine GPU measurement required to close that milestone.
+prefabs, representative production GLBs, and connected Twitch transport, but it
+is still missing rigged production animation, full command parity, production
+materials, and the recorded reference-machine GPU measurement required to close
+that milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

@@ -32,22 +32,22 @@ Do not add Twitch tokens, refresh tokens, client secrets, or OBS stream keys any
 
 ## 3. Authorize `HumanBeanBot`
 
-1. In Unity, open **Tools > Stream Town > Twitch Bot Setup**.
+1. Run `cargo run -p stream_town_tools` from `bevy-port`, then open the **Twitch** tab.
 2. Paste the app's Client ID.
 3. Set the bot account to `HumanBeanBot`.
-4. Click **Authorize Bot With Twitch**.
+4. Click **Authorize bot**.
 5. On the Twitch activation page, verify that the signed-in account is `HumanBeanBot`. Use a private browser window if the browser keeps selecting `HumanBeanGames`.
 6. Approve the two requested scopes: `chat:read` and `chat:edit`.
 
-The setup window validates the returned token, refuses a token for the wrong account or app, and writes it to the current user's Unity application-data directory. The file is outside the repository and is not included in builds. Stream Town validates the token at startup and hourly, and refreshes a public-client token when Twitch reports that it has expired.
+The setup tool validates the returned token, refuses a token for the wrong account or app, and writes it to the operating-system credential vault (Windows Credential Manager on the initial supported platform). No token file is created. Stream Town validates or refreshes the token at startup and validates it hourly.
 
 ## 4. Prepare the channel
 
 1. In `HumanBeanGames` chat, run `/mod HumanBeanBot`. This is recommended for normal bot rate limits and moderation visibility.
-2. In Stream Town's main menu, set the channel to `HumanBeanGames`.
+2. In the tools application's **Twitch** tab, set the channel to `humanbeangames`, enable Twitch, and click **Save runtime config**. This writes public settings only to `.stream-town/config.ron`.
 3. Start or load the world.
 4. When Stream Town displays its six-digit broadcaster connection code, send `!connect 123456` from the `HumanBeanGames` account, replacing `123456` with the displayed code.
-5. From a viewer account, test `!create` and then `!help`. Replies should be posted by `HumanBeanBot`.
+5. From a viewer account, test `!join`. The in-game agent and processed-command counts should increase under that viewer's stable Twitch user ID.
 
 The connection code is an application-level safety gate. It proves that the broadcaster present in chat is deliberately enabling bot output for this running game session.
 
@@ -67,9 +67,9 @@ OBS's Twitch session, Twitch stream key, and broadcast settings are independent 
 
 - `F1`: intentionally disconnect the Twitch bot.
 - `F2`: reconnect after credentials or channel settings change.
-- Unity Console success message: `Twitch bot 'humanbeanbot' connected to 'humanbeangames'.`
+- In-game HUD state: `Twitch: Connected` (or the broadcaster authorization prompt).
 - A wrong-account authorization is rejected before IRC is started.
-- If authorization expires or is revoked, reopen **Tools > Stream Town > Twitch Bot Setup** and authorize the bot again.
+- If authorization expires or is revoked and cannot be refreshed, reopen the Bevy tools **Twitch** tab and authorize the bot again.
 
 Official references:
 
