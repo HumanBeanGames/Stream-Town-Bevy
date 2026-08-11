@@ -13,10 +13,11 @@ mistaken for production-ready systems.
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
   states, with state-scoped entity cleanup.
-- Validated, versioned RON configuration (schema 3) and stable authored/runtime
+- Validated, versioned RON configuration (schema 4) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
-  recruits instead of hiding those values in runtime code.
+  recruits, plus Unity's 15,000 food/ore/wood and five-recruit base capacities;
+  gold remains intentionally unbounded.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
   grounding data, repeatable world hashes, and a 4,225-vertex/8,192-triangle
   Bevy terrain surface generated directly from that navigation height field.
@@ -34,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable Town Hall approach, and deposit into the authoritative town economy;
-  exhausted resource visuals are hidden. Content schema 6 converts each role's
+  exhausted resource visuals are hidden. Content schema 7 converts each role's
   resource affinity, action rate/range, health/regeneration/defense, movement
   speed, and carry capacity. Live gathering, construction, combat range/damage,
   health, cooldowns, and movement use those bases plus technology percentages.
@@ -50,7 +51,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 6 also promotes Unity `Placeable` and all six technology effect
+  Content schema 7 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -61,6 +62,12 @@ mistaken for production-ready systems.
   Unlocked effects now reduce placement and upgrade costs, cap deposits against
   technology-expanded storage, modify health/movement/action/combat rules, and
   switch constructed GLBs to their age-two scene variants.
+  The same schema converts all four reachable `ResourceStorageModifier`
+  components: House contributes recruit capacity, while Food/Ore/Wood Storage
+  contribute 1,000 units at level one and use the authored 2,000 x level x 3
+  increment thereafter. Only completed buildings contribute; unlocked storage
+  boosts apply to those contributions, and capped deposits retain overflow in
+  actor inventory.
 - End-to-end execution of the stable Bevy chat grammar: `!join`, role selection,
   catalog-priced building placement and upgrades, eligible technology voting,
   mapped events, atomic saves, and help. Commands validate catalog references
@@ -104,8 +111,9 @@ mistaken for production-ready systems.
   model scene variants, 15 roles, and the shipping 363-node, 362-edge technology
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, promotes construction/upgrade balance and
-  all 413 authored technology effects and role base stats into content schema 6, preserves the
-  remaining typed Unity fields as provenance, validates stable IDs, referenced
+  all 413 authored technology effects, role base stats, and building storage
+  contributions into content schema 7, preserves the remaining typed Unity
+  fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
 - A versioned presentation RON converter and YAML fallback that packages all
@@ -175,11 +183,11 @@ mistaken for production-ready systems.
   projectiles/area attacks/healing beyond the live melee combat loop, building
   station activation and derived level-up effects beyond the live construction/
   upgrade loop, and every reachable balance rule from the Unity scenes.
-- Building-derived storage contributions and role level/progression curves are
-  not yet semantically converted. Technology percentages and role level-one
-  bases are authoritative for the live Bevy rules, but health-regeneration
-  ticking and age changes for the always-present Town Hall still require those
-  underlying building/role systems.
+- Role level/progression curves are not yet semantically converted. Technology
+  percentages, role level-one bases, and building-derived storage are
+  authoritative for the live Bevy rules, but health-regeneration ticking and
+  age changes for the always-present Town Hall still require their underlying
+  systems.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on

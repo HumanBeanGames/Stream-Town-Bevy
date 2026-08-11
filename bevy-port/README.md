@@ -51,8 +51,8 @@ variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's level-one action,
-health, defense, movement, carry, and resource-affinity fields in content schema 6,
-and follows nested prefabs to
+health, defense, movement, carry, resource-affinity, and all four reachable
+building storage components in content schema 7, and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
@@ -95,15 +95,15 @@ J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
 stable chat grammar executes `!join`, `!role`, `!build`, `!upgrade`, `!vote`,
 `!event`, `!save`, and `!help` with catalog/prerequisite validation and
-HUD/Twitch feedback. Building commands consume the schema-3 starting resource balances,
+HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
 spawn the converted building GLB, and round-trip through native saves. New
 structures start at Unity's 10% construction health; Builder agents path to a
 reachable perimeter cell and advance the 33%/66% presentation stages to
 completion. Upgrades spend the authored level cost and multiplier and respect
 maximum levels granted by unlocked technology. Unlocked technologies also apply
-their authored placement/upgrade discounts, expand the live 10,000-unit resource
-storage caps, modify actor health/movement/action/combat percentages, and select
+their authored placement/upgrade discounts, expand storage-building
+contributions, modify actor health/movement/action/combat percentages, and select
 age-two GLB variants for constructed buildings. Building placement also respects
 the converted Unity `Placeable` flag and the
 persisted technology set: the authored initial technologies expose Lumbermill,
@@ -119,6 +119,11 @@ authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
 into the town balances shown by the HUD. Movement, action cadence/range, health,
 defense, and construction/combat amounts likewise use converted role bases plus
 the unlocked technology percentages.
+Food, ore, and wood start with Unity's 15,000-unit capacity, recruit capacity
+starts at five, and gold is unbounded. Completed Food/Ore/Wood Storage buildings
+add the authored level-scaled capacity; Houses add recruit slots. A capped
+deposit leaves overflow on the actor until spending or new construction creates
+space.
 Node depletion and carried inventories are part of native save/load state.
 The starting Defender and Goblin also run a live melee loop: acquire a living
 target, path into range, exchange deterministic damage once per second, trigger
