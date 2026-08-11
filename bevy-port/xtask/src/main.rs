@@ -2,7 +2,9 @@ use std::{fs, path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use stream_town_domain::{ContentCatalog, GameConfig, GridPos, generate_world};
+use stream_town_domain::{
+    ContentCatalog, GameConfig, GridPos, PresentationCatalog, generate_world,
+};
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -45,6 +47,13 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", content_path.display()))?;
     content.validate()?;
+    let presentation_path = Path::new("assets/content/presentation.ron");
+    let presentation: PresentationCatalog = ron::from_str(
+        &fs::read_to_string(presentation_path)
+            .with_context(|| format!("failed to read {}", presentation_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", presentation_path.display()))?;
+    presentation.validate()?;
     let model_baseline_path = Path::new("assets/content/model-conversion-baseline.json");
     let model_baseline: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(model_baseline_path)
@@ -112,6 +121,64 @@ fn validate() -> Result<()> {
             }
         }
     }
+    let presentation_states: usize = presentation
+        .controllers
+        .values()
+        .map(|controller| controller.states.len())
+        .sum();
+    let presentation_transitions: usize = presentation
+        .controllers
+        .values()
+        .map(|controller| controller.transitions.len())
+        .sum();
+    let native_animation_bindings = presentation
+        .prefab_bindings
+        .values()
+        .filter(|binding| binding.gltf_animation_index.is_some())
+        .count();
+    if (
+        presentation.schema_version,
+        presentation.textures.len(),
+        presentation.materials.len(),
+        presentation.clips.len(),
+        presentation.controllers.len(),
+        presentation_states,
+        presentation_transitions,
+        presentation.prefab_bindings.len(),
+        native_animation_bindings,
+    ) != (1, 133, 33, 75, 31, 94, 165, 22, 18)
+    {
+        bail!("presentation counts differ from the verified Unity baseline");
+    }
+    let missing_clip_sources: Vec<_> = presentation
+        .clips
+        .values()
+        .filter(|clip| clip.source_path.is_empty())
+        .map(|clip| clip.source_guid.as_str())
+        .collect();
+    if missing_clip_sources != ["3efab8b2dfb3f994f82d137fd8cf2c18"] {
+        bail!("Unity missing-clip baseline changed: {missing_clip_sources:?}");
+    }
+    for (texture_id, texture) in &presentation.textures {
+        let path = Path::new("assets").join(&texture.asset_path);
+        if !path.is_file() {
+            bail!(
+                "texture {texture_id} references missing packaged asset {}",
+                path.display()
+            );
+        }
+    }
+    for (prefab_guid, binding) in &presentation.prefab_bindings {
+        if let Some(scene) = &binding.animated_scene {
+            let path = Path::new("assets").join(scene);
+            if !path.is_file() {
+                bail!(
+                    "prefab {prefab_guid} references missing animated scene {}",
+                    path.display()
+                );
+            }
+        }
+    }
 
     let mut checked_json = 0_usize;
     for entry in WalkDir::new("generated").into_iter().filter_map(Result::ok) {
@@ -139,7 +206,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 404 semantic records, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 404 semantic records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

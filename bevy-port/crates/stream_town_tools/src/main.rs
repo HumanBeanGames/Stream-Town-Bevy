@@ -8,7 +8,8 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
-    ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, StableId, generate_world,
+    ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, PresentationCatalog,
+    StableId, generate_world,
 };
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
@@ -61,6 +62,7 @@ struct ToolState {
     status: String,
     config: GameConfig,
     catalog: ContentCatalog,
+    presentation: PresentationCatalog,
     generated_world: Option<GeneratedWorld>,
     preview_path: Vec<GridPos>,
     path_start: GridPos,
@@ -105,6 +107,12 @@ impl Default for ToolState {
             .validate()
             .expect("checked-in content catalog must validate");
         let selected_group = catalog.technology.groups.keys().next().cloned();
+        let presentation: PresentationCatalog =
+            ron::from_str(include_str!("../../../assets/content/presentation.ron"))
+                .expect("checked-in presentation catalog must parse");
+        presentation
+            .validate()
+            .expect("checked-in presentation catalog must validate");
         Self {
             tab: ToolTab::default(),
             unity_root: "..".to_owned(),
@@ -112,6 +120,7 @@ impl Default for ToolState {
             status: "Ready. Migration operations are read-only by default.".to_owned(),
             config: stream_town_game::load_runtime_config().unwrap_or_default(),
             catalog,
+            presentation,
             generated_world: None,
             preview_path: Vec::new(),
             path_start: GridPos { x: 20, z: 32 },
@@ -214,11 +223,13 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     }
     ui.separator();
     ui.label(format!(
-        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} source records",
+        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} materials, {} controllers, {} source records",
         state.catalog.archetypes.len(),
         state.catalog.buildings.len(),
         state.catalog.roles.len(),
         state.catalog.technology.nodes.len(),
+        state.presentation.materials.len(),
+        state.presentation.controllers.len(),
         state.catalog.source_records.len()
     ));
     ui.monospace(".\\bevy-port\\scripts\\export-unity.ps1");
@@ -246,6 +257,14 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.label(format!(
             "Provenance: {}",
             state.catalog.source_records.len()
+        ));
+        ui.separator();
+        ui.label(format!(
+            "Presentation: {} textures / {} materials / {} clips / {} controllers",
+            state.presentation.textures.len(),
+            state.presentation.materials.len(),
+            state.presentation.clips.len(),
+            state.presentation.controllers.len()
         ));
     });
     ui.separator();
@@ -295,6 +314,57 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                     ));
                     for ability in &role.granted_abilities {
                         ui.monospace(ability.to_string());
+                    }
+                });
+            }
+        });
+        ui.collapsing("Materials and texture bindings", |ui| {
+            for (id, material) in &state.presentation.materials {
+                ui.collapsing(format!("{}  ({id})", material.display_name), |ui| {
+                    ui.monospace(format!("Unity material: {}", material.source_path));
+                    ui.label(format!(
+                        "PBR base {:?}; metallic {:.2}; roughness {:.2}; {:?}",
+                        material.base_color,
+                        material.metallic,
+                        material.perceptual_roughness,
+                        material.alpha_mode
+                    ));
+                    if let Some(shader) = &material.shader_source {
+                        ui.monospace(format!("Shader source: {shader}"));
+                    }
+                    for (slot, texture) in &material.textures {
+                        let path = state
+                            .presentation
+                            .textures
+                            .get(texture)
+                            .map_or("missing", |texture| texture.asset_path.as_str());
+                        ui.monospace(format!("{slot}: {path}"));
+                    }
+                    ui.label(format!(
+                        "{} custom shader properties retained for WGSL porting",
+                        material.custom_properties.len()
+                    ));
+                });
+            }
+        });
+        ui.collapsing("Animation controllers", |ui| {
+            for (id, controller) in &state.presentation.controllers {
+                ui.collapsing(format!("{}  ({id})", controller.display_name), |ui| {
+                    ui.monospace(format!("Unity controller: {}", controller.source_path));
+                    ui.label(format!(
+                        "{} parameters, {} states, {} transitions, {} layer defaults",
+                        controller.parameters.len(),
+                        controller.states.len(),
+                        controller.transitions.len(),
+                        controller.default_states.len()
+                    ));
+                    for state_def in controller.states.values() {
+                        ui.label(format!(
+                            "{} (speed {:.2}, {} motions)",
+                            state_def.display_name,
+                            state_def.speed,
+                            state_def.motions.len()
+                        ));
                     }
                 });
             }
@@ -782,13 +852,20 @@ fn save_runtime_config(config: &GameConfig) -> anyhow::Result<std::path::PathBuf
 fn validation_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Asset validator and packager");
     if ui.button("Validate configuration and catalog").clicked() {
-        state.status = match (state.config.validate(), state.catalog.validate()) {
-            (Ok(()), Ok(())) => format!(
-                "Configuration and catalog valid: {} semantic records",
-                state.catalog.source_records.len()
+        state.status = match (
+            state.config.validate(),
+            state.catalog.validate(),
+            state.presentation.validate(),
+        ) {
+            (Ok(()), Ok(()), Ok(())) => format!(
+                "Configuration and catalogs valid: {} semantic records, {} materials, {} controllers",
+                state.catalog.source_records.len(),
+                state.presentation.materials.len(),
+                state.presentation.controllers.len()
             ),
-            (Err(error), _) => format!("Configuration error: {error}"),
-            (_, Err(error)) => format!("Catalog error: {error}"),
+            (Err(error), _, _) => format!("Configuration error: {error}"),
+            (_, Err(error), _) => format!("Content catalog error: {error}"),
+            (_, _, Err(error)) => format!("Presentation catalog error: {error}"),
         };
     }
     ui.label("Checks include stable IDs, dangling references, technology cycles, GLB hashes/headers, and deterministic baselines.");

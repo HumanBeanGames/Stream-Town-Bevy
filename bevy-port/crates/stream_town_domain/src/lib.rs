@@ -5,6 +5,7 @@ pub mod config;
 pub mod content;
 pub mod id;
 pub mod navigation;
+pub mod presentation;
 pub mod save;
 pub mod simulation;
 pub mod world;
@@ -17,6 +18,12 @@ pub use content::{
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
+pub use presentation::{
+    AnimationClipDef, AnimationConditionDef, AnimationControllerDef, AnimationMotionDef,
+    AnimationParameterDef, AnimationParameterKind, AnimationStateDef, AnimationTransitionDef,
+    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
+    PresentationError, TextureDef,
+};
 pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,
     NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,

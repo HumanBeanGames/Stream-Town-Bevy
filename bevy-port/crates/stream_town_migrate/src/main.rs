@@ -14,6 +14,7 @@ use walkdir::WalkDir;
 mod content;
 mod legacy;
 mod models;
+mod presentation;
 
 #[derive(Debug, Parser)]
 #[command(about = "Read-only migration tooling for the Stream Town Unity project")]
@@ -37,6 +38,8 @@ enum Command {
     /// Convert active Unity buildings, roles, and `TechTreeV2` into versioned RON.
     ConvertContent {
         export: PathBuf,
+        #[arg(long, default_value = "..")]
+        unity_root: PathBuf,
         #[arg(long)]
         out_dir: PathBuf,
     },
@@ -130,9 +133,20 @@ fn main() -> Result<()> {
             let summary = validate_unity_export(&export)?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
         }
-        Command::ConvertContent { export, out_dir } => {
+        Command::ConvertContent {
+            export,
+            unity_root,
+            out_dir,
+        } => {
             let report = content::convert(&export, &out_dir)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            let presentation = presentation::convert(&export, &unity_root, &out_dir)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "content": report,
+                    "presentation": presentation,
+                }))?
+            );
         }
         Command::ValidateModels {
             report,

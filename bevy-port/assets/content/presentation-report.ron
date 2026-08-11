@@ -1,0 +1,19 @@
+(
+    schema_version: 1,
+    textures: 133,
+    texture_bytes: 19291847,
+    materials: 33,
+    custom_shader_materials: 33,
+    clips: 75,
+    converted_clips: 0,
+    missing_clip_sources: 1,
+    controllers: 31,
+    controller_states: 94,
+    controller_transitions: 165,
+    prefab_bindings: 22,
+    native_animation_bindings: 18,
+    outputs: [
+        "assets/content/presentation.ron",
+        "assets/content/presentation-report.ron",
+    ],
+)

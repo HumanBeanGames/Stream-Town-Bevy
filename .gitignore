@@ -86,6 +86,8 @@ crashlytics-build.properties
 /graphify-out/authored/
 /graphify-out/cache/
 /graphify-out/reflections/
+/graphify-out/memory/
+/graphify-out/.vocab.txt
 /graphify-out/graph.html
 /graphify-out/cost.json
 /graphify-out/query-results.jsonl
@@ -99,5 +101,12 @@ crashlytics-build.properties
 /bevy-port/assets/migrated/models/*
 !/bevy-port/assets/migrated/models/**/
 !/bevy-port/assets/migrated/models/**/*.glb
+!/bevy-port/assets/migrated/textures/
+/bevy-port/assets/migrated/textures/*
+!/bevy-port/assets/migrated/textures/**/
+!/bevy-port/assets/migrated/textures/**/*.png
+!/bevy-port/assets/migrated/textures/**/*.tga
+!/bevy-port/assets/migrated/textures/**/*.jpg
+!/bevy-port/assets/migrated/textures/**/*.jpeg
 *.stbevy
 *.stbevy.bak

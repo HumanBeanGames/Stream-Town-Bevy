@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result as AnyResult};
 use avian3d::prelude::PhysicsPlugins;
 use bevy::{
+    animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
     asset::AssetPlugin,
     camera::ScalingMode,
     prelude::*,
@@ -16,9 +17,9 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
-    ActorKind, ArchetypeKind, ArchetypeScene, ChatCommand, ContentCatalog, GameConfig,
-    GeneratedWorld, GridPos, NativeSaveStore, SavedActor, StableId, TownEvent, WorldSimulation,
-    WorldSnapshot, generate_world,
+    ActorKind, ArchetypeDef, ArchetypeKind, ArchetypeScene, ChatCommand, ContentCatalog,
+    GameConfig, GeneratedWorld, GridPos, NativeSaveStore, PresentationCatalog, SavedActor,
+    StableId, TownEvent, WorldSimulation, WorldSnapshot, generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -37,6 +38,9 @@ pub struct RuntimeConfig(pub GameConfig);
 
 #[derive(Resource)]
 pub struct RuntimeContent(pub ContentCatalog);
+
+#[derive(Resource)]
+pub struct RuntimePresentation(pub PresentationCatalog);
 
 #[derive(Resource)]
 struct RuntimeAssetRoot(PathBuf);
@@ -151,6 +155,13 @@ struct AgentAnimation {
     state: MovementAnimationState,
     phase: f32,
     base_scale: Vec3,
+    native: bool,
+}
+
+#[derive(Component, Clone)]
+struct NativeAnimationSpec {
+    graph: Handle<AnimationGraph>,
+    node: AnimationNodeIndex,
 }
 
 pub struct StreamTownGamePlugin;
@@ -162,6 +173,9 @@ impl Plugin for StreamTownGamePlugin {
         }
         if !app.world().contains_resource::<RuntimeContent>() {
             app.insert_resource(RuntimeContent(embedded_content()));
+        }
+        if !app.world().contains_resource::<RuntimePresentation>() {
+            app.insert_resource(RuntimePresentation(embedded_presentation()));
         }
         if !app.world().contains_resource::<RuntimeAssetRoot>() {
             app.insert_resource(RuntimeAssetRoot(locate_asset_root()));
@@ -191,6 +205,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     move_agents,
                     animate_agents,
+                    attach_native_animations,
                     camera_controls,
                     select_grid_cell,
                     game_input,
@@ -218,6 +233,7 @@ pub fn run(config: GameConfig) {
         .insert_resource(ClearColor(Color::srgb(0.025, 0.04, 0.055)))
         .insert_resource(RuntimeConfig(config))
         .insert_resource(RuntimeContent(content))
+        .insert_resource(RuntimePresentation(embedded_presentation()))
         .insert_resource(RuntimeAssetRoot(asset_root.clone()))
         .add_plugins(
             DefaultPlugins
@@ -282,6 +298,16 @@ fn embedded_content() -> ContentCatalog {
         .validate()
         .expect("checked-in Stream Town content catalog must validate");
     content
+}
+
+fn embedded_presentation() -> PresentationCatalog {
+    let presentation: PresentationCatalog =
+        ron::from_str(include_str!("../../../assets/content/presentation.ron"))
+            .expect("checked-in Stream Town presentation catalog must parse");
+    presentation
+        .validate()
+        .expect("checked-in Stream Town presentation catalog must validate");
+    presentation
 }
 
 fn setup_rendering(
@@ -378,13 +404,16 @@ fn generate_and_spawn_world(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
     asset_server: Option<Res<AssetServer>>,
+    animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
+    let mut animation_graphs = animation_graphs;
     selected.0 = None;
     if let Ok(mut camera) = cameras.single_mut() {
         *camera = Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y);
@@ -520,20 +549,30 @@ fn generate_and_spawn_world(
                 let _ = simulation
                     .assign_role(&actor_id, StableId::new("role:enemy").expect("static ID"));
             }
-            let real_scene = if spawned == 0 {
-                archetype_scene_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
+            let real_archetype = if spawned == 0 {
+                archetype_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
             } else if spawned == 1 {
-                archetype_scene_by_source(
-                    &content.0,
-                    ArchetypeKind::Player,
-                    "Player_Character.prefab",
-                )
+                archetype_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
             } else {
                 None
-            }
-            .filter(|scene| {
-                asset_server.is_some() && converted_asset_exists(&asset_root.0, &scene.asset_path)
-            });
+            };
+            let real_scene = real_archetype
+                .and_then(default_archetype_scene)
+                .filter(|scene| {
+                    asset_server.is_some()
+                        && converted_asset_exists(&asset_root.0, &scene.asset_path)
+                });
+            let native_animation = real_archetype
+                .zip(real_scene)
+                .and_then(|(archetype, scene)| {
+                    native_animation_spec(
+                        archetype,
+                        scene,
+                        &presentation.0,
+                        asset_server.as_deref(),
+                        animation_graphs.as_deref_mut(),
+                    )
+                });
             let base_scale = if real_scene.is_some() {
                 Vec3::splat(config.0.world.cell_size / 2.0)
             } else {
@@ -561,6 +600,7 @@ fn generate_and_spawn_world(
                 },
                 AgentAnimation {
                     base_scale,
+                    native: native_animation.is_some(),
                     ..default()
                 },
                 Transform::from_xyz(world_position.x, visual_height, world_position.z)
@@ -573,6 +613,9 @@ fn generate_and_spawn_world(
                         .expect("asset server checked above")
                         .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
                 ));
+                if let Some(native_animation) = native_animation {
+                    entity.insert(native_animation);
+                }
             } else {
                 entity.insert((
                     Mesh3d(render.cube.clone()),
@@ -639,16 +682,41 @@ fn default_archetype_scene(
         .or_else(|| archetype.scenes.first())
 }
 
-fn archetype_scene_by_source<'a>(
+fn archetype_by_source<'a>(
     content: &'a ContentCatalog,
     kind: ArchetypeKind,
     source_suffix: &str,
-) -> Option<&'a ArchetypeScene> {
+) -> Option<&'a ArchetypeDef> {
     content
         .archetypes
         .values()
         .find(|archetype| archetype.kind == kind && archetype.source_path.ends_with(source_suffix))
-        .and_then(default_archetype_scene)
+}
+
+fn native_animation_spec(
+    archetype: &ArchetypeDef,
+    scene: &ArchetypeScene,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    animation_graphs: Option<&mut Assets<AnimationGraph>>,
+) -> Option<NativeAnimationSpec> {
+    let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
+    let animation_index = binding.gltf_animation_index?;
+    if binding.animated_scene.as_deref() != Some(scene.asset_path.as_str()) {
+        return None;
+    }
+    let asset_server = asset_server?;
+    let animation_graphs = animation_graphs?;
+    let (graph, node) = AnimationGraph::from_clip(
+        asset_server.load(
+            GltfAssetLabel::Animation(usize::try_from(animation_index).ok()?)
+                .from_asset(scene.asset_path.clone()),
+        ),
+    );
+    Some(NativeAnimationSpec {
+        graph: animation_graphs.add(graph),
+        node,
+    })
 }
 
 fn converted_asset_exists(asset_root: &Path, asset_path: &str) -> bool {
@@ -756,6 +824,10 @@ fn animate_agents(
             animation.phase = 0.0;
         }
         animation.phase += time.delta_secs() * if moving { 9.0 } else { 2.0 };
+        if animation.native {
+            transform.scale = animation.base_scale;
+            continue;
+        }
         let pulse = if moving {
             1.0 + animation.phase.sin().abs() * 0.16
         } else {
@@ -764,6 +836,30 @@ fn animate_agents(
         transform.scale = animation.base_scale * Vec3::new(1.0, pulse, 1.0);
         if let Some(mut material) = material {
             material.0 = actor_material(&render, &agent.kind, moving);
+        }
+    }
+}
+
+fn attach_native_animations(
+    mut commands: Commands,
+    specs: Query<&NativeAnimationSpec>,
+    parents: Query<&ChildOf>,
+    mut players: Query<(Entity, &mut AnimationPlayer), Without<AnimationGraphHandle>>,
+) {
+    for (entity, mut player) in &mut players {
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            if let Ok(spec) = specs.get(ancestor) {
+                commands
+                    .entity(entity)
+                    .insert(AnimationGraphHandle(spec.graph.clone()));
+                player.play(spec.node).repeat();
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
         }
     }
 }
@@ -1375,6 +1471,27 @@ mod tests {
         assert_eq!(content.roles.len(), 15);
         assert_eq!(content.technology.nodes.len(), 363);
         assert_eq!(content.technology.groups.len(), 20);
+    }
+
+    #[test]
+    fn embedded_presentation_binds_goblin_controller_and_native_clip() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        assert_eq!(presentation.textures.len(), 133);
+        assert_eq!(presentation.materials.len(), 33);
+        assert_eq!(presentation.controllers.len(), 31);
+        let archetype =
+            archetype_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
+        let scene = default_archetype_scene(archetype).unwrap();
+        let binding = presentation
+            .prefab_bindings
+            .get(&archetype.source_guid)
+            .unwrap();
+        assert_eq!(
+            binding.animated_scene.as_deref(),
+            Some(scene.asset_path.as_str())
+        );
+        assert_eq!(binding.gltf_animation_index, Some(0));
     }
 
     #[test]
