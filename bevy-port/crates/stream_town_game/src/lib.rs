@@ -27,8 +27,8 @@ use stream_town_domain::{
     ActorKind, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, ChatCommand,
     ContentCatalog, GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode,
-    MaterialDef, NativeSaveStore, PresentationCatalog, SavedActor, StableId, TownEvent,
-    WorldSimulation, WorldSnapshot, generate_world,
+    MaterialDef, NativeSaveStore, PresentationCatalog, SavedActor, Season, StableId, TownEvent,
+    Weather, WorldSimulation, WorldSnapshot, generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -107,6 +107,11 @@ impl Default for TwitchConnection {
 struct SelectedCell(Option<GridPos>);
 
 #[derive(Resource, Default)]
+struct EnvironmentPresentation {
+    applied: Option<(Season, Weather)>,
+}
+
+#[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
     ground: Handle<StandardMaterial>,
@@ -120,6 +125,8 @@ struct RenderAssets {
     player_idle: Handle<StandardMaterial>,
     player_moving: Handle<StandardMaterial>,
     selection: Handle<StandardMaterial>,
+    rain: Handle<StandardMaterial>,
+    snow: Handle<StandardMaterial>,
     presentation_materials: BTreeMap<StableId, Handle<StandardMaterial>>,
 }
 
@@ -153,6 +160,27 @@ struct SelectionMarker;
 
 #[derive(Component)]
 struct TownCamera;
+
+#[derive(Component)]
+struct WeatherParticle {
+    kind: Weather,
+    seed: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EnvironmentPalette {
+    terrain_tint: [f32; 3],
+    water_color: [f32; 4],
+    clear_color: [f32; 3],
+    sun_color: [f32; 3],
+    sun_illuminance: f32,
+    ambient_color: [f32; 3],
+    ambient_brightness: f32,
+    fog_color: [f32; 4],
+    fog_start: f32,
+    fog_end: f32,
+    particle_count: u16,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum MovementAnimationState {
@@ -231,6 +259,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<InjectedCommands>()
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
+            .init_resource::<EnvironmentPresentation>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
                     PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
@@ -256,6 +285,8 @@ impl Plugin for StreamTownGamePlugin {
                     drive_native_animations,
                     drive_converted_animations,
                     apply_material_overrides,
+                    update_environment_presentation.after(move_agents),
+                    animate_weather_particles.after(update_environment_presentation),
                     camera_controls,
                     select_grid_cell,
                     game_input,
@@ -388,6 +419,19 @@ fn setup_rendering(
             },
             ..OrthographicProjection::default_3d()
         }),
+        AmbientLight {
+            color: Color::srgb(0.70, 0.82, 0.92),
+            brightness: 90.0,
+            ..default()
+        },
+        DistanceFog {
+            color: Color::srgba(0.58, 0.72, 0.78, 0.10),
+            falloff: FogFalloff::Linear {
+                start: 560.0,
+                end: 940.0,
+            },
+            ..default()
+        },
         Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
@@ -437,6 +481,18 @@ fn setup_rendering(
         player_moving: materials.add(Color::srgb(0.52, 0.86, 1.0)),
         selection: materials.add(StandardMaterial {
             base_color: Color::srgba(0.95, 0.92, 0.18, 0.35),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        rain: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.36, 0.66, 0.95, 0.62),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        snow: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.94, 0.98, 1.0, 0.92),
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
@@ -541,6 +597,26 @@ fn main_menu_input(
         next_state.set(GameState::Credits);
     } else if keyboard.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
+    }
+}
+
+fn debug_start_day() -> Option<u32> {
+    std::env::var_os("STREAM_TOWN_DEBUG_DAY")
+        .and_then(|value| value.to_str().and_then(|value| value.parse().ok()))
+}
+
+fn debug_weather_override() -> Option<Weather> {
+    std::env::var_os("STREAM_TOWN_DEBUG_WEATHER")
+        .and_then(|value| value.to_str().and_then(parse_weather))
+}
+
+fn parse_weather(value: &str) -> Option<Weather> {
+    match value.to_ascii_lowercase().as_str() {
+        "clear" => Some(Weather::Clear),
+        "rain" => Some(Weather::Rain),
+        "fog" => Some(Weather::Fog),
+        "snow" => Some(Weather::Snow),
+        _ => None,
     }
 }
 
@@ -712,6 +788,13 @@ fn generate_and_spawn_world(
 
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
+    if let Some(day) = debug_start_day() {
+        simulation.elapsed_seconds = f64::from(day) * 120.0;
+        simulation.tick(0.0);
+    }
+    if let Some(weather) = debug_weather_override() {
+        simulation.weather = weather;
+    }
     'cells: for z in 0..generated.navigation.height() {
         for x in 0..generated.navigation.width() {
             let position = GridPos { x, z };
@@ -856,6 +939,7 @@ fn generate_and_spawn_world(
     ));
     commands.insert_resource(WorldRuntime { generated });
     commands.insert_resource(SimulationRuntime(simulation));
+    commands.insert_resource(EnvironmentPresentation::default());
     next_state.set(GameState::InGame);
 }
 
@@ -1038,6 +1122,9 @@ fn move_agents(
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation.0.tick(time.delta_secs());
+    if let Some(weather) = debug_weather_override() {
+        simulation.0.weather = weather;
+    }
     for (mut agent, mut location, animation, mut transform) in &mut agents {
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
@@ -1075,6 +1162,235 @@ fn move_agents(
             transform.translation += distance.normalize_or_zero() * step;
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_environment_presentation(
+    mut commands: Commands,
+    simulation: Res<SimulationRuntime>,
+    config: Res<RuntimeConfig>,
+    render: Res<RenderAssets>,
+    mut presentation: ResMut<EnvironmentPresentation>,
+    mut clear_color: Option<ResMut<ClearColor>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
+    mut lights: Query<&mut DirectionalLight>,
+    particles: Query<Entity, With<WeatherParticle>>,
+) {
+    let environment = (simulation.0.season, simulation.0.weather);
+    if presentation.applied == Some(environment) {
+        return;
+    }
+    let palette = environment_palette(environment.0, environment.1);
+    if let Some(clear_color) = clear_color.as_deref_mut() {
+        clear_color.0 = Color::srgb(
+            palette.clear_color[0],
+            palette.clear_color[1],
+            palette.clear_color[2],
+        );
+    }
+    if let Some(materials) = materials.as_deref_mut() {
+        if let Some(mut ground) = materials.get_mut(&render.ground) {
+            ground.base_color = Color::srgb(
+                palette.terrain_tint[0],
+                palette.terrain_tint[1],
+                palette.terrain_tint[2],
+            );
+        }
+        if let Some(mut water) = materials.get_mut(&render.water) {
+            water.base_color = Color::srgba(
+                palette.water_color[0],
+                palette.water_color[1],
+                palette.water_color[2],
+                palette.water_color[3],
+            );
+        }
+    }
+    for (mut fog, mut ambient) in &mut cameras {
+        fog.color = Color::srgba(
+            palette.fog_color[0],
+            palette.fog_color[1],
+            palette.fog_color[2],
+            palette.fog_color[3],
+        );
+        fog.falloff = FogFalloff::Linear {
+            start: palette.fog_start,
+            end: palette.fog_end,
+        };
+        ambient.color = Color::srgb(
+            palette.ambient_color[0],
+            palette.ambient_color[1],
+            palette.ambient_color[2],
+        );
+        ambient.brightness = palette.ambient_brightness;
+    }
+    for mut light in &mut lights {
+        light.color = Color::srgb(
+            palette.sun_color[0],
+            palette.sun_color[1],
+            palette.sun_color[2],
+        );
+        light.illuminance = palette.sun_illuminance;
+    }
+    for entity in &particles {
+        commands.entity(entity).despawn();
+    }
+    spawn_weather_particles(
+        &mut commands,
+        &config.0,
+        &render,
+        simulation.0.world_seed,
+        environment.1,
+        palette.particle_count,
+    );
+    info!(
+        season = ?environment.0,
+        weather = ?environment.1,
+        particles = palette.particle_count,
+        "environment presentation updated"
+    );
+    presentation.applied = Some(environment);
+}
+
+fn spawn_weather_particles(
+    commands: &mut Commands,
+    config: &GameConfig,
+    render: &RenderAssets,
+    world_seed: u64,
+    weather: Weather,
+    count: u16,
+) {
+    let (material, scale) = match weather {
+        Weather::Rain => (
+            render.rain.clone(),
+            Vec3::new(0.18, config.world.cell_size * 0.48, 0.18),
+        ),
+        Weather::Snow => (render.snow.clone(), Vec3::splat(0.62)),
+        Weather::Clear | Weather::Fog => return,
+    };
+    let span_x = f32::from(config.world.width) * config.world.cell_size;
+    let span_z = f32::from(config.world.height) * config.world.cell_size;
+    for index in 0..count {
+        let seed = weather_particle_seed(world_seed, index);
+        let x = (unit_from_seed(seed) - 0.5) * span_x;
+        let z = (unit_from_seed(seed.rotate_left(13)) - 0.5) * span_z;
+        let y = 18.0 + unit_from_seed(seed.rotate_left(23)) * 88.0;
+        commands.spawn((
+            WorldEntity,
+            WeatherParticle {
+                kind: weather,
+                seed,
+            },
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(x, y, z).with_scale(scale),
+        ));
+    }
+}
+
+fn animate_weather_particles(
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    mut particles: Query<(&WeatherParticle, &mut Transform)>,
+) {
+    let half_x = f32::from(config.0.world.width) * config.0.world.cell_size * 0.5;
+    let half_z = f32::from(config.0.world.height) * config.0.world.cell_size * 0.5;
+    for (particle, mut transform) in &mut particles {
+        let speed = if particle.kind == Weather::Rain {
+            52.0
+        } else {
+            9.0
+        };
+        transform.translation.y -= speed * time.delta_secs();
+        if particle.kind == Weather::Snow {
+            let seed_phase = f32::from(
+                u16::try_from(particle.seed & 0xff).expect("masked weather seed fits u16"),
+            );
+            transform.translation.x +=
+                (time.elapsed_secs() * 0.72 + seed_phase).sin() * time.delta_secs() * 1.8;
+        }
+        if transform.translation.y < -2.0 {
+            transform.translation.y = 94.0 + unit_from_seed(particle.seed.rotate_left(7)) * 24.0;
+        }
+        if transform.translation.x < -half_x {
+            transform.translation.x += half_x * 2.0;
+        } else if transform.translation.x > half_x {
+            transform.translation.x -= half_x * 2.0;
+        }
+        if transform.translation.z < -half_z {
+            transform.translation.z += half_z * 2.0;
+        } else if transform.translation.z > half_z {
+            transform.translation.z -= half_z * 2.0;
+        }
+    }
+}
+
+fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
+    let (terrain_tint, water_color, clear_color, sun_color, ambient_color) = match season {
+        Season::Spring => (
+            [0.94, 1.0, 0.92],
+            [0.05, 0.29, 0.47, 0.62],
+            [0.025, 0.04, 0.055],
+            [1.0, 0.95, 0.84],
+            [0.70, 0.82, 0.92],
+        ),
+        Season::Summer => (
+            [1.0, 0.96, 0.78],
+            [0.03, 0.34, 0.54, 0.62],
+            [0.035, 0.045, 0.05],
+            [1.0, 0.88, 0.68],
+            [0.82, 0.78, 0.68],
+        ),
+        Season::Autumn => (
+            [1.0, 0.64, 0.30],
+            [0.08, 0.25, 0.36, 0.65],
+            [0.055, 0.035, 0.035],
+            [1.0, 0.72, 0.50],
+            [0.82, 0.62, 0.52],
+        ),
+        Season::Winter => (
+            [0.76, 0.88, 1.0],
+            [0.10, 0.27, 0.40, 0.68],
+            [0.032, 0.044, 0.060],
+            [0.78, 0.88, 1.0],
+            [0.68, 0.78, 0.92],
+        ),
+    };
+    let (sun_illuminance, ambient_brightness, fog_color, fog_start, fog_end, particle_count) =
+        match weather {
+            Weather::Clear => (14_000.0, 90.0, [0.58, 0.72, 0.78, 0.08], 560.0, 940.0, 0),
+            Weather::Rain => (7_500.0, 72.0, [0.32, 0.42, 0.50, 0.32], 240.0, 650.0, 180),
+            Weather::Fog => (5_500.0, 80.0, [0.62, 0.68, 0.69, 0.72], 70.0, 390.0, 0),
+            Weather::Snow => (9_000.0, 105.0, [0.76, 0.84, 0.90, 0.42], 170.0, 590.0, 150),
+        };
+    EnvironmentPalette {
+        terrain_tint,
+        water_color,
+        clear_color,
+        sun_color,
+        sun_illuminance,
+        ambient_color,
+        ambient_brightness,
+        fog_color,
+        fog_start,
+        fog_end,
+        particle_count,
+    }
+}
+
+fn weather_particle_seed(world_seed: u64, index: u16) -> u32 {
+    let mut value = world_seed
+        ^ u64::from(index)
+            .wrapping_add(1)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    u32::try_from(value & u64::from(u32::MAX)).expect("masked weather seed fits u32")
+}
+
+fn unit_from_seed(seed: u32) -> f32 {
+    let fraction = u16::try_from(seed & u32::from(u16::MAX)).expect("masked seed fits u16");
+    f32::from(fraction) / f32::from(u16::MAX)
 }
 
 fn animate_agents(
@@ -2379,6 +2695,50 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_palette_covers_every_season_and_weather() {
+        assert_eq!(parse_weather("SNOW"), Some(Weather::Snow));
+        assert_eq!(parse_weather("unknown"), None);
+        let seasons = [
+            Season::Spring,
+            Season::Summer,
+            Season::Autumn,
+            Season::Winter,
+        ];
+        let weather = [Weather::Clear, Weather::Rain, Weather::Fog, Weather::Snow];
+        for season in seasons {
+            for weather in weather {
+                let palette = environment_palette(season, weather);
+                assert!(palette.fog_start >= 0.0);
+                assert!(palette.fog_end > palette.fog_start);
+                assert!(palette.sun_illuminance > 0.0);
+                assert!(palette.ambient_brightness > 0.0);
+            }
+        }
+        assert_eq!(
+            environment_palette(Season::Spring, Weather::Clear).particle_count,
+            0
+        );
+        assert_eq!(
+            environment_palette(Season::Spring, Weather::Rain).particle_count,
+            180
+        );
+        assert_eq!(
+            environment_palette(Season::Winter, Weather::Snow).particle_count,
+            150
+        );
+        let spring = environment_palette(Season::Spring, Weather::Clear).terrain_tint;
+        let winter = environment_palette(Season::Winter, Weather::Clear).terrain_tint;
+        assert!(
+            spring
+                .iter()
+                .zip(winter)
+                .any(|(spring, winter)| (spring - winter).abs() > 0.1)
+        );
+        assert_eq!(weather_particle_seed(42, 7), weather_particle_seed(42, 7));
+        assert_ne!(weather_particle_seed(42, 7), weather_particle_seed(42, 8));
+    }
 
     #[test]
     fn generated_terrain_mesh_matches_navigation_grid() {
