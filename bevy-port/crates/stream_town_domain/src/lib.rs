@@ -15,8 +15,8 @@ pub use content::{BuildingDef, ContentCatalog, RoleDef, TechNode, TechTree};
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
 pub use save::{
-    ActorKind, LegacySaveInfo, LegacySaveKind, NativeSaveError, NativeSaveStore, SavedActor,
-    WorldSnapshot, inspect_legacy_save,
+    ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,
+    NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,
 };
 pub use simulation::{
     ActorState, BuildingState, Season, SimulationError, TechVote, TownEvent, Weather,

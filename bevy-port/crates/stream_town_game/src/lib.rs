@@ -601,6 +601,7 @@ fn load_input(
     let saved_by_id: BTreeMap<StableId, SavedActor> = snapshot
         .actors
         .iter()
+        .filter(|actor| matches!(actor.kind, ActorKind::Player | ActorKind::Enemy))
         .cloned()
         .map(|actor| (actor.id.clone(), actor))
         .collect();
@@ -793,6 +794,8 @@ fn snapshot_world(
             })
             .collect(),
         simulation: simulation.0.clone(),
+        legacy_terrain_mesh: None,
+        legacy_migration: None,
     }
 }
 

@@ -6008,9 +6008,13 @@ dependencies = [
  "anyhow",
  "clap",
  "flate2",
+ "hex",
+ "ron",
  "serde",
  "serde_json",
+ "sha2",
  "stream_town_domain",
+ "tempfile",
  "walkdir",
 ]
 

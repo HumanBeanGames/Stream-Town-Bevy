@@ -35,6 +35,24 @@ pub struct SavedActor {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SavedTerrainMesh {
+    pub vertices: Vec<[f32; 3]>,
+    pub triangle_indices: Vec<i32>,
+    pub uvs: Vec<[f32; 2]>,
+    pub uses_32_bit_indices: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LegacyMigrationMetadata {
+    pub source_schema_version: u32,
+    pub source_container_version: Option<u32>,
+    pub source_terrain_generator_version: i32,
+    pub source_sha256: String,
+    pub recovered_from_backup: bool,
+    pub relocated_entities: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct WorldSnapshot {
     pub schema_version: u32,
     pub world_seed: u64,
@@ -43,6 +61,10 @@ pub struct WorldSnapshot {
     pub elapsed_seconds: u64,
     pub actors: Vec<SavedActor>,
     pub simulation: WorldSimulation,
+    #[serde(default)]
+    pub legacy_terrain_mesh: Option<SavedTerrainMesh>,
+    #[serde(default)]
+    pub legacy_migration: Option<LegacyMigrationMetadata>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -251,6 +273,8 @@ mod tests {
             elapsed_seconds: 42,
             actors: vec![],
             simulation: WorldSimulation::new(seed),
+            legacy_terrain_mesh: None,
+            legacy_migration: None,
         }
     }
 

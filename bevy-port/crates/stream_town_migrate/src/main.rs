@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use stream_town_domain::inspect_legacy_save;
 use walkdir::WalkDir;
 
+mod legacy;
+
 #[derive(Debug, Parser)]
 #[command(about = "Read-only migration tooling for the Stream Town Unity project")]
 struct Cli {
@@ -29,6 +31,14 @@ enum Command {
     ValidateManifest { manifest: PathBuf },
     /// Inspect a legacy JSON or STSV binary save without modifying it.
     InspectSave { save: PathBuf },
+    /// Convert a legacy JSON or schema 1-3 binary save into a validated native save.
+    ImportSave {
+        save: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -101,6 +111,19 @@ fn main() -> Result<()> {
             let info = inspect_legacy_save(&save)
                 .with_context(|| format!("failed to inspect {}", save.display()))?;
             println!("{}", serde_json::to_string_pretty(&info)?);
+        }
+        Command::ImportSave { save, out, config } => {
+            let config = if let Some(path) = config {
+                let encoded = fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read {}", path.display()))?;
+                ron::from_str(&encoded)
+                    .with_context(|| format!("failed to parse {}", path.display()))?
+            } else {
+                stream_town_domain::GameConfig::default()
+            };
+            config.validate()?;
+            let report = legacy::import_save(&save, &out, &config)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }
     Ok(())

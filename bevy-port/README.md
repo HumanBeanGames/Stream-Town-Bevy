@@ -9,7 +9,8 @@ here.
 - `stream_town_game`: shipping Bevy application and the 300-agent vertical slice.
 - `stream_town_tools`: focused content, migration, world-generation, navigation,
   Twitch, validation, and runtime tooling shell.
-- `stream_town_migrate`: Unity metadata/YAML inventory and legacy-save inspection.
+- `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
+  conversion.
 - `xtask`: repository validation and repeatable developer automation.
 
 ## Commands
@@ -21,6 +22,7 @@ cargo test --workspace
 cargo run -p stream_town_game
 cargo run -p stream_town_tools
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
+cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 ```
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.

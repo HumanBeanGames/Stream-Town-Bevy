@@ -26,9 +26,11 @@ mistaken for production-ready systems.
   voting, trade, combat, death/respawn, timed events, days, seasons, and weather.
 - Checksummed native RON saves written atomically with backup recovery, plus
   in-game F5/F9 save/load that restores stable actors and simulation state.
-- Read-only recognition of legacy JSON and binary schemas 1-3, including header,
-  compression, bounds, trailer, and payload validation. Legacy input is never
-  modified.
+- A one-time legacy importer for JSON and the exact Unity binary field order in
+  schemas 1-3, including container/compression/bounds/trailer validation, named
+  backup recovery, schema-1 mesh retention, seed-based Bevy regeneration,
+  stable IDs, deterministic surface relocation, atomic native output, SHA-256
+  provenance, and post-write reload verification. Legacy input is never modified.
 - A Unity asset inventory/validator that resolves `.meta` GUIDs and YAML
   references. The first scan found 1,429 source assets: 61 clips, 31 animator
   controllers, 33 materials, 253 models, 215 prefabs, 10 scenes, 654
@@ -51,8 +53,11 @@ mistaken for production-ready systems.
   storage. The command grammar and deterministic injection path exist only.
 - Animation graph/controller conversion, rigged production models, WGSL shader
   ports, VFX, UI parity, post-processing, replacement audio, and accessibility.
-- A complete legacy-save conversion and relocation pass. Current support safely
-  validates/inspects legacy files but does not yet emit a native replacement.
+- Rendering schema-1 retained terrain meshes and full semantic reconstruction of
+  legacy target/station/pet/customization data. The importer currently preserves
+  or maps gameplay-critical world, entity, inventory, economy, and technology
+  fields; unsupported presentation/relationship fields are consumed and
+  validated but not represented in the native runtime yet.
 - Full technology-graph editing, undo/redo, minimap interaction, live runtime
   bridging, release packaging, frame capture, and profiling controls.
 - The reference-machine 60 FPS GPU gate, screenshot baselines, launch-through-
