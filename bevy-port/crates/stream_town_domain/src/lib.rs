@@ -41,7 +41,8 @@ pub use presentation::{
 };
 pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,
-    NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,
+    NativeSaveStore, SavedActor, SavedTerrainMesh, SavedTerrainMeshError, WorldSnapshot,
+    inspect_legacy_save,
 };
 pub use simulation::{
     ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState,

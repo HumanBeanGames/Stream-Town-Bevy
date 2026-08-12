@@ -43,6 +43,78 @@ pub struct SavedTerrainMesh {
     pub uses_32_bit_indices: bool,
 }
 
+impl SavedTerrainMesh {
+    pub fn validate(&self) -> Result<(), SavedTerrainMeshError> {
+        if self.vertices.len() < 3 {
+            return Err(SavedTerrainMeshError::VertexCount(self.vertices.len()));
+        }
+        if self.triangle_indices.is_empty() || !self.triangle_indices.len().is_multiple_of(3) {
+            return Err(SavedTerrainMeshError::TriangleIndexCount(
+                self.triangle_indices.len(),
+            ));
+        }
+        if !self.uvs.is_empty() && self.uvs.len() != self.vertices.len() {
+            return Err(SavedTerrainMeshError::UvCount {
+                vertices: self.vertices.len(),
+                uvs: self.uvs.len(),
+            });
+        }
+        if self
+            .vertices
+            .iter()
+            .any(|vertex| vertex.iter().any(|coordinate| !coordinate.is_finite()))
+        {
+            return Err(SavedTerrainMeshError::NonFiniteVertex);
+        }
+        if self
+            .uvs
+            .iter()
+            .any(|uv| uv.iter().any(|coordinate| !coordinate.is_finite()))
+        {
+            return Err(SavedTerrainMeshError::NonFiniteUv);
+        }
+        for (position, index) in self.triangle_indices.iter().copied().enumerate() {
+            let Ok(index) = usize::try_from(index) else {
+                return Err(SavedTerrainMeshError::IndexOutOfBounds {
+                    position,
+                    index,
+                    vertices: self.vertices.len(),
+                });
+            };
+            if index >= self.vertices.len() {
+                return Err(SavedTerrainMeshError::IndexOutOfBounds {
+                    position,
+                    index: i32::try_from(index).unwrap_or(i32::MAX),
+                    vertices: self.vertices.len(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum SavedTerrainMeshError {
+    #[error("retained terrain mesh must contain at least three vertices, found {0}")]
+    VertexCount(usize),
+    #[error("retained terrain mesh index count must be a non-zero multiple of three, found {0}")]
+    TriangleIndexCount(usize),
+    #[error("retained terrain mesh has {vertices} vertices but {uvs} UV coordinates")]
+    UvCount { vertices: usize, uvs: usize },
+    #[error("retained terrain mesh contains a non-finite vertex coordinate")]
+    NonFiniteVertex,
+    #[error("retained terrain mesh contains a non-finite UV coordinate")]
+    NonFiniteUv,
+    #[error(
+        "retained terrain mesh index {index} at position {position} is outside {vertices} vertices"
+    )]
+    IndexOutOfBounds {
+        position: usize,
+        index: i32,
+        vertices: usize,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LegacyMigrationMetadata {
     pub source_schema_version: u32,
@@ -102,6 +174,8 @@ pub enum NativeSaveError {
     Version(u32),
     #[error("native save checksum mismatch")]
     Checksum,
+    #[error("native save retained terrain mesh is invalid: {0}")]
+    TerrainMesh(#[from] SavedTerrainMeshError),
     #[error("legacy save header is incomplete")]
     LegacyHeader,
     #[error("file is not a recognized Stream Town save")]
@@ -137,6 +211,7 @@ impl NativeSaveStore {
     }
 
     pub fn write(&self, snapshot: &WorldSnapshot) -> Result<(), NativeSaveError> {
+        validate_snapshot(snapshot)?;
         let envelope = NativeSaveEnvelope {
             format_version: NATIVE_SAVE_VERSION,
             payload_checksum: snapshot_checksum(snapshot)?,
@@ -252,7 +327,15 @@ fn load_native(path: &Path) -> Result<WorldSnapshot, NativeSaveError> {
     if snapshot_checksum(&envelope.payload)? != envelope.payload_checksum {
         return Err(NativeSaveError::Checksum);
     }
+    validate_snapshot(&envelope.payload)?;
     Ok(envelope.payload)
+}
+
+fn validate_snapshot(snapshot: &WorldSnapshot) -> Result<(), NativeSaveError> {
+    if let Some(mesh) = &snapshot.legacy_terrain_mesh {
+        mesh.validate()?;
+    }
+    Ok(())
 }
 
 fn snapshot_checksum(snapshot: &WorldSnapshot) -> Result<String, ron::Error> {
@@ -311,6 +394,41 @@ mod tests {
         store.write(&snapshot(2)).unwrap();
         fs::write(store.path(), "corrupt").unwrap();
         assert_eq!(store.load().unwrap().world_seed, 1);
+    }
+
+    #[test]
+    fn retained_terrain_mesh_validates_and_round_trips() {
+        let directory = tempdir().unwrap();
+        let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
+        let mut terrain_save = snapshot(4);
+        terrain_save.legacy_terrain_mesh = Some(SavedTerrainMesh {
+            vertices: vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.0, 2.0, 1.0]],
+            triangle_indices: vec![0, 1, 2],
+            uvs: Vec::new(),
+            uses_32_bit_indices: false,
+        });
+        store.write(&terrain_save).unwrap();
+        assert_eq!(store.load().unwrap(), terrain_save);
+    }
+
+    #[test]
+    fn retained_terrain_mesh_rejects_malformed_geometry() {
+        let directory = tempdir().unwrap();
+        let store = NativeSaveStore::new(directory.path().join("save.stbevy"));
+        let mut terrain_save = snapshot(4);
+        terrain_save.legacy_terrain_mesh = Some(SavedTerrainMesh {
+            vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            triangle_indices: vec![0, 1, 3],
+            uvs: vec![[0.0, 0.0]; 3],
+            uses_32_bit_indices: false,
+        });
+        assert!(matches!(
+            store.write(&terrain_save),
+            Err(NativeSaveError::TerrainMesh(
+                SavedTerrainMeshError::IndexOutOfBounds { .. }
+            ))
+        ));
+        assert!(!store.path().exists());
     }
 
     #[test]

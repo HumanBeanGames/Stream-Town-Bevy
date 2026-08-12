@@ -116,12 +116,18 @@ local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
-  stable chat grammar executes the player query, role/station/target selection,
-  cosmetic/pet, building/catalog, recruit administration, ruler economy,
-  camera, governance, moderation, save, and event commands documented by `!help`
-  with catalog/prerequisite validation and
-HUD/Twitch feedback. `!build` starts a Unity-style per-player placement preview
-at the last successful position, `!move`/direction aliases and `!rotate` adjust
+stable chat grammar executes the player query, role/station/target selection,
+cosmetic/pet, building/catalog, recruit administration, ruler economy, camera,
+governance, moderation, save, and event commands documented by `!help` with
+catalog/prerequisite validation and HUD/Twitch feedback.
+
+For an automated legacy-load smoke test, set `STREAM_TOWN_SAVE_PATH` to an
+imported `.stbevy` file and `STREAM_TOWN_AUTO_LOAD=1`. A retained schema-1
+terrain mesh is validated during conversion and native-save reads, rebuilt as a
+Bevy render mesh and Avian collider on load, and preserved by later F5 saves.
+
+`!build` starts a Unity-style per-player placement preview at the last successful
+position, `!move`/direction aliases and `!rotate` adjust
 the exact grid cell and retained 90-degree rotation, `!confirm`/`!accept` spends
 schema-4 resources and commits valid occupancy, and `!cancel` exits without
 spending. `!level <building> <id> [times]`, `!levelall`, and `!remove` use

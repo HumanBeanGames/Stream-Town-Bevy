@@ -208,7 +208,11 @@ mistaken for production-ready systems.
   schemas 1-3, including container/compression/bounds/trailer validation, named
   backup recovery, schema-1 mesh retention, seed-based Bevy regeneration,
   stable IDs, deterministic surface relocation, atomic native output, SHA-256
-  provenance, and post-write reload verification. Legacy input is never modified.
+  provenance, and post-write reload verification. Retained schema-1 geometry is
+  validated for finite vertices/UVs, triangle integrity, and index bounds; the
+  runtime reconstructs its Bevy mesh and Avian collider on load, and subsequent
+  native saves preserve both the mesh and migration provenance. Legacy input is
+  never modified.
 - A Unity asset inventory/validator that resolves `.meta` GUIDs and YAML
   references, plus a Unity 6000.5.6f1 editor exporter for serialized fields,
   object references, prefab sources and overrides, and the four shipping scene
@@ -353,8 +357,8 @@ mistaken for production-ready systems.
   `!buy` and `!sell` use Unity's authored rates.
 - Remaining reachable WGSL shader ports, VFX, UI parity, post-processing,
   replacement audio, and accessibility.
-- Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
-  and customization data now map into native actor state and live presentation.
+- Legacy target, active/unlocked pet, and customization data now map into native
+  actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
   layout, live runtime bridging, integrated frame capture, and profiling
   controls beyond the command-line GPU harness.

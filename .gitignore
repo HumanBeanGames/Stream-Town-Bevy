@@ -96,6 +96,7 @@ crashlytics-build.properties
 /bevy-port/target/
 /bevy-port/.stream-town/
 /bevy-port/generated/
+/bevy-port/tests/generated/
 /bevy-port/dist/
 /bevy-port/assets/migrated/*
 !/bevy-port/assets/migrated/models/

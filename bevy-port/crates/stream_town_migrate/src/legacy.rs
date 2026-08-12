@@ -1507,6 +1507,9 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
     content
         .validate()
         .context("checked-in content catalog is invalid")?;
+    if let Some(mesh) = &decoded.terrain_mesh {
+        mesh.validate().context("legacy terrain mesh is invalid")?;
+    }
     let mut world_config = config.world.clone();
     if let Some(seed) = decoded.terrain_seed {
         world_config.seed = u64::from(u32::from_ne_bytes(seed.to_ne_bytes()));
@@ -1975,6 +1978,12 @@ mod tests {
             assert_eq!(decoded.container_version, Some(1));
             assert_eq!(decoded.terrain_seed, (schema >= 2).then_some(42));
             assert_eq!(decoded.terrain_mesh.is_some(), schema == 1);
+            if schema == 1 {
+                let mesh = decoded.terrain_mesh.unwrap();
+                assert_eq!(mesh.vertices.len(), 3);
+                assert_eq!(mesh.triangle_indices, vec![0, 1, 2]);
+                mesh.validate().unwrap();
+            }
         }
         assert!(decode_legacy(&binary_fixture(3, 0)).is_err());
     }
@@ -1987,9 +1996,9 @@ mod tests {
             terrain_seed: None,
             terrain_generator_version: 0,
             terrain_mesh: Some(SavedTerrainMesh {
-                vertices: vec![[0.0, 0.0, 0.0]],
-                triangle_indices: vec![],
-                uvs: vec![],
+                vertices: vec![[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.0, 1.0, 1.0]],
+                triangle_indices: vec![0, 1, 2],
+                uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
                 uses_32_bit_indices: false,
             }),
             entities: vec![LegacyEntity {
@@ -2022,6 +2031,48 @@ mod tests {
         assert_eq!(relocated, 1);
         assert!(snapshot.legacy_terrain_mesh.is_some());
         assert_eq!(snapshot.actors.len(), 1);
+    }
+
+    #[test]
+    fn conversion_rejects_malformed_retained_mesh() {
+        let decoded = LegacyDecodedSave {
+            schema_version: 1,
+            container_version: Some(1),
+            terrain_seed: None,
+            terrain_generator_version: 0,
+            terrain_mesh: Some(SavedTerrainMesh {
+                vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                triangle_indices: vec![0, -1, 2],
+                uvs: Vec::new(),
+                uses_32_bit_indices: false,
+            }),
+            entities: Vec::new(),
+            world_age_seconds: 0.0,
+            town_resources: BTreeMap::new(),
+            unlocked_technology: BTreeSet::new(),
+            active_goal: None,
+            ruler_name: None,
+            ruler_vote_cooldown_seconds: 0.0,
+        };
+        assert!(
+            convert(decoded, &GameConfig::default())
+                .unwrap_err()
+                .to_string()
+                .contains("legacy terrain mesh is invalid")
+        );
+    }
+
+    #[test]
+    fn checked_in_schema_one_fixture_imports_retained_terrain() {
+        let decoded = decode_legacy(include_bytes!(
+            "../../../tests/fixtures/legacy-schema-1.json"
+        ))
+        .unwrap();
+        let (snapshot, relocated) = convert(decoded, &GameConfig::default()).unwrap();
+        let mesh = snapshot.legacy_terrain_mesh.unwrap();
+        assert_eq!(mesh.vertices.len(), 4);
+        assert_eq!(mesh.triangle_indices.len(), 6);
+        assert_eq!(relocated, 0);
     }
 
     #[test]
@@ -2208,9 +2259,18 @@ mod tests {
             put_i32(&mut payload, 42);
             put_i32(&mut payload, 1);
         } else {
-            put_i32(&mut payload, 0);
-            put_i32(&mut payload, 0);
-            put_i32(&mut payload, 0);
+            put_i32(&mut payload, 3);
+            for value in [-1.0, 0.0, -1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 1.0] {
+                put_f32(&mut payload, value);
+            }
+            put_i32(&mut payload, 3);
+            for index in [0, 1, 2] {
+                put_i32(&mut payload, index);
+            }
+            put_i32(&mut payload, 3);
+            for value in [0.0, 0.0, 1.0, 0.0, 0.5, 1.0] {
+                put_f32(&mut payload, value);
+            }
             payload.push(0);
         }
         put_i32(&mut payload, -1); // resources

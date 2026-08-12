@@ -37,9 +37,10 @@ use stream_town_domain::{
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
     BuildingDirection, BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
     CustomizationKind, EnemyCampState, GameConfig, GeneratedWorld, GridPos,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, ObjectiveEvent,
-    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, Season, StableId, StationDef,
-    TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
+    LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore,
+    ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor,
+    SavedTerrainMesh, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation,
+    WorldSnapshot, generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -119,11 +120,23 @@ struct RuntimeAssetRoot(PathBuf);
 #[derive(Resource)]
 struct WorldRuntime {
     generated: GeneratedWorld,
+    legacy_terrain_mesh: Option<SavedTerrainMesh>,
+    legacy_migration: Option<LegacyMigrationMetadata>,
 }
 
 #[derive(Resource)]
 struct SaveRuntime {
     store: NativeSaveStore,
+}
+
+#[derive(SystemParam)]
+struct LoadRenderParams<'w, 's> {
+    presentation: Res<'w, RuntimePresentation>,
+    render: Res<'w, RenderAssets>,
+    meshes: Option<ResMut<'w, Assets<Mesh>>>,
+    asset_server: Option<Res<'w, AssetServer>>,
+    asset_root: Res<'w, RuntimeAssetRoot>,
+    terrain_surfaces: Query<'w, 's, Entity, With<TerrainSurface>>,
 }
 
 #[derive(Resource)]
@@ -460,6 +473,9 @@ struct LevelUpPresentation {
 
 #[derive(Component)]
 struct WorldEntity;
+
+#[derive(Component)]
+struct TerrainSurface;
 
 #[derive(Component)]
 struct Agent {
@@ -799,9 +815,10 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<ConvertedAnimationCache>()
             .init_resource::<LevelUpPresentation>()
             .insert_resource(SaveRuntime {
-                store: NativeSaveStore::new(
-                    PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
-                ),
+                store: NativeSaveStore::new(std::env::var_os("STREAM_TOWN_SAVE_PATH").map_or_else(
+                    || PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
+                    PathBuf::from,
+                )),
             })
             .add_systems(Startup, (setup_rendering, start_twitch_transport))
             .add_systems(OnEnter(GameState::Boot), finish_boot)
@@ -1807,6 +1824,7 @@ fn generate_and_spawn_world(
             .expect("generated terrain mesh has indexed triangle geometry");
         commands.spawn((
             WorldEntity,
+            TerrainSurface,
             Mesh3d(meshes.add(terrain_mesh)),
             MeshMaterial3d(render.ground.clone()),
             terrain_collider,
@@ -1815,6 +1833,7 @@ fn generate_and_spawn_world(
     } else {
         commands.spawn((
             WorldEntity,
+            TerrainSurface,
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(render.ground.clone()),
             Transform::from_xyz(0.0, -0.15, 0.0).with_scale(Vec3::new(
@@ -2173,7 +2192,11 @@ fn generate_and_spawn_world(
             ..default()
         },
     ));
-    commands.insert_resource(WorldRuntime { generated });
+    commands.insert_resource(WorldRuntime {
+        generated,
+        legacy_terrain_mesh: None,
+        legacy_migration: None,
+    });
     commands.insert_resource(SimulationRuntime(simulation));
     commands.insert_resource(EnvironmentPresentation::default());
     next_state.set(GameState::InGame);
@@ -6983,10 +7006,7 @@ fn load_input(
     mut world: ResMut<WorldRuntime>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
-    presentation: Res<RuntimePresentation>,
-    render: Res<RenderAssets>,
-    asset_server: Option<Res<AssetServer>>,
-    asset_root: Res<RuntimeAssetRoot>,
+    mut load_render: LoadRenderParams,
     mut placers: ResMut<BuildingPlacers>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
@@ -6999,10 +7019,13 @@ fn load_input(
     )>,
     runtime_buildings: Query<(Entity, &RuntimeBuilding), Without<TownHall>>,
     enemy_camps: Query<(Entity, &EnemyCamp)>,
+    mut automatic_complete: Local<bool>,
 ) {
-    if !keyboard.just_pressed(KeyCode::F9) {
+    let automatic = !*automatic_complete && std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some();
+    if !keyboard.just_pressed(KeyCode::F9) && !automatic {
         return;
     }
+    *automatic_complete = true;
     let mut snapshot = match save.store.load() {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -7031,6 +7054,29 @@ fn load_input(
             }
         }
     }
+    let terrain_replacement = if let Some(meshes) = load_render.meshes.as_mut() {
+        let mesh = match snapshot.legacy_terrain_mesh.as_ref() {
+            Some(saved) => match retained_terrain_mesh(saved) {
+                Ok(mesh) => mesh,
+                Err(error) => {
+                    error!(%error, "native save retained terrain could not be reconstructed");
+                    return;
+                }
+            },
+            None => generated_terrain_mesh(&restored_world, &config.0),
+        };
+        let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
+            error!("native save terrain does not produce a valid triangle collider");
+            return;
+        };
+        Some((meshes.add(mesh), collider))
+    } else {
+        if snapshot.legacy_terrain_mesh.is_some() {
+            error!("native save contains retained terrain but rendering assets are unavailable");
+            return;
+        }
+        None
+    };
     ensure_town_hall_state(&content.0, &config.0, &mut snapshot.simulation);
     for (entity, building) in &runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
@@ -7070,10 +7116,10 @@ fn load_input(
             &mut ecs,
             &config.0,
             &restored_world,
-            &presentation.0,
-            asset_server.as_deref(),
-            &asset_root.0,
-            &render,
+            &load_render.presentation.0,
+            load_render.asset_server.as_deref(),
+            &load_render.asset_root.0,
+            &load_render.render,
             saved,
             building,
             &content.0.archetypes[&building.archetype],
@@ -7100,16 +7146,35 @@ fn load_input(
             &mut ecs,
             &config.0,
             &restored_world,
-            &presentation.0,
-            asset_server.as_deref(),
-            &asset_root.0,
-            &render,
+            &load_render.presentation.0,
+            load_render.asset_server.as_deref(),
+            &load_render.asset_root.0,
+            &load_render.render,
             &camp.id,
             archetype,
             camp.position,
         );
     }
+    if let Some((mesh, collider)) = terrain_replacement {
+        for entity in &load_render.terrain_surfaces {
+            ecs.entity(entity).despawn();
+        }
+        ecs.spawn((
+            WorldEntity,
+            TerrainSurface,
+            Mesh3d(mesh),
+            MeshMaterial3d(load_render.render.ground.clone()),
+            collider,
+            RigidBody::Static,
+        ));
+    }
     world.generated = restored_world;
+    world
+        .legacy_terrain_mesh
+        .clone_from(&snapshot.legacy_terrain_mesh);
+    world
+        .legacy_migration
+        .clone_from(&snapshot.legacy_migration);
 
     let saved_by_id: BTreeMap<StableId, SavedActor> = snapshot
         .actors
@@ -7176,8 +7241,8 @@ fn load_input(
                 base_scale,
                 ..default()
             },
-            Mesh3d(render.actor_lod.clone()),
-            MeshMaterial3d(actor_material(&render, &saved.kind, false)),
+            Mesh3d(load_render.render.actor_lod.clone()),
+            MeshMaterial3d(actor_material(&load_render.render, &saved.kind, false)),
             Transform::from_xyz(
                 world_position.x,
                 world_position.y + base_scale.y * 0.5,
@@ -7189,7 +7254,15 @@ fn load_input(
     stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
     stats.paths_completed = 0;
     simulation.0 = snapshot.simulation;
-    info!(path = %save.store.path().display(), "native save loaded and applied");
+    info!(
+        path = %save.store.path().display(),
+        retained_terrain = snapshot.legacy_terrain_mesh.is_some(),
+        terrain_vertices = snapshot
+            .legacy_terrain_mesh
+            .as_ref()
+            .map_or(0, |mesh| mesh.vertices.len()),
+        "native save loaded and applied"
+    );
 }
 
 fn capture_screenshot(
@@ -10166,8 +10239,8 @@ fn snapshot_world(
             .iter()
             .map(|resource| (resource.id.clone(), resource.amount))
             .collect(),
-        legacy_terrain_mesh: None,
-        legacy_migration: None,
+        legacy_terrain_mesh: world.legacy_terrain_mesh.clone(),
+        legacy_migration: world.legacy_migration.clone(),
     }
 }
 
@@ -10535,6 +10608,62 @@ fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
     .with_inserted_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
     mesh
+}
+
+fn retained_terrain_mesh(saved: &SavedTerrainMesh) -> AnyResult<Mesh> {
+    saved.validate().context("invalid retained terrain mesh")?;
+    let uvs = if saved.uvs.is_empty() {
+        generated_terrain_uvs(&saved.vertices)
+    } else {
+        saved.uvs.clone()
+    };
+    let indices = if saved.uses_32_bit_indices || saved.vertices.len() > usize::from(u16::MAX) {
+        Indices::U32(
+            saved
+                .triangle_indices
+                .iter()
+                .map(|index| u32::try_from(*index).expect("validated non-negative mesh index"))
+                .collect(),
+        )
+    } else {
+        Indices::U16(
+            saved
+                .triangle_indices
+                .iter()
+                .map(|index| u16::try_from(*index).expect("validated 16-bit mesh index"))
+                .collect(),
+        )
+    };
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, saved.vertices.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(indices);
+    mesh.compute_smooth_normals();
+    Ok(mesh)
+}
+
+fn generated_terrain_uvs(vertices: &[[f32; 3]]) -> Vec<[f32; 2]> {
+    let (mut min_x, mut max_x, mut min_z, mut max_z) = (
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+    );
+    for vertex in vertices {
+        min_x = min_x.min(vertex[0]);
+        max_x = max_x.max(vertex[0]);
+        min_z = min_z.min(vertex[2]);
+        max_z = max_z.max(vertex[2]);
+    }
+    let span_x = (max_x - min_x).max(f32::EPSILON);
+    let span_z = (max_z - min_z).max(f32::EPSILON);
+    vertices
+        .iter()
+        .map(|vertex| [(vertex[0] - min_x) / span_x, (vertex[2] - min_z) / span_z])
+        .collect()
 }
 
 fn terrain_corner_height(world: &GeneratedWorld, corner_x: u16, corner_z: u16) -> f32 {
@@ -11679,6 +11808,28 @@ mod tests {
                 .abs()
                 <= f32::EPSILON
         );
+    }
+
+    #[test]
+    fn retained_terrain_mesh_reconstructs_source_geometry() {
+        let saved = SavedTerrainMesh {
+            vertices: vec![[-4.0, 0.0, 3.0], [4.0, 0.0, 3.0], [0.0, 2.0, -5.0]],
+            triangle_indices: vec![0, 1, 2],
+            uvs: Vec::new(),
+            uses_32_bit_indices: false,
+        };
+        let mesh = retained_terrain_mesh(&saved).unwrap();
+        assert_eq!(mesh.count_vertices(), saved.vertices.len());
+        assert_eq!(mesh.indices().unwrap().len(), saved.triangle_indices.len());
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap().len(),
+            saved.vertices.len()
+        );
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().len(),
+            saved.vertices.len()
+        );
+        assert!(Collider::trimesh_from_mesh(&mesh).is_some());
     }
 
     #[test]
