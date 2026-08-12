@@ -317,6 +317,17 @@ fn convert_export(
             id.clone(),
             RoleDef {
                 display_name,
+                action_animation: animation_parameter_name(&required_enum(
+                    asset,
+                    "ActionAnimationName",
+                )?),
+                action_animation_variants: u8::try_from(required_u32(
+                    asset,
+                    "ActionAnimationVariants",
+                )?)
+                .with_context(|| {
+                    format!("{} ActionAnimationVariants is out of range", asset.path)
+                })?,
                 has_user_limit: required_bool(asset, "HasUserLimit")?,
                 base_max_users: u16::try_from(required_u32(asset, "BaseMaxUserLimit")?)
                     .with_context(|| format!("{} BaseMaxUserLimit is out of range", asset.path))?,
@@ -1835,6 +1846,13 @@ fn stable_id(prefix: &str, value: &str) -> Result<StableId> {
     StableId::new(format!("{prefix}:{value}")).map_err(Into::into)
 }
 
+fn animation_parameter_name(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<String>()
+        .replace("StaffAttackMagic", "StaffMagicAttack")
+}
+
 fn slug(value: &str) -> String {
     let mut output = String::new();
     let mut separator = false;
@@ -2278,6 +2296,15 @@ mod tests {
     }
 
     #[test]
+    fn unity_animation_enum_names_match_character_controller_parameters() {
+        assert_eq!(animation_parameter_name("Wood Cutting"), "WoodCutting");
+        assert_eq!(
+            animation_parameter_name("Staff Attack Magic"),
+            "StaffMagicAttack"
+        );
+    }
+
+    #[test]
     fn converts_active_catalog_references_and_round_trips_ron() {
         const BUILDING_GUID: &str = "11111111111111111111111111111111";
         const ROLE_GUID: &str = "22222222222222222222222222222222";
@@ -2549,6 +2576,8 @@ mod tests {
                     ROLE_TYPE,
                     vec![
                         field("Role", enum_value("Builder")),
+                        field("ActionAnimationName", enum_value("Build")),
+                        field("ActionAnimationVariants", Value::from(1)),
                         field("Resource", enum_value("None")),
                         field("BaseActionAmount", Value::from(1)),
                         field("ActionAmountPerLevel", Value::from(0.25)),
@@ -2601,6 +2630,8 @@ mod tests {
         assert_eq!(catalog.source_records.len(), 4);
         let builder = StableId::new("role:builder").unwrap();
         assert_eq!(catalog.roles[&builder].base_action_amount, 1);
+        assert_eq!(catalog.roles[&builder].action_animation, "Build");
+        assert_eq!(catalog.roles[&builder].action_animation_variants, 1);
         assert!(!catalog.roles[&builder].has_user_limit);
         assert_eq!(catalog.roles[&builder].base_max_users, 0);
         assert_eq!(catalog.roles[&builder].base_action_milliseconds, 1_000);

@@ -56,7 +56,7 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   all 11 reachable building role-slot modifiers,
   all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
-  shooter, and 422 typed objectives from the production technology graph in content schema 14,
+  shooter, and 422 typed objectives from the production technology graph in content schema 15,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -231,7 +231,11 @@ PNG/TGA base textures, color, emission, metallic, smoothness, and alpha settings
 Player GLB descendants also apply persisted body, hair, facial-hair, eye,
 hair-color, and eye-color selections in Unity's serialized order. Cosmetic
 material variants are cached per source material and helmets suppress hair.
-Nested controller layers/state machines, complete gameplay action emitters,
+Live gather, construction, combat, and healing goals feed the converted Player
+controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
+and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use
+that controller contract as well. Nested controller layers/state machines,
+rare/non-gameplay action emitters,
 exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
 and custom WGSL shader parity remain presentation work.
 

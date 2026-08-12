@@ -1,5 +1,5 @@
 (
-    schema_version: 14,
+    schema_version: 15,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -8036,6 +8036,8 @@
     roles: {
         "role:blacksmith": (
             display_name: "Blacksmith",
+            action_animation: "Action",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8074,6 +8076,8 @@
         ),
         "role:builder": (
             display_name: "Builder",
+            action_animation: "Build",
+            action_animation_variants: 1,
             has_user_limit: false,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8118,6 +8122,8 @@
         ),
         "role:defender": (
             display_name: "Defender",
+            action_animation: "SpearAttack",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8162,6 +8168,8 @@
         ),
         "role:farmer": (
             display_name: "Farmer",
+            action_animation: "Farming",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8207,6 +8215,8 @@
         ),
         "role:fisher": (
             display_name: "Fisher",
+            action_animation: "Fishing",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8252,6 +8262,8 @@
         ),
         "role:gatherer": (
             display_name: "Gatherer",
+            action_animation: "Gathering",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8297,6 +8309,8 @@
         ),
         "role:logger": (
             display_name: "Logger",
+            action_animation: "WoodCutting",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8342,6 +8356,8 @@
         ),
         "role:miner": (
             display_name: "Miner",
+            action_animation: "Mining",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8387,6 +8403,8 @@
         ),
         "role:necromancer": (
             display_name: "Necromancer",
+            action_animation: "StaffAttack",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8431,6 +8449,8 @@
         ),
         "role:paladin": (
             display_name: "Paladin",
+            action_animation: "HammerAttack",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8475,6 +8495,8 @@
         ),
         "role:priest": (
             display_name: "Priest",
+            action_animation: "Heal",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8519,6 +8541,8 @@
         ),
         "role:ranger": (
             display_name: "Ranger",
+            action_animation: "BowShoot",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8563,6 +8587,8 @@
         ),
         "role:ruler": (
             display_name: "Ruler",
+            action_animation: "LongSword",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 1,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8607,6 +8633,8 @@
         ),
         "role:soldier": (
             display_name: "Soldier",
+            action_animation: "LongSword",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
@@ -8651,6 +8679,8 @@
         ),
         "role:wizard": (
             display_name: "Wizard",
+            action_animation: "StaffMagicAttack",
+            action_animation_variants: 1,
             has_user_limit: true,
             base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,

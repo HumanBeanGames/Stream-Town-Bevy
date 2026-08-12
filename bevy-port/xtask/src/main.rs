@@ -107,7 +107,7 @@ fn validate() -> Result<()> {
         technology_edges,
         technology_roots,
         content.source_records.len(),
-    ) != (14, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+    ) != (15, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }

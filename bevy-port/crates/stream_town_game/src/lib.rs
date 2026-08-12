@@ -469,6 +469,7 @@ struct ConvertedAnimationDriver {
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
     active: Vec<(AnimationNodeIndex, f32)>,
     last_alive: Option<bool>,
+    active_action: Option<String>,
 }
 
 #[derive(Component, Clone)]
@@ -555,7 +556,7 @@ impl Plugin for StreamTownGamePlugin {
                     attach_native_animations,
                     attach_converted_animations,
                     drive_native_animations,
-                    drive_converted_animations,
+                    drive_converted_animations.after(move_agents),
                     apply_material_overrides,
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
@@ -3645,7 +3646,7 @@ fn animate_agents(
     )>,
 ) {
     for (agent, mut animation, material, mut transform) in &mut agents {
-        let moving = !agent.path.is_empty() && agent.path_index < agent.path.len();
+        let moving = agent_is_moving(agent);
         let next_state = if moving {
             MovementAnimationState::Moving
         } else {
@@ -3789,6 +3790,7 @@ fn attach_converted_animations(
                 nodes,
                 active: Vec::new(),
                 last_alive: None,
+                active_action: None,
             },
         ));
         commands
@@ -4389,6 +4391,30 @@ fn drive_converted_animations(
             driver.last_alive = Some(alive);
         }
         if let Some(actor) = simulation.0.actors.get(&agent.id) {
+            let action = agent_action_animation(&content.0, agent, actor);
+            if driver.active_action.as_deref() != action.as_deref() {
+                if let Some(previous) = driver.active_action.take() {
+                    let _ = driver.runtime.reset_trigger(&previous);
+                }
+                let _ = driver.runtime.set_boolean("Action", action.is_some());
+                if let Some(action) = &action {
+                    let _ = driver.runtime.set_trigger(action);
+                    let variants = content
+                        .0
+                        .roles
+                        .get(&actor.role)
+                        .map_or(1, |role| role.action_animation_variants.max(1));
+                    let index = deterministic_animation_variant(&agent.id, action, variants);
+                    let _ = driver
+                        .runtime
+                        .set_integer("AnimationIndex", i32::from(index));
+                    let _ = driver.runtime.set_float(
+                        "ActionSpeed",
+                        action_animation_speed(&content.0, &simulation.0, actor),
+                    );
+                }
+                driver.active_action = action;
+            }
             let carrying = actor.inventory.values().any(|amount| *amount > 0);
             let carry_kind = content
                 .0
@@ -4446,6 +4472,66 @@ fn drive_converted_animations(
         }
         driver.active = desired;
     }
+}
+
+fn agent_action_animation(
+    content: &ContentCatalog,
+    agent: &Agent,
+    actor: &ActorState,
+) -> Option<String> {
+    let acting =
+        !agent_is_moving(agent) && agent.action_cooldown_seconds > f32::EPSILON && actor.alive;
+    if !acting {
+        return None;
+    }
+    match agent.goal {
+        AgentGoal::Gather(_)
+        | AgentGoal::Construct(_)
+        | AgentGoal::Attack(_)
+        | AgentGoal::Heal(_) => content
+            .roles
+            .get(&actor.role)
+            .map(|role| role.action_animation.clone()),
+        AgentGoal::Deposit | AgentGoal::Wander => None,
+    }
+}
+
+fn agent_is_moving(agent: &Agent) -> bool {
+    agent
+        .path
+        .get(agent.path_index)
+        .is_some_and(|next| *next != agent.origin)
+}
+
+fn action_animation_speed(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &ActorState,
+) -> f32 {
+    let action_seconds = actor_archetype(content, actor)
+        .and_then(|archetype| archetype.enemy.as_ref())
+        .map_or_else(
+            || {
+                effective_role_stats(content, simulation, actor)
+                    .map_or(1.0, |stats| milli_units_as_f32(stats.action_milliseconds))
+            },
+            |enemy| milli_units_as_f32(enemy.action_milliseconds),
+        );
+    (3.0 - action_seconds * 2.0).max(1.0)
+}
+
+fn deterministic_animation_variant(actor: &StableId, action: &str, variants: u8) -> u8 {
+    if variants <= 1 {
+        return 0;
+    }
+    let hash = actor
+        .as_str()
+        .bytes()
+        .chain(action.bytes())
+        .fold(2_166_136_261_u32, |hash, byte| {
+            hash.wrapping_mul(16_777_619) ^ u32::from(byte)
+        });
+    u8::try_from(hash % u32::from(variants)).expect("variant modulo fits u8")
 }
 
 fn current_normalized_time(
@@ -8590,6 +8676,72 @@ mod tests {
     }
 
     #[test]
+    fn live_agent_goals_select_authored_action_animation_contracts() {
+        let content = embedded_content();
+        let actor_id = StableId::new("npc:animation_test").unwrap();
+        let mut simulation = WorldSimulation::new(42);
+        assert!(simulation.join_player(actor_id.clone(), GridPos { x: 10, z: 10 }));
+        let agent_for = |goal| Agent {
+            id: actor_id.clone(),
+            kind: ActorKind::Player,
+            archetype: StableId::new("archetype:viewer").unwrap(),
+            goal,
+            spawn: GridPos { x: 10, z: 10 },
+            origin: GridPos { x: 10, z: 10 },
+            path: vec![GridPos { x: 10, z: 10 }],
+            path_index: 1,
+            target: GridPos { x: 10, z: 10 },
+            action_cooldown_seconds: 0.75,
+            health_regen_accumulator: 0.0,
+        };
+
+        for (role, goal, expected) in [
+            (
+                "role:logger",
+                AgentGoal::Gather(StableId::new("resource:test").unwrap()),
+                "WoodCutting",
+            ),
+            (
+                "role:builder",
+                AgentGoal::Construct(StableId::new("building:test").unwrap()),
+                "Build",
+            ),
+            (
+                "role:ranger",
+                AgentGoal::Attack(StableId::new("actor:enemy").unwrap()),
+                "BowShoot",
+            ),
+            (
+                "role:priest",
+                AgentGoal::Heal(StableId::new("actor:injured").unwrap()),
+                "Heal",
+            ),
+        ] {
+            simulation
+                .assign_role(&actor_id, StableId::new(role).unwrap())
+                .unwrap();
+            assert_eq!(
+                agent_action_animation(&content, &agent_for(goal), &simulation.actors[&actor_id])
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+
+        let mut moving = agent_for(AgentGoal::Gather(StableId::new("resource:test").unwrap()));
+        moving.path_index = 0;
+        moving.path[0] = GridPos { x: 11, z: 10 };
+        assert_eq!(
+            agent_action_animation(&content, &moving, &simulation.actors[&actor_id]),
+            None
+        );
+        assert_eq!(deterministic_animation_variant(&actor_id, "BowShoot", 1), 0);
+        assert_eq!(
+            deterministic_animation_variant(&actor_id, "BowShoot", 4),
+            deterministic_animation_variant(&actor_id, "BowShoot", 4)
+        );
+    }
+
+    #[test]
     fn cosmetic_nodes_preserve_unity_order_and_visibility_rules() {
         for (index, name) in EYE_NODES.iter().enumerate() {
             assert_eq!(
@@ -9364,6 +9516,24 @@ mod tests {
         );
         let spec = converted_animation_spec(player, &presentation).unwrap();
         let controller = presentation.controllers.get(&spec.controller).unwrap();
+        for (role_id, role) in &content.roles {
+            let parameter = controller
+                .parameters
+                .iter()
+                .find(|parameter| parameter.name == role.action_animation)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{role_id} action {} is missing from Character.controller",
+                        role.action_animation
+                    )
+                });
+            let expected_kind = if role.action_animation == "Action" {
+                stream_town_domain::AnimationParameterKind::Boolean
+            } else {
+                stream_town_domain::AnimationParameterKind::Trigger
+            };
+            assert_eq!(parameter.kind, expected_kind, "{role_id}");
+        }
         let state = controller.states.get(&spec.state).unwrap();
         assert_eq!(state.blend_parameter.as_deref(), Some("Move Speed"));
         assert_eq!(state.motions.len(), 3);
@@ -9373,6 +9543,14 @@ mod tests {
         runtime.set_float("Move Speed", 0.25).unwrap();
         let selection = runtime.motion_selection(controller).unwrap().unwrap();
         assert!(selection.second.is_some());
+        runtime.set_boolean("Action", true).unwrap();
+        runtime.set_trigger("SpearAttack").unwrap();
+        let transition = runtime.evaluate_transitions(controller, 0.0).unwrap();
+        let stream_town_domain::AnimationTransitionOutcome::Entered(action_state) = transition
+        else {
+            panic!("authored SpearAttack trigger did not enter an action state");
+        };
+        assert_eq!(controller.states[&action_state].display_name, "SpearAttack");
         assert_eq!(
             presentation
                 .clips

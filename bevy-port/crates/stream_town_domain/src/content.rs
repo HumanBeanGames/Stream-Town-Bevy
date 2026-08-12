@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 14;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 15;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -184,6 +184,9 @@ pub struct RoleEquipmentDef {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RoleDef {
     pub display_name: String,
+    /// Exact parameter name from Unity's `AnimationName`/`Character.controller` contract.
+    pub action_animation: String,
+    pub action_animation_variants: u8,
     pub has_user_limit: bool,
     pub base_max_users: u16,
     pub movement_speed_multiplier_per_thousand: u16,
@@ -367,6 +370,8 @@ pub enum ContentError {
     InvalidSpawnedEnemy { spawner: StableId, enemy: StableId },
     #[error("role {role} equipment contains an empty renderer node for {slot}")]
     EmptyEquipmentNode { role: StableId, slot: &'static str },
+    #[error("role {0} has an invalid action-animation contract")]
+    InvalidRoleAnimation(StableId),
     #[error("archetype {0} has an empty footprint")]
     EmptyArchetypeFootprint(StableId),
     #[error("archetype {archetype} has invalid scene asset path {path}")]
@@ -526,6 +531,9 @@ impl ContentCatalog {
             }
         }
         for (id, role) in &self.roles {
+            if role.action_animation.trim().is_empty() || role.action_animation_variants == 0 {
+                return Err(ContentError::InvalidRoleAnimation(id.clone()));
+            }
             if let Some(equipment) = &role.equipment {
                 for (slot, node) in [
                     ("slim body", equipment.body_nodes[0].as_str()),

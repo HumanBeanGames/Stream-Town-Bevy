@@ -35,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town
-  economy; exhausted resource visuals are hidden. Content schema 14 converts each role's
+  economy; exhausted resource visuals are hidden. Content schema 15 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -58,6 +58,11 @@ mistaken for production-ready systems.
   shields, and helmets; toggles carry-only props from authoritative inventory;
   and drives translated `CarryWood`/`CarryHip` parameters. The content tool shows
   station masks/ranges/capacities and role equipment bindings.
+- Content schema 15 preserves every role's exact Unity `AnimationName` action
+  parameter and authored variant count. Live gather, construction, attack, and
+  heal goals now drive the converted Player controller's `Action`, role trigger,
+  `AnimationIndex`, and remapped `ActionSpeed` parameters, while locomotion,
+  carrying, death, and revival continue through the same controller runtime.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
@@ -84,7 +89,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 14 also promotes Unity `Placeable` and all six technology effect
+  Content schema 15 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -197,7 +202,7 @@ mistaken for production-ready systems.
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
   building storage and role-slot contributions, stations, role target masks, and equipment into
-  422 technology objectives in content schema 14, preserves the remaining typed Unity
+  422 technology objectives in content schema 15, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -340,7 +345,7 @@ persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing nested
-controller layers and complete gameplay action emitters,
+controller layers and rare/non-gameplay action emitters,
 production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
