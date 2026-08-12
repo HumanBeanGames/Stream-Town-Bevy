@@ -247,6 +247,18 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         .values()
         .filter(|clip| !clip.transform_tracks.is_empty())
         .count();
+    let enemies = state
+        .catalog
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.enemy.is_some())
+        .count();
+    let camps = state
+        .catalog
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.enemy_spawner.is_some())
+        .count();
     ui.heading("Content catalog and stable references");
     ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
     ui.horizontal(|ui| {
@@ -255,6 +267,8 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.label(format!("Buildings: {}", state.catalog.buildings.len()));
         ui.separator();
         ui.label(format!("Roles: {}", state.catalog.roles.len()));
+        ui.separator();
+        ui.label(format!("Enemies / camps: {enemies} / {camps}"));
         ui.separator();
         ui.label(format!(
             "Technology: {}",

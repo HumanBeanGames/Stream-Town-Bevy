@@ -54,6 +54,9 @@ pub enum TownEvent {
 pub struct ActorState {
     pub id: StableId,
     pub role: StableId,
+    /// Authored prefab archetype. Old native saves omit this field and use runtime fallbacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archetype: Option<StableId>,
     pub position: GridPos,
     pub health: i32,
     pub max_health: i32,
@@ -76,6 +79,28 @@ pub struct BuildingState {
     pub level: u16,
     pub health: i32,
     pub complete: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct EnemyCampState {
+    pub id: StableId,
+    pub archetype: StableId,
+    pub position: GridPos,
+    pub health: i32,
+    pub spawn_remaining_seconds: f64,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub spawned_enemies: BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RaidState {
+    pub current_wave: u16,
+    pub total_waves: u16,
+    pub enemies_per_wave: u16,
+    pub enemy_archetype: StableId,
+    pub boss_archetype: StableId,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub tracked_enemies: BTreeSet<StableId>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -118,11 +143,17 @@ pub struct WorldSimulation {
     pub town_resources: BTreeMap<StableId, u32>,
     pub actors: BTreeMap<StableId, ActorState>,
     pub buildings: BTreeMap<StableId, BuildingState>,
+    #[serde(default)]
+    pub next_enemy_serial: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub enemy_camps: BTreeMap<StableId, EnemyCampState>,
     pub unlocked_technology: BTreeSet<StableId>,
     pub active_vote: Option<TechVote>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_goals: Vec<TownGoalState>,
     pub active_event: Option<TownEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_raid: Option<RaidState>,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -172,10 +203,13 @@ impl WorldSimulation {
             town_resources: BTreeMap::new(),
             actors: BTreeMap::new(),
             buildings: BTreeMap::new(),
+            next_enemy_serial: 0,
+            enemy_camps: BTreeMap::new(),
             unlocked_technology: BTreeSet::new(),
             active_vote: None,
             active_goals: Vec::new(),
             active_event: None,
+            active_raid: None,
         }
     }
 
@@ -188,6 +222,7 @@ impl WorldSimulation {
             ActorState {
                 id,
                 role: StableId::new("role:villager").expect("static stable ID"),
+                archetype: None,
                 position,
                 health: 100,
                 max_health: 100,
@@ -202,6 +237,64 @@ impl WorldSimulation {
             },
         );
         true
+    }
+
+    pub fn spawn_enemy(
+        &mut self,
+        id: StableId,
+        archetype: StableId,
+        position: GridPos,
+        max_health: i32,
+    ) -> bool {
+        if self.actors.contains_key(&id) || max_health <= 0 {
+            return false;
+        }
+        self.actors.insert(
+            id.clone(),
+            ActorState {
+                id,
+                role: StableId::new("role:enemy").expect("static stable ID"),
+                archetype: Some(archetype),
+                position,
+                health: max_health,
+                max_health,
+                alive: true,
+                respawn_remaining_seconds: None,
+                inventory: BTreeMap::new(),
+                station: None,
+                role_progression: BTreeMap::new(),
+            },
+        );
+        true
+    }
+
+    pub fn start_raid(
+        &mut self,
+        total_waves: u16,
+        enemies_per_wave: u16,
+        enemy_archetype: StableId,
+        boss_archetype: StableId,
+    ) -> bool {
+        if self.active_raid.is_some() || total_waves == 0 || enemies_per_wave == 0 {
+            return false;
+        }
+        self.active_event = Some(TownEvent::EnemyRaid);
+        self.active_raid = Some(RaidState {
+            current_wave: 0,
+            total_waves,
+            enemies_per_wave,
+            enemy_archetype,
+            boss_archetype,
+            tracked_enemies: BTreeSet::new(),
+        });
+        true
+    }
+
+    pub fn finish_raid(&mut self) {
+        self.active_raid = None;
+        if self.active_event == Some(TownEvent::EnemyRaid) {
+            self.active_event = None;
+        }
     }
 
     pub fn assign_role(&mut self, actor: &StableId, role: StableId) -> Result<(), SimulationError> {
@@ -870,6 +963,51 @@ mod tests {
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
         );
+    }
+
+    #[test]
+    fn enemy_camps_and_raid_progress_round_trip_with_stable_archetypes() {
+        let mut simulation = WorldSimulation::new(99);
+        let enemy_archetype = id("archetype:prefab:minotaur");
+        let boss_archetype = id("archetype:prefab:minotaur_boss");
+        let enemy = id("actor:enemy_00000000");
+        assert!(simulation.spawn_enemy(
+            enemy.clone(),
+            enemy_archetype.clone(),
+            GridPos { x: 6, z: 7 },
+            25,
+        ));
+        assert_eq!(
+            simulation.actors[&enemy].archetype,
+            Some(enemy_archetype.clone())
+        );
+        assert!(simulation.start_raid(5, 50, enemy_archetype, boss_archetype));
+        simulation
+            .active_raid
+            .as_mut()
+            .unwrap()
+            .tracked_enemies
+            .insert(enemy);
+        simulation.enemy_camps.insert(
+            id("enemy_camp:test"),
+            EnemyCampState {
+                id: id("enemy_camp:test"),
+                archetype: id("archetype:prefab:camp"),
+                position: GridPos { x: 2, z: 3 },
+                health: 1_000,
+                spawn_remaining_seconds: 2.5,
+                spawned_enemies: BTreeSet::new(),
+            },
+        );
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap(),
+            simulation
+        );
+        simulation.finish_raid();
+        assert!(simulation.active_event.is_none());
+        assert!(simulation.active_raid.is_none());
     }
 
     #[test]

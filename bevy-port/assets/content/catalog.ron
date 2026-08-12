@@ -1,5 +1,5 @@
 (
-    schema_version: 11,
+    schema_version: 12,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -1645,6 +1645,14 @@
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
+            enemy: Some((
+                enemy_type: "enemy:goblin_boss",
+                pool: "pool:goblinboss",
+                additional_health_milli_per_player: 200,
+                action_amount: 2,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 2000,
+            )),
         ),
         "archetype:prefab:122de980ba16c8d44a0149e18fe5b03e": (
             display_name: "Env_Necrolands_Debris_15_03",
@@ -1910,6 +1918,14 @@
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
+            enemy: Some((
+                enemy_type: "enemy:necro_slasher",
+                pool: "pool:necroslasher",
+                additional_health_milli_per_player: 200,
+                action_amount: 1,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 2000,
+            )),
         ),
         "archetype:prefab:1ebf70d17d1f1a048ac8af03f7400737": (
             display_name: "Enemy_Minotaur",
@@ -1963,6 +1979,14 @@
                 max_health: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
+            )),
+            enemy: Some((
+                enemy_type: "enemy:minotaur",
+                pool: "pool:minotaur",
+                additional_health_milli_per_player: 200,
+                action_amount: 3,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 2000,
             )),
         ),
         "archetype:prefab:216e6a0e74fb05841804c87d47dc5ead": (
@@ -2439,6 +2463,14 @@
                 max_health: 10,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
+            )),
+            enemy: Some((
+                enemy_type: "enemy:necro_stalker",
+                pool: "pool:necrostalker",
+                additional_health_milli_per_player: 200,
+                action_amount: 1,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 2000,
             )),
         ),
         "archetype:prefab:3d0b3ca82df27d84e874a3337e471441": (
@@ -4012,6 +4044,14 @@
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
+            enemy: Some((
+                enemy_type: "enemy:skeleton",
+                pool: "pool:skeleton",
+                additional_health_milli_per_player: 200,
+                action_amount: 1,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 2000,
+            )),
         ),
         "archetype:prefab:7358640a0fe0e20439150c08750cecac": (
             display_name: "Env_Necrolands_Ruins_08",
@@ -4128,6 +4168,31 @@
                 max_health: 1000,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
+            )),
+            enemy_spawner: Some((
+                min_total_enemies: 3,
+                max_total_enemies: 50,
+                spawn_milliseconds: 3000,
+                weighted_enemies: [
+                    (
+                        enemy_archetype: "archetype:prefab:bb4e5c2429e223343b18975ac68f8168",
+                        weight_milli: 50000,
+                    ),
+                    (
+                        enemy_archetype: "archetype:prefab:b2e5d7013b66b794daaf2165065e4381",
+                        weight_milli: 20000,
+                    ),
+                    (
+                        enemy_archetype: "archetype:prefab:0fdd8eef430847043be381ebd7cde251",
+                        weight_milli: 1000,
+                    ),
+                ],
+                spawn_offsets_milli_cells: [
+                    (1750, 2250),
+                    (-1750, 2250),
+                    (-1750, -2250),
+                    (2375, -2250),
+                ],
             )),
         ),
         "archetype:prefab:76e8cb4141c7a1d4bbde5cc25be9eb97": (
@@ -4835,6 +4900,14 @@
                 max_health: 1000,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
+            )),
+            enemy: Some((
+                enemy_type: "enemy:minotaur_boss",
+                pool: "pool:minotaurboss",
+                additional_health_milli_per_player: 200,
+                action_amount: 30,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 10000,
             )),
         ),
         "archetype:prefab:94690280dced35541b76136d86cb001c": (
@@ -5680,6 +5753,14 @@
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
+            enemy: Some((
+                enemy_type: "enemy:blargul",
+                pool: "pool:blargul",
+                additional_health_milli_per_player: 200,
+                action_amount: 5,
+                action_milliseconds: 3000,
+                action_range_milli_cells: 10000,
+            )),
         ),
         "archetype:prefab:b3437b5dafe6a15489132833187dc592": (
             display_name: "Model_Goblin_Boss",
@@ -5922,6 +6003,14 @@
                 max_health: 15,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
+            )),
+            enemy: Some((
+                enemy_type: "enemy:goblin",
+                pool: "pool:goblin",
+                additional_health_milli_per_player: 200,
+                action_amount: 1,
+                action_milliseconds: 1000,
+                action_range_milli_cells: 2000,
             )),
         ),
         "archetype:prefab:bb5331581e5fa8f44ad53933b712895d": (
@@ -6853,6 +6942,14 @@
                 max_health: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
+            )),
+            enemy: Some((
+                enemy_type: "enemy:battering_ram",
+                pool: "pool:batteringram",
+                additional_health_milli_per_player: 200,
+                action_amount: 20,
+                action_milliseconds: 2000,
+                action_range_milli_cells: 3000,
             )),
         ),
         "archetype:prefab:ed617ade83fb3674abae4072fb62decd": (

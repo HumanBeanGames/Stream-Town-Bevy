@@ -10,9 +10,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, HealthDef, ObjectiveDef, ObjectiveKind, ProjectileShooterDef,
-    RoleDef, RoleEquipmentDef, StableId, StationDef, StorageContribution, TechGroup, TechNode,
-    TechTree,
+    BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, HealthDef, ObjectiveDef, ObjectiveKind,
+    ProjectileShooterDef, RoleDef, RoleEquipmentDef, StableId, StationDef, StorageContribution,
+    TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -23,6 +23,7 @@ const BUILDING_TYPE: &str = "ScriptablesProcessorInfrastructure.BuildingDataSett
 const ROLE_TYPE: &str = "ScriptablesProcessorInfrastructure.RoleDataSettings";
 const TECH_NODE_TYPE: &str = "TechTree.ScriptableObjects.Node_SO";
 const PLAYER_PREFAB: &str = "Assets/Prefabs/Player_Character.prefab";
+const POOL_SETTINGS: &str = "Assets/DefaultSettings/D_ObjectPoolingSettings.asset";
 
 type ArchetypesById = BTreeMap<StableId, ArchetypeDef>;
 type BuildingArchetypesBySlug = BTreeMap<String, (StableId, [u16; 2])>;
@@ -100,6 +101,8 @@ struct UnityGameObject {
 #[serde(rename_all = "PascalCase")]
 struct UnityComponent {
     #[serde(default)]
+    hierarchy_path: String,
+    #[serde(default)]
     #[serde(rename = "Type")]
     unity_type: Option<String>,
     #[serde(default)]
@@ -110,6 +113,12 @@ struct UnityComponent {
 struct BuildingPlacement {
     prefab_guid: String,
     footprint: [u16; 2],
+}
+
+#[derive(Default)]
+struct PoolIndex {
+    pool_by_prefab_guid: BTreeMap<String, StableId>,
+    archetype_by_pool_name: BTreeMap<String, StableId>,
 }
 
 pub fn convert(export_path: &Path, out_dir: &Path) -> Result<ContentConversionReport> {
@@ -176,7 +185,8 @@ fn convert_export(
         .collect();
 
     let placements = building_placements(required_asset(&assets_by_path, BUILDING_PLACER)?)?;
-    let (archetypes, building_archetypes) = convert_archetypes(export, &placements)?;
+    let pools = pool_index(required_asset(&assets_by_path, POOL_SETTINGS)?)?;
+    let (archetypes, building_archetypes) = convert_archetypes(export, &placements, &pools)?;
     let role_equipment = role_equipment(required_asset(&assets_by_path, PLAYER_PREFAB)?)?;
 
     let building_guids = referenced_guids(
@@ -697,6 +707,183 @@ fn health_definition(asset: &UnityAsset) -> Result<Option<HealthDef>> {
     }))
 }
 
+fn pool_index(asset: &UnityAsset) -> Result<PoolIndex> {
+    let size = required_u32(asset, "_objectsToPool.Array.size")?;
+    let mut index = PoolIndex::default();
+    for pool_index in 0..size {
+        let prefix = format!("_objectsToPool.Array.data[{pool_index}]");
+        let name = required_string(asset, &format!("{prefix}.Name"))?;
+        let prefab_guid = field_value(asset, &format!("{prefix}.Prefab"))
+            .and_then(reference)
+            .and_then(|reference| reference.get("Guid"))
+            .and_then(Value::as_str)
+            .filter(|guid| !guid.is_empty())
+            .with_context(|| format!("{} {prefix} has no prefab GUID", asset.path))?;
+        let pool = stable_id("pool", &slug(&name))?;
+        let archetype = stable_id("archetype:prefab", prefab_guid)?;
+        index
+            .pool_by_prefab_guid
+            .insert(prefab_guid.to_owned(), pool);
+        index.archetype_by_pool_name.insert(slug(&name), archetype);
+    }
+    Ok(index)
+}
+
+fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<EnemyDef>> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components);
+    let Some(enemy) = components
+        .clone()
+        .find(|component| component_type(component) == "Enemies.Enemy")
+    else {
+        return Ok(None);
+    };
+    let action = components
+        .clone()
+        .find(|component| {
+            component_type(component) == "STStateMachine.States.STSM_Action_EnemyAttack"
+        })
+        .with_context(|| format!("{} enemy has no attack action", asset.path))?;
+    let number = |component: &UnityComponent, path: &str| {
+        component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .with_context(|| format!("{} enemy field {path} is invalid", asset.path))
+    };
+    let positive_milli = |component: &UnityComponent, path: &str| -> Result<u32> {
+        let value = number(component, path)?;
+        if !value.is_finite() || value <= 0.0 {
+            bail!("{} enemy field {path} must be positive", asset.path);
+        }
+        (value * 1_000.0)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} enemy field {path} is out of range", asset.path))
+    };
+    let enemy_type = component_field_value(enemy, "_enemyType")
+        .and_then(enum_name)
+        .with_context(|| format!("{} enemy has no enemy type", asset.path))?;
+    let pool = pools
+        .pool_by_prefab_guid
+        .get(&asset.guid)
+        .cloned()
+        .with_context(|| format!("{} enemy is absent from object-pool settings", asset.path))?;
+    let action_amount = component_field_value(action, "_actionAmount")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .with_context(|| format!("{} enemy attack amount is invalid", asset.path))?;
+    Ok(Some(EnemyDef {
+        enemy_type: stable_id("enemy", &slug(enemy_type))?,
+        pool,
+        additional_health_milli_per_player: positive_milli(enemy, "_additionalHealthPerPlayer")?,
+        action_amount,
+        action_milliseconds: positive_milli(action, "_actionRate")?,
+        action_range_milli_cells: positive_milli(action, "_actionRange")?,
+    }))
+}
+
+fn enemy_spawner_definition(
+    asset: &UnityAsset,
+    pools: &PoolIndex,
+) -> Result<Option<EnemySpawnerDef>> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components);
+    let Some(spawner) = components
+        .clone()
+        .find(|component| component_type(component) == "Enemies.EnemySpawner")
+    else {
+        return Ok(None);
+    };
+    let unsigned = |path: &str| -> Result<u16> {
+        component_field_value(spawner, path)
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .with_context(|| format!("{} enemy-spawner field {path} is invalid", asset.path))
+    };
+    let seconds = component_field_value(spawner, "_timeBetweenSpawns")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .with_context(|| format!("{} enemy spawn interval is invalid", asset.path))?;
+    let spawn_milliseconds = (seconds * 1_000.0)
+        .round()
+        .to_string()
+        .parse()
+        .with_context(|| format!("{} enemy spawn interval is out of range", asset.path))?;
+    let weighted_size = unsigned("_enemies._list.Array.size")?;
+    let mut weighted_enemies = Vec::with_capacity(usize::from(weighted_size));
+    for index in 0..weighted_size {
+        let prefix = format!("_enemies._list.Array.data[{index}]");
+        let pool_name = component_field_value(spawner, &format!("{prefix}.Object"))
+            .and_then(|value| {
+                value
+                    .as_str()
+                    .or_else(|| value.as_object()?.get("Name")?.as_str())
+            })
+            .with_context(|| format!("{} {prefix} has no pool name", asset.path))?;
+        let enemy_archetype = pools
+            .archetype_by_pool_name
+            .get(&slug(pool_name))
+            .cloned()
+            .with_context(|| format!("{} references unknown enemy pool {pool_name}", asset.path))?;
+        let chance = component_field_value(spawner, &format!("{prefix}.Chance"))
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .with_context(|| format!("{} {prefix} has an invalid weight", asset.path))?;
+        let weight_milli = (chance * 1_000.0)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} {prefix} weight is out of range", asset.path))?;
+        weighted_enemies.push(WeightedEnemySpawn {
+            enemy_archetype,
+            weight_milli,
+        });
+    }
+    let location_size = unsigned("_spawnLocations.Array.size")?;
+    let mut spawn_offsets_milli_cells = Vec::with_capacity(usize::from(location_size));
+    for index in 0..location_size {
+        let path = format!("_spawnLocations.Array.data[{index}]");
+        let name = component_field_value(spawner, &path)
+            .and_then(reference)
+            .and_then(|reference| reference.get("Name"))
+            .and_then(Value::as_str)
+            .with_context(|| format!("{} {path} has no transform name", asset.path))?;
+        let transform = components
+            .clone()
+            .find(|component| {
+                component_type(component) == "UnityEngine.Transform"
+                    && component.hierarchy_path == name
+            })
+            .with_context(|| format!("{} cannot resolve spawn transform {name}", asset.path))?;
+        let position = component_field_value(transform, "localPosition")
+            .and_then(vector3)
+            .with_context(|| format!("{} spawn transform {name} has no position", asset.path))?;
+        let to_milli_cells = |value: f64| -> Result<i32> {
+            (value * 500.0)
+                .round()
+                .to_string()
+                .parse()
+                .with_context(|| format!("{} spawn transform {name} is out of range", asset.path))
+        };
+        spawn_offsets_milli_cells
+            .push([to_milli_cells(position[0])?, to_milli_cells(position[2])?]);
+    }
+    Ok(Some(EnemySpawnerDef {
+        min_total_enemies: unsigned("_minTotalEnemies")?,
+        max_total_enemies: unsigned("_maxTotalEnemies")?,
+        spawn_milliseconds,
+        weighted_enemies,
+        spawn_offsets_milli_cells,
+    }))
+}
+
 fn projectile_shooter_definition(asset: &UnityAsset) -> Result<Option<ProjectileShooterDef>> {
     let components: Vec<_> = asset
         .game_object
@@ -881,6 +1068,7 @@ fn building_placements(asset: &UnityAsset) -> Result<BTreeMap<String, BuildingPl
 fn convert_archetypes(
     export: &UnityExport,
     placements: &BTreeMap<String, BuildingPlacement>,
+    pools: &PoolIndex,
 ) -> Result<(ArchetypesById, BuildingArchetypesBySlug)> {
     let assets_by_path: BTreeMap<_, _> = export
         .assets
@@ -958,6 +1146,8 @@ fn convert_archetypes(
             scenes,
             component_types,
             health: health_definition(asset)?,
+            enemy: enemy_definition(asset, pools)?,
+            enemy_spawner: enemy_spawner_definition(asset, pools)?,
         };
         if let Some((building, _)) = active_building {
             let previous = building_archetypes.insert(building.clone(), (id.clone(), footprint));
@@ -1747,6 +1937,7 @@ mod tests {
 
     fn component(unity_type: &str, fields: Vec<UnityField>) -> UnityComponent {
         UnityComponent {
+            hierarchy_path: String::new(),
             unity_type: Some(unity_type.to_owned()),
             fields,
         }
@@ -1853,6 +2044,90 @@ mod tests {
                 fire_milliseconds: 3_000,
             })
         );
+    }
+
+    #[test]
+    fn converts_enemy_combat_and_camp_spawn_data() {
+        let enemy_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let pools = PoolIndex {
+            pool_by_prefab_guid: BTreeMap::from([(
+                enemy_guid.to_owned(),
+                stable_id("pool", "goblin").unwrap(),
+            )]),
+            archetype_by_pool_name: BTreeMap::from([(
+                "goblin".to_owned(),
+                stable_id("archetype:prefab", enemy_guid).unwrap(),
+            )]),
+        };
+        let mut enemy = asset(
+            enemy_guid,
+            "Assets/Prefabs/Enemies/Enemy_Goblin.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        enemy.game_object = Some(UnityGameObject {
+            components: vec![
+                component(
+                    "Enemies.Enemy, Assembly-CSharp",
+                    vec![
+                        field("_enemyType", serde_json::json!({"Name": "Goblin"})),
+                        field("_additionalHealthPerPlayer", Value::from(0.2)),
+                    ],
+                ),
+                component(
+                    "STStateMachine.States.STSM_Action_EnemyAttack, Assembly-CSharp",
+                    vec![
+                        field("_actionAmount", Value::from(1)),
+                        field("_actionRate", Value::from(1.0)),
+                        field("_actionRange", Value::from(2.0)),
+                    ],
+                ),
+            ],
+        });
+        let converted = enemy_definition(&enemy, &pools).unwrap().unwrap();
+        assert_eq!(converted.enemy_type.as_str(), "enemy:goblin");
+        assert_eq!(converted.additional_health_milli_per_player, 200);
+        assert_eq!(converted.action_milliseconds, 1_000);
+
+        let mut transform = component(
+            "UnityEngine.Transform, UnityEngine.CoreModule",
+            vec![field(
+                "localPosition",
+                serde_json::json!({"x": 3.5, "y": 0.0, "z": 4.5}),
+            )],
+        );
+        transform.hierarchy_path = "Spawner_Goblin".to_owned();
+        let mut camp = asset(
+            "cccccccccccccccccccccccccccccccc",
+            "Assets/Prefabs/Buildings/Enemy/Camp.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        camp.game_object = Some(UnityGameObject {
+            components: vec![
+                component(
+                    "Enemies.EnemySpawner, Assembly-CSharp",
+                    vec![
+                        field("_minTotalEnemies", Value::from(3)),
+                        field("_maxTotalEnemies", Value::from(50)),
+                        field("_timeBetweenSpawns", Value::from(3.0)),
+                        field("_enemies._list.Array.size", Value::from(1)),
+                        field("_enemies._list.Array.data[0].Object", Value::from("Goblin")),
+                        field("_enemies._list.Array.data[0].Chance", Value::from(50.0)),
+                        field("_spawnLocations.Array.size", Value::from(1)),
+                        field(
+                            "_spawnLocations.Array.data[0]",
+                            serde_json::json!({"Guid": "camp", "Name": "Spawner_Goblin"}),
+                        ),
+                    ],
+                ),
+                transform,
+            ],
+        });
+        let converted = enemy_spawner_definition(&camp, &pools).unwrap().unwrap();
+        assert_eq!(converted.spawn_milliseconds, 3_000);
+        assert_eq!(converted.spawn_offsets_milli_cells, vec![[1_750, 2_250]]);
+        assert_eq!(converted.weighted_enemies[0].weight_milli, 50_000);
     }
 
     #[test]
@@ -2144,6 +2419,12 @@ mod tests {
                 prefab,
                 player_prefab,
                 asset(
+                    "ffffffffffffffffffffffffffffffff",
+                    POOL_SETTINGS,
+                    "Scriptables.ObjectPoolingSettings",
+                    vec![field("_objectsToPool.Array.size", Value::from(0))],
+                ),
+                asset(
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     BUILDING_CONTAINER,
                     "Container",
@@ -2239,7 +2520,7 @@ mod tests {
         };
 
         let (catalog, report) = convert_export(&export, "fixture-sha".to_owned()).unwrap();
-        assert_eq!(report.source_assets, 10);
+        assert_eq!(report.source_assets, 11);
         assert_eq!(report.archetypes, 3);
         assert_eq!(report.archetype_scenes, 1);
         assert_eq!(report.buildings, 1);

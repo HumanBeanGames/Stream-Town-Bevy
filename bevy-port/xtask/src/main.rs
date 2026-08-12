@@ -107,7 +107,7 @@ fn validate() -> Result<()> {
         technology_edges,
         technology_roots,
         content.source_records.len(),
-    ) != (11, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+    ) != (12, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -121,7 +121,23 @@ fn validate() -> Result<()> {
         .values()
         .filter(|building| building.projectile_shooter.is_some())
         .count();
-    if (health_definitions, projectile_shooters) != (42, 1) {
+    let enemy_definitions = content
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.enemy.is_some())
+        .count();
+    let enemy_spawners = content
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.enemy_spawner.is_some())
+        .count();
+    if (
+        health_definitions,
+        projectile_shooters,
+        enemy_definitions,
+        enemy_spawners,
+    ) != (42, 1, 9, 1)
+    {
         bail!("authored combat component counts differ from the verified Unity baseline");
     }
     for (archetype_id, archetype) in &content.archetypes {
@@ -259,7 +275,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 42 health definitions, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 42 health definitions, 9 enemy definitions, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

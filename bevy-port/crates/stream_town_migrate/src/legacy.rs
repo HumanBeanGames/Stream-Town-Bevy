@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ActorKind, ActorState, BuildingState, ContentCatalog, GameConfig, GridPos,
+    ActorKind, ActorState, BuildingState, ContentCatalog, EnemyCampState, GameConfig, GridPos,
     LegacyMigrationMetadata, MAX_ROLE_LEVEL, NativeSaveStore, ObjectiveDef, ObjectiveKind,
     ObjectiveProgress, RoleProgress, SavedActor, SavedTerrainMesh, StableId, TownGoalState,
     WorldSimulation, WorldSnapshot, generate_world,
@@ -1318,7 +1318,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
         let id = StableId::new(id_text)?;
         let (position, relocated) = snap_position(entity.position, config, &generated);
         relocated_entities = relocated_entities.saturating_add(u32::from(relocated));
-        let archetype = content_id(actor_prefix(&entity.kind), &entity.archetype)?;
+        let archetype = resolve_legacy_archetype(&content, &entity.kind, &entity.archetype)?;
         let height = generated.navigation.height_at(position).unwrap_or_default();
         actors.push(SavedActor {
             id: id.clone(),
@@ -1356,6 +1356,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                     ActorState {
                         id,
                         role,
+                        archetype: Some(archetype),
                         position,
                         health: entity.health,
                         max_health: entity.health.max(1),
@@ -1388,6 +1389,19 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         level: u16::try_from(entity.level.max(0)).unwrap_or(u16::MAX),
                         health: entity.health,
                         complete: true,
+                    },
+                );
+            }
+            ActorKind::EnemyCamp => {
+                simulation.enemy_camps.insert(
+                    id.clone(),
+                    EnemyCampState {
+                        id,
+                        archetype,
+                        position,
+                        health: entity.health,
+                        spawn_remaining_seconds: 0.0,
+                        spawned_enemies: BTreeSet::new(),
                     },
                 );
             }
@@ -1435,6 +1449,34 @@ fn actor_prefix(kind: &ActorKind) -> &'static str {
         ActorKind::Resource => "resource",
         ActorKind::Foliage => "foliage",
         ActorKind::EnemyCamp => "enemy_camp",
+    }
+}
+
+fn resolve_legacy_archetype(
+    content: &ContentCatalog,
+    kind: &ActorKind,
+    value: &str,
+) -> Result<StableId> {
+    let requested = sanitize_component(value, 96);
+    match kind {
+        ActorKind::Enemy => content
+            .archetypes
+            .iter()
+            .find(|(_, archetype)| {
+                archetype.enemy.as_ref().is_some_and(|enemy| {
+                    enemy.pool.as_str().trim_start_matches("pool:") == requested
+                        || enemy.enemy_type.as_str().trim_start_matches("enemy:") == requested
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .map_or_else(|| content_id(actor_prefix(kind), value), Ok),
+        ActorKind::EnemyCamp => content
+            .archetypes
+            .iter()
+            .find(|(_, archetype)| archetype.enemy_spawner.is_some())
+            .map(|(id, _)| id.clone())
+            .map_or_else(|| content_id(actor_prefix(kind), value), Ok),
+        _ => content_id(actor_prefix(kind), value),
     }
 }
 

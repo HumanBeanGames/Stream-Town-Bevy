@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 11;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 12;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -37,6 +37,10 @@ pub struct ArchetypeDef {
     pub component_types: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enemy: Option<EnemyDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enemy_spawner: Option<EnemySpawnerDef>,
 }
 
 /// Authored `HealthHandler` and optional player-revival behavior attached to a prefab.
@@ -47,6 +51,34 @@ pub struct HealthDef {
     pub regeneration_requires_food: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revive_milliseconds: Option<u32>,
+}
+
+/// Authored combat behavior attached to a pooled Unity enemy prefab.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EnemyDef {
+    pub enemy_type: StableId,
+    pub pool: StableId,
+    pub additional_health_milli_per_player: u32,
+    pub action_amount: u32,
+    pub action_milliseconds: u32,
+    pub action_range_milli_cells: u32,
+}
+
+/// One weighted enemy entry in a Unity `ChanceObjectList`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WeightedEnemySpawn {
+    pub enemy_archetype: StableId,
+    pub weight_milli: u32,
+}
+
+/// A Unity enemy-camp spawner expressed in deterministic grid coordinates.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EnemySpawnerDef {
+    pub min_total_enemies: u16,
+    pub max_total_enemies: u16,
+    pub spawn_milliseconds: u32,
+    pub weighted_enemies: Vec<WeightedEnemySpawn>,
+    pub spawn_offsets_milli_cells: Vec<[i32; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -314,6 +346,12 @@ pub enum ContentError {
     InvalidProjectileShooter(StableId),
     #[error("archetype {0} has invalid health or revival values")]
     InvalidHealth(StableId),
+    #[error("archetype {0} has invalid enemy combat values")]
+    InvalidEnemy(StableId),
+    #[error("archetype {0} has invalid enemy-spawner values")]
+    InvalidEnemySpawner(StableId),
+    #[error("enemy spawner {spawner} references invalid enemy archetype {enemy}")]
+    InvalidSpawnedEnemy { spawner: StableId, enemy: StableId },
     #[error("role {role} equipment contains an empty renderer node for {slot}")]
     EmptyEquipmentNode { role: StableId, slot: &'static str },
     #[error("archetype {0} has an empty footprint")]
@@ -391,6 +429,39 @@ impl ContentCatalog {
                     || health.revive_milliseconds == Some(0)
             }) {
                 return Err(ContentError::InvalidHealth(id.clone()));
+            }
+            if archetype.enemy.as_ref().is_some_and(|enemy| {
+                enemy.action_amount == 0
+                    || enemy.action_milliseconds == 0
+                    || enemy.action_range_milli_cells == 0
+            }) {
+                return Err(ContentError::InvalidEnemy(id.clone()));
+            }
+            if let Some(spawner) = &archetype.enemy_spawner {
+                if spawner.min_total_enemies == 0
+                    || spawner.max_total_enemies < spawner.min_total_enemies
+                    || spawner.spawn_milliseconds == 0
+                    || spawner.weighted_enemies.is_empty()
+                    || spawner.spawn_offsets_milli_cells.is_empty()
+                    || spawner
+                        .weighted_enemies
+                        .iter()
+                        .any(|enemy| enemy.weight_milli == 0)
+                {
+                    return Err(ContentError::InvalidEnemySpawner(id.clone()));
+                }
+                for enemy in &spawner.weighted_enemies {
+                    if self
+                        .archetypes
+                        .get(&enemy.enemy_archetype)
+                        .is_none_or(|archetype| archetype.enemy.is_none())
+                    {
+                        return Err(ContentError::InvalidSpawnedEnemy {
+                            spawner: id.clone(),
+                            enemy: enemy.enemy_archetype.clone(),
+                        });
+                    }
+                }
             }
         }
         for (id, building) in &self.buildings {

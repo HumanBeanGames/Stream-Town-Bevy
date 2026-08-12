@@ -26,10 +26,10 @@ use bevy::{
 use stream_town_domain::{
     ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
-    BuildingDef, BuildingState, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, ObjectiveEvent,
-    PresentationCatalog, RoleEquipmentDef, SavedActor, Season, StableId, StationDef, TownEvent,
-    Weather, WorldSimulation, WorldSnapshot, generate_world,
+    BuildingDef, BuildingState, ChatCommand, ContentCatalog, EnemyCampState, GameConfig,
+    GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore,
+    ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, SavedActor, Season, StableId,
+    StationDef, TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -148,6 +148,7 @@ struct WorldEntity;
 struct Agent {
     id: StableId,
     kind: ActorKind,
+    archetype: StableId,
     goal: AgentGoal,
     spawn: GridPos,
     origin: GridPos,
@@ -185,6 +186,11 @@ struct TownHall;
 
 #[derive(Component)]
 struct RuntimeBuilding {
+    id: StableId,
+}
+
+#[derive(Component)]
+struct EnemyCamp {
     id: StableId,
 }
 
@@ -369,6 +375,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     update_tower_shooters.after(move_agents),
                     move_combat_projectiles.after(update_tower_shooters),
+                    update_enemy_encounters.after(move_combat_projectiles),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -959,6 +966,22 @@ fn generate_and_spawn_world(
                 StableId::new(role).expect("starting role IDs are valid"),
             );
         }
+        let authored_archetype = if spawned == 0 {
+            archetype_id_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
+        } else {
+            archetype_id_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
+        };
+        if let Some(actor) = simulation.actors.get_mut(&actor_id) {
+            actor.archetype.clone_from(&authored_archetype);
+            if let Some(health) = authored_archetype
+                .as_ref()
+                .and_then(|id| content.0.archetypes.get(id))
+                .and_then(|archetype| archetype.health.as_ref())
+            {
+                actor.max_health = i32::try_from(health.max_health).unwrap_or(i32::MAX);
+                actor.health = actor.max_health;
+            }
+        }
         let real_archetype = if spawned == 0 {
             archetype_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
         } else if spawned == 1 {
@@ -1009,6 +1032,8 @@ fn generate_and_spawn_world(
             Agent {
                 id: actor_id,
                 kind: kind.clone(),
+                archetype: authored_archetype
+                    .unwrap_or_else(|| StableId::new("archetype:viewer").expect("static ID")),
                 goal: AgentGoal::Wander,
                 spawn: position,
                 origin: position,
@@ -1053,6 +1078,51 @@ fn generate_and_spawn_world(
         if spawned >= config.0.gameplay.initial_agents {
             break;
         }
+    }
+
+    if let Some((camp_archetype_id, camp_archetype)) = content
+        .0
+        .archetypes
+        .iter()
+        .find(|(_, archetype)| archetype.enemy_spawner.is_some())
+        && let Some(position) = find_building_site(
+            &generated,
+            GridPos {
+                x: generated.navigation.width().saturating_sub(8),
+                z: generated.navigation.height().saturating_sub(8),
+            },
+            camp_archetype.footprint,
+        )
+    {
+        let camp_id = StableId::new("enemy_camp:0000").expect("static ID");
+        if let Some(region) = building_region(position, camp_archetype.footprint, &generated) {
+            let _ = generated.navigation.set_blocked(region, true);
+        }
+        simulation.enemy_camps.insert(
+            camp_id.clone(),
+            EnemyCampState {
+                id: camp_id.clone(),
+                archetype: camp_archetype_id.clone(),
+                position,
+                health: camp_archetype.health.as_ref().map_or(1_000, |health| {
+                    i32::try_from(health.max_health).unwrap_or(i32::MAX)
+                }),
+                spawn_remaining_seconds: 0.0,
+                spawned_enemies: BTreeSet::new(),
+            },
+        );
+        spawn_enemy_camp(
+            &mut commands,
+            &config.0,
+            &generated,
+            &presentation.0,
+            asset_server.as_deref(),
+            &asset_root.0,
+            &render,
+            &camp_id,
+            camp_archetype,
+            position,
+        );
     }
 
     commands.spawn((
@@ -1126,6 +1196,17 @@ fn archetype_by_source<'a>(
         .archetypes
         .values()
         .find(|archetype| archetype.kind == kind && archetype.source_path.ends_with(source_suffix))
+}
+
+fn archetype_id_by_source(
+    content: &ContentCatalog,
+    kind: ArchetypeKind,
+    source_suffix: &str,
+) -> Option<StableId> {
+    content.archetypes.iter().find_map(|(id, archetype)| {
+        (archetype.kind == kind && archetype.source_path.ends_with(source_suffix))
+            .then(|| id.clone())
+    })
 }
 
 fn native_animation_spec(
@@ -1426,6 +1507,11 @@ fn role_action_range_cells(
     simulation: &WorldSimulation,
     actor: &ActorState,
 ) -> u16 {
+    if let Some(enemy) =
+        actor_archetype(content, actor).and_then(|archetype| archetype.enemy.as_ref())
+    {
+        return u16::try_from(enemy.action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX);
+    }
     effective_role_stats(content, simulation, actor).map_or(1, |stats| {
         u16::try_from(stats.action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
     })
@@ -1459,6 +1545,13 @@ fn actor_archetype<'a>(
     content: &'a ContentCatalog,
     actor: &ActorState,
 ) -> Option<&'a ArchetypeDef> {
+    if let Some(archetype) = actor
+        .archetype
+        .as_ref()
+        .and_then(|archetype| content.archetypes.get(archetype))
+    {
+        return Some(archetype);
+    }
     let (kind, source) = if actor.role.as_str() == "role:enemy" {
         (ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
     } else {
@@ -1777,9 +1870,7 @@ fn next_agent_goal(
     if let Some(target) = combat_target {
         let distance =
             target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
-        let destination = if actor.role.as_str() == "role:enemy"
-            || distance <= role_action_range_cells(content, simulation, actor)
-        {
+        let destination = if distance <= role_action_range_cells(content, simulation, actor) {
             current
         } else {
             target.position
@@ -1888,7 +1979,15 @@ fn complete_agent_goal(
         .actors
         .get(actor_id)
         .and_then(|actor| effective_role_stats(content, simulation, actor));
-    let action_amount = stats.map_or(1, |stats| stats.action_amount);
+    let action_amount = simulation
+        .actors
+        .get(actor_id)
+        .and_then(|actor| actor_archetype(content, actor))
+        .and_then(|archetype| archetype.enemy.as_ref())
+        .map_or_else(
+            || stats.map_or(1, |stats| stats.action_amount),
+            |enemy| enemy.action_amount,
+        );
     let mut projectile_spawn = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
@@ -1961,11 +2060,7 @@ fn complete_agent_goal(
             {
                 return None;
             }
-            let damage = if attacker.role.as_str() == "role:enemy" {
-                12
-            } else {
-                action_amount
-            };
+            let damage = action_amount;
             if is_ranged_role(&attacker.role) {
                 projectile_spawn = Some(ProjectileSpawn {
                     source: ProjectileSource::Actor(actor_id.clone()),
@@ -2069,15 +2164,18 @@ fn apply_combat_damage(
     target_id: &StableId,
     damage: u32,
 ) -> Result<bool, stream_town_domain::SimulationError> {
-    let target_is_enemy = simulation
+    let enemy_type = simulation
         .actors
         .get(target_id)
-        .is_some_and(|target| target.role.as_str() == "role:enemy");
+        .filter(|target| target.role.as_str() == "role:enemy")
+        .and_then(|target| actor_archetype(content, target))
+        .and_then(|archetype| archetype.enemy.as_ref())
+        .map(|enemy| enemy.enemy_type.clone());
     let killed = simulation.damage_actor(target_id, damage)?;
-    if killed && target_is_enemy {
+    if killed && let Some(enemy_type) = enemy_type {
         let _ = simulation.record_objective_event(
             &content.objectives,
-            &ObjectiveEvent::EnemyKilled(StableId::new("enemy:goblin").expect("static stable ID")),
+            &ObjectiveEvent::EnemyKilled(enemy_type),
         );
     }
     Ok(killed)
@@ -2171,6 +2269,188 @@ fn move_combat_projectiles(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn update_enemy_encounters(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    render: Res<RenderAssets>,
+    world: Res<WorldRuntime>,
+    mut simulation: ResMut<SimulationRuntime>,
+    agents: Query<(Entity, &Agent)>,
+) {
+    let dead_enemies: Vec<_> = agents
+        .iter()
+        .filter(|(_, agent)| agent.kind == ActorKind::Enemy)
+        .filter(|(_, agent)| {
+            !simulation
+                .0
+                .actors
+                .get(&agent.id)
+                .is_some_and(|actor| actor.alive)
+        })
+        .map(|(entity, agent)| (entity, agent.id.clone()))
+        .collect();
+    for (entity, enemy) in dead_enemies {
+        commands.entity(entity).despawn();
+        simulation.0.actors.remove(&enemy);
+        for camp in simulation.0.enemy_camps.values_mut() {
+            camp.spawned_enemies.remove(&enemy);
+        }
+        if let Some(raid) = &mut simulation.0.active_raid {
+            raid.tracked_enemies.remove(&enemy);
+        }
+    }
+
+    if simulation.0.active_event == Some(TownEvent::EnemyRaid)
+        && simulation.0.active_raid.is_none()
+        && let (Some(enemy), Some(boss)) = (
+            archetype_id_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Minotaur.prefab"),
+            archetype_id_by_source(
+                &content.0,
+                ArchetypeKind::Enemy,
+                "Enemy_MinotaurBoss.prefab",
+            ),
+        )
+    {
+        let _ = simulation.0.start_raid(5, 50, enemy, boss);
+    }
+
+    let next_wave = simulation.0.active_raid.as_ref().and_then(|raid| {
+        raid.tracked_enemies.is_empty().then(|| {
+            if raid.current_wave >= raid.total_waves {
+                None
+            } else {
+                let final_wave = raid.current_wave + 1 == raid.total_waves;
+                Some((
+                    if final_wave {
+                        raid.boss_archetype.clone()
+                    } else {
+                        raid.enemy_archetype.clone()
+                    },
+                    if final_wave { 1 } else { raid.enemies_per_wave },
+                    final_wave,
+                ))
+            }
+        })
+    });
+    if matches!(next_wave, Some(None)) {
+        simulation.0.finish_raid();
+    } else if let Some(Some((archetype, count, final_wave))) = next_wave {
+        let camp = simulation.0.enemy_camps.values().next().cloned();
+        let spawner = camp.as_ref().and_then(|camp| {
+            content
+                .0
+                .archetypes
+                .get(&camp.archetype)
+                .and_then(|archetype| archetype.enemy_spawner.clone())
+        });
+        if let (Some(camp), Some(spawner)) = (camp, spawner) {
+            let mut wave_members = BTreeSet::new();
+            for _ in 0..count {
+                let serial = simulation.0.next_enemy_serial;
+                let position = enemy_spawn_position(&world.generated, &camp, &spawner, serial);
+                if let Some(enemy) = spawn_runtime_enemy(
+                    &mut commands,
+                    &config.0,
+                    &world.generated,
+                    &content.0,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                    &asset_root.0,
+                    &render,
+                    &mut simulation.0,
+                    archetype.clone(),
+                    position,
+                ) {
+                    if final_wave {
+                        let player_count = simulation
+                            .0
+                            .actors
+                            .values()
+                            .filter(|actor| actor.role.as_str() != "role:enemy")
+                            .count();
+                        let boss_health =
+                            i32::try_from(50_usize.saturating_mul(player_count).max(1_000))
+                                .unwrap_or(i32::MAX);
+                        if let Some(actor) = simulation.0.actors.get_mut(&enemy) {
+                            actor.health = boss_health;
+                            actor.max_health = boss_health;
+                        }
+                    }
+                    wave_members.insert(enemy);
+                }
+            }
+            if let Some(raid) = &mut simulation.0.active_raid {
+                raid.current_wave = raid.current_wave.saturating_add(1);
+                raid.tracked_enemies = wave_members;
+            }
+        } else {
+            simulation.0.finish_raid();
+        }
+        return;
+    }
+
+    if simulation.0.active_raid.is_some() || simulation.0.elapsed_seconds.rem_euclid(120.0) < 80.0 {
+        return;
+    }
+    let player_count = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| actor.role.as_str() != "role:enemy")
+        .count();
+    let camp_ids: Vec<_> = simulation.0.enemy_camps.keys().cloned().collect();
+    for camp_id in camp_ids {
+        let Some(mut camp) = simulation.0.enemy_camps.get(&camp_id).cloned() else {
+            continue;
+        };
+        let Some(spawner) = content
+            .0
+            .archetypes
+            .get(&camp.archetype)
+            .and_then(|archetype| archetype.enemy_spawner.as_ref())
+        else {
+            continue;
+        };
+        camp.spawn_remaining_seconds =
+            (camp.spawn_remaining_seconds - time.delta_secs_f64()).max(0.0);
+        let day_cap = usize::try_from(simulation.0.day)
+            .unwrap_or(usize::MAX)
+            .saturating_add(player_count / 10)
+            .clamp(
+                usize::from(spawner.min_total_enemies),
+                usize::from(spawner.max_total_enemies),
+            );
+        if camp.spawned_enemies.len() < day_cap && camp.spawn_remaining_seconds <= f64::EPSILON {
+            let serial = simulation.0.next_enemy_serial;
+            let archetype = weighted_enemy_archetype(spawner, simulation.0.world_seed, serial);
+            let position = enemy_spawn_position(&world.generated, &camp, spawner, serial);
+            if let Some(enemy) = spawn_runtime_enemy(
+                &mut commands,
+                &config.0,
+                &world.generated,
+                &content.0,
+                &presentation.0,
+                asset_server.as_deref(),
+                &asset_root.0,
+                &render,
+                &mut simulation.0,
+                archetype,
+                position,
+            ) {
+                camp.spawned_enemies.insert(enemy);
+            }
+            camp.spawn_remaining_seconds = f64::from(spawner.spawn_milliseconds) / 1_000.0;
+        }
+        simulation.0.enemy_camps.insert(camp_id, camp);
+    }
+}
+
 fn update_tower_shooters(
     mut commands: Commands,
     time: Res<Time>,
@@ -2254,6 +2534,12 @@ fn action_cooldown(
     let Some(actor) = simulation.actors.get(actor) else {
         return fallback;
     };
+    if matches!(goal, AgentGoal::Attack(_))
+        && let Some(enemy) =
+            actor_archetype(content, actor).and_then(|archetype| archetype.enemy.as_ref())
+    {
+        return milli_units_as_f32(enemy.action_milliseconds).max(0.1);
+    }
     let base = if matches!(
         goal,
         AgentGoal::Attack(_) | AgentGoal::Construct(_) | AgentGoal::Gather(_) | AgentGoal::Heal(_)
@@ -3787,6 +4073,7 @@ fn load_input(
         &mut Transform,
     )>,
     runtime_buildings: Query<(Entity, &RuntimeBuilding)>,
+    enemy_camps: Query<(Entity, &EnemyCamp)>,
 ) {
     if !keyboard.just_pressed(KeyCode::F9) {
         return;
@@ -3840,6 +4127,10 @@ fn load_input(
         debug!(building = %building.id, "despawning runtime building before native load");
         ecs.entity(entity).despawn();
     }
+    for (entity, camp) in &enemy_camps {
+        debug!(camp = %camp.id, "despawning enemy camp before native load");
+        ecs.entity(entity).despawn();
+    }
     for saved in snapshot.simulation.buildings.values() {
         let Some((building_id, building)) = content
             .0
@@ -3879,6 +4170,33 @@ fn load_input(
             building_age(&content.0, &snapshot.simulation, building_id),
         );
     }
+    for camp in snapshot.simulation.enemy_camps.values() {
+        let Some(archetype) = content.0.archetypes.get(&camp.archetype) else {
+            error!(camp = %camp.id, archetype = %camp.archetype, "native save references an unknown enemy camp");
+            return;
+        };
+        let Some(region) = building_region(camp.position, archetype.footprint, &restored_world)
+        else {
+            error!(camp = %camp.id, "native save enemy camp lies outside the world");
+            return;
+        };
+        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
+            error!(camp = %camp.id, %error, "native save enemy camp could not update navigation");
+            return;
+        }
+        spawn_enemy_camp(
+            &mut ecs,
+            &config.0,
+            &restored_world,
+            &presentation.0,
+            asset_server.as_deref(),
+            &asset_root.0,
+            &render,
+            &camp.id,
+            archetype,
+            camp.position,
+        );
+    }
     world.generated = restored_world;
 
     let saved_by_id: BTreeMap<StableId, SavedActor> = snapshot
@@ -3901,6 +4219,7 @@ fn load_input(
             world_position.y += animation.base_scale.y * 0.5;
         }
         agent.kind = saved.kind.clone();
+        agent.archetype = saved.archetype.clone();
         agent.goal = AgentGoal::Wander;
         agent.spawn = position;
         agent.origin = position;
@@ -3931,6 +4250,7 @@ fn load_input(
             Agent {
                 id: saved.id.clone(),
                 kind: saved.kind.clone(),
+                archetype: saved.archetype.clone(),
                 goal: AgentGoal::Wander,
                 spawn: position,
                 origin: position,
@@ -4337,6 +4657,219 @@ fn find_building_site(
     candidates.into_iter().next()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_enemy_camp(
+    commands: &mut Commands,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+    render: &RenderAssets,
+    id: &StableId,
+    archetype: &ArchetypeDef,
+    position: GridPos,
+) {
+    let centre = GridPos {
+        x: position.x + archetype.footprint[0] / 2,
+        z: position.z + archetype.footprint[1] / 2,
+    };
+    let world_position = grid_to_world_on_surface(centre, config, world);
+    let mut entity = commands.spawn((
+        WorldEntity,
+        EnemyCamp { id: id.clone() },
+        GridLocation(position),
+        Transform::from_translation(world_position),
+    ));
+    if let Some(scene) = default_archetype_scene(archetype).filter(|scene| {
+        asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
+    }) {
+        entity.insert((
+            WorldAssetRoot(
+                asset_server
+                    .expect("asset server checked above")
+                    .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+            ),
+            Transform::from_translation(world_position)
+                .with_scale(Vec3::splat(config.world.cell_size / 2.0)),
+        ));
+        if let Some(material) = prefab_material_handle(archetype, presentation, render) {
+            entity.insert(MaterialOverrideSpec(material));
+        }
+    } else {
+        let size = Vec3::new(
+            f32::from(archetype.footprint[0]) * config.world.cell_size * 0.8,
+            config.world.cell_size * 1.2,
+            f32::from(archetype.footprint[1]) * config.world.cell_size * 0.8,
+        );
+        entity.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.building.clone()),
+            Transform::from_translation(world_position + Vec3::Y * size.y * 0.5).with_scale(size),
+        ));
+    }
+}
+
+fn enemy_spawn_position(
+    world: &GeneratedWorld,
+    camp: &EnemyCampState,
+    spawner: &stream_town_domain::EnemySpawnerDef,
+    serial: u64,
+) -> GridPos {
+    let offset = spawner.spawn_offsets_milli_cells
+        [usize::try_from(serial % spawner.spawn_offsets_milli_cells.len() as u64).unwrap_or(0)];
+    let offset_cells = |value: i32| -> i32 {
+        if value >= 0 {
+            (value + 500) / 1_000
+        } else {
+            (value - 500) / 1_000
+        }
+    };
+    let x = i64::from(camp.position.x) + i64::from(offset_cells(offset[0]));
+    let z = i64::from(camp.position.z) + i64::from(offset_cells(offset[1]));
+    let desired = GridPos {
+        x: u16::try_from(x.clamp(0, i64::from(world.navigation.width() - 1))).unwrap_or(0),
+        z: u16::try_from(z.clamp(0, i64::from(world.navigation.height() - 1))).unwrap_or(0),
+    };
+    nearest_walkable(world, desired)
+        .unwrap_or_else(|| nearest_walkable(world, camp.position).unwrap_or(camp.position))
+}
+
+fn weighted_enemy_archetype(
+    spawner: &stream_town_domain::EnemySpawnerDef,
+    seed: u64,
+    serial: u64,
+) -> StableId {
+    let total = spawner
+        .weighted_enemies
+        .iter()
+        .map(|entry| u64::from(entry.weight_milli))
+        .sum::<u64>();
+    let mut mixed = seed.wrapping_add(serial.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let mut value = (mixed ^ (mixed >> 31)) % total;
+    for entry in &spawner.weighted_enemies {
+        if value < u64::from(entry.weight_milli) {
+            return entry.enemy_archetype.clone();
+        }
+        value -= u64::from(entry.weight_milli);
+    }
+    spawner.weighted_enemies[0].enemy_archetype.clone()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_runtime_enemy(
+    commands: &mut Commands,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+    render: &RenderAssets,
+    simulation: &mut WorldSimulation,
+    archetype_id: StableId,
+    position: GridPos,
+) -> Option<StableId> {
+    let archetype = content.archetypes.get(&archetype_id)?;
+    let enemy = archetype.enemy.as_ref()?;
+    let base_health = archetype.health.as_ref()?.max_health;
+    let player_count = simulation
+        .actors
+        .values()
+        .filter(|actor| actor.role.as_str() != "role:enemy")
+        .count();
+    let additional = u64::from(enemy.additional_health_milli_per_player)
+        .saturating_mul(u64::try_from(player_count).unwrap_or(u64::MAX))
+        / 1_000;
+    let max_health =
+        u32::try_from(u64::from(base_health).saturating_add(additional)).unwrap_or(u32::MAX);
+    let id = loop {
+        let serial = simulation.next_enemy_serial;
+        simulation.next_enemy_serial = simulation.next_enemy_serial.saturating_add(1);
+        let id =
+            StableId::new(format!("actor:enemy_{serial:08}")).expect("runtime enemy IDs are valid");
+        if !simulation.actors.contains_key(&id) {
+            break id;
+        }
+    };
+    if !simulation.spawn_enemy(
+        id.clone(),
+        archetype_id.clone(),
+        position,
+        i32::try_from(max_health).unwrap_or(i32::MAX),
+    ) {
+        return None;
+    }
+    let world_position = grid_to_world_on_surface(position, config, world);
+    let real_scene = default_archetype_scene(archetype).filter(|scene| {
+        asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
+    });
+    let converted_animation =
+        real_scene.and_then(|_| converted_animation_spec(archetype, presentation));
+    let base_scale = if real_scene.is_some() {
+        Vec3::splat(config.world.cell_size / 2.0)
+    } else {
+        Vec3::new(
+            config.world.cell_size * 0.3,
+            config.world.cell_size * 0.55,
+            config.world.cell_size * 0.3,
+        )
+    };
+    let mut entity = commands.spawn((
+        WorldEntity,
+        GridLocation(position),
+        Agent {
+            id: id.clone(),
+            kind: ActorKind::Enemy,
+            archetype: archetype_id,
+            goal: AgentGoal::Wander,
+            spawn: position,
+            origin: position,
+            path: Vec::new(),
+            path_index: 0,
+            target: mirrored_target(world, position),
+            action_cooldown_seconds: 0.0,
+            health_regen_accumulator: 0.0,
+        },
+        AgentAnimation {
+            base_scale,
+            native: converted_animation.is_some(),
+            ..default()
+        },
+        Transform::from_xyz(
+            world_position.x,
+            if real_scene.is_some() {
+                world_position.y
+            } else {
+                world_position.y + base_scale.y * 0.5
+            },
+            world_position.z,
+        )
+        .with_scale(base_scale),
+    ));
+    if let Some(scene) = real_scene {
+        entity.insert(WorldAssetRoot(
+            asset_server
+                .expect("asset server checked above")
+                .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+        ));
+        if let Some(animation) = converted_animation {
+            entity.insert(animation);
+        }
+        if let Some(material) = prefab_material_handle(archetype, presentation, render) {
+            entity.insert(MaterialOverrideSpec(material));
+        }
+    } else {
+        entity.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.enemy_idle.clone()),
+        ));
+    }
+    Some(id)
+}
+
 fn runtime_building_id(simulation: &WorldSimulation) -> StableId {
     for sequence in simulation.buildings.len()..usize::MAX {
         let candidate = StableId::new(format!("building:runtime_{sequence:08}"))
@@ -4486,6 +5019,17 @@ fn process_injected_commands(
                         let world_position =
                             grid_to_world_on_surface(position, &config.0, &world.generated);
                         simulation.0.join_player(actor_id.clone(), position);
+                        let player_archetype = archetype_id_by_source(
+                            &content.0,
+                            ArchetypeKind::Player,
+                            "Player_Character.prefab",
+                        )
+                        .unwrap_or_else(|| {
+                            StableId::new("archetype:viewer").expect("static ID")
+                        });
+                        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+                            actor.archetype = Some(player_archetype.clone());
+                        }
                         let base_scale = Vec3::new(
                             config.0.world.cell_size * 0.3,
                             config.0.world.cell_size * 0.55,
@@ -4497,6 +5041,7 @@ fn process_injected_commands(
                             Agent {
                                 id: actor_id.clone(),
                                 kind: ActorKind::Player,
+                                archetype: player_archetype,
                                 goal: AgentGoal::Wander,
                                 spawn: position,
                                 origin: position,
@@ -4735,9 +5280,30 @@ fn process_injected_commands(
             ChatCommand::TriggerEvent(event) => {
                 town_event_from_id(event)
                     .ok_or_else(|| format!("unknown event {}", event.as_str()))
-                    .map(|event| {
-                        simulation.0.trigger_event(event);
-                        "event started".to_owned()
+                    .and_then(|event| {
+                        if event == TownEvent::EnemyRaid {
+                            if simulation.0.active_raid.is_some() {
+                                return Err("a raid is already active".to_owned());
+                            }
+                            let enemy = archetype_id_by_source(
+                                &content.0,
+                                ArchetypeKind::Enemy,
+                                "Enemy_Minotaur.prefab",
+                            )
+                            .ok_or_else(|| "raid enemy archetype is unavailable".to_owned())?;
+                            let boss = archetype_id_by_source(
+                                &content.0,
+                                ArchetypeKind::Enemy,
+                                "Enemy_MinotaurBoss.prefab",
+                            )
+                            .ok_or_else(|| "raid boss archetype is unavailable".to_owned())?;
+                            if !simulation.0.start_raid(5, 50, enemy, boss) {
+                                return Err("raid settings are invalid".to_owned());
+                            }
+                        } else {
+                            simulation.0.trigger_event(event);
+                        }
+                        Ok("event started".to_owned())
                     })
             }
             ChatCommand::Revive(requested) => {
@@ -4900,7 +5466,7 @@ fn update_hud(
         .filter(|actor| !actor.alive)
         .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | Goals: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | Goals: {} | Event: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -4913,6 +5479,7 @@ fn update_hud(
         town_resource_amount(&simulation.0, "resource:ore"),
         town_resource_amount(&simulation.0, "resource:wood"),
         town_goal_status(&content.0, &simulation.0),
+        active_event_text(&simulation.0),
         feedback.0,
     );
 }
@@ -4954,6 +5521,22 @@ fn town_resource_amount(simulation: &WorldSimulation, resource: &str) -> u32 {
         .unwrap_or_default()
 }
 
+fn active_event_text(simulation: &WorldSimulation) -> String {
+    if let Some(raid) = &simulation.active_raid {
+        format!(
+            "raid wave {}/{} ({} enemies)",
+            raid.current_wave,
+            raid.total_waves,
+            raid.tracked_enemies.len()
+        )
+    } else {
+        simulation
+            .active_event
+            .as_ref()
+            .map_or_else(|| "none".to_owned(), |event| format!("{event:?}"))
+    }
+}
+
 fn twitch_status_text(connection: &TwitchConnection) -> String {
     if matches!(connection.status, TwitchStatus::Connected) && !connection.broadcaster_authorized {
         format!("awaiting broadcaster !connect {}", connection.connect_code)
@@ -4982,7 +5565,7 @@ fn snapshot_world(
             .map(|(agent, location)| SavedActor {
                 id: agent.id.clone(),
                 kind: agent.kind.clone(),
-                archetype: StableId::new("archetype:viewer").expect("static ID"),
+                archetype: agent.archetype.clone(),
                 grid_position: location.0,
                 height_centimetres: world
                     .generated
@@ -5378,6 +5961,64 @@ mod tests {
             (action_cooldown(&content, &simulation, &defender, &goal) - expected_cooldown).abs()
                 <= f32::EPSILON
         );
+    }
+
+    #[test]
+    fn authored_enemies_drive_damage_range_cadence_and_weighted_spawning() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let blargul_archetype =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Blargul.prefab").unwrap();
+        let blargul = &content.archetypes[&blargul_archetype].enemy;
+        let blargul = blargul.as_ref().unwrap();
+        assert_eq!(blargul.action_amount, 5);
+        assert_eq!(blargul.action_milliseconds, 3_000);
+        assert_eq!(blargul.action_range_milli_cells, 10_000);
+
+        let enemy_id = StableId::new("actor:enemy_authored_test").unwrap();
+        let player_id = StableId::new("actor:player_authored_test").unwrap();
+        let enemy_position = GridPos { x: 30, z: 30 };
+        let player_position = GridPos { x: 38, z: 30 };
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.spawn_enemy(enemy_id.clone(), blargul_archetype, enemy_position, 5,));
+        assert!(simulation.join_player(player_id.clone(), player_position));
+        let (goal, target) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &enemy_id,
+            enemy_position,
+        );
+        assert_eq!(goal, AgentGoal::Attack(player_id.clone()));
+        assert_eq!(target, enemy_position);
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &enemy_id,
+                &goal,
+                enemy_position,
+            )
+            .is_none()
+        );
+        assert_eq!(simulation.actors[&player_id].health, 95);
+        assert!(
+            (action_cooldown(&content, &simulation, &enemy_id, &goal) - 3.0).abs() <= f32::EPSILON
+        );
+
+        let camp = content
+            .archetypes
+            .values()
+            .find_map(|archetype| archetype.enemy_spawner.as_ref())
+            .unwrap();
+        let samples: BTreeSet<_> = (0..1_000)
+            .map(|serial| weighted_enemy_archetype(camp, 42, serial))
+            .collect();
+        assert_eq!(samples.len(), 3);
     }
 
     #[test]

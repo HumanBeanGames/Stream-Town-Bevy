@@ -53,8 +53,9 @@ and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's action, XP multiplier,
 level curves, health, defense, movement, carry, resource-affinity, station/target
   masks, all 15 equipment sets, all four reachable building storage components,
-  all 42 reachable prefab health definitions, the Tower's consolidated projectile
-  shooter, and 422 typed objectives from the production technology graph in content schema 11,
+  all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
+  the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
+  shooter, and 422 typed objectives from the production technology graph in content schema 12,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -142,7 +143,17 @@ enemy within 10 cells. Players trigger Death at zero health and use Unity's
 authored 60-second automatic revival. `!revive` pays 400 food for self-revival;
 Priests and Paladins can pay 200 food to revive another stable Twitch actor and
 receive role XP. Pending revival time and actor health survive native saves.
-Initial actors are
+Enemy camps are placed on a deterministic valid edge site because the shipping
+Unity camp-generation setting list is empty and its former placement loop is
+commented out. At night, the camp applies Unity's day/player population cap,
+three-second authored cadence, weighted Goblin/Blargul/Goblin Boss selection,
+and four converted spawn offsets. `!event raid` disables normal camp spawning
+and starts the Unity-authored five-wave Minotaur raid: 50 tracked enemies must
+be defeated before each next wave, followed by a Minotaur Boss whose health is
+at least 1,000 and otherwise scales by 50 per player. Enemy archetype, camp
+timers and members, wave progress, tracked enemies, and the next stable enemy ID
+survive native saves; legacy enemy and camp names resolve back to catalog
+archetypes. Initial actors are
 placed by a deterministic flood fill from the connected town centre so combat
 and work targets are reachable rather than stranded on isolated land cells.
 
