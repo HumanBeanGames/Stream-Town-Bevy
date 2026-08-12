@@ -302,6 +302,11 @@ mistaken for production-ready systems.
   `MaterialPropertyBlock` health percentage without multiplying assets per mesh
   primitive, follows season changes, and is released on despawn. Healthy and
   damaged winter rendering are covered by DirectX 12 smoke captures.
+- Main Menu and Credits recreate the reachable `VFX_Clouds` prefab's 21 Unity
+  built-in planes without routing generated geometry through Blender. A typed
+  cloud material ports its two world-space animated noise layers, alpha cutoff,
+  tint, surface exponent, and packaged noise texture; a DirectX 12 menu capture
+  verifies the transparent layer field and authored `_CloudTint=200` value.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,

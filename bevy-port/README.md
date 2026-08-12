@@ -288,6 +288,11 @@ ports remain presentation work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.
+Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
+stacked built-in planes directly in Bevy. A typed WGSL material consumes its
+authored texture and exact dual world-space time offsets, cutoff, tint, and
+surface exponent; this deliberately preserves the shipping material's extreme
+`_CloudTint=200` rather than silently normalizing its look.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

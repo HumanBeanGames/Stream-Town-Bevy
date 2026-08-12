@@ -49,6 +49,8 @@ const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
+const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
+const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -324,15 +326,40 @@ impl MaterialExtension for BuildingMaterialExtension {
 
 type BuildingMaterial = ExtendedMaterial<StandardMaterial, BuildingMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct CloudMaterialUniform {
+    noise_controls: Vec4,
+    surface_transform: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct CloudMaterialExtension {
+    #[uniform(100)]
+    parameters: CloudMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    noise_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for CloudMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        CLOUD_SHADER_ASSET_PATH.into()
+    }
+}
+
+type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudMaterialExtension>;
+
 #[derive(Clone)]
 enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
     Building(Handle<BuildingMaterial>),
+    Cloud(Handle<CloudMaterial>),
 }
 
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
+    cloud_plane: Handle<Mesh>,
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
     wood: Handle<StandardMaterial>,
@@ -351,6 +378,7 @@ struct RenderAssets {
     snow: Handle<StandardMaterial>,
     projectile: Handle<StandardMaterial>,
     authored_building: Handle<BuildingMaterial>,
+    clouds: Handle<CloudMaterial>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -831,6 +859,7 @@ pub fn run(config: GameConfig) {
         .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
+        .add_plugins(MaterialPlugin::<CloudMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -900,6 +929,7 @@ fn setup_rendering(
     terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
+    cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
 ) {
     let (
         Some(mut meshes),
@@ -907,12 +937,14 @@ fn setup_rendering(
         Some(mut terrain_materials),
         Some(mut water_materials),
         Some(mut building_materials),
+        Some(mut cloud_materials),
     ) = (
         meshes,
         materials,
         terrain_materials,
         water_materials,
         building_materials,
+        cloud_materials,
     )
     else {
         commands.insert_resource(RenderAssets::default());
@@ -960,6 +992,7 @@ fn setup_rendering(
     ));
     let authored_building =
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
+    let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
     let presentation_materials = presentation
         .0
         .materials
@@ -967,6 +1000,8 @@ fn setup_rendering(
         .map(|(id, material)| {
             let resolved = if material.source_path == BUILDING_MATERIAL_PATH {
                 ResolvedMaterialHandle::Building(authored_building.clone())
+            } else if material.source_path == CLOUD_MATERIAL_PATH {
+                ResolvedMaterialHandle::Cloud(clouds.clone())
             } else {
                 ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
@@ -979,6 +1014,7 @@ fn setup_rendering(
         .collect();
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
+        cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
         ground: terrain_materials.add(terrain_material(
             &presentation.0,
             &config.0,
@@ -1037,6 +1073,7 @@ fn setup_rendering(
             ..default()
         }),
         authored_building,
+        clouds,
         presentation_materials,
     });
 }
@@ -1326,6 +1363,61 @@ fn building_material(
     }
 }
 
+fn cloud_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> CloudMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == CLOUD_MATERIAL_PATH);
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let texture = authored.and_then(|material| {
+        asset_server.and_then(|asset_server| {
+            material
+                .textures
+                .get("_Texture0")
+                .and_then(|id| presentation.textures.get(id))
+                .map(|texture| asset_server.load(texture.asset_path.clone()))
+        })
+    });
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_Texture0"))
+        .copied()
+        .unwrap_or_default();
+    CloudMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.5,
+            alpha_mode: AlphaMode::Blend,
+            cull_mode: None,
+            ..default()
+        },
+        extension: CloudMaterialExtension {
+            parameters: CloudMaterialUniform {
+                noise_controls: Vec4::new(
+                    scalar("_Cloud1", 0.01),
+                    scalar("_Cloud2", 0.001),
+                    scalar("_ColourSS", 0.0),
+                    scalar("_ColourCutoff", 0.13),
+                ),
+                surface_transform: Vec4::new(
+                    scalar("_CloudTint", 1.36),
+                    scalar("_CloudSurface", 0.58),
+                    transform.scale[0],
+                    transform.scale[1],
+                ),
+            },
+            noise_texture: texture,
+        },
+    }
+}
+
 fn primary_material_texture_entry<'a>(
     material: &'a MaterialDef,
     presentation: &'a PresentationCatalog,
@@ -1363,7 +1455,8 @@ fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
     }
 }
 
-fn spawn_main_menu(mut commands: Commands) {
+fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
+    spawn_cloud_field(&mut commands, &render, 72.0);
     commands.spawn((
         StateEntity,
         Text::new("STREAM TOWN\n\nENTER  Generate Town\nC  Credits\nESC  Quit"),
@@ -1380,6 +1473,18 @@ fn spawn_main_menu(mut commands: Commands) {
             ..default()
         },
     ));
+}
+
+fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
+    for layer in 0_u8..21 {
+        let height = base_height + f32::from(layer) * 0.85;
+        commands.spawn((
+            StateEntity,
+            Mesh3d(render.cloud_plane.clone()),
+            MeshMaterial3d(render.clouds.clone()),
+            Transform::from_xyz(0.0, height, 0.0).with_scale(Vec3::new(900.0, 1.0, 900.0)),
+        ));
+    }
 }
 
 fn main_menu_input(
@@ -5662,6 +5767,12 @@ fn apply_material_overrides(
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
+                        ResolvedMaterialHandle::Cloud(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
                     }
                 }
                 commands.entity(entity).insert(MaterialOverrideApplied);
@@ -9572,8 +9683,9 @@ fn snapshot_world(
     }
 }
 
-fn spawn_credits(mut commands: Commands) {
+fn spawn_credits(mut commands: Commands, render: Res<RenderAssets>) {
     commands.insert_resource(CreditsTimeline::default());
+    spawn_cloud_field(&mut commands, &render, 55.0);
     commands.spawn((
         StateEntity,
         Text::new("STREAM TOWN"),
@@ -11050,6 +11162,8 @@ mod tests {
         let override_material = materials.add(StandardMaterial::default());
         let mut building_materials = Assets::<BuildingMaterial>::default();
         let building = building_materials.add(building_material(&embedded_presentation(), None));
+        let mut cloud_materials = Assets::<CloudMaterial>::default();
+        let cloud = cloud_materials.add(cloud_material(&embedded_presentation(), None));
         let spec = MaterialOverrideSpec {
             fallback: Some(ResolvedMaterialHandle::Standard(fallback.clone())),
             model_materials: BTreeMap::from([
@@ -11064,6 +11178,10 @@ mod tests {
                 (
                     "BuildingMaterial".into(),
                     ResolvedMaterialHandle::Building(building.clone()),
+                ),
+                (
+                    "CloudMaterial".into(),
+                    ResolvedMaterialHandle::Cloud(cloud.clone()),
                 ),
             ]),
             renderer_materials: vec![
@@ -11130,6 +11248,18 @@ mod tests {
         assert!(matches!(
             typed_building,
             ResolvedMaterialHandle::Building(material) if material.id() == building.id()
+        ));
+
+        let typed_cloud = resolved_renderer_material(
+            &spec,
+            "Scene/Clouds/Clouds.CloudMaterial",
+            Some("Clouds"),
+            Some("CloudMaterial"),
+        )
+        .unwrap();
+        assert!(matches!(
+            typed_cloud,
+            ResolvedMaterialHandle::Cloud(material) if material.id() == cloud.id()
         ));
 
         let final_fallback =
@@ -11215,6 +11345,16 @@ mod tests {
             Vec4::new(1.0, 1.0, 0.0, 0.0)
         );
         assert!((building.extension.parameters.snow_damage.z - 1.787).abs() < f32::EPSILON);
+        let clouds = cloud_material(&presentation, None);
+        assert!(clouds.extension.noise_texture.is_none());
+        assert_eq!(
+            clouds.extension.parameters.noise_controls,
+            Vec4::new(0.005, 20.0, 0.0, 0.09)
+        );
+        assert_eq!(
+            clouds.extension.parameters.surface_transform,
+            Vec4::new(200.0, 1.4, 1.0, 1.0)
+        );
         let water_definition = presentation
             .materials
             .values()
