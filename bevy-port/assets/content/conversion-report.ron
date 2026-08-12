@@ -8,6 +8,8 @@
     missing_main_objects: 61,
     archetypes: 215,
     archetype_scenes: 288,
+    foliage_layers: 4,
+    foliage_variants: 21,
     buildings: 26,
     building_prefabs: 26,
     roles: 15,

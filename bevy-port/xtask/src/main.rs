@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fs, path::Path, time::Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use stream_town_domain::{
-    ContentCatalog, GameConfig, GridPos, PresentationCatalog, generate_world,
+    ContentCatalog, GameConfig, GridPos, PresentationCatalog, generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -112,19 +112,26 @@ fn validate() -> Result<()> {
         .values()
         .map(|archetype| archetype.scenes.len())
         .sum();
-    if (
-        content.schema_version,
-        content.archetypes.len(),
-        archetype_scenes,
-        content.buildings.len(),
-        content.roles.len(),
-        content.objectives.len(),
-        content.technology.nodes.len(),
-        content.technology.groups.len(),
-        technology_edges,
-        technology_roots,
-        content.source_records.len(),
-    ) != (16, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+    let foliage_variants: usize = content
+        .foliage
+        .iter()
+        .map(|layer| layer.variants.len())
+        .sum();
+    if content.foliage.len() != 4
+        || foliage_variants != 21
+        || (
+            content.schema_version,
+            content.archetypes.len(),
+            archetype_scenes,
+            content.buildings.len(),
+            content.roles.len(),
+            content.objectives.len(),
+            content.technology.nodes.len(),
+            content.technology.groups.len(),
+            technology_edges,
+            technology_roots,
+            content.source_records.len(),
+        ) != (17, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -163,6 +170,29 @@ fn validate() -> Result<()> {
             if !path.is_file() {
                 bail!(
                     "archetype {archetype_id} references missing converted model {}",
+                    path.display()
+                );
+            }
+        }
+    }
+    for layer in &content.foliage {
+        if !presentation
+            .materials
+            .values()
+            .any(|material| material.source_path == layer.material_source_path)
+        {
+            bail!(
+                "foliage layer {} references missing material {}",
+                layer.id,
+                layer.material_source_path
+            );
+        }
+        for variant in &layer.variants {
+            let path = Path::new("assets").join(&variant.asset_path);
+            if !path.is_file() {
+                bail!(
+                    "foliage layer {} references missing converted model {}",
+                    layer.id,
                     path.display()
                 );
             }
@@ -400,14 +430,16 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 42 health definitions, 9 enemy definitions, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 42 health definitions, 9 enemy definitions, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }
 
 fn stress(agents: u32) -> Result<()> {
     let config = GameConfig::default();
-    let world = generate_world(&config.world);
+    let content: ContentCatalog =
+        ron::from_str(&fs::read_to_string("assets/content/catalog.ron")?)?;
+    let world = generate_world_with_content(&config.world, &content);
     let walkable: Vec<_> = (0..world.navigation.height())
         .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
         .filter(|position| world.navigation.is_walkable(*position))
@@ -434,8 +466,9 @@ fn stress(agents: u32) -> Result<()> {
     }
     let elapsed = started.elapsed();
     println!(
-        "Planned {agents} routes ({planned_steps} steps) in {:.2?}; world {}",
+        "Planned {agents} routes ({planned_steps} steps) in {:.2?}; {} foliage instances; world {}",
         elapsed,
+        world.foliage.len(),
         &world.deterministic_hash[..16]
     );
     Ok(())

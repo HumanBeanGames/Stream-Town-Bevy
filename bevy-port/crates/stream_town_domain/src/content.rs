@@ -8,13 +8,15 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 16;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 17;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
     pub schema_version: u32,
     #[serde(default)]
     pub archetypes: BTreeMap<StableId, ArchetypeDef>,
+    #[serde(default)]
+    pub foliage: Vec<FoliageLayerDef>,
     pub buildings: BTreeMap<StableId, BuildingDef>,
     pub roles: BTreeMap<StableId, RoleDef>,
     #[serde(default)]
@@ -22,6 +24,41 @@ pub struct ContentCatalog {
     pub technology: TechTree,
     #[serde(default)]
     pub source_records: BTreeMap<StableId, AuthoredRecord>,
+}
+
+/// An authored Unity foliage generation layer reduced to portable world-space data.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FoliageLayerDef {
+    pub id: StableId,
+    pub source_path: String,
+    pub habitat: FoliageHabitat,
+    pub source_size: u16,
+    pub level_of_detail: u8,
+    pub noise_scale: f32,
+    pub octaves: u8,
+    pub persistence: f32,
+    pub lacunarity: f32,
+    pub seed: i32,
+    pub offset: [f32; 2],
+    pub spawn_threshold: f32,
+    pub spacing: u16,
+    pub material_source_path: String,
+    pub variants: Vec<FoliageVariantDef>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FoliageHabitat {
+    Land,
+    Underwater,
+}
+
+/// One converted FBX mesh choice in a Unity foliage generation layer.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FoliageVariantDef {
+    pub source_model: String,
+    pub asset_path: String,
+    pub base_scale: [f32; 3],
 }
 
 /// A Unity prefab reduced to the stable data Bevy needs to spawn it.
@@ -368,6 +405,8 @@ pub enum ContentError {
     InvalidHealth(StableId),
     #[error("archetype {0} has invalid enemy combat values")]
     InvalidEnemy(StableId),
+    #[error("foliage layer {0} has invalid generation or variant values")]
+    InvalidFoliage(StableId),
     #[error("archetype {0} has invalid enemy-spawner values")]
     InvalidEnemySpawner(StableId),
     #[error("enemy spawner {spawner} references invalid enemy archetype {enemy}")]
@@ -415,6 +454,37 @@ impl ContentCatalog {
     pub fn validate(&self) -> Result<(), ContentError> {
         if self.schema_version != CURRENT_CONTENT_SCHEMA {
             return Err(ContentError::Schema(self.schema_version));
+        }
+        let mut foliage_ids = BTreeSet::new();
+        for layer in &self.foliage {
+            if !foliage_ids.insert(layer.id.clone())
+                || layer.source_size == 0
+                || layer.level_of_detail > 6
+                || !layer.noise_scale.is_finite()
+                || layer.noise_scale <= 0.0
+                || layer.octaves == 0
+                || layer.octaves > 8
+                || !layer.persistence.is_finite()
+                || !(0.0..=1.0).contains(&layer.persistence)
+                || !layer.lacunarity.is_finite()
+                || layer.lacunarity <= 0.0
+                || layer.offset.iter().any(|value| !value.is_finite())
+                || !layer.spawn_threshold.is_finite()
+                || !(0.0..=1.0).contains(&layer.spawn_threshold)
+                || layer.spacing == 0
+                || layer.material_source_path.trim().is_empty()
+                || layer.variants.is_empty()
+                || layer.variants.iter().any(|variant| {
+                    !valid_asset_path(&variant.asset_path)
+                        || variant.source_model.trim().is_empty()
+                        || variant
+                            .base_scale
+                            .iter()
+                            .any(|value| !value.is_finite() || *value <= 0.0)
+                })
+            {
+                return Err(ContentError::InvalidFoliage(layer.id.clone()));
+            }
         }
         for (id, archetype) in &self.archetypes {
             if archetype.footprint[0] == 0 || archetype.footprint[1] == 0 {
@@ -601,6 +671,15 @@ impl ContentCatalog {
         }
         self.technology.validate()
     }
+}
+
+fn valid_asset_path(path: &str) -> bool {
+    path.starts_with("migrated/models/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+        && !path.contains("..")
+        && !path.contains('\\')
 }
 
 impl TechTree {

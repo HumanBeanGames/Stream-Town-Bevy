@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{GridPos, NavGrid, StableId, WorldGenConfig};
+use crate::{FoliageHabitat, FoliageLayerDef, GridPos, NavGrid, StableId, WorldGenConfig};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GeneratedResource {
@@ -12,16 +12,44 @@ pub struct GeneratedResource {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct GeneratedFoliage {
+    pub id: StableId,
+    pub layer: StableId,
+    pub habitat: FoliageHabitat,
+    pub position: GridPos,
+    pub offset_milli_cells: [i16; 2],
+    pub variant: u16,
+    pub yaw_milliradians: u16,
+    pub scale_milli: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GeneratedWorld {
     pub seed: u64,
     pub generator_version: u32,
     pub navigation: NavGrid,
     pub resources: Vec<GeneratedResource>,
+    pub foliage: Vec<GeneratedFoliage>,
     pub deterministic_hash: String,
 }
 
 #[must_use]
 pub fn generate_world(config: &WorldGenConfig) -> GeneratedWorld {
+    generate_world_from_layers(config, &[])
+}
+
+#[must_use]
+pub fn generate_world_with_content(
+    config: &WorldGenConfig,
+    content: &crate::ContentCatalog,
+) -> GeneratedWorld {
+    generate_world_from_layers(config, &content.foliage)
+}
+
+fn generate_world_from_layers(
+    config: &WorldGenConfig,
+    foliage_layers: &[FoliageLayerDef],
+) -> GeneratedWorld {
     const GENERATOR_VERSION: u32 = 1;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let mut heights = Vec::with_capacity(cell_count);
@@ -77,14 +105,149 @@ pub fn generate_world(config: &WorldGenConfig) -> GeneratedWorld {
 
     let navigation = NavGrid::new(config.width, config.height, blocked, heights)
         .expect("validated world configuration produces a valid grid");
+    let foliage = generate_foliage(config, &navigation, &resources, foliage_layers);
+    // Decorative foliage is regenerated from authored content and deliberately
+    // excluded from native-save compatibility. The saved world fingerprint
+    // continues to describe terrain, navigation, and gameplay resources only.
     let deterministic_hash = hash_world(config.seed, GENERATOR_VERSION, &navigation, &resources);
     GeneratedWorld {
         seed: config.seed,
         generator_version: GENERATOR_VERSION,
         navigation,
         resources,
+        foliage,
         deterministic_hash,
     }
+}
+
+fn generate_foliage(
+    config: &WorldGenConfig,
+    navigation: &NavGrid,
+    resources: &[GeneratedResource],
+    layers: &[FoliageLayerDef],
+) -> Vec<GeneratedFoliage> {
+    let mut foliage = Vec::new();
+    let mut occupied: std::collections::BTreeSet<_> =
+        resources.iter().map(|resource| resource.position).collect();
+    for (layer_index, layer) in layers.iter().enumerate() {
+        for z in 0..config.height {
+            for x in 0..config.width {
+                let position = GridPos { x, z };
+                if occupied.contains(&position)
+                    || x % layer.spacing != 0
+                    || z % layer.spacing != 0
+                    || (layer.habitat == FoliageHabitat::Land) != navigation.is_walkable(position)
+                {
+                    continue;
+                }
+                let random = foliage_hash(config.seed, layer.seed, x, z);
+                // Source thresholds are dense because Unity samples one-unit space.
+                // The Bevy grid is twelve units, so preserve the pattern while
+                // applying an explicit draw-budget density reduction.
+                if foliage_noise(config, layer, position) < f64::from(layer.spawn_threshold)
+                    || !(random >> 20).is_multiple_of(4)
+                {
+                    continue;
+                }
+                let variant = u16::try_from((random >> 24) % layer.variants.len() as u64)
+                    .expect("foliage variant count fits u16");
+                let offset_milli_cells = [
+                    i16::try_from((random >> 8) % 801).expect("bounded foliage offset") - 400,
+                    i16::try_from((random >> 16) % 801).expect("bounded foliage offset") - 400,
+                ];
+                let yaw_milliradians =
+                    u16::try_from((random >> 32) % 6_284).expect("bounded foliage yaw");
+                let scale_milli =
+                    u16::try_from(850 + ((random >> 48) % 301)).expect("bounded foliage scale");
+                foliage.push(GeneratedFoliage {
+                    id: StableId::new(format!("foliage:{layer_index}:{x}:{z}"))
+                        .expect("generated stable foliage ID"),
+                    layer: layer.id.clone(),
+                    habitat: layer.habitat,
+                    position,
+                    offset_milli_cells,
+                    variant,
+                    yaw_milliradians,
+                    scale_milli,
+                });
+                occupied.insert(position);
+            }
+        }
+    }
+    foliage
+}
+
+fn foliage_noise(config: &WorldGenConfig, layer: &FoliageLayerDef, position: GridPos) -> f64 {
+    let source_size = f64::from(layer.source_size);
+    let source_x = f64::from(position.x) * source_size / f64::from(config.width)
+        - source_size * 0.5
+        + f64::from(layer.offset[0]);
+    let source_z = f64::from(position.z) * source_size / f64::from(config.height)
+        - source_size * 0.5
+        + f64::from(layer.offset[1]);
+    let mut amplitude = 1.0_f64;
+    let mut frequency = 1.0_f64;
+    let mut total = 0.0_f64;
+    let mut total_amplitude = 0.0_f64;
+    for octave in 0..layer.octaves {
+        let octave_seed = config.seed
+            ^ u64::from(layer.seed.cast_unsigned()).rotate_left(17)
+            ^ u64::from(octave).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        total += value_noise(
+            octave_seed,
+            source_x / f64::from(layer.noise_scale) * frequency,
+            source_z / f64::from(layer.noise_scale) * frequency,
+        ) * amplitude;
+        total_amplitude += amplitude;
+        amplitude *= f64::from(layer.persistence);
+        frequency *= f64::from(layer.lacunarity);
+    }
+    total / total_amplitude.max(f64::EPSILON)
+}
+
+fn value_noise(seed: u64, x: f64, z: f64) -> f64 {
+    let x0 = x.floor();
+    let z0 = z.floor();
+    let tx = smooth_noise_step(x - x0);
+    let tz = smooth_noise_step(z - z0);
+    let lower = lerp(
+        lattice_noise(seed, x0, z0),
+        lattice_noise(seed, x0 + 1.0, z0),
+        tx,
+    );
+    let upper = lerp(
+        lattice_noise(seed, x0, z0 + 1.0),
+        lattice_noise(seed, x0 + 1.0, z0 + 1.0),
+        tx,
+    );
+    lerp(lower, upper, tz)
+}
+
+fn lattice_noise(seed: u64, x: f64, z: f64) -> f64 {
+    let mut value = seed
+        ^ x.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ z.to_bits().wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^= value >> 31;
+    let sample = u32::try_from(value >> 32).expect("upper hash bits fit u32");
+    f64::from(sample) / f64::from(u32::MAX)
+}
+
+fn smooth_noise_step(value: f64) -> f64 {
+    value * value * (3.0 - 2.0 * value)
+}
+
+fn lerp(start: f64, end: f64, amount: f64) -> f64 {
+    start + (end - start) * amount
+}
+
+fn foliage_hash(seed: u64, layer_seed: i32, x: u16, z: u16) -> u64 {
+    cell_hash(
+        seed ^ u64::from(layer_seed.cast_unsigned()).rotate_left(17),
+        x,
+        z,
+    )
 }
 
 fn cell_hash(seed: u64, x: u16, z: u16) -> u64 {
@@ -129,7 +292,7 @@ fn hash_world(
 
 #[cfg(test)]
 mod tests {
-    use crate::GameConfig;
+    use crate::{ContentCatalog, GameConfig};
 
     use super::*;
 
@@ -148,5 +311,53 @@ mod tests {
         let first = generate_world(&config).deterministic_hash;
         config.seed += 1;
         assert_ne!(first, generate_world(&config).deterministic_hash);
+    }
+
+    #[test]
+    fn authored_foliage_is_deterministic_and_respects_habitat_and_resources() {
+        let config = GameConfig::default().world;
+        let mut content: ContentCatalog =
+            ron::from_str(include_str!("../../../assets/content/catalog.ron")).unwrap();
+        let first = generate_world_with_content(&config, &content);
+        let second = generate_world_with_content(&config, &content);
+        assert_eq!(first.foliage, second.foliage);
+        assert!(!first.foliage.is_empty());
+        assert!(
+            first
+                .foliage
+                .iter()
+                .any(|foliage| foliage.habitat == FoliageHabitat::Land)
+        );
+        assert!(
+            first
+                .foliage
+                .iter()
+                .any(|foliage| foliage.habitat == FoliageHabitat::Underwater)
+        );
+        let resources: std::collections::BTreeSet<_> = first
+            .resources
+            .iter()
+            .map(|resource| resource.position)
+            .collect();
+        let positions: std::collections::BTreeSet<_> = first
+            .foliage
+            .iter()
+            .map(|foliage| foliage.position)
+            .collect();
+        assert_eq!(positions.len(), first.foliage.len());
+        for foliage in &first.foliage {
+            assert!(!resources.contains(&foliage.position));
+            assert_eq!(
+                first.navigation.is_walkable(foliage.position),
+                foliage.habitat == FoliageHabitat::Land
+            );
+        }
+        content.foliage[0].noise_scale *= 2.0;
+        let altered = generate_world_with_content(&config, &content);
+        assert_ne!(first.foliage, altered.foliage);
+        content.foliage.clear();
+        let without_foliage = generate_world_with_content(&config, &content);
+        assert!(without_foliage.foliage.is_empty());
+        assert_eq!(first.deterministic_hash, without_foliage.deterministic_hash);
     }
 }

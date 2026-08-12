@@ -10,8 +10,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
-    ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, PresentationCatalog,
-    StableId, generate_world,
+    ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, PresentationCatalog, StableId,
 };
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
@@ -763,12 +762,14 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.add(egui::Slider::new(&mut state.config.world.width, 8..=256).text("Width"));
     ui.add(egui::Slider::new(&mut state.config.world.height, 8..=256).text("Height"));
     if ui.button("Generate deterministic preview").clicked() {
-        let world = generate_world(&state.config.world);
+        let world =
+            stream_town_domain::generate_world_with_content(&state.config.world, &state.catalog);
         state.status = format!(
-            "Generated {}x{} world with {} resources; hash {}",
+            "Generated {}x{} world with {} resources and {} foliage instances; hash {}",
             world.navigation.width(),
             world.navigation.height(),
             world.resources.len(),
+            world.foliage.len(),
             &world.deterministic_hash[..16]
         );
         state.generated_world = Some(world);

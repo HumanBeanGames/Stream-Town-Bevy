@@ -10,9 +10,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, HealthDef, ObjectiveDef, ObjectiveKind,
-    ProjectileShooterDef, RoleDef, RoleEquipmentDef, RoleSlotContribution, StableId, StationDef,
-    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat, FoliageLayerDef,
+    FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind, ProjectileShooterDef, RoleDef,
+    RoleEquipmentDef, RoleSlotContribution, StableId, StationDef, StorageContribution, TechGroup,
+    TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -24,6 +25,8 @@ const ROLE_TYPE: &str = "ScriptablesProcessorInfrastructure.RoleDataSettings";
 const TECH_NODE_TYPE: &str = "TechTree.ScriptableObjects.Node_SO";
 const PLAYER_PREFAB: &str = "Assets/Prefabs/Player_Character.prefab";
 const POOL_SETTINGS: &str = "Assets/DefaultSettings/D_ObjectPoolingSettings.asset";
+const LAND_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_FoliageGenSettings.asset";
+const WATER_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_WaterFoliageGenSettings.asset";
 
 type ArchetypesById = BTreeMap<StableId, ArchetypeDef>;
 type BuildingArchetypesBySlug = BTreeMap<String, (StableId, [u16; 2])>;
@@ -39,6 +42,8 @@ pub struct ContentConversionReport {
     pub missing_main_objects: usize,
     pub archetypes: usize,
     pub archetype_scenes: usize,
+    pub foliage_layers: usize,
+    pub foliage_variants: usize,
     pub buildings: usize,
     pub building_prefabs: usize,
     pub roles: usize,
@@ -187,6 +192,16 @@ fn convert_export(
     let placements = building_placements(required_asset(&assets_by_path, BUILDING_PLACER)?)?;
     let pools = pool_index(required_asset(&assets_by_path, POOL_SETTINGS)?)?;
     let (archetypes, building_archetypes) = convert_archetypes(export, &placements, &pools)?;
+    let mut foliage = foliage_layers(
+        required_asset(&assets_by_path, LAND_FOLIAGE_SETTINGS)?,
+        "_foliageGenerationSettings",
+        FoliageHabitat::Land,
+    )?;
+    foliage.extend(foliage_layers(
+        required_asset(&assets_by_path, WATER_FOLIAGE_SETTINGS)?,
+        "_waterFoliageGenerationSettings",
+        FoliageHabitat::Underwater,
+    )?);
     let role_equipment = role_equipment(required_asset(&assets_by_path, PLAYER_PREFAB)?)?;
 
     let building_guids = referenced_guids(
@@ -466,6 +481,7 @@ fn convert_export(
     let catalog = ContentCatalog {
         schema_version: stream_town_domain::CURRENT_CONTENT_SCHEMA,
         archetypes,
+        foliage,
         buildings,
         roles,
         objectives,
@@ -491,6 +507,12 @@ fn convert_export(
             .archetypes
             .values()
             .map(|archetype| archetype.scenes.len())
+            .sum(),
+        foliage_layers: catalog.foliage.len(),
+        foliage_variants: catalog
+            .foliage
+            .iter()
+            .map(|layer| layer.variants.len())
             .sum(),
         buildings: catalog.buildings.len(),
         building_prefabs: building_archetypes.len(),
@@ -1436,6 +1458,99 @@ fn glb_asset_path(source_model: &str) -> String {
     format!("migrated/models/{stem}.glb")
 }
 
+fn foliage_layers(
+    asset: &UnityAsset,
+    list_path: &str,
+    habitat: FoliageHabitat,
+) -> Result<Vec<FoliageLayerDef>> {
+    let count = required_u32(asset, &format!("{list_path}.Array.size"))?;
+    (0..count)
+        .map(|index| {
+            let prefix = format!("{list_path}.Array.data[{index}]");
+            let mesh_count = required_u32(asset, &format!("{prefix}.MeshSettings.Array.size"))?;
+            let mut variants = Vec::new();
+            for mesh_index in 0..mesh_count {
+                let mesh_prefix = format!("{prefix}.MeshSettings.Array.data[{mesh_index}]");
+                let source_model = field_value(asset, &format!("{mesh_prefix}.Mesh"))
+                    .and_then(reference)
+                    .and_then(|reference| reference.get("Path"))
+                    .and_then(Value::as_str)
+                    .with_context(|| {
+                        format!(
+                            "{} foliage mesh {mesh_index} has no source path",
+                            asset.path
+                        )
+                    })?
+                    .to_owned();
+                variants.push(FoliageVariantDef {
+                    asset_path: glb_asset_path(&source_model),
+                    source_model,
+                    base_scale: [
+                        required_f32(asset, &format!("{mesh_prefix}.BaseScale.x"))?,
+                        required_f32(asset, &format!("{mesh_prefix}.BaseScale.y"))?,
+                        required_f32(asset, &format!("{mesh_prefix}.BaseScale.z"))?,
+                    ],
+                });
+            }
+            // Unity 6 no longer exposes the obsolete water `Meshes` list through
+            // SerializedObject. The neutral export still retains those FBX
+            // dependencies, so recover the two authored sets by their stable names.
+            if variants.is_empty() && habitat == FoliageHabitat::Underwater {
+                let source_models = asset.dependencies.iter().filter_map(|dependency| {
+                    dependency.path.as_deref().filter(|path| {
+                        path.to_ascii_lowercase().ends_with(".fbx")
+                            && (path.contains("Seaweed") == (index == 0))
+                    })
+                });
+                variants.extend(source_models.map(|source_model| FoliageVariantDef {
+                    source_model: source_model.to_owned(),
+                    asset_path: glb_asset_path(source_model),
+                    base_scale: [1.0; 3],
+                }));
+            }
+            let material_source_path = field_value(asset, &format!("{prefix}.Material"))
+                .and_then(reference)
+                .and_then(|reference| reference.get("Path"))
+                .and_then(Value::as_str)
+                .with_context(|| format!("{} foliage layer {index} has no material", asset.path))?
+                .to_owned();
+            let habitat_slug = match habitat {
+                FoliageHabitat::Land => "land",
+                FoliageHabitat::Underwater => "underwater",
+            };
+            Ok(FoliageLayerDef {
+                id: StableId::new(format!("foliage:{habitat_slug}:{index}"))?,
+                source_path: asset.path.clone(),
+                habitat,
+                source_size: required_u32(asset, &format!("{prefix}.Size"))?
+                    .try_into()
+                    .with_context(|| format!("{} foliage size is out of range", asset.path))?,
+                level_of_detail: required_u32(asset, &format!("{prefix}.LevelOfDetail"))?
+                    .try_into()
+                    .with_context(|| format!("{} foliage LOD is out of range", asset.path))?,
+                noise_scale: required_f32(asset, &format!("{prefix}.NoiseScale"))?,
+                octaves: required_u32(asset, &format!("{prefix}.Octaves"))?
+                    .try_into()
+                    .with_context(|| format!("{} foliage octaves are out of range", asset.path))?,
+                persistence: required_f32(asset, &format!("{prefix}.Persistance"))?,
+                lacunarity: required_f32(asset, &format!("{prefix}.Lacunarity"))?,
+                seed: required_i32(asset, &format!("{prefix}.Seed"))?,
+                offset: [
+                    required_f32(asset, &format!("{prefix}.Offset.x"))?,
+                    required_f32(asset, &format!("{prefix}.Offset.y"))?,
+                ],
+                spawn_threshold: required_f32(asset, &format!("{prefix}.SpawnThreshold"))?,
+                spacing: required_u32(asset, &format!("{prefix}.Spacing"))?
+                    .max(1)
+                    .try_into()
+                    .with_context(|| format!("{} foliage spacing is out of range", asset.path))?,
+                material_source_path,
+                variants,
+            })
+        })
+        .collect()
+}
+
 fn model_age(path: &str) -> Option<u8> {
     let lower = path.to_ascii_lowercase();
     if lower.contains("age01") {
@@ -1603,6 +1718,14 @@ fn required_f64(asset: &UnityAsset, path: &str) -> Result<f64> {
     field_value(asset, path)
         .and_then(Value::as_f64)
         .with_context(|| format!("{} is missing numeric field {path}", asset.path))
+}
+
+fn required_f32(asset: &UnityAsset, path: &str) -> Result<f32> {
+    let value = required_f64(asset, path)?;
+    value
+        .to_string()
+        .parse()
+        .with_context(|| format!("{} field {path} is outside the f32 range", asset.path))
 }
 
 fn required_milli(asset: &UnityAsset, path: &str) -> Result<u32> {
@@ -1976,6 +2099,37 @@ mod tests {
 
     fn reference_value(guid: &str, unity_type: &str) -> Value {
         serde_json::json!({ "Guid": guid, "Type": unity_type })
+    }
+
+    fn foliage_fixture_fields(list: &str, model: &str, threshold: f64) -> Vec<UnityField> {
+        let prefix = format!("{list}.Array.data[0]");
+        let mesh = format!("{prefix}.MeshSettings.Array.data[0]");
+        vec![
+            field(&format!("{list}.Array.size"), Value::from(1)),
+            field(&format!("{prefix}.Size"), Value::from(300)),
+            field(&format!("{prefix}.LevelOfDetail"), Value::from(2)),
+            field(&format!("{prefix}.NoiseScale"), Value::from(10.0)),
+            field(&format!("{prefix}.Octaves"), Value::from(1)),
+            field(&format!("{prefix}.Persistance"), Value::from(0.8)),
+            field(&format!("{prefix}.Lacunarity"), Value::from(1.53)),
+            field(&format!("{prefix}.Seed"), Value::from(-430_535_522)),
+            field(&format!("{prefix}.Offset.x"), Value::from(130.0)),
+            field(&format!("{prefix}.Offset.y"), Value::from(302.0)),
+            field(&format!("{prefix}.SpawnThreshold"), Value::from(threshold)),
+            field(&format!("{prefix}.Spacing"), Value::from(1)),
+            field(&format!("{prefix}.MeshSettings.Array.size"), Value::from(1)),
+            field(
+                &format!("{mesh}.Mesh"),
+                serde_json::json!({ "Guid": "mesh", "Path": format!("Assets/Models/Environment/{model}.fbx") }),
+            ),
+            field(&format!("{mesh}.BaseScale.x"), Value::from(0.5)),
+            field(&format!("{mesh}.BaseScale.y"), Value::from(0.3)),
+            field(&format!("{mesh}.BaseScale.z"), Value::from(0.5)),
+            field(
+                &format!("{prefix}.Material"),
+                serde_json::json!({ "Guid": "material", "Path": "Assets/Materials/Environment/Env_Grass.mat" }),
+            ),
+        ]
     }
 
     fn asset(
@@ -2545,6 +2699,18 @@ mod tests {
                     vec![field("_objectsToPool.Array.size", Value::from(0))],
                 ),
                 asset(
+                    "11111111111111111111111111111111",
+                    LAND_FOLIAGE_SETTINGS,
+                    "ScriptablesProcessorInfrastructure.FoliageGenSettings",
+                    foliage_fixture_fields("_foliageGenerationSettings", "Grass", 0.6),
+                ),
+                asset(
+                    "22222222222222222222222222222222",
+                    WATER_FOLIAGE_SETTINGS,
+                    "ScriptablesProcessorInfrastructure.WaterFoliageGenSettings",
+                    foliage_fixture_fields("_waterFoliageGenerationSettings", "Seaweed", 0.7),
+                ),
+                asset(
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     BUILDING_CONTAINER,
                     "Container",
@@ -2644,9 +2810,11 @@ mod tests {
         };
 
         let (catalog, report) = convert_export(&export, "fixture-sha".to_owned()).unwrap();
-        assert_eq!(report.source_assets, 11);
+        assert_eq!(report.source_assets, 13);
         assert_eq!(report.archetypes, 3);
         assert_eq!(report.archetype_scenes, 1);
+        assert_eq!(report.foliage_layers, 2);
+        assert_eq!(report.foliage_variants, 2);
         assert_eq!(report.buildings, 1);
         assert_eq!(report.building_prefabs, 1);
         assert_eq!(report.roles, 1);

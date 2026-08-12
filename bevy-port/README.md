@@ -64,7 +64,7 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   all 11 reachable building role-slot modifiers,
   all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
-  shooter, and 422 typed objectives from the production technology graph in content schema 16,
+  shooter, and 422 typed objectives from the production technology graph in content schema 17,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -263,7 +263,13 @@ authoritative simulation. Generated wood, ore, and food nodes load the converted
 `Env_Tree`, `Env_Ore`, and `Env_Bush` GLB primitives selected through the
 versioned content and presentation catalogs. Deterministic grid parity selects
 Unity's two tree and ore variants, while bushes retain Unity's duplicated first
-mesh. Ore uses the shared building material. Foliage uses a typed
+mesh. Ore uses the shared building material. Content schema 17 converts Unity's
+two land and two underwater foliage-generation layers, including their noise,
+threshold, seed, LOD, scale, material, and 21 FBX variant references. Bevy
+regenerates stable land/underwater instances from the world seed, excludes
+resource cells, and renders the converted grass, flower, seaweed, and coral
+primitives with deterministic jitter, rotation, scale, and a 420-unit
+visibility budget. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
@@ -286,9 +292,11 @@ and frames the converted Arrow GLB for a repeatable combat-VFX capture.
 `STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction/repair smoke, the
 spark-emitting construction hit, building-level arrows, and persistent
 damage fire/smoke together. Enemy `TargetSensor` masks are authoritative in
-content schema 16: ordinary enemies choose the nearest allowed actor/building,
+content schema 17: ordinary enemies choose the nearest allowed actor/building,
 while the battering ram attacks only construction and buildings. Zero-health
 buildings are removed and release their dirty navigation region.
+`STREAM_TOWN_SMOKE_FOLIAGE=1` frames the generated foliage field for a
+repeatable land/shoreline visual capture.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -326,10 +334,10 @@ uses an unsynchronized present mode for meaningful capacity measurements, and
 reports average and 95th-percentile frame time after a warmup. The optional
 `STREAM_TOWN_FRAME_TIME_WARMUP` and
 `STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS` values default to ten seconds each.
-The recorded Windows reference run (Ryzen 5 7600X, Radeon RX 7800 XT, 64 GB,
-DX12, 1920×1080) measured 559 post-warmup frames at 10.74 ms average and
-14.25 ms p95 with 300 simulated agents and the production 16-character detail
-budget, below the 16.7 ms gate.
+The current Windows reference run (Ryzen 5 7600X, Radeon RX 7800 XT, 64 GB,
+DX12, 1920×1080) measured 544 post-warmup frames at 9.18 ms average and
+11.51 ms p95 with 300 simulated agents, 457 deterministic foliage instances,
+and the production 16-character detail budget, below the 16.7 ms gate.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use

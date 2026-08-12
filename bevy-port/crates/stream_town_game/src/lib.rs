@@ -36,11 +36,11 @@ use stream_town_domain::{
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
     BuildingDirection, BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
-    CustomizationKind, EnemyCampState, GameConfig, GeneratedWorld, GridPos,
+    CustomizationKind, EnemyCampState, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
     LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore,
     ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor,
     SavedTerrainMesh, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation,
-    WorldSnapshot, generate_world,
+    WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -56,6 +56,7 @@ const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
+const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
 const CHARACTER_HIT_SECONDS: f32 = 0.25;
@@ -545,6 +546,9 @@ struct ResourceNode {
 struct ResourceVisual {
     mesh_index: usize,
 }
+
+#[derive(Component)]
+struct FoliageVisual;
 
 #[derive(Component)]
 struct Hud;
@@ -1212,6 +1216,7 @@ fn setup_rendering(
     let healing_closeup = std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some();
     let combat_closeup = std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some();
     let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some();
+    let foliage_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1229,6 +1234,8 @@ fn setup_rendering(
                     48.0
                 } else if building_closeup {
                     58.0
+                } else if foliage_closeup {
+                    45.0
                 } else {
                     520.0
                 },
@@ -1984,7 +1991,7 @@ fn generate_and_spawn_world(
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     selected.0 = None;
-    let mut generated = generate_world(&config.0.world);
+    let mut generated = generate_world_with_content(&config.0.world, &content.0);
     let centre = GridPos {
         x: config.0.world.width / 2,
         z: config.0.world.height / 2,
@@ -2027,6 +2034,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
                 .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_xyz(focus.x + 30.0, focus.y + 35.0, focus.z + 30.0)
+                .looking_at(focus + Vec3::Y, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
                 .map_or(Vec3::ZERO, |position| {
@@ -2106,6 +2117,21 @@ fn generate_and_spawn_world(
             position,
             config.0.world.cell_size,
         );
+    }
+    if let Some(asset_server) = asset_server.as_deref() {
+        for foliage in &generated.foliage {
+            spawn_foliage_visual(
+                &mut commands,
+                &content.0,
+                &presentation.0,
+                &render,
+                asset_server,
+                &asset_root.0,
+                &generated,
+                &config.0,
+                foliage,
+            );
+        }
     }
 
     let hall = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
@@ -2617,6 +2643,84 @@ fn spawn_resource_visual(
         Transform::from_xyz(position.x, position.y + scale * 0.5, position.z)
             .with_scale(Vec3::splat(scale)),
     ));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_foliage_visual(
+    commands: &mut Commands,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    foliage: &GeneratedFoliage,
+) {
+    let Some(layer) = content
+        .foliage
+        .iter()
+        .find(|layer| layer.id == foliage.layer)
+    else {
+        return;
+    };
+    let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
+        return;
+    };
+    if !converted_asset_exists(asset_root, &variant.asset_path) {
+        return;
+    }
+    let mesh = asset_server.load(
+        GltfAssetLabel::Primitive {
+            mesh: 0,
+            primitive: 0,
+        }
+        .from_asset(variant.asset_path.clone()),
+    );
+    let centre = grid_to_world_on_surface(foliage.position, config, world);
+    let offset = Vec3::new(
+        f32::from(foliage.offset_milli_cells[0]) * config.world.cell_size / 1_000.0,
+        0.0,
+        f32::from(foliage.offset_milli_cells[1]) * config.world.cell_size / 1_000.0,
+    );
+    // The Blender conversion preserves FBX centimetres just like the resource
+    // GLBs, while authored Unity scale is expressed in metres.
+    let scale = Vec3::from_array(variant.base_scale)
+        * resource_visual_scale(config.world.cell_size)
+        * (f32::from(foliage.scale_milli) / 1_000.0);
+    let material = presentation
+        .model_materials
+        .get(&variant.source_model)
+        .and_then(|materials| materials.values().next())
+        .and_then(|id| render.presentation_materials.get(id));
+    let mut entity = commands.spawn((
+        WorldEntity,
+        FoliageVisual,
+        GridLocation(foliage.position),
+        Mesh3d(mesh),
+        Transform::from_translation(centre + offset)
+            .with_rotation(
+                Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
+                    * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            )
+            .with_scale(scale),
+        bevy::camera::visibility::VisibilityRange::abrupt(0.0, FOLIAGE_VISIBILITY_RANGE),
+        bevy::light::NotShadowCaster,
+    ));
+    match material {
+        Some(ResolvedMaterialHandle::Standard(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Building(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Tree(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Cloud(_)) | None => {
+            entity.insert(MeshMaterial3d(render.food.clone()));
+        }
+    }
 }
 
 fn archetype_scene_for_age(archetype: &ArchetypeDef, age: u8) -> Option<&ArchetypeScene> {
@@ -8289,7 +8393,7 @@ fn load_input(
         return;
     }
 
-    let mut restored_world = generate_world(&config.0.world);
+    let mut restored_world = generate_world_with_content(&config.0.world, &content.0);
     if !snapshot.resource_nodes.is_empty() {
         for resource in &mut restored_world.resources {
             if let Some(remaining) = snapshot.resource_nodes.get(&resource.id) {
@@ -12021,6 +12125,7 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use stream_town_domain::generate_world;
 
     #[test]
     fn production_crowd_lod_budget_matches_measured_gpu_gate() {
@@ -13323,6 +13428,15 @@ mod tests {
     fn embedded_unity_content_catalog_is_valid() {
         let content = embedded_content();
         assert_eq!(content.archetypes.len(), 215);
+        assert_eq!(content.foliage.len(), 4);
+        assert_eq!(
+            content
+                .foliage
+                .iter()
+                .map(|layer| layer.variants.len())
+                .sum::<usize>(),
+            21
+        );
         assert_eq!(content.buildings.len(), 26);
         assert_eq!(content.roles.len(), 15);
         assert_eq!(content.technology.nodes.len(), 363);

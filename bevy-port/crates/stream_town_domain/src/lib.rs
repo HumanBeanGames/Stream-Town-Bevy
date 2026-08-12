@@ -23,10 +23,10 @@ pub use command::{
 pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef, EnemySpawnerDef, HealthDef,
-    ObjectiveDef, ObjectiveKind, ProjectileShooterDef, RoleDef, RoleEquipmentDef,
-    RoleSlotContribution, StationDef, StorageContribution, TechGroup, TechNode, TechTree,
-    WeightedEnemySpawn,
+    BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat,
+    FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
+    ProjectileShooterDef, RoleDef, RoleEquipmentDef, RoleSlotContribution, StationDef,
+    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
@@ -51,4 +51,7 @@ pub use simulation::{
     SimulationError, TechVote, TownEvent, TownGoalState, Weather, WorldSimulation,
     required_role_experience,
 };
-pub use world::{GeneratedResource, GeneratedWorld, generate_world};
+pub use world::{
+    GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,
+    generate_world_with_content,
+};
