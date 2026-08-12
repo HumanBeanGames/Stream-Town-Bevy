@@ -236,11 +236,26 @@ building, shares the clone across that building's primitives, drives
 `_DestructionValue` from its authoritative health percentage, and releases the
 asset when the building leaves the simulation. Seasons and weather drive terrain/water tint, clear color, directional and
 ambient lighting, distance fog, and deterministic rain/snow fields from the
-authoritative simulation. For repeatable rendering diagnostics,
+authoritative simulation. Generated wood, ore, and food nodes load the converted
+`Env_Tree`, `Env_Ore`, and `Env_Bush` GLB primitives selected through the
+versioned content and presentation catalogs. Deterministic grid parity selects
+Unity's two tree and ore variants, while bushes retain Unity's duplicated first
+mesh. Ore uses the shared building material. Foliage uses a typed
+`TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
+wind, per-object color variation, and spring/autumn/winter controls. The Blender
+pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
+the red wind, green snow, and blue bark-exclusion channels Bevy consumes.
+Missing converted assets retain the resource-cube fallback.
+
+For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
 `STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.
 `STREAM_TOWN_DEBUG_BUILDING_HEALTH=125` starts the Town Hall at that clamped
 health value so its per-building damage material can be captured repeatably.
+`STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP=1` focuses on the nearest wood node;
+`STREAM_TOWN_SMOKE_RESOURCE_KIND=resource:ore` or `resource:food` selects
+another production resource. `STREAM_TOWN_DEBUG_INITIAL_AGENTS=<n>` reduces
+diagnostic actor clutter without changing the validated production default.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger

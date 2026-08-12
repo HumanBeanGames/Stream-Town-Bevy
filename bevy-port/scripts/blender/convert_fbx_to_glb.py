@@ -172,6 +172,63 @@ def bake_uniform_scale(scale: float) -> None:
                 keyframe.handle_right[1] *= scale
 
 
+def preserve_unity_vertex_colors() -> None:
+    """Make Unity's authored mask the glTF primary color attribute.
+
+    The Blender FBX importer can synthesize a constant-white color layer before
+    the actual FBX vertex-color layer. glTF names those layers COLOR_0 and
+    COLOR_1, while Bevy intentionally imports only COLOR_0. Unity reads the
+    authored layer as Mesh.colors, so discard any constant-white prefix and
+    move the first meaningful layer to the active/render slot before export.
+    """
+    processed: set[int] = set()
+    for source_object in bpy.context.scene.objects:
+        if source_object.type != "MESH" or source_object.data.as_pointer() in processed:
+            continue
+        mesh = source_object.data
+        processed.add(mesh.as_pointer())
+        colors = list(mesh.color_attributes)
+        if not colors:
+            continue
+        meaningful = next(
+            (
+                color
+                for color in colors
+                if any(
+                    any(abs(float(channel) - 1.0) > 1.0e-6 for channel in datum.color)
+                    for datum in color.data
+                )
+            ),
+            None,
+        )
+        if meaningful is None:
+            continue
+        if meaningful.domain == "CORNER":
+            totals = [[0.0, 0.0, 0.0, 0.0] for _ in mesh.vertices]
+            counts = [0 for _ in mesh.vertices]
+            for loop, datum in zip(mesh.loops, meaningful.data):
+                for channel in range(4):
+                    totals[loop.vertex_index][channel] += float(datum.color[channel])
+                counts[loop.vertex_index] += 1
+            vertex_colors = [
+                tuple(channel / max(counts[index], 1) for channel in totals[index])
+                for index in range(len(mesh.vertices))
+            ]
+        else:
+            vertex_colors = [tuple(float(channel) for channel in datum.color) for datum in meaningful.data]
+        for color in list(mesh.color_attributes):
+            mesh.color_attributes.remove(color)
+        primary = mesh.color_attributes.new(
+            name="UnityColor",
+            type="FLOAT_COLOR",
+            domain="POINT",
+        )
+        for datum, value in zip(primary.data, vertex_colors):
+            datum.color = value
+        mesh.color_attributes.active_color = primary
+        mesh.color_attributes.render_color_index = 0
+
+
 def inspect_glb(path: Path) -> dict[str, int]:
     payload = path.read_bytes()
     if len(payload) < 20:
@@ -194,6 +251,45 @@ def inspect_glb(path: Path) -> dict[str, int]:
     }
 
 
+def promote_primary_vertex_colors(path: Path) -> None:
+    """Map Blender's exported authored color set to glTF COLOR_0.
+
+    Blender 4.2 emits a constant-white COLOR_0 before an FBX `colorSet1` as
+    COLOR_1. Unity exposes `colorSet1` as Mesh.colors, and Bevy loads only the
+    standard COLOR_0 semantic. Rewrite the semantic table without touching the
+    accessor payload, and drop higher color semantics that Bevy cannot consume.
+    """
+    payload = path.read_bytes()
+    json_length, json_type = struct.unpack_from("<II", payload, 12)
+    if json_type != 0x4E4F534A:
+        raise ValueError("GLB does not begin with a JSON chunk")
+    document = json.loads(payload[20 : 20 + json_length].rstrip(b"\x00 ").decode("utf-8"))
+    changed = False
+    for mesh in document.get("meshes", []):
+        for primitive in mesh.get("primitives", []):
+            attributes = primitive.get("attributes", {})
+            if "COLOR_1" not in attributes:
+                continue
+            attributes["COLOR_0"] = attributes["COLOR_1"]
+            for semantic in list(attributes):
+                if semantic.startswith("COLOR_") and semantic != "COLOR_0":
+                    del attributes[semantic]
+            changed = True
+    if not changed:
+        return
+    encoded = json.dumps(document, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoded += b" " * ((4 - len(encoded) % 4) % 4)
+    remaining_chunks = payload[20 + json_length :]
+    total_length = 20 + len(encoded) + len(remaining_chunks)
+    rewritten = (
+        struct.pack("<4sII", b"glTF", 2, total_length)
+        + struct.pack("<II", len(encoded), 0x4E4F534A)
+        + encoded
+        + remaining_chunks
+    )
+    path.write_bytes(rewritten)
+
+
 def convert(
     source: Path,
     output: Path,
@@ -201,6 +297,7 @@ def convert(
 ) -> dict[str, object]:
     reset_scene()
     bpy.ops.import_scene.fbx(filepath=str(source), use_anim=True)
+    preserve_unity_vertex_colors()
     normalization_scale, output_bounds = normalize_to_unity_bounds(target_bounds)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f"{output.stem}.tmp.glb")
@@ -213,6 +310,7 @@ def convert(
         export_morph=True,
         export_materials="EXPORT",
     )
+    promote_primary_vertex_colors(temporary)
     metadata = inspect_glb(temporary)
     os.replace(temporary, output)
     return {

@@ -51,6 +51,8 @@ const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
+const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
+const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -349,11 +351,44 @@ impl MaterialExtension for CloudMaterialExtension {
 
 type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct TreeMaterialUniform {
+    wind_direction_smoothness: Vec4,
+    wind_controls: Vec4,
+    season_controls: Vec4,
+    main_scale_offset: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct TreeMaterialExtension {
+    #[uniform(100)]
+    parameters: TreeMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    main_texture: Option<Handle<Image>>,
+    #[texture(103)]
+    #[sampler(104)]
+    noise_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for TreeMaterialExtension {
+    fn vertex_shader() -> ShaderRef {
+        TREE_SHADER_ASSET_PATH.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        TREE_SHADER_ASSET_PATH.into()
+    }
+}
+
+type TreeMaterial = ExtendedMaterial<StandardMaterial, TreeMaterialExtension>;
+
 #[derive(Clone)]
 enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
     Building(Handle<BuildingMaterial>),
     Cloud(Handle<CloudMaterial>),
+    Tree(Handle<TreeMaterial>),
 }
 
 #[derive(Resource, Default)]
@@ -379,6 +414,7 @@ struct RenderAssets {
     projectile: Handle<StandardMaterial>,
     authored_building: Handle<BuildingMaterial>,
     clouds: Handle<CloudMaterial>,
+    tree: Handle<TreeMaterial>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -454,6 +490,11 @@ struct GridLocation(GridPos);
 #[derive(Component)]
 struct ResourceNode {
     id: StableId,
+}
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+struct ResourceVisual {
+    mesh_index: usize,
 }
 
 #[derive(Component)]
@@ -860,6 +901,7 @@ pub fn run(config: GameConfig) {
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
+        .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -930,6 +972,7 @@ fn setup_rendering(
     water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
+    tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
 ) {
     let (
         Some(mut meshes),
@@ -938,6 +981,7 @@ fn setup_rendering(
         Some(mut water_materials),
         Some(mut building_materials),
         Some(mut cloud_materials),
+        Some(mut tree_materials),
     ) = (
         meshes,
         materials,
@@ -945,6 +989,7 @@ fn setup_rendering(
         water_materials,
         building_materials,
         cloud_materials,
+        tree_materials,
     )
     else {
         commands.insert_resource(RenderAssets::default());
@@ -952,6 +997,7 @@ fn setup_rendering(
     };
     let material_closeup = std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some();
     let animation_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
+    let resource_closeup = std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -961,6 +1007,8 @@ fn setup_rendering(
                     96.0
                 } else if animation_closeup {
                     180.0
+                } else if resource_closeup {
+                    24.0
                 } else {
                     520.0
                 },
@@ -993,6 +1041,7 @@ fn setup_rendering(
     let authored_building =
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
+    let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
     let presentation_materials = presentation
         .0
         .materials
@@ -1002,6 +1051,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Building(authored_building.clone())
             } else if material.source_path == CLOUD_MATERIAL_PATH {
                 ResolvedMaterialHandle::Cloud(clouds.clone())
+            } else if material.source_path == TREE_MATERIAL_PATH {
+                ResolvedMaterialHandle::Tree(tree.clone())
             } else {
                 ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
@@ -1074,6 +1125,7 @@ fn setup_rendering(
         }),
         authored_building,
         clouds,
+        tree,
         presentation_materials,
     });
 }
@@ -1418,6 +1470,77 @@ fn cloud_material(
     }
 }
 
+fn tree_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> TreeMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == TREE_MATERIAL_PATH);
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let texture = |slot: &str| {
+        authored.and_then(|material| {
+            asset_server.and_then(|asset_server| {
+                material
+                    .textures
+                    .get(slot)
+                    .and_then(|id| presentation.textures.get(id))
+                    .map(|texture| asset_server.load(texture.asset_path.clone()))
+            })
+        })
+    };
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_MainTexture"))
+        .copied()
+        .unwrap_or_default();
+    let direction = vector("_windDirection", [1.0, 0.0, 0.0, 0.0]);
+    let smoothness = vector("_WindDetailSmoothness", [0.0, 1.0, 0.0, 0.0]);
+    TreeMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+        extension: TreeMaterialExtension {
+            parameters: TreeMaterialUniform {
+                wind_direction_smoothness: Vec4::new(
+                    direction[0],
+                    direction[1],
+                    smoothness[0],
+                    smoothness[1],
+                ),
+                wind_controls: Vec4::new(
+                    scalar("_Sync", 0.7),
+                    scalar("_windStrength", 0.79),
+                    scalar("_WindDetailStrength", 0.01),
+                    scalar("_textureSize", 1.0),
+                ),
+                season_controls: tree_season_controls(Season::Spring),
+                main_scale_offset: Vec4::new(
+                    transform.scale[0],
+                    transform.scale[1],
+                    transform.offset[0],
+                    transform.offset[1],
+                ),
+            },
+            main_texture: texture("_MainTexture"),
+            noise_texture: texture("_NoiseTexture"),
+        },
+    }
+}
+
 fn primary_material_texture_entry<'a>(
     material: &'a MaterialDef,
     presentation: &'a PresentationCatalog,
@@ -1517,6 +1640,12 @@ fn debug_building_health() -> Option<i32> {
         .map(|health: i32| health.clamp(0, BUILDING_MAX_HEALTH))
 }
 
+fn debug_initial_agents(configured: u16) -> u16 {
+    std::env::var_os("STREAM_TOWN_DEBUG_INITIAL_AGENTS")
+        .and_then(|value| value.to_str().and_then(|value| value.parse().ok()))
+        .map_or(configured, |agents: u16| agents.clamp(1, configured))
+}
+
 fn parse_weather(value: &str) -> Option<Weather> {
     match value.to_ascii_lowercase().as_str() {
         "clear" => Some(Weather::Clear),
@@ -1569,7 +1698,24 @@ fn generate_and_spawn_world(
     let town_hall_placement =
         town_hall_placement_position(&config.0, town_hall_definition.footprint);
     if let Ok(mut camera) = cameras.single_mut() {
-        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
+        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some() {
+            let requested_kind = std::env::var("STREAM_TOWN_SMOKE_RESOURCE_KIND")
+                .unwrap_or_else(|_| "resource:wood".to_owned());
+            let focus = generated
+                .resources
+                .iter()
+                .filter(|resource| resource.kind.as_str() == requested_kind)
+                .min_by_key(|resource| {
+                    let dx = i32::from(resource.position.x) - i32::from(centre.x);
+                    let dz = i32::from(resource.position.z) - i32::from(centre.z);
+                    dx * dx + dz * dz
+                })
+                .map_or(Vec3::ZERO, |resource| {
+                    grid_to_world_on_surface(resource.position, &config.0, &generated)
+                });
+            Transform::from_xyz(focus.x + 12.0, focus.y + 16.0, focus.z + 12.0)
+                .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
                 .map_or(Vec3::ZERO, |position| {
                     grid_to_world_on_surface(position, &config.0, &generated)
@@ -1635,23 +1781,17 @@ fn generate_and_spawn_world(
 
     for resource in &generated.resources {
         let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
-        let material = match resource.kind.as_str() {
-            "resource:wood" => render.wood.clone(),
-            "resource:ore" => render.ore.clone(),
-            _ => render.food.clone(),
-        };
-        let scale = config.0.world.cell_size * 0.55;
-        commands.spawn((
-            WorldEntity,
-            ResourceNode {
-                id: resource.id.clone(),
-            },
-            GridLocation(resource.position),
-            Mesh3d(render.cube.clone()),
-            MeshMaterial3d(material),
-            Transform::from_xyz(position.x, position.y + scale * 0.5, position.z)
-                .with_scale(Vec3::splat(scale)),
-        ));
+        spawn_resource_visual(
+            &mut commands,
+            &content.0,
+            &presentation.0,
+            &render,
+            asset_server.as_deref(),
+            &asset_root.0,
+            resource,
+            position,
+            config.0.world.cell_size,
+        );
     }
 
     let hall = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
@@ -1765,12 +1905,9 @@ fn generate_and_spawn_world(
     {
         simulation.unlocked_technology.insert(technology.clone());
     }
-    let spawn_positions = connected_actor_positions(
-        &generated,
-        centre,
-        town_hall_position,
-        config.0.gameplay.initial_agents,
-    );
+    let initial_agents = debug_initial_agents(config.0.gameplay.initial_agents);
+    let spawn_positions =
+        connected_actor_positions(&generated, centre, town_hall_position, initial_agents);
     for position in spawn_positions {
         let x = position.x;
         let z = position.z;
@@ -1909,7 +2046,7 @@ fn generate_and_spawn_world(
             ));
         }
         spawned += 1;
-        if spawned >= config.0.gameplay.initial_agents {
+        if spawned >= initial_agents {
             break;
         }
     }
@@ -2017,6 +2154,116 @@ fn default_archetype_scene(
         .iter()
         .find(|scene| scene.is_default)
         .or_else(|| archetype.scenes.first())
+}
+
+fn resource_visual_archetype<'a>(
+    content: &'a ContentCatalog,
+    resource_kind: &StableId,
+) -> Option<&'a ArchetypeDef> {
+    let source_suffix = match resource_kind.as_str() {
+        "resource:wood" => "Assets/Prefabs/Dummy Assets/Env_Tree.prefab",
+        "resource:ore" => "Assets/Prefabs/Resources/Resource_Ore_Base.prefab",
+        "resource:food" => "Assets/Prefabs/Resources/Resource_Bush_Base.prefab",
+        _ => return None,
+    };
+    content
+        .archetypes
+        .values()
+        .find(|archetype| archetype.source_path == source_suffix)
+}
+
+fn resource_mesh_index(resource: &stream_town_domain::GeneratedResource) -> usize {
+    if resource.kind.as_str() == "resource:food" {
+        // Unity's production generation settings list the same bush mesh twice.
+        return 0;
+    }
+    usize::from((resource.position.x ^ resource.position.z) & 1)
+}
+
+fn resource_visual_scale(cell_size: f32) -> f32 {
+    // Blender's GLBs retain the Unity scene root's centimeter conversion. The
+    // Bevy grid uses a 12-unit cell where the Unity resource footprint was
+    // authored around four units, so scale both conversions explicitly.
+    0.01 * (cell_size / 4.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_resource_visual(
+    commands: &mut Commands,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+    resource: &stream_town_domain::GeneratedResource,
+    position: Vec3,
+    cell_size: f32,
+) {
+    let visual = resource_visual_archetype(content, &resource.kind)
+        .and_then(default_archetype_scene)
+        .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
+    let mesh_index = resource_mesh_index(resource);
+    let material = visual.and_then(|scene| {
+        presentation
+            .model_materials
+            .get(&scene.source_model)
+            .and_then(|materials| materials.get("MainMaterial"))
+            .and_then(|id| render.presentation_materials.get(id))
+    });
+    if let (Some(asset_server), Some(scene), Some(material)) = (asset_server, visual, material) {
+        let mesh = asset_server.load(
+            GltfAssetLabel::Primitive {
+                mesh: mesh_index,
+                primitive: 0,
+            }
+            .from_asset(scene.asset_path.clone()),
+        );
+        let mut entity = commands.spawn((
+            WorldEntity,
+            ResourceNode {
+                id: resource.id.clone(),
+            },
+            ResourceVisual { mesh_index },
+            GridLocation(resource.position),
+            Mesh3d(mesh),
+            Transform::from_translation(position)
+                .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::splat(resource_visual_scale(cell_size))),
+        ));
+        match material {
+            ResolvedMaterialHandle::Standard(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
+            ResolvedMaterialHandle::Building(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
+            ResolvedMaterialHandle::Cloud(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
+            ResolvedMaterialHandle::Tree(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
+        }
+        return;
+    }
+
+    let material = match resource.kind.as_str() {
+        "resource:wood" => render.wood.clone(),
+        "resource:ore" => render.ore.clone(),
+        _ => render.food.clone(),
+    };
+    let scale = cell_size * 0.55;
+    commands.spawn((
+        WorldEntity,
+        ResourceNode {
+            id: resource.id.clone(),
+        },
+        GridLocation(resource.position),
+        Mesh3d(render.cube.clone()),
+        MeshMaterial3d(material),
+        Transform::from_xyz(position.x, position.y + scale * 0.5, position.z)
+            .with_scale(Vec3::splat(scale)),
+    ));
 }
 
 fn archetype_scene_for_age(archetype: &ArchetypeDef, age: u8) -> Option<&ArchetypeScene> {
@@ -4072,6 +4319,7 @@ fn update_environment_presentation(
     mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     mut water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     mut building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
+    mut tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     particles: Query<Entity, With<WeatherParticle>>,
@@ -4116,6 +4364,11 @@ fn update_environment_presentation(
         let snow = building_snow_strength(environment.0);
         building.extension.parameters.snow_damage.x = snow;
         building.extension.parameters.snow_damage.y = snow;
+    }
+    if let Some(tree_materials) = tree_materials.as_deref_mut()
+        && let Some(mut tree) = tree_materials.get_mut(&render.tree)
+    {
+        tree.extension.parameters.season_controls = tree_season_controls(environment.0);
     }
     for (mut fog, mut ambient) in &mut cameras {
         fog.color = Color::srgba(
@@ -4295,6 +4548,15 @@ fn water_ice_strength(season: Season) -> f32 {
 
 fn building_snow_strength(season: Season) -> f32 {
     if season == Season::Winter { 1.0 } else { 0.0 }
+}
+
+fn tree_season_controls(season: Season) -> Vec4 {
+    match season {
+        Season::Spring => Vec4::new(0.0, 0.0, 0.1, 0.0),
+        Season::Summer => Vec4::ZERO,
+        Season::Autumn => Vec4::new(0.3, 0.0, 0.0, 0.0),
+        Season::Winter => Vec4::new(0.0, 0.5, 0.0, 0.0),
+    }
 }
 
 fn weather_particle_seed(world_seed: u64, index: u16) -> u32 {
@@ -5768,6 +6030,12 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Cloud(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                        ResolvedMaterialHandle::Tree(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -11061,6 +11329,103 @@ mod tests {
         assert!((building_damage_value(0) - 0.0).abs() < f32::EPSILON);
         assert!((building_damage_value(-100) - 0.0).abs() < f32::EPSILON);
         assert!((building_damage_value(BUILDING_MAX_HEALTH * 2) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn production_resource_kinds_resolve_converted_visuals() {
+        let content = embedded_content();
+        let cases = [
+            (
+                "resource:wood",
+                "Assets/Prefabs/Dummy Assets/Env_Tree.prefab",
+                "Env_Tree.glb",
+            ),
+            (
+                "resource:ore",
+                "Assets/Prefabs/Resources/Resource_Ore_Base.prefab",
+                "Env_Ore.glb",
+            ),
+            (
+                "resource:food",
+                "Assets/Prefabs/Resources/Resource_Bush_Base.prefab",
+                "Env_Bush.glb",
+            ),
+        ];
+        for (kind, expected_source, expected_asset) in cases {
+            let kind = StableId::new(kind).unwrap();
+            let archetype = resource_visual_archetype(&content, &kind).unwrap();
+            assert_eq!(archetype.source_path, expected_source);
+            let scene = default_archetype_scene(archetype).unwrap();
+            assert!(scene.asset_path.ends_with(expected_asset));
+        }
+        assert!(
+            resource_visual_archetype(&content, &StableId::new("resource:fish").unwrap()).is_none()
+        );
+    }
+
+    #[test]
+    fn production_resource_glbs_expose_unity_masks_as_color_zero() {
+        for name in ["Env_Tree.glb", "Env_Ore.glb", "Env_Bush.glb"] {
+            let path = locate_asset_root()
+                .join("migrated/models/Models/Resources")
+                .join(name);
+            let bytes = std::fs::read(&path).unwrap();
+            let json_length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+            let json = &bytes[20..20 + json_length];
+            let json_end = json
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace() && *byte != 0)
+                .unwrap()
+                + 1;
+            let document: serde_json::Value = serde_json::from_slice(&json[..json_end]).unwrap();
+            for primitive in document["meshes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|mesh| mesh["primitives"].as_array().unwrap())
+            {
+                let attributes = primitive["attributes"].as_object().unwrap();
+                assert!(attributes.contains_key("COLOR_0"), "{name} lacks COLOR_0");
+                assert!(
+                    attributes
+                        .keys()
+                        .all(|key| !key.starts_with("COLOR_") || key == "COLOR_0"),
+                    "{name} contains an unsupported secondary color semantic"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resource_variants_and_scale_are_deterministic() {
+        let resource = |kind: &str, x, z| stream_town_domain::GeneratedResource {
+            id: StableId::new(format!("resource:{x}:{z}")).unwrap(),
+            kind: StableId::new(kind).unwrap(),
+            position: GridPos { x, z },
+            amount: 100,
+        };
+        assert_eq!(resource_mesh_index(&resource("resource:wood", 2, 4)), 0);
+        assert_eq!(resource_mesh_index(&resource("resource:wood", 3, 4)), 1);
+        assert_eq!(resource_mesh_index(&resource("resource:ore", 9, 6)), 1);
+        assert_eq!(resource_mesh_index(&resource("resource:food", 9, 6)), 0);
+        assert!((resource_visual_scale(12.0) - 0.03).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tree_seasons_match_unity_material_targets() {
+        assert_eq!(
+            tree_season_controls(Season::Spring),
+            Vec4::new(0.0, 0.0, 0.1, 0.0)
+        );
+        assert_eq!(tree_season_controls(Season::Summer), Vec4::ZERO);
+        assert_eq!(
+            tree_season_controls(Season::Autumn),
+            Vec4::new(0.3, 0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            tree_season_controls(Season::Winter),
+            Vec4::new(0.0, 0.5, 0.0, 0.0)
+        );
     }
 
     #[test]
