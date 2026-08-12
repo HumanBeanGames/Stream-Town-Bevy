@@ -15,6 +15,7 @@ struct WaterMaterialUniform {
     season_tint: vec4<f32>,
     main_scale_offset: vec4<f32>,
     noise_scale_offset: vec4<f32>,
+    depth_foam_controls: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -63,7 +64,12 @@ fn fragment(
                 + water_material.noise_scale_offset.zw,
         ),
     );
-    var color = mix(water_material.deep_color, water_material.surface_color, broad.g);
+    var depth = broad.g;
+#ifdef VERTEX_COLORS
+    depth = clamp(in.color.r, 0.0, 1.0);
+#endif
+    let shallow = pow(1.0 - depth, water_material.depth_foam_controls.y);
+    var color = mix(water_material.deep_color, water_material.surface_color, shallow);
     color = mix(color, vec4<f32>(1.0, 1.0, 1.0, 0.0), clamp(wind_noise, 0.0, 1.0));
 
     let foam_scale = water_material.scale_foam_ice.y * 0.01;
@@ -89,7 +95,19 @@ fn fragment(
                 + water_material.noise_scale_offset.zw,
         ),
     ).a;
-    let foam = smoothstep(1.35, 1.75, foam_a + foam_b);
+    let shoreline = 1.0 - smoothstep(
+        0.0,
+        water_material.depth_foam_controls.w
+            / water_material.depth_foam_controls.x,
+        depth,
+    );
+    let foam_threshold = clamp(
+        1.0 - shoreline * water_material.depth_foam_controls.z * 0.1,
+        0.05,
+        1.95,
+    );
+    let foam = smoothstep(foam_threshold, foam_threshold + 0.22, foam_a + foam_b)
+        * shoreline;
     color = mix(color, water_material.foam_color, foam);
 
     let ice_pattern = smoothstep(0.2, 0.8, broad.b - primary * 0.35);
@@ -98,9 +116,14 @@ fn fragment(
         water_material.ice_color,
         ice_pattern * water_material.scale_foam_ice.w,
     );
+    let tinted_water = color.rgb * water_material.season_tint.rgb;
     pbr_input.material.base_color = vec4<f32>(
-        color.rgb * water_material.season_tint.rgb,
-        mix(water_material.season_tint.a, water_material.scale_foam_ice.z, foam),
+        mix(tinted_water, water_material.foam_color.rgb, foam),
+        mix(
+            mix(1.0, water_material.season_tint.a, depth),
+            water_material.scale_foam_ice.z,
+            foam,
+        ),
     );
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material,

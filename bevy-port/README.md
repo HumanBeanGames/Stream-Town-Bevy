@@ -246,7 +246,11 @@ reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that
 blend to the deterministic replacement terrain generator. A second PBR
 extension ports the reachable water material's shallow/deep colors, animated
-dual-noise wind, foam controls, transparency, and winter ice pattern. Exact
+dual-noise wind, foam controls, transparency, and winter ice pattern. A
+terrain-matched 6,561-vertex water mesh carries deterministic depth into the
+shader, producing the authored shallow/deep blend and animated edge foam along
+the replacement terrain shoreline, with an eight-cell deep-water apron beyond
+the island. Exact
 prefab/model renderer bindings can also replace a loaded glTF primitive with a
 typed material extension. The heavily reused shipping `Building.shader` now
 preserves its authored base/detail texture sampling, red-channel ambient
@@ -297,6 +301,8 @@ while the battering ram attacks only construction and buildings. Zero-health
 buildings are removed and release their dirty navigation region.
 `STREAM_TOWN_SMOKE_FOLIAGE=1` frames the generated foliage field for a
 repeatable land/shoreline visual capture.
+`STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated
+land/water boundary for a repeatable depth-blend and edge-foam capture.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -335,8 +341,8 @@ reports average and 95th-percentile frame time after a warmup. The optional
 `STREAM_TOWN_FRAME_TIME_WARMUP` and
 `STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS` values default to ten seconds each.
 The current Windows reference run (Ryzen 5 7600X, Radeon RX 7800 XT, 64 GB,
-DX12, 1920×1080) measured 544 post-warmup frames at 9.18 ms average and
-11.51 ms p95 with 300 simulated agents, 457 deterministic foliage instances,
+DX12, 1920×1080) measured 514 post-warmup frames at 9.73 ms average and
+12.45 ms p95 with 300 simulated agents, 457 deterministic foliage instances,
 and the production 16-character detail budget, below the 16.7 ms gate.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
@@ -357,8 +363,8 @@ but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
 [`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). Rare/non-gameplay action
-emitters, scene-depth shoreline foam, and the remaining reachable WGSL shader
-ports remain presentation work. Property curves
+emitters and the remaining reachable WGSL shader ports remain presentation
+work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.

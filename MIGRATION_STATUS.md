@@ -294,8 +294,10 @@ mistaken for production-ready systems.
 - A separate PBR water extension consumes `Env_Water`'s shallow/deep, foam,
   wind, noise, alpha, and ice controls. Its WGSL port animates both authored
   noise textures and restores Unity's winter ice toggle while preserving live
-  season/weather tint. Exact scene-depth shoreline foam remains a later render
-  pass rather than being represented as completed.
+  season/weather tint. The generated 81×81 water mesh encodes terrain depth for
+  shallow/deep color, opacity, and animated shoreline foam and extends eight
+  cells beyond the island as deep ocean; this deterministically reproduces the
+  scene-depth relationship without requiring an opaque-texture sampling pass.
 - Exact prefab/model renderer bindings can replace a glTF primitive's standard
   material with a typed custom extension. The 688 reachable references to the
   shared `Building_Material` now use a WGSL port of `Building.shader`, including
@@ -357,8 +359,9 @@ mistaken for production-ready systems.
 - A measured 300-agent presentation LOD: 16 actors use authored GLB rigs and
   shared animation graphs while the remaining crowd uses lightweight capsule
   visuals without changing authoritative gameplay or persistence. The recorded
-  1920×1080 DX12 reference run reached 9.18 ms average and 11.51 ms p95 across
-  544 post-warmup frames with 457 generated foliage instances on the documented
+  1920×1080 DX12 reference run reached 9.73 ms average and 12.45 ms p95 across
+  514 post-warmup frames with 457 generated foliage instances and the
+  depth-aware 81×81 water surface on the documented
   reference machine.
 
 ## Not yet at parity
@@ -366,8 +369,7 @@ mistaken for production-ready systems.
 - The remaining rare/non-gameplay action emitters. Direct and nested
   layer/state-machine routing, conditioned entries,
   parent exits, masks, and property curves are converted and live.
-- Scene-depth shoreline foam, chunked terrain/foliage LOD, production-grade
-  actor steering, complete advanced
+- Chunked terrain/foliage LOD, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
   area attacks, additional enemy archetype behaviors/spawners, combat buildings
   beyond the Tower, station
@@ -448,7 +450,7 @@ persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
-action emitters, remaining scene-depth shoreline and chunked LOD work,
+action emitters and remaining chunked LOD work,
 particle fields, remaining custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.

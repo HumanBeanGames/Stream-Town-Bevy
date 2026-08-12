@@ -313,6 +313,7 @@ struct WaterMaterialUniform {
     season_tint: Vec4,
     main_scale_offset: Vec4,
     noise_scale_offset: Vec4,
+    depth_foam_controls: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -1217,6 +1218,7 @@ fn setup_rendering(
     let combat_closeup = std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some();
     let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some();
     let foliage_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some();
+    let shoreline_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1236,6 +1238,8 @@ fn setup_rendering(
                     58.0
                 } else if foliage_closeup {
                     45.0
+                } else if shoreline_closeup {
+                    80.0
                 } else {
                     520.0
                 },
@@ -1607,12 +1611,7 @@ fn water_material(
                     scalar("_FoamAlpha", 0.4).clamp(0.0, 1.0),
                     scalar("_IceStrength", 0.0).clamp(0.0, 1.0),
                 ),
-                season_tint: Vec4::new(
-                    0.05 / surface.x.max(0.001),
-                    0.29 / surface.y.max(0.001),
-                    0.47 / surface.z.max(0.001),
-                    0.62,
-                ),
+                season_tint: water_color_tint(surface, [0.05, 0.29, 0.47, 0.62]),
                 main_scale_offset: Vec4::new(
                     main_transform.scale[0],
                     main_transform.scale[1],
@@ -1624,6 +1623,12 @@ fn water_material(
                     noise_transform.scale[1],
                     noise_transform.offset[0],
                     noise_transform.offset[1],
+                ),
+                depth_foam_controls: Vec4::new(
+                    scalar("_Distance", 10.0).max(0.01),
+                    scalar("_EdgePower", 0.8).max(0.01),
+                    scalar("_FoamCuttoff", 7.81).max(0.01),
+                    scalar("_FoamDepth", 0.94).max(0.01),
                 ),
             },
             main_texture: texture("_MainTexture"),
@@ -1983,7 +1988,7 @@ fn generate_and_spawn_world(
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
-    meshes: Option<ResMut<Assets<Mesh>>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
@@ -2038,6 +2043,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 30.0, focus.y + 35.0, focus.z + 30.0)
                 .looking_at(focus + Vec3::Y, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some() {
+            let focus = shoreline_focus(&generated, &config.0);
+            Transform::from_translation(focus + Vec3::new(45.0, 48.0, 45.0))
+                .looking_at(focus, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
                 .map_or(Vec3::ZERO, |position| {
@@ -2067,7 +2076,7 @@ fn generate_and_spawn_world(
         f32::from(config.0.world.width) * config.0.world.cell_size,
         f32::from(config.0.world.height) * config.0.world.cell_size,
     );
-    if let Some(mut meshes) = meshes {
+    if let Some(meshes) = meshes.as_deref_mut() {
         let terrain_mesh = generated_terrain_mesh(&generated, &config.0);
         let terrain_collider = Collider::trimesh_from_mesh(&terrain_mesh)
             .expect("generated terrain mesh has indexed triangle geometry");
@@ -2092,17 +2101,25 @@ fn generate_and_spawn_world(
             )),
         ));
     }
-    let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
-    commands.spawn((
-        WorldEntity,
-        Mesh3d(render.cube.clone()),
-        MeshMaterial3d(render.water.clone()),
-        Transform::from_xyz(0.0, water_height - 0.08, 0.0).with_scale(Vec3::new(
-            world_size.x,
-            0.12,
-            world_size.y,
-        )),
-    ));
+    if let Some(meshes) = meshes.as_deref_mut() {
+        commands.spawn((
+            WorldEntity,
+            Mesh3d(meshes.add(generated_water_mesh(&generated, &config.0))),
+            MeshMaterial3d(render.water.clone()),
+        ));
+    } else {
+        let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
+        commands.spawn((
+            WorldEntity,
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.water.clone()),
+            Transform::from_xyz(0.0, water_height - 0.08, 0.0).with_scale(Vec3::new(
+                world_size.x,
+                0.12,
+                world_size.y,
+            )),
+        ));
+    }
 
     for resource in &generated.resources {
         let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
@@ -5755,12 +5772,7 @@ fn update_environment_presentation(
         && let Some(mut water) = water_materials.get_mut(&render.water)
     {
         let surface = water.extension.parameters.surface_color;
-        water.extension.parameters.season_tint = Vec4::new(
-            palette.water_color[0] / surface.x.max(0.001),
-            palette.water_color[1] / surface.y.max(0.001),
-            palette.water_color[2] / surface.z.max(0.001),
-            palette.water_color[3],
-        );
+        water.extension.parameters.season_tint = water_color_tint(surface, palette.water_color);
         water.extension.parameters.scale_foam_ice.w = water_ice_strength(environment.0);
     }
     if let Some(building_materials) = building_materials.as_deref_mut()
@@ -5949,6 +5961,15 @@ fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
 
 fn water_ice_strength(season: Season) -> f32 {
     if season == Season::Winter { 1.0 } else { 0.0 }
+}
+
+fn water_color_tint(surface: Vec4, target: [f32; 4]) -> Vec4 {
+    Vec4::new(
+        target[0] / surface.x.max(0.1),
+        target[1] / surface.y.max(0.1),
+        target[2] / surface.z.max(0.1),
+        target[3],
+    )
 }
 
 fn building_snow_strength(season: Season) -> f32 {
@@ -11925,6 +11946,52 @@ fn terrain_height(world: &GeneratedWorld, position: GridPos) -> f32 {
     f32::from(world.navigation.height_at(position).unwrap_or_default()) * 0.01
 }
 
+fn shoreline_focus(world: &GeneratedWorld, config: &GameConfig) -> Vec3 {
+    let centre = GridPos {
+        x: world.navigation.width() / 2,
+        z: world.navigation.height() / 2,
+    };
+    let best = (0..world.navigation.height())
+        .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+        .filter(|position| !world.navigation.is_walkable(*position))
+        .filter(|position| {
+            [
+                position
+                    .x
+                    .checked_sub(1)
+                    .map(|x| GridPos { x, z: position.z }),
+                (position.x + 1 < world.navigation.width()).then_some(GridPos {
+                    x: position.x + 1,
+                    z: position.z,
+                }),
+                position
+                    .z
+                    .checked_sub(1)
+                    .map(|z| GridPos { x: position.x, z }),
+                (position.z + 1 < world.navigation.height()).then_some(GridPos {
+                    x: position.x,
+                    z: position.z + 1,
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|neighbor| world.navigation.is_walkable(neighbor))
+        })
+        .min_by_key(|position| position.x.abs_diff(centre.x) + position.z.abs_diff(centre.z))
+        .unwrap_or(centre);
+    let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
+    let mut boundary = grid_to_world_on_surface(best, config, world);
+    boundary.y = water_height;
+    let centre_world = grid_to_world_on_surface(centre, config, world);
+    let inward = Vec3::new(
+        centre_world.x - boundary.x,
+        0.0,
+        centre_world.z - boundary.z,
+    )
+    .normalize_or_zero();
+    boundary + inward * config.world.cell_size * 2.5
+}
+
 fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
     let width = world.navigation.width();
     let height = world.navigation.height();
@@ -11976,6 +12043,77 @@ fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
     .with_inserted_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
     mesh
+}
+
+fn generated_water_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
+    const OCEAN_PADDING_CELLS: u16 = 8;
+    let width = world.navigation.width();
+    let height = world.navigation.height();
+    let padded_width = width + OCEAN_PADDING_CELLS * 2;
+    let padded_height = height + OCEAN_PADDING_CELLS * 2;
+    let columns = u32::from(padded_width) + 1;
+    let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
+    let authored_depth_range = 10.0_f32;
+    let mut positions =
+        Vec::with_capacity(usize::from(padded_width + 1) * usize::from(padded_height + 1));
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut colors = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    for z in 0..=padded_height {
+        for x in 0..=padded_width {
+            let terrain_height = if (OCEAN_PADDING_CELLS..=OCEAN_PADDING_CELLS + width).contains(&x)
+                && (OCEAN_PADDING_CELLS..=OCEAN_PADDING_CELLS + height).contains(&z)
+            {
+                terrain_corner_height(world, x - OCEAN_PADDING_CELLS, z - OCEAN_PADDING_CELLS)
+            } else {
+                water_height - authored_depth_range
+            };
+            let depth = (water_height - terrain_height).max(0.0);
+            let normalized_depth = (depth / authored_depth_range).clamp(0.0, 1.0);
+            positions.push([
+                (f32::from(x) - f32::from(OCEAN_PADDING_CELLS) - f32::from(width) * 0.5)
+                    * config.world.cell_size,
+                water_height + 0.05,
+                (f32::from(z) - f32::from(OCEAN_PADDING_CELLS) - f32::from(height) * 0.5)
+                    * config.world.cell_size,
+            ]);
+            normals.push([0.0, 1.0, 0.0]);
+            colors.push([normalized_depth, 0.0, 0.0, 1.0]);
+            uvs.push([
+                f32::from(x) / f32::from(padded_width),
+                f32::from(z) / f32::from(padded_height),
+            ]);
+        }
+    }
+
+    let mut indices =
+        Vec::with_capacity(usize::from(padded_width) * usize::from(padded_height) * 6);
+    for z in 0..u32::from(padded_height) {
+        for x in 0..u32::from(padded_width) {
+            let top_left = z * columns + x;
+            let top_right = top_left + 1;
+            let bottom_left = top_left + columns;
+            let bottom_right = bottom_left + 1;
+            indices.extend_from_slice(&[
+                top_left,
+                bottom_left,
+                top_right,
+                top_right,
+                bottom_left,
+                bottom_right,
+            ]);
+        }
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 fn healing_ring_mesh(segments: u32) -> Mesh {
@@ -13392,6 +13530,21 @@ mod tests {
                 .abs()
                 <= f32::EPSILON
         );
+        let water = generated_water_mesh(&world, &config);
+        assert_eq!(water.count_vertices(), 81 * 81);
+        assert_eq!(water.indices().unwrap().len(), 80 * 80 * 6);
+        let bevy::mesh::VertexAttributeValues::Float32x4(depth_colors) =
+            water.attribute(Mesh::ATTRIBUTE_COLOR).unwrap()
+        else {
+            panic!("water depth must use float vertex colors");
+        };
+        assert!(
+            depth_colors
+                .iter()
+                .all(|color| (0.0..=1.0).contains(&color[0]))
+        );
+        assert!(depth_colors.iter().any(|color| color[0] == 0.0));
+        assert!(depth_colors.iter().any(|color| color[0] > 0.0));
     }
 
     #[test]
@@ -13662,6 +13815,17 @@ mod tests {
         );
         assert!((water.extension.parameters.wind_speed_noise_alpha.z - 0.02).abs() < f32::EPSILON);
         assert!((water.extension.parameters.scale_foam_ice.y - 3.71).abs() < f32::EPSILON);
+        assert_eq!(
+            water.extension.parameters.depth_foam_controls,
+            Vec4::new(10.0, 0.8, 7.81, 0.94)
+        );
+        assert_eq!(
+            water_color_tint(
+                Vec4::new(0.0, 0.764_705_9, 1.0, 1.0),
+                [0.05, 0.29, 0.47, 0.62]
+            ),
+            Vec4::new(0.5, 0.29 / 0.764_705_9, 0.47, 0.62)
+        );
         assert_eq!(
             water.extension.parameters.main_scale_offset,
             Vec4::new(1.0, 1.0, 0.0, 0.0)
