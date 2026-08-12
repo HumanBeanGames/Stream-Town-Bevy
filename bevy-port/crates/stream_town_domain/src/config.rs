@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -53,6 +53,10 @@ pub struct TwitchConfig {
     pub bot_login: String,
     pub channel_login: String,
     pub require_broadcaster_connect: bool,
+    /// Numeric Twitch user IDs authorized for Unity-compatible game-master commands.
+    /// This intentionally does not inherit broadcaster or moderator privileges.
+    #[serde(default)]
+    pub game_master_ids: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -73,6 +77,8 @@ pub enum ConfigError {
     TwitchClientId,
     #[error("Twitch bot and channel logins must be lowercase ASCII names")]
     TwitchLogin,
+    #[error("game-master Twitch user IDs must contain only ASCII digits")]
+    TwitchGameMasterId,
     #[error("starting resource {resource} exceeds capacity {capacity}")]
     StartingResourceCapacity { resource: StableId, capacity: u32 },
 }
@@ -119,6 +125,7 @@ impl Default for GameConfig {
                 bot_login: "humanbeanbot".to_owned(),
                 channel_login: "humanbeangames".to_owned(),
                 require_broadcaster_connect: true,
+                game_master_ids: BTreeSet::new(),
             },
         }
     }
@@ -166,6 +173,14 @@ impl GameConfig {
         {
             return Err(ConfigError::TwitchLogin);
         }
+        if self
+            .twitch
+            .game_master_ids
+            .iter()
+            .any(|id| id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return Err(ConfigError::TwitchGameMasterId);
+        }
         Ok(())
     }
 }
@@ -198,5 +213,11 @@ mod tests {
         assert!(config.validate().is_ok());
         config.twitch.channel_login = "MixedCase".to_owned();
         assert_eq!(config.validate(), Err(ConfigError::TwitchLogin));
+        config.twitch.channel_login = "humanbeangames".to_owned();
+        config
+            .twitch
+            .game_master_ids
+            .insert("not-a-user-id".to_owned());
+        assert_eq!(config.validate(), Err(ConfigError::TwitchGameMasterId));
     }
 }

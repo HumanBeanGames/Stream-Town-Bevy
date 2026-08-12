@@ -38,5 +38,6 @@
         bot_login: "humanbeanbot",
         channel_login: "humanbeangames",
         require_broadcaster_connect: true,
+        game_master_ids: [],
     ),
 )

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     time::Duration,
 };
 
@@ -218,6 +218,8 @@ pub struct WorldSimulation {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_goals: Vec<TownGoalState>,
     pub active_event: Option<TownEvent>,
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    pub queued_events: VecDeque<TownEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_raid: Option<RaidState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,6 +241,13 @@ pub struct WorldSimulation {
     pub ruler_vote_cooldown_seconds: f32,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub ruler_vote_scheduled: bool,
+    /// Unity-compatible game-master toggle. Disabled costs pass an empty cost map
+    /// through the same construction and upgrade transactions.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub building_costs_enabled: bool,
+    /// Unity-compatible game-master toggle for authored per-role user caps.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub role_limits_enabled: bool,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -306,6 +315,7 @@ impl WorldSimulation {
             active_vote: None,
             active_goals: Vec::new(),
             active_event: None,
+            queued_events: VecDeque::new(),
             active_raid: None,
             fish_god: None,
             fish_god_attempts: 0,
@@ -315,7 +325,25 @@ impl WorldSimulation {
             ruler_vote: None,
             ruler_vote_cooldown_seconds: 30.0,
             ruler_vote_scheduled: true,
+            building_costs_enabled: true,
+            role_limits_enabled: true,
         }
+    }
+
+    pub fn toggle_building_costs(&mut self) -> bool {
+        self.building_costs_enabled = !self.building_costs_enabled;
+        self.building_costs_enabled
+    }
+
+    pub fn toggle_role_limits(&mut self) -> bool {
+        self.role_limits_enabled = !self.role_limits_enabled;
+        self.role_limits_enabled
+    }
+
+    pub fn adjust_town_resource(&mut self, resource: StableId, amount: i32) -> u32 {
+        let value = self.town_resources.entry(resource).or_default();
+        *value = value.saturating_add_signed(amount);
+        *value
     }
 
     pub fn join_player(&mut self, id: StableId, position: GridPos) -> bool {
@@ -445,6 +473,12 @@ impl WorldSimulation {
         if !player.alive {
             return Err(SimulationError::ActorDead(actor.clone()));
         }
+        self.action_fish_god()
+    }
+
+    /// Applies the current event's action without requiring a player actor, matching
+    /// Unity's game-master `!gaction` path.
+    pub fn action_fish_god(&mut self) -> Result<bool, SimulationError> {
         let Some(event) = &mut self.fish_god else {
             return Err(SimulationError::NoFishGodEvent);
         };
@@ -474,6 +508,34 @@ impl WorldSimulation {
         self.fish_god = None;
         self.active_event = None;
         Ok(true)
+    }
+
+    /// Queues a unique event type. Unity rejects duplicates that are active or queued.
+    pub fn queue_event(&mut self, event: TownEvent) -> bool {
+        if self.active_event.as_ref() == Some(&event) || self.queued_events.contains(&event) {
+            return false;
+        }
+        self.queued_events.push_back(event);
+        true
+    }
+
+    pub fn take_next_queued_event(&mut self) -> Option<TownEvent> {
+        if self.active_event.is_some() {
+            None
+        } else {
+            self.queued_events.pop_front()
+        }
+    }
+
+    /// Stops the current event and returns raid actors that the runtime must despawn.
+    pub fn stop_active_event(&mut self) -> Vec<StableId> {
+        let raid_actors = self
+            .active_raid
+            .take()
+            .map_or_else(Vec::new, |raid| raid.tracked_enemies.into_iter().collect());
+        self.fish_god = None;
+        self.active_event = None;
+        raid_actors
     }
 
     pub fn start_ruler_vote(&mut self, kind: RulerVoteKind) -> Result<(), SimulationError> {
@@ -679,6 +741,32 @@ impl WorldSimulation {
             levels_gained += 1;
         }
         Ok(levels_gained)
+    }
+
+    pub fn grant_role_levels(
+        &mut self,
+        actor: &StableId,
+        amount: u16,
+    ) -> Result<u16, SimulationError> {
+        let actor_state = self.actor_mut(actor)?;
+        let progress = actor_state
+            .role_progression
+            .entry(actor_state.role.clone())
+            .or_default();
+        let before = progress.level;
+        progress.level = progress.level.saturating_add(amount).min(MAX_ROLE_LEVEL);
+        if progress.level >= MAX_ROLE_LEVEL {
+            progress.experience = 0;
+        }
+        if actor_state.alive {
+            actor_state.health = actor_state.max_health;
+        }
+        let levels_gained = progress.level - before;
+        Ok(levels_gained)
+    }
+
+    pub fn unlock_pet(&mut self, actor: &StableId, pet: StableId) -> Result<bool, SimulationError> {
+        Ok(self.actor_mut(actor)?.unlocked_pets.insert(pet))
     }
 
     pub fn gather(
@@ -990,6 +1078,59 @@ impl WorldSimulation {
                 })
                 .collect(),
         });
+        Some(technology)
+    }
+
+    /// Starts a technology goal directly, as Unity's game-master random-tech command does.
+    pub fn start_technology_goal(
+        &mut self,
+        technology: StableId,
+        objective_ids: &[StableId],
+        definitions: &BTreeMap<StableId, ObjectiveDef>,
+        max_goals: usize,
+    ) -> bool {
+        if self.unlocked_technology.contains(&technology)
+            || self
+                .active_goals
+                .iter()
+                .any(|goal| goal.technology == technology)
+        {
+            return false;
+        }
+        if objective_ids.is_empty() {
+            return self.unlocked_technology.insert(technology);
+        }
+        if self.active_goals.len() >= max_goals {
+            return false;
+        }
+        let objectives = objective_ids
+            .iter()
+            .filter_map(|objective| {
+                definitions
+                    .get(objective)
+                    .map(|definition| ObjectiveProgress {
+                        objective: objective.clone(),
+                        amount: 0,
+                        required_amount: definition.required_amount,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if objectives.is_empty() {
+            return false;
+        }
+        self.active_goals.push(TownGoalState {
+            technology,
+            objectives,
+        });
+        true
+    }
+
+    pub fn force_complete_first_goal(&mut self) -> Option<StableId> {
+        if self.active_goals.is_empty() {
+            return None;
+        }
+        let technology = self.active_goals.remove(0).technology;
+        self.unlocked_technology.insert(technology.clone());
         Some(technology)
     }
 
@@ -1364,6 +1505,80 @@ mod tests {
                 experience: 4,
             }
         );
+    }
+
+    #[test]
+    fn game_master_state_toggles_queue_and_direct_actions_round_trip() {
+        let mut simulation = WorldSimulation::new(11);
+        let actor = id("twitch:gm_target");
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
+        assert!(!simulation.toggle_building_costs());
+        assert!(!simulation.toggle_role_limits());
+        assert_eq!(simulation.adjust_town_resource(id("resource:wood"), -20), 0);
+        assert_eq!(
+            simulation.adjust_town_resource(id("resource:wood"), 125),
+            125
+        );
+        assert_eq!(simulation.grant_role_levels(&actor, 3), Ok(3));
+        assert_eq!(
+            simulation.actors[&actor].role_progression[&id("role:villager")].level,
+            4
+        );
+        assert_eq!(simulation.unlock_pet(&actor, id("pet:duck")), Ok(true));
+
+        assert!(simulation.queue_event(TownEvent::FishGod));
+        assert!(!simulation.queue_event(TownEvent::FishGod));
+        assert_eq!(
+            simulation.take_next_queued_event(),
+            Some(TownEvent::FishGod)
+        );
+        assert!(simulation.start_fish_god(true));
+        assert_eq!(simulation.action_fish_god(), Ok(false));
+        assert_eq!(simulation.fish_god.as_ref().unwrap().praises_given, 1);
+        assert!(simulation.queue_event(TownEvent::EnemyRaid));
+        assert_eq!(simulation.take_next_queued_event(), None);
+        assert!(simulation.stop_active_event().is_empty());
+        assert_eq!(
+            simulation.take_next_queued_event(),
+            Some(TownEvent::EnemyRaid)
+        );
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap(),
+            simulation
+        );
+    }
+
+    #[test]
+    fn game_master_can_start_and_force_complete_a_technology_goal() {
+        let mut simulation = WorldSimulation::new(12);
+        let technology = id("tech:test");
+        let objective = id("objective:test");
+        let definitions = BTreeMap::from([(
+            objective.clone(),
+            ObjectiveDef {
+                kind: ObjectiveKind::BuildAny,
+                required_amount: 3,
+                float_value_milli: 0,
+                resource: None,
+                building: None,
+                enemy: None,
+            },
+        )]);
+        assert!(simulation.start_technology_goal(
+            technology.clone(),
+            std::slice::from_ref(&objective),
+            &definitions,
+            2,
+        ));
+        assert_eq!(simulation.active_goals.len(), 1);
+        assert_eq!(
+            simulation.force_complete_first_goal(),
+            Some(technology.clone())
+        );
+        assert!(simulation.unlocked_technology.contains(&technology));
+        assert!(!simulation.start_technology_goal(technology, &[objective], &definitions, 2));
     }
 
     fn id(value: &str) -> StableId {

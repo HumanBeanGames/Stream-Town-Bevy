@@ -89,6 +89,14 @@ struct PendingChatCommand {
     is_broadcaster: bool,
     is_moderator: bool,
     is_subscriber: bool,
+    origin: CommandOrigin,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandOrigin {
+    Twitch,
+    /// Local tool/keyboard injection mirrors Unity's debug bridge permission bypass.
+    LocalDebug,
 }
 
 #[derive(Resource, Default)]
@@ -2913,6 +2921,14 @@ fn move_agents(
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation.0.tick(time.delta_secs());
+    if let Some(event) = simulation.0.take_next_queued_event() {
+        match event {
+            TownEvent::FishGod => {
+                let _ = simulation.0.start_fish_god(true);
+            }
+            other => simulation.0.trigger_event(other),
+        }
+    }
     if let Some(technology) = simulation
         .0
         .active_vote
@@ -4559,6 +4575,7 @@ fn game_input(
             is_broadcaster: true,
             is_moderator: true,
             is_subscriber: true,
+            origin: CommandOrigin::LocalDebug,
         });
     }
     if !*injected_debug_commands {
@@ -4574,6 +4591,7 @@ fn game_input(
                         is_broadcaster: true,
                         is_moderator: true,
                         is_subscriber: true,
+                        origin: CommandOrigin::LocalDebug,
                     }),
                     Err(error) => warn!(command, %error, "ignored invalid debug command"),
                 }
@@ -4682,6 +4700,7 @@ fn handle_twitch_event(
                     is_broadcaster: message.is_broadcaster,
                     is_moderator: message.is_moderator,
                     is_subscriber: message.is_subscriber,
+                    origin: CommandOrigin::Twitch,
                 });
                 return;
             }
@@ -4694,6 +4713,7 @@ fn handle_twitch_event(
                     is_broadcaster: message.is_broadcaster,
                     is_moderator: message.is_moderator,
                     is_subscriber: message.is_subscriber,
+                    origin: CommandOrigin::Twitch,
                 }),
                 Err(parse_error) => {
                     debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
@@ -5048,6 +5068,60 @@ fn resolve_technology_id(content: &ContentCatalog, requested: &StableId) -> Opti
         .iter()
         .find(|(_, technology)| normalized_content_name(&technology.display_name) == requested_name)
         .map(|(id, _)| id.clone())
+}
+
+fn eligible_technology_ids(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Vec<StableId> {
+    content
+        .technology
+        .nodes
+        .iter()
+        .filter(|(id, node)| {
+            !node.unavailable
+                && !simulation.unlocked_technology.contains(*id)
+                && !simulation
+                    .active_goals
+                    .iter()
+                    .any(|goal| goal.technology == **id)
+                && simulation
+                    .active_vote
+                    .as_ref()
+                    .is_none_or(|vote| vote.technology != **id)
+                && node
+                    .prerequisites
+                    .iter()
+                    .all(|required| simulation.unlocked_technology.contains(required))
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+fn unlock_reachable_technologies(
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    age_one_only: bool,
+) -> usize {
+    let mut unlocked = 0;
+    loop {
+        let available = eligible_technology_ids(content, simulation)
+            .into_iter()
+            .filter(|id| {
+                !age_one_only
+                    || content.technology.nodes[id]
+                        .age
+                        .trim()
+                        .eq_ignore_ascii_case("Age 1")
+            })
+            .collect::<Vec<_>>();
+        if available.is_empty() {
+            break;
+        }
+        unlocked += available.len();
+        simulation.unlocked_technology.extend(available);
+    }
+    unlocked
 }
 
 fn maximum_building_level(
@@ -5675,6 +5749,22 @@ fn require_staff(pending: &PendingChatCommand) -> Result<(), String> {
     }
 }
 
+fn require_game_master(config: &GameConfig, pending: &PendingChatCommand) -> Result<(), String> {
+    if pending.origin == CommandOrigin::LocalDebug {
+        return Ok(());
+    }
+    let raw_user_id = pending
+        .actor_id
+        .as_str()
+        .strip_prefix("twitch:")
+        .unwrap_or_else(|| pending.actor_id.as_str());
+    if config.twitch.game_master_ids.contains(raw_user_id) {
+        Ok(())
+    } else {
+        Err("this command requires an explicitly configured game-master Twitch user ID".to_owned())
+    }
+}
+
 fn require_ruler_or_staff(
     simulation: &WorldSimulation,
     pending: &PendingChatCommand,
@@ -5777,6 +5867,9 @@ fn role_is_available(
     role: &StableId,
     excluding: Option<&StableId>,
 ) -> bool {
+    if !simulation.role_limits_enabled {
+        return true;
+    }
     role_capacity(content, simulation, role).is_none_or(|capacity| {
         let used = simulation
             .actors
@@ -6194,7 +6287,11 @@ fn upgrade_building_instance(
         .buildings
         .get(runtime_id)
         .ok_or_else(|| format!("building instance {runtime_id} does not exist"))?;
-    let cost = building_upgrade_cost(content, simulation, building_id, definition, state.level);
+    let cost = if simulation.building_costs_enabled {
+        building_upgrade_cost(content, simulation, building_id, definition, state.level)
+    } else {
+        BTreeMap::new()
+    };
     let max_level = maximum_building_level(content, simulation, building_id);
     simulation
         .upgrade_building(runtime_id, max_level, &cost)
@@ -6401,7 +6498,9 @@ fn process_injected_commands(
                         &building_id,
                         building,
                     );
-                    if !can_afford(&simulation.0, &cost) {
+                    if simulation.0.building_costs_enabled
+                        && !can_afford(&simulation.0, &cost)
+                    {
                         return Err(format!("cannot afford {}", building.display_name));
                     }
                     let rotation = actor.building_rotation_quarter_turns;
@@ -6484,12 +6583,16 @@ fn process_injected_commands(
                 ) {
                     return Err("building placement is blocked or outside the world".to_owned());
                 }
-                let cost = building_construction_cost(
-                    &content.0,
-                    &simulation.0,
-                    &placement.building,
-                    building,
-                );
+                let cost = if simulation.0.building_costs_enabled {
+                    building_construction_cost(
+                        &content.0,
+                        &simulation.0,
+                        &placement.building,
+                        building,
+                    )
+                } else {
+                    BTreeMap::new()
+                };
                 let runtime_id = runtime_building_id(&simulation.0);
                 let region = building_region(placement.position, footprint, &world.generated)
                     .ok_or_else(|| "building placement is outside the world".to_owned())?;
@@ -7157,7 +7260,249 @@ fn process_injected_commands(
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
+            ChatCommand::Discord => {
+                Ok("Stream Town Discord: https://discord.gg/By4jvks".to_owned())
+            }
             ChatCommand::Info(requested) => item_info(&content.0, &simulation.0, requested),
+            ChatCommand::ToggleBuildCosts => {
+                require_game_master(&config.0, &pending)?;
+                let enabled = simulation.0.toggle_building_costs();
+                Ok(format!("Buildings Cost Resources: {enabled}"))
+            }
+            ChatCommand::ToggleRoleLimits => {
+                require_game_master(&config.0, &pending)?;
+                let enabled = simulation.0.toggle_role_limits();
+                Ok(format!("Player Role Limits: {enabled}"))
+            }
+            ChatCommand::AddResource { resource, amount } => {
+                require_game_master(&config.0, &pending)?;
+                let resource = prefixed_id(resource, "resource:")
+                    .filter(|resource| {
+                        matches!(
+                            resource.as_str(),
+                            "resource:wood"
+                                | "resource:ore"
+                                | "resource:food"
+                                | "resource:gold"
+                                | "resource:recruit"
+                        )
+                    })
+                    .ok_or_else(|| format!("unknown town resource {resource}"))?;
+                let total = simulation.0.adjust_town_resource(resource.clone(), *amount);
+                Ok(format!("{resource} changed by {amount}; total {total}"))
+            }
+            ChatCommand::KillPlayer(requested) => {
+                require_game_master(&config.0, &pending)?;
+                let target = resolve_player_id(&simulation.0, requested)
+                    .ok_or_else(|| format!("unknown player {requested}"))?;
+                simulation
+                    .0
+                    .damage_actor(&target, u32::MAX)
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("killed {target}"))
+            }
+            ChatCommand::GameMasterRevive(requested) => {
+                require_game_master(&config.0, &pending)?;
+                let target = resolve_player_id(&simulation.0, requested)
+                    .ok_or_else(|| format!("unknown player {requested}"))?;
+                let position = simulation.0.actors[&target].position;
+                let spawn = nearest_walkable(&world.generated, position).unwrap_or(position);
+                simulation
+                    .0
+                    .respawn_actor(&target, spawn)
+                    .map_err(|error| error.to_string())?;
+                queues.agent.0.push_back(AgentCommand::Teleport {
+                    actor: target.clone(),
+                    position: spawn,
+                });
+                Ok(format!("revived {target} without a food cost"))
+            }
+            ChatCommand::GiveExperience { player, amount } => {
+                require_game_master(&config.0, &pending)?;
+                let target = resolve_player_id(&simulation.0, player)
+                    .ok_or_else(|| format!("unknown player {player}"))?;
+                let multiplier = simulation
+                    .0
+                    .actors
+                    .get(&target)
+                    .and_then(|actor| content.0.roles.get(&actor.role))
+                    .map_or(1_000, |role| role.experience_multiplier_per_thousand);
+                let levels = simulation
+                    .0
+                    .grant_role_experience(&target, *amount, multiplier)
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("gave {target} {amount} experience; {levels} levels gained"))
+            }
+            ChatCommand::GiveExperienceAll(amount) => {
+                require_game_master(&config.0, &pending)?;
+                let players = simulation
+                    .0
+                    .actors
+                    .values()
+                    .filter(|actor| actor.role.as_str() != "role:enemy")
+                    .map(|actor| actor.id.clone())
+                    .collect::<Vec<_>>();
+                for player in &players {
+                    let multiplier = simulation
+                        .0
+                        .actors
+                        .get(player)
+                        .and_then(|actor| content.0.roles.get(&actor.role))
+                        .map_or(1_000, |role| role.experience_multiplier_per_thousand);
+                    simulation
+                        .0
+                        .grant_role_experience(player, *amount, multiplier)
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(format!("gave {} players {amount} experience", players.len()))
+            }
+            ChatCommand::LevelUpPlayer { player, amount } => {
+                require_game_master(&config.0, &pending)?;
+                let target = resolve_player_id(&simulation.0, player)
+                    .ok_or_else(|| format!("unknown player {player}"))?;
+                let gained = simulation
+                    .0
+                    .grant_role_levels(&target, *amount)
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("leveled {target} by {gained}"))
+            }
+            ChatCommand::GivePet { player, pet } => {
+                require_game_master(&config.0, &pending)?;
+                let target = resolve_player_id(&simulation.0, player)
+                    .ok_or_else(|| format!("unknown player {player}"))?;
+                let pet = prefixed_id(pet, "pet:")
+                    .filter(|pet| {
+                        matches!(
+                            pet.as_str(),
+                            "pet:none"
+                                | "pet:redpanda"
+                                | "pet:red_panda"
+                                | "pet:fishgod"
+                                | "pet:fish_god"
+                                | "pet:giraffe"
+                                | "pet:duck"
+                                | "pet:butterfly"
+                        )
+                    })
+                    .map(|pet| match pet.as_str() {
+                        "pet:redpanda" => StableId::new("pet:red_panda").expect("static ID"),
+                        "pet:fishgod" => StableId::new("pet:fish_god").expect("static ID"),
+                        _ => pet,
+                    })
+                    .ok_or_else(|| format!("unknown pet {pet}"))?;
+                simulation
+                    .0
+                    .unlock_pet(&target, pet.clone())
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("unlocked {pet} for {target}"))
+            }
+            ChatCommand::QueueEvent(requested) => {
+                require_game_master(&config.0, &pending)?;
+                let event = match requested.as_str().trim_start_matches("event:") {
+                    "fishgod" | "fish_god" => TownEvent::FishGod,
+                    "monsterraid" | "monster_raid" | "raid" => TownEvent::EnemyRaid,
+                    _ => return Err(format!("unsupported Unity queue event {requested}")),
+                };
+                if !simulation.0.queue_event(event.clone()) {
+                    return Err(format!("{event:?} is already active or queued"));
+                }
+                Ok(format!("queued {event:?}"))
+            }
+            ChatCommand::StopEvent => {
+                require_game_master(&config.0, &pending)?;
+                if simulation.0.active_event.is_none() {
+                    return Err("there is no active event".to_owned());
+                }
+                for enemy in simulation.0.stop_active_event() {
+                    simulation.0.actors.remove(&enemy);
+                    queues.agent.0.push_back(AgentCommand::Despawn(enemy));
+                }
+                Ok("stopped the current event".to_owned())
+            }
+            ChatCommand::CompleteObjective => {
+                require_game_master(&config.0, &pending)?;
+                simulation
+                    .0
+                    .force_complete_first_goal()
+                    .map(|technology| format!("completed the goal for {technology}"))
+                    .ok_or_else(|| "there is no active technology goal".to_owned())
+            }
+            ChatCommand::RandomTechnology => {
+                require_game_master(&config.0, &pending)?;
+                if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
+                    return Err("the town already has the maximum active goals".to_owned());
+                }
+                let technology = eligible_technology_ids(&content.0, &simulation.0)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "there are no eligible technologies".to_owned())?;
+                let node = &content.0.technology.nodes[&technology];
+                if !simulation.0.start_technology_goal(
+                    technology.clone(),
+                    &node.objectives,
+                    &content.0.objectives,
+                    MAX_TOWN_GOALS,
+                ) {
+                    return Err(format!("could not start {}", node.display_name));
+                }
+                Ok(format!("started technology goal {}", node.display_name))
+            }
+            ChatCommand::TechnologyVote => {
+                require_game_master(&config.0, &pending)?;
+                let technology = eligible_technology_ids(&content.0, &simulation.0)
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "there are no eligible technologies".to_owned())?;
+                let name = content.0.technology.nodes[&technology].display_name.clone();
+                simulation
+                    .0
+                    .start_technology_vote(technology, 60.0)
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("started a 60-second technology vote for {name}"))
+            }
+            ChatCommand::GameEventAction => {
+                require_game_master(&config.0, &pending)?;
+                if simulation.0.fish_god.is_none() {
+                    return Err("the current event has no game-master action".to_owned());
+                }
+                simulation
+                    .0
+                    .action_fish_god()
+                    .map(|completed| {
+                        if completed {
+                            "completed the Fish God event action".to_owned()
+                        } else {
+                            let event = simulation.0.fish_god.as_ref().expect("event remains active");
+                            format!(
+                                "Fish God action {}/{}",
+                                event.praises_given, event.praises_required
+                            )
+                        }
+                    })
+                    .map_err(|error| error.to_string())
+            }
+            ChatCommand::UnlockAllTechnology => {
+                require_game_master(&config.0, &pending)?;
+                let count = unlock_reachable_technologies(&content.0, &mut simulation.0, false);
+                Ok(format!("unlocked {count} reachable technologies"))
+            }
+            ChatCommand::UnlockAgeTwo => {
+                require_game_master(&config.0, &pending)?;
+                let count = unlock_reachable_technologies(&content.0, &mut simulation.0, true);
+                Ok(format!("unlocked {count} Age 1 technologies"))
+            }
+            ChatCommand::ResetId { kind, value } => {
+                require_game_master(&config.0, &pending)?;
+                if kind.as_str() != "building" {
+                    return Err("Unity resetid supports only building IDs".to_owned());
+                }
+                let building = building_definition_id(&content.0, value)?;
+                let count = building_instance_ids(&content.0, &simulation.0, &building).len();
+                Ok(format!(
+                    "{count} {} instances already use stable IDs; no counter reset was required",
+                    content.0.buildings[&building].display_name
+                ))
+            }
             ChatCommand::TriggerEvent(event) => {
                 require_staff(&pending)?;
                 town_event_from_id(event)
@@ -7316,7 +7661,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role [role], !roles, !health, !experience/!level [role], !station [id], !target [id], !stuck, !ping, !pets/!pet [pet], !hair/!eyes/!facialhair/!body/!haircolor/!eyecolor <id>, !build <type>, !move/!up/!down/!left/!right/!rotate, !confirm/!accept/!cancel, !buildings/!bid, !level <building> <id> [times], !levelall <building> <level>, !remove <building> <id>, !upgrade, !info, !townstats, !buy/!sell (Ruler), !recruit/!recruits/!rid/!rinfo/!rrole/!rdismiss (Ruler), !cam/!resetcam (Ruler), !modrole/!rulervote/!event (staff), !resign, !revive, !praise, !vote, !save, !help"
+                "commands: !join, !role [role], !roles, !health, !experience/!level [role], !station [id], !target [id], !stuck, !ping, !pets/!pet [pet], !hair/!eyes/!facialhair/!body/!haircolor/!eyecolor <id>, !build <type>, !move/!up/!down/!left/!right/!rotate, !confirm/!accept/!cancel, !buildings/!bid, !level <building> <id> [times], !levelall <building> <level>, !remove <building> <id>, !upgrade, !info, !townstats, !stdiscord, !buy/!sell (Ruler), !recruit/!recruits/!rid/!rinfo/!rrole/!rdismiss (Ruler), !cam/!resetcam (Ruler), !modrole/!rulervote/!event (staff), !resign, !revive, !praise, !vote, !save, !help; GM: !tbuildcosts/!trolelimits/!addresource/!kill/!grevive/!givexp/!givexpall/!levelup/!givepet/!qevent/!stopevent/!cobj/!randtech/!techvote/!gaction/!unlockall/!unlockage2/!resetid"
                     .to_owned(),
             ),
             }
@@ -8669,6 +9014,7 @@ mod tests {
             is_broadcaster: false,
             is_moderator: false,
             is_subscriber: false,
+            origin: CommandOrigin::Twitch,
         };
         assert!(require_ruler_or_staff(&simulation, &ordinary).is_err());
         let ruler_command = PendingChatCommand {
@@ -8679,6 +9025,7 @@ mod tests {
             is_broadcaster: false,
             is_moderator: false,
             is_subscriber: false,
+            origin: CommandOrigin::Twitch,
         };
         assert!(require_ruler_or_staff(&simulation, &ruler_command).is_ok());
         assert_eq!(
@@ -8693,6 +9040,30 @@ mod tests {
             resolve_ruler_vote_option(&simulation, &StableId::new("the_ruler").unwrap()),
             Some(StableId::new("twitch:100").unwrap())
         );
+    }
+
+    #[test]
+    fn game_master_permission_is_explicit_and_local_debug_bypasses_it() {
+        let mut config = GameConfig::default();
+        let mut command = PendingChatCommand {
+            actor_id: StableId::new("twitch:12345").unwrap(),
+            login_name: "configured_gm".to_owned(),
+            display_name: "Configured GM".to_owned(),
+            command: ChatCommand::ToggleBuildCosts,
+            is_broadcaster: true,
+            is_moderator: true,
+            is_subscriber: false,
+            origin: CommandOrigin::Twitch,
+        };
+        assert!(require_staff(&command).is_ok());
+        assert!(require_game_master(&config, &command).is_err());
+        config.twitch.game_master_ids.insert("12345".to_owned());
+        assert!(require_game_master(&config, &command).is_ok());
+        config.twitch.game_master_ids.clear();
+        command.is_broadcaster = false;
+        command.is_moderator = false;
+        command.origin = CommandOrigin::LocalDebug;
+        assert!(require_game_master(&config, &command).is_ok());
     }
 
     #[test]
@@ -8748,6 +9119,7 @@ mod tests {
                 is_broadcaster: true,
                 is_moderator: true,
                 is_subscriber: true,
+                origin: CommandOrigin::LocalDebug,
             });
         app.update();
         let joined_count = app
@@ -8771,6 +9143,96 @@ mod tests {
                 .map(StableId::as_str),
             Some("pet:red_panda")
         );
+
+        let gm_commands = [
+            ChatCommand::ToggleBuildCosts,
+            ChatCommand::ToggleRoleLimits,
+            ChatCommand::AddResource {
+                resource: StableId::new("wood").unwrap(),
+                amount: 123,
+            },
+            ChatCommand::GivePet {
+                player: StableId::new("debug_viewer").unwrap(),
+                pet: StableId::new("duck").unwrap(),
+            },
+            ChatCommand::LevelUpPlayer {
+                player: StableId::new("debug_viewer").unwrap(),
+                amount: 2,
+            },
+            ChatCommand::QueueEvent(StableId::new("fishgod").unwrap()),
+        ];
+        for command in gm_commands {
+            app.world_mut()
+                .resource_mut::<InjectedCommands>()
+                .0
+                .push_back(PendingChatCommand {
+                    actor_id: StableId::new("twitch:debug_viewer").unwrap(),
+                    login_name: "debug_viewer".to_owned(),
+                    display_name: "debug_viewer".to_owned(),
+                    command,
+                    is_broadcaster: false,
+                    is_moderator: false,
+                    is_subscriber: true,
+                    origin: CommandOrigin::LocalDebug,
+                });
+        }
+        app.update();
+        {
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            assert!(!simulation.building_costs_enabled);
+            assert!(!simulation.role_limits_enabled);
+            assert_eq!(town_resource_amount(simulation, "resource:wood"), 5_123);
+            assert!(
+                simulation.actors[&StableId::new("twitch:debug_viewer").unwrap()]
+                    .unlocked_pets
+                    .contains(&StableId::new("pet:duck").unwrap())
+            );
+            assert_eq!(
+                simulation.queued_events.len() + usize::from(simulation.fish_god.is_some()),
+                1
+            );
+        }
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .fish_god
+                .is_some()
+        );
+        for command in [
+            ChatCommand::GameEventAction,
+            ChatCommand::StopEvent,
+            ChatCommand::AddResource {
+                resource: StableId::new("wood").unwrap(),
+                amount: -123,
+            },
+            ChatCommand::ToggleBuildCosts,
+            ChatCommand::ToggleRoleLimits,
+        ] {
+            app.world_mut()
+                .resource_mut::<InjectedCommands>()
+                .0
+                .push_back(PendingChatCommand {
+                    actor_id: StableId::new("twitch:debug_viewer").unwrap(),
+                    login_name: "debug_viewer".to_owned(),
+                    display_name: "debug_viewer".to_owned(),
+                    command,
+                    is_broadcaster: false,
+                    is_moderator: false,
+                    is_subscriber: true,
+                    origin: CommandOrigin::LocalDebug,
+                });
+        }
+        app.update();
+        {
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            assert!(simulation.building_costs_enabled);
+            assert!(simulation.role_limits_enabled);
+            assert_eq!(town_resource_amount(simulation, "resource:wood"), 5_000);
+            assert!(simulation.fish_god.is_none());
+            assert!(simulation.active_event.is_none());
+        }
 
         let eligible_technology = {
             let content = &app.world().resource::<RuntimeContent>().0;
@@ -8869,6 +9331,7 @@ mod tests {
                     is_broadcaster: true,
                     is_moderator: true,
                     is_subscriber: true,
+                    origin: CommandOrigin::LocalDebug,
                 });
         }
         app.update();
@@ -8959,6 +9422,7 @@ mod tests {
                 is_broadcaster: true,
                 is_moderator: true,
                 is_subscriber: true,
+                origin: CommandOrigin::LocalDebug,
             });
         app.update();
         let simulation = &app.world().resource::<SimulationRuntime>().0;
@@ -9015,6 +9479,7 @@ mod tests {
                     is_broadcaster: false,
                     is_moderator: false,
                     is_subscriber: true,
+                    origin: CommandOrigin::LocalDebug,
                 });
         }
         app.update();
@@ -9037,6 +9502,7 @@ mod tests {
                 is_broadcaster: false,
                 is_moderator: false,
                 is_subscriber: true,
+                origin: CommandOrigin::LocalDebug,
             });
         app.update();
         assert!(

@@ -266,14 +266,17 @@ mistaken for production-ready systems.
 - Age changes for the always-present Town Hall still require its underlying
   runtime presentation path; constructed buildings already switch to age-two
   variants when technology applies the authored effect.
-- Full Unity Twitch command coverage, per-command cooldowns, and exact production
+- Per-command cooldowns and exact production
   outbound response wording. The authenticated IRC path now includes player
   role/health/progression, role/station/target selection, unstuck/ping,
   pets and cosmetics, catalogs/info/town stats, recruit inspection/dismissal/
   re-role, camera movement/reset, moderator role assignment, governance,
   economy, save, event, staged building-placement, indexed/all-building upgrade,
-  and indexed removal commands. Remaining game-master cheats, player emotes/
-  actions, and queued-event administration remain.
+  and indexed removal commands. The full registered Unity game-master surface,
+  queued Fish God/Monster Raid administration, current-event action, direct
+  goals/technology control, persisted build-cost and role-limit toggles, and
+  the remaining `!stdiscord` utility command are implemented behind an explicit
+  numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
@@ -340,6 +343,6 @@ storage, stat, and building-age effects. It is still missing nested
 controller layers and complete gameplay action emitters,
 production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
-broader Unity-only command surface, and the recorded reference-machine GPU
+exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

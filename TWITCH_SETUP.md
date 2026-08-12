@@ -45,11 +45,19 @@ The setup tool validates the returned token, refuses a token for the wrong accou
 
 1. In `HumanBeanGames` chat, run `/mod HumanBeanBot`. This is recommended for normal bot rate limits and moderation visibility.
 2. In the tools application's **Twitch** tab, set the channel to `humanbeangames`, enable Twitch, and click **Save runtime config**. This writes public settings only to `.stream-town/config.ron`.
+   Enter numeric Twitch user IDs in **Game-master Twitch user IDs** only for
+   operators who should receive Unity-compatible cheat commands. Login/display
+   names are not accepted because they can change.
 3. Start or load the world.
 4. When Stream Town displays its six-digit broadcaster connection code, send `!connect 123456` from the `HumanBeanGames` account, replacing `123456` with the displayed code.
 5. From a viewer account, test `!join`. The in-game agent and processed-command counts should increase under that viewer's stable Twitch user ID.
 
 The connection code is an application-level safety gate. It proves that the broadcaster present in chat is deliberately enabling bot output for this running game session.
+
+Broadcaster and moderator status grants the existing staff command set, but it
+does not grant game-master cheats. Those commands require an exact ID from
+`twitch.game_master_ids`; the checked-in list is intentionally empty. Local
+debug injection bypasses the list in the same way Unity's session bridge did.
 
 ## 5. Configure OBS
 

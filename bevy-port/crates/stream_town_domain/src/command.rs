@@ -77,6 +77,40 @@ pub enum ChatCommand {
     StartRulerVote,
     Resign,
     TriggerEvent(StableId),
+    Discord,
+    ToggleBuildCosts,
+    ToggleRoleLimits,
+    AddResource {
+        resource: StableId,
+        amount: i32,
+    },
+    KillPlayer(StableId),
+    GameMasterRevive(StableId),
+    GiveExperience {
+        player: StableId,
+        amount: u32,
+    },
+    GiveExperienceAll(u32),
+    LevelUpPlayer {
+        player: StableId,
+        amount: u16,
+    },
+    QueueEvent(StableId),
+    GivePet {
+        player: StableId,
+        pet: StableId,
+    },
+    StopEvent,
+    CompleteObjective,
+    RandomTechnology,
+    TechnologyVote,
+    GameEventAction,
+    UnlockAllTechnology,
+    UnlockAgeTwo,
+    ResetId {
+        kind: StableId,
+        value: StableId,
+    },
     Experience,
     Save,
     Help,
@@ -198,6 +232,61 @@ impl FromStr for ChatCommand {
                 }
                 Ok(Self::Recruit { role, amount })
             }
+            "addresource" => {
+                let resource = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let amount = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?
+                    .parse::<i32>()
+                    .map_err(|_| CommandParseError::InvalidAmount)?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::AddResource { resource, amount })
+            }
+            "givexp" => parse_player_amount(parts, false)
+                .map(|(player, amount)| Self::GiveExperience { player, amount }),
+            "levelup" => parse_player_amount(parts, true).and_then(|(player, amount)| {
+                u16::try_from(amount)
+                    .map(|amount| Self::LevelUpPlayer { player, amount })
+                    .map_err(|_| CommandParseError::InvalidAmount)
+            }),
+            "givepet" => {
+                let player = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let pet = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::GivePet { player, pet })
+            }
+            "resetid" => {
+                let kind = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let value = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::ResetId { kind, value })
+            }
             "rrole" | "modrole" => {
                 let first = parts
                     .next()
@@ -294,6 +383,7 @@ impl FromStr for ChatCommand {
                     "health" => no_argument(argument, Self::Health),
                     "roles" => no_argument(argument, Self::Roles),
                     "townstats" => no_argument(argument, Self::TownStats),
+                    "stdiscord" => no_argument(argument, Self::Discord),
                     "buildings" => no_argument(argument, Self::Buildings),
                     "rid" => no_argument(argument, Self::RecruitIds),
                     "stuck" => no_argument(argument, Self::Unstuck),
@@ -323,11 +413,54 @@ impl FromStr for ChatCommand {
                     "event" => with_id(&command, argument, Self::TriggerEvent),
                     "revive" => optional_id(argument).map(Self::Revive),
                     "praise" => no_argument(argument, Self::Praise),
+                    "tbuildcosts" => no_argument(argument, Self::ToggleBuildCosts),
+                    "trolelimits" => no_argument(argument, Self::ToggleRoleLimits),
+                    "stopevent" => no_argument(argument, Self::StopEvent),
+                    "cobj" => no_argument(argument, Self::CompleteObjective),
+                    "randtech" => no_argument(argument, Self::RandomTechnology),
+                    "techvote" => no_argument(argument, Self::TechnologyVote),
+                    "gaction" => no_argument(argument, Self::GameEventAction),
+                    "unlockall" => no_argument(argument, Self::UnlockAllTechnology),
+                    "unlockage2" => no_argument(argument, Self::UnlockAgeTwo),
+                    "kill" => with_id(&command, argument, Self::KillPlayer),
+                    "grevive" => with_id(&command, argument, Self::GameMasterRevive),
+                    "qevent" => with_id(&command, argument, Self::QueueEvent),
+                    "givexpall" => argument
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|amount| *amount > 0)
+                        .map(Self::GiveExperienceAll)
+                        .ok_or(CommandParseError::InvalidAmount),
                     _ => Err(CommandParseError::Unknown(command)),
                 }
             }
         }
     }
+}
+
+fn parse_player_amount<'a>(
+    mut parts: impl Iterator<Item = &'a str>,
+    default_amount: bool,
+) -> Result<(StableId, u32), CommandParseError> {
+    let player = content_id(
+        parts
+            .next()
+            .ok_or_else(|| CommandParseError::MissingArgument("player".to_owned()))?,
+    )?;
+    let amount = parts
+        .next()
+        .map(str::parse::<u32>)
+        .transpose()
+        .map_err(|_| CommandParseError::InvalidAmount)?
+        .unwrap_or(u32::from(default_amount));
+    if amount == 0 {
+        return Err(CommandParseError::InvalidAmount);
+    }
+    if parts.next().is_some() {
+        return Err(CommandParseError::TooManyArguments);
+    }
+    Ok((player, amount))
 }
 
 fn content_id(value: &str) -> Result<StableId, CommandParseError> {
@@ -596,6 +729,71 @@ mod tests {
             })
         );
         assert_eq!("!rulervote".parse(), Ok(ChatCommand::StartRulerVote));
+        assert_eq!("!stdiscord".parse(), Ok(ChatCommand::Discord));
+        assert_eq!("!tbuildcosts".parse(), Ok(ChatCommand::ToggleBuildCosts));
+        assert_eq!("!trolelimits".parse(), Ok(ChatCommand::ToggleRoleLimits));
+        assert_eq!("!stopevent".parse(), Ok(ChatCommand::StopEvent));
+        assert_eq!("!cobj".parse(), Ok(ChatCommand::CompleteObjective));
+        assert_eq!("!randtech".parse(), Ok(ChatCommand::RandomTechnology));
+        assert_eq!("!techvote".parse(), Ok(ChatCommand::TechnologyVote));
+        assert_eq!("!gaction".parse(), Ok(ChatCommand::GameEventAction));
+        assert_eq!("!unlockall".parse(), Ok(ChatCommand::UnlockAllTechnology));
+        assert_eq!("!unlockage2".parse(), Ok(ChatCommand::UnlockAgeTwo));
+        assert_eq!(
+            "!addresource wood -20".parse(),
+            Ok(ChatCommand::AddResource {
+                resource: StableId::new("wood").unwrap(),
+                amount: -20,
+            })
+        );
+        assert_eq!(
+            "!kill viewer".parse(),
+            Ok(ChatCommand::KillPlayer(StableId::new("viewer").unwrap()))
+        );
+        assert_eq!(
+            "!grevive viewer".parse(),
+            Ok(ChatCommand::GameMasterRevive(
+                StableId::new("viewer").unwrap()
+            ))
+        );
+        assert_eq!(
+            "!givexp viewer 200000".parse(),
+            Ok(ChatCommand::GiveExperience {
+                player: StableId::new("viewer").unwrap(),
+                amount: 200_000,
+            })
+        );
+        assert_eq!(
+            "!givexpall 500".parse(),
+            Ok(ChatCommand::GiveExperienceAll(500))
+        );
+        assert_eq!(
+            "!levelup viewer".parse(),
+            Ok(ChatCommand::LevelUpPlayer {
+                player: StableId::new("viewer").unwrap(),
+                amount: 1,
+            })
+        );
+        assert_eq!(
+            "!qevent monsterraid".parse(),
+            Ok(ChatCommand::QueueEvent(
+                StableId::new("monsterraid").unwrap()
+            ))
+        );
+        assert_eq!(
+            "!givepet viewer redpanda".parse(),
+            Ok(ChatCommand::GivePet {
+                player: StableId::new("viewer").unwrap(),
+                pet: StableId::new("redpanda").unwrap(),
+            })
+        );
+        assert_eq!(
+            "!resetid building house".parse(),
+            Ok(ChatCommand::ResetId {
+                kind: StableId::new("building").unwrap(),
+                value: StableId::new("house").unwrap(),
+            })
+        );
         assert_eq!("!resign".parse(), Ok(ChatCommand::Resign));
         assert_eq!(
             "!revive twitch:friend".parse(),

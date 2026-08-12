@@ -94,6 +94,9 @@ public settings to `.stream-town/config.ron`; OAuth access and refresh tokens ar
 stored only in the operating-system credential vault. The game validates or
 refreshes the token before starting IRC, revalidates hourly, and keeps the Unity
 broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
+Unity-compatible game-master commands use a separate explicit list of numeric
+Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
+local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
 
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
@@ -126,6 +129,16 @@ persisted technology set: the authored initial technologies expose Lumbermill,
   and selling update HUD-visible progress before the technology unlocks. A semicolon-delimited
 `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
+
+The registered Unity game-master surface is also live: `!tbuildcosts`,
+`!trolelimits`, `!addresource`, `!kill`, `!grevive`, `!givexp`, `!givexpall`,
+`!levelup`, `!givepet`, `!qevent`, `!stopevent`, `!cobj`, `!randtech`,
+`!techvote`, `!gaction`, `!unlockall`, `!unlockage2`, and `!resetid`. Build-cost
+and role-limit toggles plus unique queued events persist in native saves.
+Technology administration chooses stable catalog order instead of Unity's
+process-global random state. `!resetid` reports the stable-ID state because Bevy
+does not have Unity's pooled per-type counter to repair. `!stdiscord` preserves
+the remaining registered no-character utility command.
 
 Ruler governance follows the shipping Unity rules: the first election is
 scheduled after 30 seconds, ballots wait indefinitely for the first vote and

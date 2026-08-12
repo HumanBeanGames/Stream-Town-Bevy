@@ -75,6 +75,7 @@ struct ToolState {
     twitch_auth_events: Option<Arc<Mutex<mpsc::Receiver<TwitchToolEvent>>>>,
     twitch_device: Option<DeviceAuthorization>,
     twitch_validation: Option<TokenValidation>,
+    game_master_ids: String,
 }
 
 #[derive(Debug)]
@@ -113,12 +114,20 @@ impl Default for ToolState {
         presentation
             .validate()
             .expect("checked-in presentation catalog must validate");
+        let config = stream_town_game::load_runtime_config().unwrap_or_default();
+        let game_master_ids = config
+            .twitch
+            .game_master_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         Self {
             tab: ToolTab::default(),
             unity_root: "..".to_owned(),
             command: "!join".to_owned(),
             status: "Ready. Migration operations are read-only by default.".to_owned(),
-            config: stream_town_game::load_runtime_config().unwrap_or_default(),
+            config,
             catalog,
             presentation,
             generated_world: None,
@@ -133,6 +142,7 @@ impl Default for ToolState {
             twitch_auth_events: None,
             twitch_device: None,
             twitch_validation: None,
+            game_master_ids,
         }
     }
 }
@@ -734,6 +744,22 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         &mut state.config.twitch.enabled,
         "Enable Twitch in the game",
     );
+    ui.horizontal(|ui| {
+        ui.label("Game-master Twitch user IDs");
+        if ui
+            .text_edit_singleline(&mut state.game_master_ids)
+            .changed()
+        {
+            state.config.twitch.game_master_ids = state
+                .game_master_ids
+                .split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .collect();
+        }
+    });
+    ui.label("GM IDs are explicit numeric Twitch user IDs; broadcaster/moderator status does not grant GM commands.");
     ui.horizontal(|ui| {
         ui.label("Client ID");
         ui.text_edit_singleline(&mut state.config.twitch.client_id);
