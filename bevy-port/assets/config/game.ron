@@ -1,5 +1,5 @@
 (
-    schema_version: 4,
+    schema_version: 5,
     window: (
         title: "Stream Town — Bevy Migration",
         width: 1920,
@@ -13,6 +13,14 @@
         height_scale_centimetres: 800,
         water_level_centimetres: -180,
         resource_density_per_thousand: 38,
+    ),
+    time: (
+        seconds_per_day: 3600,
+        daylight_per_thousand: 666,
+        transition_seconds: 100,
+        day_light_intensity_milli: 10000,
+        night_light_intensity_milli: 5000,
+        max_building_emission_milli: 5000,
     ),
     gameplay: (
         initial_agents: 300,

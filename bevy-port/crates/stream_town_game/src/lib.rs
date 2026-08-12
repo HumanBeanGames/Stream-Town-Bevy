@@ -263,7 +263,8 @@ struct SelectedCell(Option<GridPos>);
 
 #[derive(Resource, Default)]
 struct EnvironmentPresentation {
-    applied: Option<(Season, Weather)>,
+    applied_environment: Option<(Season, Weather)>,
+    applied_daylight_milli: u16,
 }
 
 #[derive(Resource, Default)]
@@ -273,6 +274,7 @@ struct BuildingMaterialInstance {
     handle: Handle<BuildingMaterial>,
     applied_health: i32,
     applied_season: Season,
+    applied_daylight_milli: u16,
 }
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
@@ -1149,11 +1151,10 @@ pub fn load_runtime_config() -> AnyResult<GameConfig> {
     } else {
         include_str!("../../../assets/config/game.ron").to_owned()
     };
-    let config: GameConfig = ron::from_str(&encoded).context("runtime config is invalid RON")?;
-    config
-        .validate()
-        .context("runtime config failed validation")?;
-    Ok(config)
+    ron::from_str::<GameConfig>(&encoded)
+        .context("runtime config is invalid RON")?
+        .upgrade()
+        .context("runtime config failed validation")
 }
 
 fn locate_asset_root() -> PathBuf {
@@ -2272,8 +2273,8 @@ fn generate_and_spawn_world(
             .map(|(id, _)| id.clone()),
     );
     if let Some(day) = debug_start_day() {
-        simulation.elapsed_seconds = f64::from(day) * 120.0;
-        simulation.tick(0.0);
+        simulation.elapsed_seconds = f64::from(day) * f64::from(config.0.time.seconds_per_day);
+        simulation.tick(0.0, config.0.time.seconds_per_day);
     }
     if let Some(weather) = debug_weather_override() {
         simulation.weather = weather;
@@ -5180,7 +5181,13 @@ fn update_enemy_encounters(
         return;
     }
 
-    if simulation.0.active_raid.is_some() || simulation.0.elapsed_seconds.rem_euclid(120.0) < 80.0 {
+    if simulation.0.active_raid.is_some()
+        || config
+            .0
+            .time
+            .sample(simulation.0.elapsed_seconds)
+            .is_daytime
+    {
         return;
     }
     let player_count = simulation
@@ -5526,7 +5533,9 @@ fn move_agents(
     buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
-    simulation.0.tick(time.delta_secs());
+    simulation
+        .0
+        .tick(time.delta_secs(), config.0.time.seconds_per_day);
     apply_passive_building_income(&config.0, &content.0, &mut simulation.0, time.delta());
     if let Some(event) = simulation.0.take_next_queued_event() {
         match event {
@@ -6266,18 +6275,29 @@ fn update_environment_presentation(
     particles: Query<Entity, With<WeatherParticle>>,
 ) {
     let environment = (simulation.0.season, simulation.0.weather);
-    if presentation.applied == Some(environment) {
+    let time_cycle = config.0.time.sample(simulation.0.elapsed_seconds);
+    let daylight_milli = normalized_milli(time_cycle.daylight);
+    let environment_changed = presentation.applied_environment != Some(environment);
+    let daylight_changed = presentation.applied_daylight_milli != daylight_milli;
+    if !environment_changed && !daylight_changed {
         return;
     }
     let palette = environment_palette(environment.0, environment.1);
+    let daylight = f32::from(daylight_milli) / 1_000.0;
+    let authored_daylight = f32::from(config.0.time.day_light_intensity_milli) / 1_000.0;
+    let authored_nightlight = f32::from(config.0.time.night_light_intensity_milli) / 1_000.0;
+    let light_ratio = (authored_nightlight + (authored_daylight - authored_nightlight) * daylight)
+        / authored_daylight.max(f32::EPSILON);
     if let Some(clear_color) = clear_color.as_deref_mut() {
+        let sky_ratio = 0.35 + 0.65 * light_ratio;
         clear_color.0 = Color::srgb(
-            palette.clear_color[0],
-            palette.clear_color[1],
-            palette.clear_color[2],
+            palette.clear_color[0] * sky_ratio,
+            palette.clear_color[1] * sky_ratio,
+            palette.clear_color[2] * sky_ratio,
         );
     }
-    if let Some(terrain_materials) = terrain_materials.as_deref_mut()
+    if environment_changed
+        && let Some(terrain_materials) = terrain_materials.as_deref_mut()
         && let Some(mut ground) = terrain_materials.get_mut(&render.ground)
     {
         ground.extension.parameters.season_tint = Vec4::new(
@@ -6287,7 +6307,8 @@ fn update_environment_presentation(
             ground.extension.parameters.season_tint.w,
         );
     }
-    if let Some(water_materials) = water_materials.as_deref_mut()
+    if environment_changed
+        && let Some(water_materials) = water_materials.as_deref_mut()
         && let Some(mut water) = water_materials.get_mut(&render.water)
     {
         let surface = water.extension.parameters.surface_color;
@@ -6297,32 +6318,39 @@ fn update_environment_presentation(
     if let Some(building_materials) = building_materials.as_deref_mut()
         && let Some(mut building) = building_materials.get_mut(&render.authored_building)
     {
-        let snow = building_snow_strength(environment.0);
-        building.extension.parameters.snow_damage.x = snow;
-        building.extension.parameters.snow_damage.y = snow;
+        if environment_changed {
+            let snow = building_snow_strength(environment.0);
+            building.extension.parameters.snow_damage.x = snow;
+            building.extension.parameters.snow_damage.y = snow;
+        }
+        building.extension.parameters.surface_controls.z =
+            f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
     }
-    if let Some(tree_materials) = tree_materials.as_deref_mut()
+    if environment_changed
+        && let Some(tree_materials) = tree_materials.as_deref_mut()
         && let Some(mut tree) = tree_materials.get_mut(&render.tree)
     {
         tree.extension.parameters.season_controls = tree_season_controls(environment.0);
     }
     for (mut fog, mut ambient) in &mut cameras {
-        fog.color = Color::srgba(
-            palette.fog_color[0],
-            palette.fog_color[1],
-            palette.fog_color[2],
-            palette.fog_color[3],
-        );
-        fog.falloff = FogFalloff::Linear {
-            start: palette.fog_start,
-            end: palette.fog_end,
-        };
+        if environment_changed {
+            fog.color = Color::srgba(
+                palette.fog_color[0],
+                palette.fog_color[1],
+                palette.fog_color[2],
+                palette.fog_color[3],
+            );
+            fog.falloff = FogFalloff::Linear {
+                start: palette.fog_start,
+                end: palette.fog_end,
+            };
+        }
         ambient.color = Color::srgb(
             palette.ambient_color[0],
             palette.ambient_color[1],
             palette.ambient_color[2],
         );
-        ambient.brightness = palette.ambient_brightness;
+        ambient.brightness = palette.ambient_brightness * light_ratio;
     }
     for mut light in &mut lights {
         light.color = Color::srgb(
@@ -6330,26 +6358,39 @@ fn update_environment_presentation(
             palette.sun_color[1],
             palette.sun_color[2],
         );
-        light.illuminance = palette.sun_illuminance;
+        light.illuminance = palette.sun_illuminance * light_ratio;
     }
-    for entity in &particles {
-        commands.entity(entity).despawn();
+    if environment_changed {
+        for entity in &particles {
+            commands.entity(entity).despawn();
+        }
+        spawn_weather_particles(
+            &mut commands,
+            &config.0,
+            &render,
+            simulation.0.world_seed,
+            environment.1,
+            palette.particle_count,
+        );
     }
-    spawn_weather_particles(
-        &mut commands,
-        &config.0,
-        &render,
-        simulation.0.world_seed,
-        environment.1,
-        palette.particle_count,
-    );
     info!(
         season = ?environment.0,
         weather = ?environment.1,
+        daylight,
         particles = palette.particle_count,
         "environment presentation updated"
     );
-    presentation.applied = Some(environment);
+    presentation.applied_environment = Some(environment);
+    presentation.applied_daylight_milli = daylight_milli;
+}
+
+fn normalized_milli(value: f32) -> u16 {
+    u16::try_from(
+        Duration::from_secs_f32(value.clamp(0.0, 1.0))
+            .as_millis()
+            .min(1_000),
+    )
+    .expect("normalized milliseconds fit u16")
 }
 
 fn spawn_weather_particles(
@@ -8217,6 +8258,7 @@ fn resolved_renderer_material<'a>(
 fn instantiate_building_materials(
     mut commands: Commands,
     simulation: Res<SimulationRuntime>,
+    config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     parents: Query<&ChildOf>,
     buildings: Query<&RuntimeBuilding>,
@@ -8269,6 +8311,11 @@ fn instantiate_building_materials(
                     building_max_health(&content.0, state)
                 });
             material.extension.parameters.snow_damage.z = building_damage_value(health, max_health);
+            let daylight_milli =
+                normalized_milli(config.0.time.sample(simulation.0.elapsed_seconds).daylight);
+            let daylight = f32::from(daylight_milli) / 1_000.0;
+            material.extension.parameters.surface_controls.z =
+                f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
             let handle = materials.add(material);
             instances.0.insert(
                 building,
@@ -8276,6 +8323,7 @@ fn instantiate_building_materials(
                     handle: handle.clone(),
                     applied_health: health,
                     applied_season: season,
+                    applied_daylight_milli: daylight_milli,
                 },
             );
             handle
@@ -8288,6 +8336,7 @@ fn instantiate_building_materials(
 
 fn sync_building_material_instances(
     simulation: Res<SimulationRuntime>,
+    config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     mut instances: ResMut<BuildingMaterialInstances>,
     mut materials: Option<ResMut<Assets<BuildingMaterial>>>,
@@ -8309,8 +8358,11 @@ fn sync_building_material_instances(
         let Some(building) = simulation.0.buildings.get(id) else {
             continue;
         };
+        let daylight_milli =
+            normalized_milli(config.0.time.sample(simulation.0.elapsed_seconds).daylight);
         if instance.applied_health == building.health
             && instance.applied_season == simulation.0.season
+            && instance.applied_daylight_milli == daylight_milli
         {
             continue;
         }
@@ -8320,10 +8372,14 @@ fn sync_building_material_instances(
         let snow = building_snow_strength(simulation.0.season);
         material.extension.parameters.snow_damage.x = snow;
         material.extension.parameters.snow_damage.y = snow;
+        let daylight = config.0.time.sample(simulation.0.elapsed_seconds).daylight;
+        material.extension.parameters.surface_controls.z =
+            f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
         material.extension.parameters.snow_damage.z =
             building_damage_value(building.health, building_max_health(&content.0, building));
         instance.applied_health = building.health;
         instance.applied_season = simulation.0.season;
+        instance.applied_daylight_milli = daylight_milli;
     }
 }
 
@@ -8979,6 +9035,9 @@ fn load_input(
         None
     };
     ensure_town_hall_state(&content.0, &config.0, &mut snapshot.simulation);
+    snapshot
+        .simulation
+        .upgrade_time_schema(config.0.time.seconds_per_day);
     normalize_building_health(&content.0, &mut snapshot.simulation);
     for (entity, building) in &runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
@@ -12093,6 +12152,7 @@ fn process_injected_commands(
 fn update_hud(
     stats: Res<SessionStats>,
     twitch: Res<TwitchConnection>,
+    config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     feedback: Res<CommandFeedback>,
@@ -12153,10 +12213,17 @@ fn update_hud(
         .values()
         .filter(|actor| !actor.alive)
         .count();
+    let time_cycle = config.0.time.sample(simulation.0.elapsed_seconds);
+    let day_phase = if time_cycle.is_daytime {
+        "Day"
+    } else {
+        "Night"
+    };
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} R:{} | Goals: {} | Event: {} | Governance: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | Day {} ({day_phase}) | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} R:{} | Goals: {} | Event: {} | Governance: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
+        simulation.0.day,
         stats.paths_completed,
         stats.commands_processed,
         simulation.0.season,

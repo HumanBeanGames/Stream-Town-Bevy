@@ -20,7 +20,10 @@ pub use command::{
     BuildingAction, BuildingDirection, CameraAction, CameraDirection, ChatCommand,
     CommandParseError, CustomizationKind,
 };
-pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
+pub use config::{
+    GameConfig, GameplayConfig, SHIPPING_SECONDS_PER_DAY, TimeCycleConfig, TimeCycleSample,
+    TwitchConfig, WindowConfig, WorldGenConfig,
+};
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, BuildingModelDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef,

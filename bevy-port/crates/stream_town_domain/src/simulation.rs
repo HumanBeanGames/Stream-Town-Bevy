@@ -304,7 +304,7 @@ impl WorldSimulation {
     #[must_use]
     pub fn new(world_seed: u64) -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             world_seed,
             elapsed_seconds: 0.0,
             day: 0,
@@ -1312,22 +1312,10 @@ impl WorldSimulation {
         self.active_event = Some(event);
     }
 
-    pub fn tick(&mut self, delta_seconds: f32) {
+    pub fn tick(&mut self, delta_seconds: f32, seconds_per_day: u32) {
         let delta_seconds = delta_seconds.max(0.0);
         self.elapsed_seconds += f64::from(delta_seconds);
-        self.day = u32::try_from(
-            Duration::from_secs_f64(self.elapsed_seconds)
-                .as_secs()
-                .saturating_div(120),
-        )
-        .unwrap_or(u32::MAX);
-        self.season = match (self.day / 7) % 4 {
-            0 => Season::Spring,
-            1 => Season::Summer,
-            2 => Season::Autumn,
-            _ => Season::Winter,
-        };
-        self.weather = deterministic_weather(self.world_seed, self.day, self.season);
+        self.recalculate_calendar(seconds_per_day);
 
         if let Some(vote) = &mut self.active_vote {
             vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
@@ -1368,6 +1356,33 @@ impl WorldSimulation {
                 self.active_event = None;
             }
         }
+    }
+
+    /// Reinterprets clocks written before the shipping Unity day length was
+    /// restored. Timed gameplay state is preserved; only derived calendar data
+    /// changes from the authoritative elapsed time.
+    pub fn upgrade_time_schema(&mut self, seconds_per_day: u32) {
+        if self.schema_version < 2 {
+            self.schema_version = 2;
+            self.recalculate_calendar(seconds_per_day);
+        }
+    }
+
+    fn recalculate_calendar(&mut self, seconds_per_day: u32) {
+        let seconds_per_day = u64::from(seconds_per_day.max(1));
+        self.day = u32::try_from(
+            Duration::from_secs_f64(self.elapsed_seconds)
+                .as_secs()
+                .saturating_div(seconds_per_day),
+        )
+        .unwrap_or(u32::MAX);
+        self.season = match (self.day / 7) % 4 {
+            0 => Season::Spring,
+            1 => Season::Summer,
+            2 => Season::Autumn,
+            _ => Season::Winter,
+        };
+        self.weather = deterministic_weather(self.world_seed, self.day, self.season);
     }
 
     fn actor_mut(&mut self, actor: &StableId) -> Result<&mut ActorState, SimulationError> {
@@ -1510,6 +1525,7 @@ fn deterministic_weather(seed: u64, day: u32, season: Season) -> Weather {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SHIPPING_SECONDS_PER_DAY;
 
     #[test]
     fn role_progression_matches_unity_curve_and_carries_excess() {
@@ -1675,7 +1691,7 @@ mod tests {
             .start_technology_vote(id("tech:construction_1"), 10.0)
             .unwrap();
         simulation.cast_vote(&player, true).unwrap();
-        simulation.tick(10.0);
+        simulation.tick(10.0, SHIPPING_SECONDS_PER_DAY);
         simulation.resolve_technology_vote(&[], &BTreeMap::new(), 2);
         assert!(
             simulation
@@ -1689,13 +1705,37 @@ mod tests {
         simulation
             .trade(&id("resource:wood"), 10, id("resource:food"), 15)
             .unwrap();
-        simulation.tick(120.0 * 22.0);
+        simulation.tick(3_600.0 * 22.0, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(simulation.season, Season::Winter);
 
         let encoded = ron::to_string(&simulation).unwrap();
         assert_eq!(
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
+        );
+    }
+
+    #[test]
+    fn legacy_simulation_calendar_upgrades_without_advancing_timers() {
+        let actor = id("actor:legacy_clock");
+        let mut simulation = WorldSimulation::new(71);
+        simulation.schema_version = 1;
+        simulation.elapsed_seconds = 3_650.0;
+        simulation.day = 30;
+        simulation.season = Season::Winter;
+        simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 });
+        let state = simulation.actors.get_mut(&actor).unwrap();
+        state.alive = false;
+        state.respawn_remaining_seconds = Some(45.0);
+
+        simulation.upgrade_time_schema(SHIPPING_SECONDS_PER_DAY);
+
+        assert_eq!(simulation.schema_version, 2);
+        assert_eq!(simulation.day, 1);
+        assert_eq!(simulation.season, Season::Spring);
+        assert_eq!(
+            simulation.actors[&actor].respawn_remaining_seconds,
+            Some(45.0)
         );
     }
 
@@ -1709,31 +1749,31 @@ mod tests {
         simulation.assign_role(&first, id("role:builder")).unwrap();
         simulation.assign_role(&second, id("role:miner")).unwrap();
 
-        simulation.tick(30.0);
+        simulation.tick(30.0, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(
             simulation.ruler_vote.as_ref().unwrap().kind,
             RulerVoteKind::NewRuler
         );
-        simulation.tick(60.0);
+        simulation.tick(60.0, SHIPPING_SECONDS_PER_DAY);
         assert!(
             (simulation.ruler_vote.as_ref().unwrap().remaining_seconds - 120.0).abs()
                 <= f32::EPSILON
         );
         simulation.cast_ruler_vote(&first, first.clone()).unwrap();
         simulation.cast_ruler_vote(&second, second.clone()).unwrap();
-        simulation.tick(120.0);
+        simulation.tick(120.0, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(simulation.current_ruler, Some(first.clone()));
         assert_eq!(simulation.actors[&first].role, id("role:ruler"));
         assert_eq!(simulation.ruler_previous_role, Some(id("role:builder")));
         assert!((simulation.ruler_vote_cooldown_seconds - 3_600.0).abs() <= f32::EPSILON);
 
-        simulation.tick(3_600.0);
+        simulation.tick(3_600.0, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(
             simulation.ruler_vote.as_ref().unwrap().kind,
             RulerVoteKind::KeepRuler
         );
         simulation.cast_ruler_vote(&first, id("no")).unwrap();
-        simulation.tick(120.0);
+        simulation.tick(120.0, SHIPPING_SECONDS_PER_DAY);
         assert!(simulation.current_ruler.is_none());
         assert_eq!(simulation.actors[&first].role, id("role:builder"));
         assert_eq!(
@@ -1765,7 +1805,7 @@ mod tests {
             simulation.cast_ruler_vote(&voter, voter.clone()),
             Err(SimulationError::AlreadyVoted(voter.clone()))
         );
-        simulation.tick(120.0);
+        simulation.tick(120.0, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(simulation.current_ruler, Some(voter.clone()));
         simulation.resign_ruler(&voter).unwrap();
         assert!(simulation.current_ruler.is_none());
@@ -1844,7 +1884,7 @@ mod tests {
         assert!(simulation.active_event.is_none());
 
         assert!(simulation.start_fish_god(true));
-        simulation.tick(300.0);
+        simulation.tick(300.0, SHIPPING_SECONDS_PER_DAY);
         assert!(simulation.fish_god.is_none());
         assert!(simulation.active_event.is_none());
         assert!(matches!(
@@ -1918,7 +1958,7 @@ mod tests {
             Err(SimulationError::ActorDead(_))
         ));
         simulation.schedule_respawn(&actor, 60.0).unwrap();
-        simulation.tick(0.25);
+        simulation.tick(0.25, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(
             simulation.actors[&actor].respawn_remaining_seconds,
             Some(59.75)
@@ -1960,7 +2000,7 @@ mod tests {
             .start_technology_vote(technology.clone(), 1.0)
             .unwrap();
         simulation.cast_vote(&player, true).unwrap();
-        simulation.tick(1.0);
+        simulation.tick(1.0, SHIPPING_SECONDS_PER_DAY);
         assert_eq!(
             simulation.resolve_technology_vote(
                 &[collect.clone(), build.clone()],

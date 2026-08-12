@@ -819,6 +819,50 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.add(egui::DragValue::new(&mut state.config.world.seed).prefix("Seed "));
     ui.add(egui::Slider::new(&mut state.config.world.width, 8..=256).text("Width"));
     ui.add(egui::Slider::new(&mut state.config.world.height, 8..=256).text("Height"));
+    ui.collapsing("Time-of-day settings", |ui| {
+        ui.label("Converted from D_TimeSettings and D_DayAndNightSettings");
+        ui.add(
+            egui::DragValue::new(&mut state.config.time.seconds_per_day)
+                .range(1..=86_400)
+                .suffix(" seconds per day"),
+        );
+        ui.add(
+            egui::Slider::new(&mut state.config.time.daylight_per_thousand, 1..=999)
+                .text("Daylight (per thousand)"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.time.transition_seconds)
+                .range(0..=3_600)
+                .suffix(" second transitions"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.time.day_light_intensity_milli)
+                .range(1..=65_535)
+                .suffix(" day light milli"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.time.night_light_intensity_milli)
+                .range(0..=65_535)
+                .suffix(" night light milli"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.config.time.max_building_emission_milli)
+                .range(0..=65_535)
+                .suffix(" max emission milli"),
+        );
+        let dusk = f64::from(state.config.time.seconds_per_day)
+            * f64::from(state.config.time.daylight_per_thousand)
+            / 1_000.0;
+        ui.label(format!(
+            "Night begins after dusk at {dusk:.1}s; dawn completes at the next day boundary"
+        ));
+        if ui.button("Save validated runtime config").clicked() {
+            state.status = match save_runtime_config(&state.config) {
+                Ok(path) => format!("Saved public runtime configuration to {}", path.display()),
+                Err(error) => format!("Could not save runtime configuration: {error:#}"),
+            };
+        }
+    });
     if ui.button("Generate deterministic preview").clicked() {
         let world =
             stream_town_domain::generate_world_with_content(&state.config.world, &state.catalog);

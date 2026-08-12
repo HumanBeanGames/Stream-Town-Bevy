@@ -13,11 +13,13 @@ mistaken for production-ready systems.
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
   states, with state-scoped entity cleanup.
-- Validated, versioned RON configuration (schema 4) and stable authored/runtime
+- Validated, versioned RON configuration (schema 5) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
   recruits before roster creation, plus Unity's 15,000 food/ore/wood and five-recruit base capacities;
-  gold remains intentionally unbounded.
+  gold remains intentionally unbounded. Time configuration carries the shipping
+  3,600-second day, 66.6% daylight boundary, 100-second dusk/dawn transitions,
+  10/5 day/night light intensities, and five-unit building emission ceiling.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
   grounding data, repeatable world hashes, and a 4,225-vertex/8,192-triangle
   Bevy terrain surface generated directly from that navigation height field.
@@ -199,6 +201,11 @@ mistaken for production-ready systems.
 - Runtime season and weather presentation driven by that simulation state:
   seasonal terrain/water palettes, clear color, sun and ambient lighting,
   distance fog, plus deterministic rain and snow fields with no second clock.
+  The authoritative clock now follows Unity's shipping day/night assets; it
+  drives eased sky/light transitions, building emission, calendar/season
+  boundaries, and the camp's night-only spawn gate. Native simulation schema-1
+  clocks and user configuration schema 4 upgrade on load without advancing
+  gameplay timers.
 - Checksummed native RON saves written atomically with backup recovery, plus
   in-game F5/F9 save/load that restores stable actors, constructed buildings,
   dynamic navigation occupancy, town resources, per-node depletion, carried

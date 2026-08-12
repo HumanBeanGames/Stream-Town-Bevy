@@ -3,7 +3,8 @@ use std::{collections::BTreeMap, fs, path::Path, time::Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use stream_town_domain::{
-    ContentCatalog, GameConfig, GridPos, PresentationCatalog, generate_world_with_content,
+    ContentCatalog, GameConfig, GridPos, PresentationCatalog, SHIPPING_SECONDS_PER_DAY,
+    generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -56,6 +57,15 @@ fn validate() -> Result<()> {
             .with_context(|| format!("failed to read {}", config_path.display()))?,
     )?;
     config.validate()?;
+    if config.time.seconds_per_day != SHIPPING_SECONDS_PER_DAY
+        || config.time.daylight_per_thousand != 666
+        || config.time.transition_seconds != 100
+        || config.time.day_light_intensity_milli != 10_000
+        || config.time.night_light_intensity_milli != 5_000
+        || config.time.max_building_emission_milli != 5_000
+    {
+        bail!("shipping time-cycle settings no longer match the converted Unity assets");
+    }
 
     let content_path = Path::new("assets/content/catalog.ron");
     let content: ContentCatalog = ron::from_str(
