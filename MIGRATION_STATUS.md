@@ -311,6 +311,13 @@ mistaken for production-ready systems.
   cloud material ports its two world-space animated noise layers, alpha cutoff,
   tint, surface exponent, and packaged noise texture; a DirectX 12 menu capture
   verifies the transparent layer field and authored `_CloudTint=200` value.
+- Priest heals now drive a purpose-built ECS replacement for the reachable
+  `VFX_healing` and `VFX_Healing_Channeling` graphs. The target receives the
+  Unity-authored 1.2-second green/gold healed burst, while the healer emits the
+  serialized five-second channel field with its 0/0.289/1/0 size keys. Automatic
+  respawns, paid `!revive`, and game-master revival emit the larger gold-accented
+  variant. All three use short-lived shared meshes/materials rather than a
+  prewarmed pool, and a deterministic DirectX 12 smoke scene covers them.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -340,7 +347,7 @@ mistaken for production-ready systems.
   foliage/biome rendering, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
   area attacks, additional enemy archetype behaviors/spawners, combat buildings
-  beyond the Tower, healing/revival VFX, station
+  beyond the Tower, station
   effects derived from building level beyond current activation/range behavior,
   and every reachable balance rule from the Unity scenes.
 - Per-command cooldowns and exact production

@@ -56,6 +56,8 @@ const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
+const HEALED_BURST_SECONDS: f32 = 1.2;
+const HEALING_CHANNEL_SECONDS: f32 = 5.0;
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -411,6 +413,7 @@ struct RenderAssets {
     cube: Handle<Mesh>,
     actor_lod: Handle<Mesh>,
     cloud_plane: Handle<Mesh>,
+    healing_ring: Handle<Mesh>,
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
     wood: Handle<StandardMaterial>,
@@ -428,6 +431,8 @@ struct RenderAssets {
     rain: Handle<StandardMaterial>,
     snow: Handle<StandardMaterial>,
     projectile: Handle<StandardMaterial>,
+    healing_green: Handle<StandardMaterial>,
+    healing_gold: Handle<StandardMaterial>,
     authored_building: Handle<BuildingMaterial>,
     clouds: Handle<CloudMaterial>,
     tree: Handle<TreeMaterial>,
@@ -573,6 +578,47 @@ struct ProjectileSpawn {
     target: StableId,
     damage: u32,
     speed_cells_per_second: f32,
+}
+
+#[derive(Clone)]
+enum ActionPresentation {
+    Projectile(ProjectileSpawn),
+    Healing { source: GridPos, target: GridPos },
+}
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum HealingEffectKind {
+    Channel,
+    Burst,
+    Revive,
+}
+
+#[derive(Component)]
+struct HealingRingEffect {
+    kind: HealingEffectKind,
+    origin: Vec3,
+    elapsed_seconds: f32,
+    base_scale: f32,
+}
+
+#[derive(Component)]
+struct HealingMoteEffect {
+    kind: HealingEffectKind,
+    origin: Vec3,
+    elapsed_seconds: f32,
+    angle_radians: f32,
+    phase: f32,
+    base_scale: Vec3,
+    distance_scale: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HealingEffectSample {
+    ring_scale: f32,
+    mote_scale: f32,
+    radial_distance: f32,
+    rise: f32,
+    rotation_radians: f32,
 }
 
 #[derive(Component)]
@@ -896,6 +942,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                animate_healing_effects
+                    .after(move_agents)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     instantiate_building_materials.after(apply_material_overrides),
                     sync_building_material_instances.after(instantiate_building_materials),
@@ -1059,6 +1111,7 @@ fn setup_rendering(
     let material_closeup = std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some();
     let animation_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
     let resource_closeup = std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some();
+    let healing_closeup = std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1070,6 +1123,8 @@ fn setup_rendering(
                     180.0
                 } else if resource_closeup {
                     24.0
+                } else if healing_closeup {
+                    42.0
                 } else {
                     520.0
                 },
@@ -1128,6 +1183,7 @@ fn setup_rendering(
         cube: meshes.add(Cuboid::default()),
         actor_lod: meshes.add(Capsule3d::new(0.42, 1.45)),
         cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
+        healing_ring: meshes.add(healing_ring_mesh(48)),
         ground: terrain_materials.add(terrain_material(
             &presentation.0,
             &config.0,
@@ -1182,6 +1238,20 @@ fn setup_rendering(
         projectile: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.58, 0.12),
             emissive: LinearRgba::new(3.5, 1.1, 0.08, 1.0),
+            unlit: true,
+            ..default()
+        }),
+        healing_green: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.18, 1.0, 0.12, 0.74),
+            emissive: LinearRgba::new(0.28, 3.5, 0.14, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        healing_gold: materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.84, 0.18, 0.86),
+            emissive: LinearRgba::new(4.0, 2.4, 0.16, 1.0),
+            alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
         }),
@@ -1789,6 +1859,10 @@ fn generate_and_spawn_world(
                 });
             Transform::from_xyz(focus.x + 12.0, focus.y + 16.0, focus.z + 12.0)
                 .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_xyz(focus.x + 28.0, focus.y + 32.0, focus.z + 28.0)
+                .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
                 .map_or(Vec3::ZERO, |position| {
@@ -2192,6 +2266,31 @@ fn generate_and_spawn_world(
             ..default()
         },
     ));
+    if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
+        let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+        let spacing = config.0.world.cell_size * 3.2;
+        spawn_healing_effect(
+            &mut commands,
+            &render,
+            focus - Vec3::X * spacing,
+            HealingEffectKind::Channel,
+            config.0.world.cell_size,
+        );
+        spawn_healing_effect(
+            &mut commands,
+            &render,
+            focus,
+            HealingEffectKind::Burst,
+            config.0.world.cell_size,
+        );
+        spawn_healing_effect(
+            &mut commands,
+            &render,
+            focus + Vec3::X * spacing,
+            HealingEffectKind::Revive,
+            config.0.world.cell_size,
+        );
+    }
     commands.insert_resource(WorldRuntime {
         generated,
         legacy_terrain_mesh: None,
@@ -3288,7 +3387,7 @@ fn complete_agent_goal(
     actor_id: &StableId,
     goal: &AgentGoal,
     current: GridPos,
-) -> Option<ProjectileSpawn> {
+) -> Option<ActionPresentation> {
     if !simulation.actors.contains_key(actor_id) {
         return None;
     }
@@ -3305,7 +3404,7 @@ fn complete_agent_goal(
             || stats.map_or(1, |stats| stats.action_amount),
             |enemy| enemy.action_amount,
         );
-    let mut projectile_spawn = None;
+    let mut action_presentation = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
             let gathering_pet = simulation.actors.get(actor_id).and_then(|actor| {
@@ -3396,12 +3495,12 @@ fn complete_agent_goal(
             }
             let damage = action_amount;
             if is_ranged_role(&attacker.role) {
-                projectile_spawn = Some(ProjectileSpawn {
+                action_presentation = Some(ActionPresentation::Projectile(ProjectileSpawn {
                     source: ProjectileSource::Actor(actor_id.clone()),
                     target: target_id.clone(),
                     damage,
                     speed_cells_per_second: 12.0,
-                });
+                }));
                 damage > 0
             } else {
                 let defense = effective_role_stats(content, simulation, target)
@@ -3419,6 +3518,7 @@ fn complete_agent_goal(
         AgentGoal::Heal(target_id) => {
             let healer = simulation.actors.get(actor_id)?;
             let target = simulation.actors.get(target_id)?;
+            let target_position = target.position;
             if !healer.alive
                 || !target.alive
                 || target.role.as_str() == "role:enemy"
@@ -3429,7 +3529,17 @@ fn complete_agent_goal(
                 return None;
             }
             match simulation.heal_actor(target_id, action_amount) {
-                Ok(restored) => restored > 0,
+                Ok(restored) => {
+                    if restored > 0 {
+                        action_presentation = Some(ActionPresentation::Healing {
+                            source: current,
+                            target: target_position,
+                        });
+                        true
+                    } else {
+                        false
+                    }
+                }
                 Err(error) => {
                     warn!(actor = %actor_id, target = %target_id, %error, "healing action failed");
                     false
@@ -3496,7 +3606,7 @@ fn complete_agent_goal(
             actor.health = actor.max_health;
         }
     }
-    projectile_spawn
+    action_presentation
 }
 
 fn apply_combat_damage(
@@ -3546,6 +3656,147 @@ fn spawn_combat_projectile(
         Transform::from_translation(origin + Vec3::Y * config.world.cell_size * 0.35)
             .with_scale(Vec3::splat(scale)),
     ));
+}
+
+fn healing_effect_duration(kind: HealingEffectKind) -> f32 {
+    match kind {
+        HealingEffectKind::Channel => HEALING_CHANNEL_SECONDS,
+        HealingEffectKind::Burst | HealingEffectKind::Revive => HEALED_BURST_SECONDS,
+    }
+}
+
+fn healing_effect_sample(kind: HealingEffectKind, elapsed_seconds: f32) -> HealingEffectSample {
+    let duration = healing_effect_duration(kind);
+    let progress = (elapsed_seconds / duration).clamp(0.0, 1.0);
+    let envelope = (std::f32::consts::PI * progress).sin().max(0.0);
+    let channel_size = if elapsed_seconds <= 1.5 {
+        0.289 * elapsed_seconds / 1.5
+    } else if elapsed_seconds <= 3.0 {
+        0.289 + (1.0 - 0.289) * (elapsed_seconds - 1.5) / 1.5
+    } else {
+        (1.0 - (elapsed_seconds - 3.0) / 2.0).max(0.0)
+    };
+    match kind {
+        HealingEffectKind::Channel => HealingEffectSample {
+            ring_scale: channel_size,
+            mote_scale: envelope.sqrt(),
+            radial_distance: 0.28 + progress * 0.58,
+            rise: 0.18 + progress * 1.9,
+            rotation_radians: progress * std::f32::consts::TAU * 1.5,
+        },
+        HealingEffectKind::Burst => HealingEffectSample {
+            ring_scale: envelope.sqrt() * (0.35 + progress * 1.85),
+            mote_scale: envelope,
+            radial_distance: 0.22 + progress * 1.35,
+            rise: 0.2 + progress * 2.4,
+            rotation_radians: progress * std::f32::consts::TAU,
+        },
+        HealingEffectKind::Revive => HealingEffectSample {
+            ring_scale: envelope.sqrt() * (0.5 + progress * 2.55),
+            mote_scale: envelope,
+            radial_distance: 0.3 + progress * 1.75,
+            rise: 0.25 + progress * 3.1,
+            rotation_radians: progress * std::f32::consts::TAU * 1.25,
+        },
+    }
+}
+
+fn spawn_healing_effect(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    origin: Vec3,
+    kind: HealingEffectKind,
+    cell_size: f32,
+) {
+    let material = if kind == HealingEffectKind::Revive {
+        render.healing_gold.clone()
+    } else {
+        render.healing_green.clone()
+    };
+    let base_scale = match kind {
+        HealingEffectKind::Burst => cell_size * 0.7,
+        HealingEffectKind::Channel | HealingEffectKind::Revive => cell_size * 0.85,
+    };
+    commands.spawn((
+        WorldEntity,
+        HealingRingEffect {
+            kind,
+            origin,
+            elapsed_seconds: 0.0,
+            base_scale,
+        },
+        Mesh3d(render.healing_ring.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::from_translation(origin + Vec3::Y * 0.08).with_scale(Vec3::ZERO),
+    ));
+
+    let mote_count: u16 = match kind {
+        HealingEffectKind::Channel => 8,
+        HealingEffectKind::Burst => 7,
+        HealingEffectKind::Revive => 12,
+    };
+    for mote_index in 0..mote_count {
+        let phase = f32::from(mote_index) / f32::from(mote_count);
+        let angle_radians = phase * std::f32::consts::TAU;
+        for base_scale in [
+            Vec3::new(cell_size * 0.055, cell_size * 0.2, cell_size * 0.05),
+            Vec3::new(cell_size * 0.2, cell_size * 0.055, cell_size * 0.05),
+        ] {
+            commands.spawn((
+                WorldEntity,
+                HealingMoteEffect {
+                    kind,
+                    origin,
+                    elapsed_seconds: -phase * 0.22,
+                    angle_radians,
+                    phase,
+                    base_scale,
+                    distance_scale: cell_size,
+                },
+                Mesh3d(render.cube.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation(origin).with_scale(Vec3::ZERO),
+            ));
+        }
+    }
+}
+
+fn animate_healing_effects(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut rings: Query<(Entity, &mut HealingRingEffect, &mut Transform)>,
+    mut motes: Query<(Entity, &mut HealingMoteEffect, &mut Transform), Without<HealingRingEffect>>,
+) {
+    for (entity, mut effect, mut transform) in &mut rings {
+        effect.elapsed_seconds += time.delta_secs();
+        if effect.elapsed_seconds >= healing_effect_duration(effect.kind) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let sample = healing_effect_sample(effect.kind, effect.elapsed_seconds);
+        transform.translation = effect.origin + Vec3::Y * 0.08;
+        transform.rotation = Quat::from_rotation_y(sample.rotation_radians * 0.2);
+        transform.scale = Vec3::splat(effect.base_scale * sample.ring_scale);
+    }
+    for (entity, mut effect, mut transform) in &mut motes {
+        effect.elapsed_seconds += time.delta_secs();
+        if effect.elapsed_seconds >= healing_effect_duration(effect.kind) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let sample = healing_effect_sample(effect.kind, effect.elapsed_seconds.max(0.0));
+        let angle =
+            effect.angle_radians + sample.rotation_radians + effect.phase * std::f32::consts::PI;
+        let radius = sample.radial_distance * effect.distance_scale;
+        transform.translation = effect.origin
+            + Vec3::new(
+                angle.cos() * radius,
+                sample.rise * effect.distance_scale,
+                angle.sin() * radius,
+            );
+        transform.rotation = Quat::from_rotation_y(-angle * 0.35);
+        transform.scale = effect.base_scale * sample.mote_scale;
+    }
 }
 
 fn move_combat_projectiles(
@@ -4183,13 +4434,20 @@ fn move_agents(
             agent.origin = spawn;
             agent.target = mirrored_target(&world.generated, spawn);
             agent.action_cooldown_seconds = 0.0;
+            spawn_healing_effect(
+                &mut commands,
+                &render,
+                grid_to_world_on_surface(spawn, &config.0, &world.generated),
+                HealingEffectKind::Revive,
+                config.0.world.cell_size,
+            );
         }
         ensure_actor_station(&content.0, &mut simulation.0, &config.0, &agent.id);
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
                 stats.paths_completed += 1;
                 if location.0 == agent.target && agent.action_cooldown_seconds <= f32::EPSILON {
-                    if let Some(projectile) = complete_agent_goal(
+                    if let Some(presentation) = complete_agent_goal(
                         &mut simulation.0,
                         &mut world.generated,
                         &config.0,
@@ -4198,13 +4456,37 @@ fn move_agents(
                         &agent.goal,
                         location.0,
                     ) {
-                        spawn_combat_projectile(
-                            &mut commands,
-                            &render,
-                            &config.0,
-                            transform.translation,
-                            projectile,
-                        );
+                        match presentation {
+                            ActionPresentation::Projectile(projectile) => {
+                                spawn_combat_projectile(
+                                    &mut commands,
+                                    &render,
+                                    &config.0,
+                                    transform.translation,
+                                    projectile,
+                                );
+                            }
+                            ActionPresentation::Healing { source, target } => {
+                                let source =
+                                    grid_to_world_on_surface(source, &config.0, &world.generated);
+                                let target =
+                                    grid_to_world_on_surface(target, &config.0, &world.generated);
+                                spawn_healing_effect(
+                                    &mut commands,
+                                    &render,
+                                    source,
+                                    HealingEffectKind::Channel,
+                                    config.0.world.cell_size,
+                                );
+                                spawn_healing_effect(
+                                    &mut commands,
+                                    &render,
+                                    target,
+                                    HealingEffectKind::Burst,
+                                    config.0.world.cell_size,
+                                );
+                            }
+                        }
                     }
                     agent.action_cooldown_seconds =
                         action_cooldown(&content.0, &simulation.0, &agent.id, &agent.goal);
@@ -9649,6 +9931,13 @@ fn process_injected_commands(
                     actor: target.clone(),
                     position: spawn,
                 });
+                spawn_healing_effect(
+                    &mut ecs,
+                    &render,
+                    grid_to_world_on_surface(spawn, &config.0, &world.generated),
+                    HealingEffectKind::Revive,
+                    config.0.world.cell_size,
+                );
                 Ok(format!("revived {target} without a food cost"))
             }
             ChatCommand::GiveExperience { player, amount } => {
@@ -9916,6 +10205,13 @@ fn process_injected_commands(
                             if self_revive { 400 } else { 200 },
                         )
                         .map_err(|error| error.to_string())?;
+                    spawn_healing_effect(
+                        &mut ecs,
+                        &render,
+                        grid_to_world_on_surface(spawn, &config.0, &world.generated),
+                        HealingEffectKind::Revive,
+                        config.0.world.cell_size,
+                    );
                     if !self_revive {
                         let experience_multiplier = content
                             .0
@@ -10608,6 +10904,40 @@ fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
     .with_inserted_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
     mesh
+}
+
+fn healing_ring_mesh(segments: u32) -> Mesh {
+    let segments = u16::try_from(segments.max(3).min(u32::from(u16::MAX)))
+        .expect("clamped ring segment count fits u16");
+    let mut positions = Vec::with_capacity(usize::from(segments) * 2);
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    for index in 0..segments {
+        let angle = f32::from(index) / f32::from(segments) * std::f32::consts::TAU;
+        let direction = Vec2::new(angle.cos(), angle.sin());
+        for (radius, uv_y) in [(0.84, 0.0), (1.0, 1.0)] {
+            positions.push([direction.x * radius, 0.0, direction.y * radius]);
+            normals.push([0.0, 1.0, 0.0]);
+            uvs.push([f32::from(index) / f32::from(segments), uv_y]);
+        }
+    }
+    let mut indices = Vec::with_capacity(usize::from(segments) * 6);
+    for index in 0..segments {
+        let next = (index + 1) % segments;
+        let inner = u32::from(index) * 2;
+        let outer = inner + 1;
+        let next_inner = u32::from(next) * 2;
+        let next_outer = next_inner + 1;
+        indices.extend_from_slice(&[inner, next_inner, outer, next_inner, next_outer, outer]);
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 fn retained_terrain_mesh(saved: &SavedTerrainMesh) -> AnyResult<Mesh> {
@@ -11316,19 +11646,53 @@ mod tests {
         );
         assert_eq!(goal, AgentGoal::Heal(patient.clone()));
         assert_eq!(target, priest_position);
-        assert!(
-            complete_agent_goal(
-                &mut simulation,
-                &mut world,
-                &config,
-                &content,
-                &priest,
-                &goal,
-                priest_position,
-            )
-            .is_none()
+        let presentation = complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &priest,
+            &goal,
+            priest_position,
         );
+        assert!(matches!(
+            presentation,
+            Some(ActionPresentation::Healing { source, target })
+                if source == priest_position && target == patient_position
+        ));
         assert_eq!(simulation.actors[&patient].health, 82);
+    }
+
+    #[test]
+    fn healing_effect_curves_preserve_authored_lifetimes_and_channel_keys() {
+        assert!((healing_effect_duration(HealingEffectKind::Burst) - 1.2).abs() < f32::EPSILON);
+        assert!((healing_effect_duration(HealingEffectKind::Channel) - 5.0).abs() < f32::EPSILON);
+        assert!((healing_effect_duration(HealingEffectKind::Revive) - 1.2).abs() < f32::EPSILON);
+
+        let channel_start = healing_effect_sample(HealingEffectKind::Channel, 0.0);
+        let channel_first_key = healing_effect_sample(HealingEffectKind::Channel, 1.5);
+        let channel_peak = healing_effect_sample(HealingEffectKind::Channel, 3.0);
+        let channel_end = healing_effect_sample(HealingEffectKind::Channel, 5.0);
+        assert!(channel_start.ring_scale.abs() < f32::EPSILON);
+        assert!((channel_first_key.ring_scale - 0.289).abs() < f32::EPSILON);
+        assert!((channel_peak.ring_scale - 1.0).abs() < f32::EPSILON);
+        assert!(channel_end.ring_scale.abs() < f32::EPSILON);
+
+        let burst_midpoint = healing_effect_sample(HealingEffectKind::Burst, 0.6);
+        let revive_midpoint = healing_effect_sample(HealingEffectKind::Revive, 0.6);
+        assert!(burst_midpoint.ring_scale > 0.0);
+        assert!(burst_midpoint.mote_scale > 0.0);
+        assert!(revive_midpoint.ring_scale > burst_midpoint.ring_scale);
+        assert!(revive_midpoint.rise > burst_midpoint.rise);
+    }
+
+    #[test]
+    fn healing_ring_mesh_is_a_closed_top_facing_annulus() {
+        let mesh = healing_ring_mesh(48);
+        assert_eq!(mesh.count_vertices(), 96);
+        assert_eq!(mesh.indices().unwrap().len(), 288);
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
     }
 
     #[test]
@@ -11357,7 +11721,7 @@ mod tests {
             &ranger,
             ranger_position,
         );
-        let projectile = complete_agent_goal(
+        let presentation = complete_agent_goal(
             &mut simulation,
             &mut world,
             &config,
@@ -11367,6 +11731,9 @@ mod tests {
             ranger_position,
         )
         .unwrap();
+        let ActionPresentation::Projectile(projectile) = presentation else {
+            panic!("ranged role must emit a projectile");
+        };
         assert_eq!(projectile.target, enemy);
         assert_eq!(simulation.actors[&projectile.target].health, 100);
     }
@@ -12897,6 +13264,20 @@ mod tests {
                 .0
                 .contains("revived twitch:debug_viewer")
         );
+        let revival_rings = app
+            .world_mut()
+            .query::<&HealingRingEffect>()
+            .iter(app.world())
+            .filter(|effect| effect.kind == HealingEffectKind::Revive)
+            .count();
+        let revival_mote_bars = app
+            .world_mut()
+            .query::<&HealingMoteEffect>()
+            .iter(app.world())
+            .filter(|effect| effect.kind == HealingEffectKind::Revive)
+            .count();
+        assert_eq!(revival_rings, 1);
+        assert_eq!(revival_mote_bars, 24);
 
         {
             let technology_ids = app

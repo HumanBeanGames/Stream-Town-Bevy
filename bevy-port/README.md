@@ -194,7 +194,11 @@ Node depletion and carried inventories are part of native save/load state.
 Combat roles acquire a living target and path into authored range. Melee roles
 apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks
 spawn visible homing ECS projectiles. Priests select the nearest injured player,
-heal on their authored cadence, and release full-health targets. Completed Towers
+heal on their authored cadence, and release full-health targets. Successful
+heals emit the Unity-authored 1.2-second target burst plus a purpose-built
+five-second green channel field using the serialized 0/0.289/1/0 size curve.
+Automatic, paid, and game-master revives emit a larger gold-accented variant.
+Completed Towers
 launch their converted one-damage projectile every three seconds at the nearest
 enemy within 10 cells. Players trigger Death at zero health and use Unity's
 authored 60-second automatic revival. `!revive` pays 400 food for self-revival;
@@ -270,6 +274,8 @@ health value so its per-building damage material can be captured repeatably.
 `STREAM_TOWN_SMOKE_RESOURCE_KIND=resource:ore` or `resource:food` selects
 another production resource. `STREAM_TOWN_DEBUG_INITIAL_AGENTS=<n>` reduces
 diagnostic actor clutter without changing the validated production default.
+`STREAM_TOWN_SMOKE_HEALING_VFX=1` frames deterministic channel, healed-burst,
+and revival cues together for a repeatable gameplay-VFX capture.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
