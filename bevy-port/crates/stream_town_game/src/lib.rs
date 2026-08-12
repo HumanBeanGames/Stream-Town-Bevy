@@ -964,6 +964,10 @@ fn generate_and_spawn_world(
         x: (centre.x + 4).min(config.0.world.width - 2),
         z: centre.z,
     };
+    let town_hall_id = StableId::new("building:townhall").expect("static ID");
+    let town_hall_definition = &content.0.buildings[&town_hall_id];
+    let town_hall_placement =
+        town_hall_placement_position(&config.0, town_hall_definition.footprint);
     if let Ok(mut camera) = cameras.single_mut() {
         *camera = if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
@@ -979,16 +983,16 @@ fn generate_and_spawn_world(
             Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
         };
     }
-    let _ = generated.navigation.set_blocked(
-        stream_town_domain::DirtyRegion {
-            min: town_hall_position,
-            max: GridPos {
-                x: town_hall_position.x + 1,
-                z: town_hall_position.z + 1,
-            },
-        },
-        true,
-    );
+    let town_hall_region = building_region(
+        town_hall_placement,
+        town_hall_definition.footprint,
+        &generated,
+    )
+    .expect("the configured Town Hall footprint fits the generated world");
+    generated
+        .navigation
+        .set_blocked(town_hall_region, true)
+        .expect("the configured Town Hall footprint updates navigation");
 
     let world_size = Vec2::new(
         f32::from(config.0.world.width) * config.0.world.cell_size,
@@ -1054,10 +1058,12 @@ fn generate_and_spawn_world(
     let mut hall_entity = commands.spawn((
         WorldEntity,
         TownHall,
+        RuntimeBuilding {
+            id: town_hall_id.clone(),
+        },
         GridLocation(town_hall_position),
         Transform::from_translation(hall),
     ));
-    let town_hall_id = StableId::new("building:townhall").expect("static ID");
     let town_hall = content
         .0
         .buildings
@@ -1073,6 +1079,14 @@ fn generate_and_spawn_world(
                     .expect("asset server checked above")
                     .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
             ),
+            BuildingPresentation {
+                base_translation: hall,
+                base_scale: Vec3::splat(config.0.world.cell_size / 2.0),
+                base_height_offset: 0.0,
+                applied_stage: u8::MAX,
+                applied_level: u16::MAX,
+                applied_age: 1,
+            },
             Transform::from_translation(hall)
                 .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
         ));
@@ -1089,6 +1103,14 @@ fn generate_and_spawn_world(
             f32::from(footprint[1]) * config.0.world.cell_size,
         );
         hall_entity.insert((
+            BuildingPresentation {
+                base_translation: hall + Vec3::Y * size.y * 0.5,
+                base_scale: size,
+                base_height_offset: size.y * 0.5,
+                applied_stage: u8::MAX,
+                applied_level: u16::MAX,
+                applied_age: 1,
+            },
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(render.building.clone()),
             Transform::from_xyz(hall.x, hall.y + size.y * 0.5, hall.z).with_scale(size),
@@ -1110,6 +1132,7 @@ fn generate_and_spawn_world(
 
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
+    ensure_town_hall_state(&content.0, &config.0, &mut simulation);
     simulation.town_resources = config.0.gameplay.starting_town_resources.clone();
     simulation.unlocked_technology.extend(
         content
@@ -1126,6 +1149,16 @@ fn generate_and_spawn_world(
     }
     if let Some(weather) = debug_weather_override() {
         simulation.weather = weather;
+    }
+    if std::env::var_os("STREAM_TOWN_DEBUG_AGE_TWO").is_some()
+        && let Some((technology, _)) = content
+            .0
+            .technology
+            .nodes
+            .iter()
+            .find(|(_, technology)| technology.aged_buildings.contains(&town_hall_id))
+    {
+        simulation.unlocked_technology.insert(technology.clone());
     }
     let spawn_positions = connected_actor_positions(
         &generated,
@@ -1769,6 +1802,38 @@ fn town_hall_grid_position(config: &GameConfig) -> GridPos {
     }
 }
 
+fn town_hall_placement_position(config: &GameConfig, footprint: [u16; 2]) -> GridPos {
+    let centre = town_hall_grid_position(config);
+    GridPos {
+        x: centre.x.saturating_sub(footprint[0] / 2),
+        z: centre.z.saturating_sub(footprint[1] / 2),
+    }
+}
+
+fn ensure_town_hall_state(
+    content: &ContentCatalog,
+    config: &GameConfig,
+    simulation: &mut WorldSimulation,
+) {
+    let id = StableId::new("building:townhall").expect("static ID");
+    if simulation.buildings.contains_key(&id) {
+        return;
+    }
+    let definition = &content.buildings[&id];
+    simulation.buildings.insert(
+        id.clone(),
+        BuildingState {
+            id,
+            archetype: definition.archetype.clone(),
+            position: town_hall_placement_position(config, definition.footprint),
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: BUILDING_MAX_HEALTH,
+            complete: true,
+        },
+    );
+}
+
 #[derive(Clone, Copy)]
 struct StationCandidate<'a> {
     id: &'a StableId,
@@ -1865,6 +1930,9 @@ fn best_station_id(
     town_hall
         .into_iter()
         .chain(simulation.buildings.values().filter_map(|state| {
+            if state.id.as_str() == "building:townhall" {
+                return None;
+            }
             if !state.complete {
                 return None;
             }
@@ -3309,13 +3377,18 @@ fn sync_building_presentation(
             }
             presentation.applied_age = age;
         }
+        let is_town_hall = runtime.id.as_str() == "building:townhall";
         let stage_scale = match construction_stage {
             0 => 0.35,
             1 => 0.55,
             2 => 0.75,
             _ => 1.0,
         };
-        let level_scale = 1.0 + f32::from(state.level.saturating_sub(1)) * 0.05;
+        let level_scale = if is_town_hall {
+            1.0
+        } else {
+            1.0 + f32::from(state.level.saturating_sub(1)) * 0.05
+        };
         let scale = stage_scale * level_scale;
         transform.scale = presentation.base_scale * scale;
         transform.translation = presentation.base_translation
@@ -5047,13 +5120,13 @@ fn load_input(
         &AgentAnimation,
         &mut Transform,
     )>,
-    runtime_buildings: Query<(Entity, &RuntimeBuilding)>,
+    runtime_buildings: Query<(Entity, &RuntimeBuilding), Without<TownHall>>,
     enemy_camps: Query<(Entity, &EnemyCamp)>,
 ) {
     if !keyboard.just_pressed(KeyCode::F9) {
         return;
     }
-    let snapshot = match save.store.load() {
+    let mut snapshot = match save.store.load() {
         Ok(snapshot) => snapshot,
         Err(error) => {
             error!(%error, "native load failed");
@@ -5081,24 +5154,7 @@ fn load_input(
             }
         }
     }
-    let centre = GridPos {
-        x: config.0.world.width / 2,
-        z: config.0.world.height / 2,
-    };
-    let town_hall_position = GridPos {
-        x: (centre.x + 4).min(config.0.world.width - 2),
-        z: centre.z,
-    };
-    let _ = restored_world.navigation.set_blocked(
-        stream_town_domain::DirtyRegion {
-            min: town_hall_position,
-            max: GridPos {
-                x: town_hall_position.x + 1,
-                z: town_hall_position.z + 1,
-            },
-        },
-        true,
-    );
+    ensure_town_hall_state(&content.0, &config.0, &mut snapshot.simulation);
     for (entity, building) in &runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
         ecs.entity(entity).despawn();
@@ -5129,6 +5185,9 @@ fn load_input(
         if let Err(error) = restored_world.navigation.set_blocked(region, true) {
             error!(building = %saved.id, %error, "native save building could not update navigation");
             return;
+        }
+        if saved.id.as_str() == "building:townhall" {
+            continue;
         }
         spawn_runtime_building(
             &mut ecs,
@@ -5923,7 +5982,7 @@ fn spawn_runtime_enemy(
 }
 
 fn runtime_building_id(simulation: &WorldSimulation) -> StableId {
-    for sequence in simulation.buildings.len()..usize::MAX {
+    for sequence in constructed_building_count(simulation)..usize::MAX {
         let candidate = StableId::new(format!("building:runtime_{sequence:08}"))
             .expect("runtime building IDs are valid");
         if !simulation.buildings.contains_key(&candidate) {
@@ -6269,7 +6328,13 @@ fn compatible_station_ids(
     };
     let town_hall = StableId::new("building:townhall").expect("static ID");
     let mut stations: Vec<_> = std::iter::once(town_hall)
-        .chain(simulation.buildings.keys().cloned())
+        .chain(
+            simulation
+                .buildings
+                .keys()
+                .filter(|id| id.as_str() != "building:townhall")
+                .cloned(),
+        )
         .filter(|id| {
             station_candidate(content, simulation, config, id).is_some_and(|station| {
                 station_matches_role(station.definition, role)
@@ -6556,6 +6621,14 @@ fn building_instance_ids(
         .filter(|building| building.archetype == *archetype)
         .map(|building| building.id.clone())
         .collect()
+}
+
+fn constructed_building_count(simulation: &WorldSimulation) -> usize {
+    simulation
+        .buildings
+        .keys()
+        .filter(|id| id.as_str() != "building:townhall")
+        .count()
 }
 
 fn upgrade_building_instance(
@@ -8474,6 +8547,49 @@ mod tests {
     }
 
     #[test]
+    fn town_hall_is_a_stable_authoritative_building_and_ages_with_technology() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let town_hall_id = StableId::new("building:townhall").unwrap();
+        let definition = &content.buildings[&town_hall_id];
+        let mut simulation = WorldSimulation::new(config.world.seed);
+
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        let town_hall = &simulation.buildings[&town_hall_id];
+        assert_eq!(town_hall.id, town_hall_id);
+        assert_eq!(town_hall.archetype, definition.archetype);
+        assert_eq!(
+            town_hall.position,
+            town_hall_placement_position(&config, definition.footprint)
+        );
+        assert_eq!(town_hall.level, 1);
+        assert_eq!(town_hall.health, BUILDING_MAX_HEALTH);
+        assert!(town_hall.complete);
+        assert_eq!(constructed_building_count(&simulation), 0);
+        assert_eq!(building_age(&content, &simulation, &town_hall_id), 1);
+
+        let age_technology = content
+            .technology
+            .nodes
+            .iter()
+            .find(|(_, technology)| technology.aged_buildings.contains(&town_hall_id))
+            .map(|(id, _)| id.clone())
+            .expect("converted technology contains the Town Hall age unlock");
+        simulation.unlocked_technology.insert(age_technology);
+        assert_eq!(building_age(&content, &simulation, &town_hall_id), 2);
+        assert_eq!(
+            archetype_scene_for_age(&content.archetypes[&definition.archetype], 2)
+                .and_then(|scene| scene.age),
+            Some(2)
+        );
+
+        let saved = simulation.buildings[&town_hall_id].clone();
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        assert_eq!(simulation.buildings.len(), 1);
+        assert_eq!(simulation.buildings[&town_hall_id], saved);
+    }
+
+    #[test]
     fn cosmetic_nodes_preserve_unity_order_and_visibility_rules() {
         for (index, name) in EYE_NODES.iter().enumerate() {
             assert_eq!(
@@ -9718,8 +9834,13 @@ mod tests {
                     .last_building_position
                     .is_some()
             );
-            assert_eq!(simulation.buildings.len(), 1);
-            let placed_building = simulation.buildings.values().next().unwrap().clone();
+            assert_eq!(simulation.buildings.len(), 2);
+            let placed_building = simulation
+                .buildings
+                .values()
+                .find(|building| building.id.as_str() != "building:townhall")
+                .unwrap()
+                .clone();
             assert!(!placed_building.complete);
             assert_eq!(placed_building.health, BUILDING_MAX_HEALTH / 10);
             assert_eq!(placed_building.rotation_quarter_turns, 4);
@@ -9740,19 +9861,26 @@ mod tests {
                 Some(&eligible_technology)
             );
             assert_eq!(simulation.active_event, Some(TownEvent::Festival));
+            let saved_building_id = placed_building.id.clone();
             (
                 placed_building,
-                simulation.buildings.keys().next().unwrap().clone(),
+                saved_building_id,
                 town_resource_amount(simulation, "resource:food"),
             )
         };
-        let runtime_building_ids: Vec<_> = app
+        let mut runtime_building_ids: Vec<_> = app
             .world_mut()
             .query::<&RuntimeBuilding>()
             .iter(app.world())
             .map(|building| building.id.clone())
             .collect();
-        assert_eq!(runtime_building_ids, vec![saved_building_id.clone()]);
+        runtime_building_ids.sort();
+        let mut expected_runtime_buildings = vec![
+            StableId::new("building:townhall").unwrap(),
+            saved_building_id.clone(),
+        ];
+        expected_runtime_buildings.sort();
+        assert_eq!(runtime_building_ids, expected_runtime_buildings);
         assert!(save_path.is_file());
         let saved = NativeSaveStore::new(&save_path).load().unwrap();
         assert_eq!(
@@ -9864,12 +9992,15 @@ mod tests {
                 origin: CommandOrigin::LocalDebug,
             });
         app.update();
-        assert!(
+        assert_eq!(
             app.world()
                 .resource::<SimulationRuntime>()
                 .0
                 .buildings
-                .is_empty()
+                .keys()
+                .map(StableId::as_str)
+                .collect::<Vec<_>>(),
+            vec!["building:townhall"]
         );
         assert!(
             app.world()
@@ -9880,7 +10011,7 @@ mod tests {
         );
         assert_eq!(
             app.world_mut()
-                .query::<&RuntimeBuilding>()
+                .query_filtered::<&RuntimeBuilding, Without<TownHall>>()
                 .iter(app.world())
                 .count(),
             0

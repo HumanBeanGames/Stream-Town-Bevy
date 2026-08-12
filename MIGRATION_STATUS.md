@@ -94,7 +94,10 @@ mistaken for production-ready systems.
   12 age upgrades.
   Unlocked effects now reduce placement and upgrade costs, cap deposits against
   technology-expanded storage, modify health/movement/action/combat rules, and
-  switch constructed GLBs to their age-two scene variants.
+  switch constructed GLBs and the always-present Town Hall to their age-two
+  scene variants. The Town Hall is a stable, complete level-one building in the
+  authoritative simulation, so it participates in upgrades, building counts,
+  native save/load, and the same presentation synchronization as construction.
   Twitch construction now uses Unity's staged placer lifecycle: `!build`
   creates a per-player translucent validity preview without spending resources,
   `!move` and the directional aliases adjust it in grid cells, `!rotate`
@@ -264,9 +267,6 @@ mistaken for production-ready systems.
   beyond the Tower, healing/revival VFX, station
   effects derived from building level beyond current activation/range behavior,
   and every reachable balance rule from the Unity scenes.
-- Age changes for the always-present Town Hall still require its underlying
-  runtime presentation path; constructed buildings already switch to age-two
-  variants when technology applies the authored effect.
 - Per-command cooldowns and exact production
   outbound response wording. The authenticated IRC path now includes player
   role/health/progression, role/station/target selection, unstuck/ping,

@@ -120,7 +120,10 @@ completion. Upgrades spend the authored level cost and multiplier and respect
 maximum levels granted by unlocked technology. Unlocked technologies also apply
 their authored placement/upgrade discounts, expand storage-building
 contributions, modify actor health/movement/action/combat percentages, and select
-age-two GLB variants for constructed buildings. Building placement also respects
+age-two GLB variants for constructed buildings and the always-present Town Hall.
+The Town Hall has stable authoritative level/health state, is upgradeable by the
+same commands, and round-trips through native saves; old saves synthesize this
+state during load. Building placement also respects
 the converted Unity `Placeable` flag and the
 persisted technology set: the authored initial technologies expose Lumbermill,
   Stonemason, Tower, and Windmill, while later votes expose the buildings named by
@@ -213,6 +216,8 @@ ambient lighting, distance fog, and deterministic rain/snow fields from the
 authoritative simulation. For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
 `STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.
+`STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
+repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
