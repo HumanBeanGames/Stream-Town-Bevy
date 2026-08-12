@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786542112.7021418,
-    "ast_hash": "7d47346dfd6e889bb5ba165db8553fdd",
+    "mtime": 1786553397.2021742,
+    "ast_hash": "24542d2f04268ed36ffae93a355756be",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2775,8 +2775,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/save.rs": {
-    "mtime": 1786484041.1789193,
-    "ast_hash": "41ebb6d9efc0575843345e40c7e90e19",
+    "mtime": 1786553657.400549,
+    "ast_hash": "2134f8d8d1ce486778ce88dc11c01212",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/simulation.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786550633.329677,
-    "ast_hash": "329cc3a37029d367fc776944ba78909d",
+    "mtime": 1786554495.9863496,
+    "ast_hash": "bea20654300c8b36398072b85a1f8b1a",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786552331.8163483,
-    "ast_hash": "5785cf169c6aecde1a1258366ef736f6",
+    "mtime": 1786554035.9544196,
+    "ast_hash": "260d1ad26e5a53b7b0b99d5e90cb2d97",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,13 +3605,13 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786552349.2323668,
-    "ast_hash": "656f1fbcac5463ba33c595427693f723",
+    "mtime": 1786554022.0177789,
+    "ast_hash": "649542ff47df4764f7161d5b93dbe6df",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
-    "mtime": 1786523614.5929887,
-    "ast_hash": "e32d0d5dd2bbaa33087ae3929f1a7d97",
+    "mtime": 1786554587.8031147,
+    "ast_hash": "1db788a3d117c2489ea4b49351f1a929",
     "semantic_hash": ""
   },
   "Assets/Editor/BevyMigrationExporter.cs": {
