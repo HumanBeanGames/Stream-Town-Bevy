@@ -48,6 +48,7 @@ pub enum TownEvent {
     EnemyRaid,
     Festival,
     HarshWeather,
+    FishGod,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -69,6 +70,8 @@ pub struct ActorState {
     pub station: Option<StableId>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub role_progression: BTreeMap<StableId, RoleProgress>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub unlocked_pets: BTreeSet<StableId>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -101,6 +104,13 @@ pub struct RaidState {
     pub boss_archetype: StableId,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub tracked_enemies: BTreeSet<StableId>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FishGodState {
+    pub praises_given: u16,
+    pub praises_required: u16,
+    pub remaining_seconds: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -154,6 +164,10 @@ pub struct WorldSimulation {
     pub active_event: Option<TownEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_raid: Option<RaidState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fish_god: Option<FishGodState>,
+    #[serde(default)]
+    pub fish_god_attempts: u64,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -188,6 +202,8 @@ pub enum SimulationError {
     InvalidTradeResource(StableId),
     #[error("actor {0} is not dead")]
     ActorAlive(StableId),
+    #[error("there is no active Fish God event")]
+    NoFishGodEvent,
 }
 
 impl WorldSimulation {
@@ -210,6 +226,8 @@ impl WorldSimulation {
             active_goals: Vec::new(),
             active_event: None,
             active_raid: None,
+            fish_god: None,
+            fish_god_attempts: 0,
         }
     }
 
@@ -234,6 +252,7 @@ impl WorldSimulation {
                     StableId::new("role:villager").expect("static stable ID"),
                     RoleProgress::default(),
                 )]),
+                unlocked_pets: BTreeSet::new(),
             },
         );
         true
@@ -263,6 +282,7 @@ impl WorldSimulation {
                 inventory: BTreeMap::new(),
                 station: None,
                 role_progression: BTreeMap::new(),
+                unlocked_pets: BTreeSet::new(),
             },
         );
         true
@@ -295,6 +315,64 @@ impl WorldSimulation {
         if self.active_event == Some(TownEvent::EnemyRaid) {
             self.active_event = None;
         }
+    }
+
+    pub fn start_fish_god(&mut self, force: bool) -> bool {
+        if self.active_event.is_some() || self.fish_god.is_some() {
+            return false;
+        }
+        self.fish_god_attempts = self.fish_god_attempts.saturating_add(1);
+        let answered = deterministic_fish_god_value(self.world_seed, self.fish_god_attempts)
+            .is_multiple_of(10);
+        if !force && !answered {
+            return false;
+        }
+        self.active_event = Some(TownEvent::FishGod);
+        self.fish_god = Some(FishGodState {
+            praises_given: 0,
+            praises_required: 20,
+            remaining_seconds: 300.0,
+        });
+        true
+    }
+
+    pub fn praise_fish_god(&mut self, actor: &StableId) -> Result<bool, SimulationError> {
+        let player = self
+            .actors
+            .get(actor)
+            .ok_or_else(|| SimulationError::MissingActor(actor.clone()))?;
+        if !player.alive {
+            return Err(SimulationError::ActorDead(actor.clone()));
+        }
+        let Some(event) = &mut self.fish_god else {
+            return Err(SimulationError::NoFishGodEvent);
+        };
+        event.praises_given = event.praises_given.saturating_add(1);
+        if event.praises_given < event.praises_required {
+            return Ok(false);
+        }
+        let food = StableId::new("resource:food").expect("static stable ID");
+        let current = self.town_resources.get(&food).copied().unwrap_or_default();
+        self.town_resources
+            .insert(food, current.saturating_add(1_000));
+        let twitch_players: Vec<_> = self
+            .actors
+            .keys()
+            .filter(|id| id.as_str().starts_with("twitch:"))
+            .cloned()
+            .collect();
+        let roll = deterministic_fish_god_value(self.world_seed, self.fish_god_attempts + 1);
+        if !twitch_players.is_empty() && roll % 100 < 70 {
+            let index = usize::try_from(roll % twitch_players.len() as u64).unwrap_or(0);
+            if let Some(recipient) = self.actors.get_mut(&twitch_players[index]) {
+                recipient
+                    .unlocked_pets
+                    .insert(StableId::new("pet:fish_god").expect("static stable ID"));
+            }
+        }
+        self.fish_god = None;
+        self.active_event = None;
+        Ok(true)
     }
 
     pub fn assign_role(&mut self, actor: &StableId, role: StableId) -> Result<(), SimulationError> {
@@ -778,6 +856,16 @@ impl WorldSimulation {
                 *remaining = (*remaining - f64::from(delta_seconds)).max(0.0);
             }
         }
+        let fish_god_expired = self.fish_god.as_mut().is_some_and(|event| {
+            event.remaining_seconds = (event.remaining_seconds - f64::from(delta_seconds)).max(0.0);
+            event.remaining_seconds <= f64::EPSILON
+        });
+        if fish_god_expired {
+            self.fish_god = None;
+            if self.active_event == Some(TownEvent::FishGod) {
+                self.active_event = None;
+            }
+        }
     }
 
     fn actor_mut(&mut self, actor: &StableId) -> Result<&mut ActorState, SimulationError> {
@@ -820,6 +908,13 @@ fn validate_trade_resource(resource: &StableId) -> Result<(), SimulationError> {
     } else {
         Err(SimulationError::InvalidTradeResource(resource.clone()))
     }
+}
+
+fn deterministic_fish_god_value(seed: u64, attempt: u64) -> u64 {
+    let mut mixed = seed.wrapping_add(attempt.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^ (mixed >> 31)
 }
 
 fn objective_increment(
@@ -1008,6 +1103,60 @@ mod tests {
         simulation.finish_raid();
         assert!(simulation.active_event.is_none());
         assert!(simulation.active_raid.is_none());
+    }
+
+    #[test]
+    fn fish_god_progress_rewards_food_unlocks_pet_and_expires() {
+        let pet_seed = (0..1_000)
+            .find(|seed| deterministic_fish_god_value(*seed, 2) % 100 < 70)
+            .expect("a deterministic pet-winning seed");
+        let mut simulation = WorldSimulation::new(pet_seed);
+        let viewer = id("twitch:fish_friend");
+        assert!(simulation.join_player(viewer.clone(), GridPos { x: 1, z: 1 }));
+        assert!(simulation.start_fish_god(true));
+        for praise in 1..20 {
+            assert_eq!(simulation.praise_fish_god(&viewer), Ok(false));
+            assert_eq!(simulation.fish_god.as_ref().unwrap().praises_given, praise);
+        }
+        assert_eq!(simulation.praise_fish_god(&viewer), Ok(true));
+        assert_eq!(simulation.town_resources[&id("resource:food")], 1_000);
+        assert!(
+            simulation.actors[&viewer]
+                .unlocked_pets
+                .contains(&id("pet:fish_god"))
+        );
+        assert!(simulation.fish_god.is_none());
+        assert!(simulation.active_event.is_none());
+
+        assert!(simulation.start_fish_god(true));
+        simulation.tick(300.0);
+        assert!(simulation.fish_god.is_none());
+        assert!(simulation.active_event.is_none());
+        assert!(matches!(
+            simulation.praise_fish_god(&viewer),
+            Err(SimulationError::NoFishGodEvent)
+        ));
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap(),
+            simulation
+        );
+    }
+
+    #[test]
+    fn fish_god_summon_chance_is_replay_deterministic() {
+        fn attempts_until_answered(seed: u64) -> u64 {
+            let mut simulation = WorldSimulation::new(seed);
+            while !simulation.start_fish_god(false) {
+                assert!(simulation.fish_god_attempts < 1_000);
+            }
+            simulation.fish_god_attempts
+        }
+
+        let attempts = attempts_until_answered(42);
+        assert_eq!(attempts_until_answered(42), attempts);
+        assert!(attempts > 0);
     }
 
     #[test]

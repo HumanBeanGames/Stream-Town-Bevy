@@ -14,6 +14,7 @@ pub enum ChatCommand {
     Buy { amount: u32, resource: StableId },
     Sell { amount: u32, resource: StableId },
     Revive(Option<StableId>),
+    Praise,
     Vote(StableId),
     TriggerEvent(StableId),
     Experience,
@@ -87,6 +88,7 @@ impl FromStr for ChatCommand {
                     "vote" => with_id(&command, argument, Self::Vote),
                     "event" => with_id(&command, argument, Self::TriggerEvent),
                     "revive" => optional_id(argument).map(Self::Revive),
+                    "praise" => no_argument(argument, Self::Praise),
                     _ => Err(CommandParseError::Unknown(command)),
                 }
             }
@@ -159,6 +161,7 @@ mod tests {
             })
         );
         assert_eq!("!revive".parse(), Ok(ChatCommand::Revive(None)));
+        assert_eq!("!praise".parse(), Ok(ChatCommand::Praise));
         assert_eq!(
             "!revive twitch:friend".parse(),
             Ok(ChatCommand::Revive(Some(

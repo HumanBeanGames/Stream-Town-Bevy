@@ -33,6 +33,7 @@ use stream_town_domain::{
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
@@ -192,6 +193,16 @@ struct RuntimeBuilding {
 #[derive(Component)]
 struct EnemyCamp {
     id: StableId,
+}
+
+#[derive(Component)]
+struct FishGodPresentation;
+
+#[derive(Component)]
+struct FallingFish {
+    floor_height: f32,
+    top_height: f32,
+    fall_speed: f32,
 }
 
 #[derive(Component)]
@@ -376,6 +387,8 @@ impl Plugin for StreamTownGamePlugin {
                     update_tower_shooters.after(move_agents),
                     move_combat_projectiles.after(update_tower_shooters),
                     update_enemy_encounters.after(move_combat_projectiles),
+                    sync_fish_god_presentation.after(update_enemy_encounters),
+                    animate_falling_fish.after(sync_fish_god_presentation),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -2451,6 +2464,123 @@ fn update_enemy_encounters(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn sync_fish_god_presentation(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    render: Res<RenderAssets>,
+    world: Res<WorldRuntime>,
+    simulation: Res<SimulationRuntime>,
+    existing: Query<Entity, With<FishGodPresentation>>,
+) {
+    let active = simulation.0.fish_god.is_some();
+    if !active {
+        for entity in &existing {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+    if !existing.is_empty() {
+        return;
+    }
+    let spawn = nearest_walkable(
+        &world.generated,
+        GridPos {
+            x: config.0.world.width / 2,
+            z: config.0.world.height / 2 + 6,
+        },
+    )
+    .unwrap_or(GridPos {
+        x: config.0.world.width / 2,
+        z: config.0.world.height / 2,
+    });
+    let position = grid_to_world_on_surface(spawn, &config.0, &world.generated);
+    let fish_god = archetype_by_source(&content.0, ArchetypeKind::Other, "Event_FishGod.prefab")
+        .or_else(|| {
+            content
+                .0
+                .archetypes
+                .values()
+                .find(|archetype| archetype.source_path.ends_with("Event_FishGod.prefab"))
+        });
+    let mut entity = commands.spawn((
+        WorldEntity,
+        FishGodPresentation,
+        Transform::from_translation(position),
+    ));
+    if let Some((archetype, scene)) = fish_god
+        .and_then(|archetype| default_archetype_scene(archetype).map(|scene| (archetype, scene)))
+        .filter(|(_, scene)| {
+            asset_server.is_some() && converted_asset_exists(&asset_root.0, &scene.asset_path)
+        })
+    {
+        entity.insert((
+            WorldAssetRoot(
+                asset_server
+                    .as_deref()
+                    .expect("asset server checked above")
+                    .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+            ),
+            Transform::from_translation(position)
+                .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
+        ));
+        if let Some(material) = prefab_material_handle(archetype, &presentation.0, &render) {
+            entity.insert(MaterialOverrideSpec(material));
+        }
+    } else {
+        let scale = config.0.world.cell_size * 1.5;
+        entity.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.food.clone()),
+            Transform::from_translation(position + Vec3::Y * scale * 0.5)
+                .with_scale(Vec3::splat(scale)),
+        ));
+    }
+    for index in 0..48_u32 {
+        let x = f32::from(u16::try_from(index % 8).unwrap_or(0)) - 3.5;
+        let z = f32::from(u16::try_from(index / 8).unwrap_or(0)) - 2.5;
+        let top_height = position.y
+            + config.0.world.cell_size * (3.0 + f32::from(u16::try_from(index % 5).unwrap_or(0)));
+        let floor_height = position.y + config.0.world.cell_size * 0.15;
+        commands.spawn((
+            WorldEntity,
+            FishGodPresentation,
+            FallingFish {
+                floor_height,
+                top_height,
+                fall_speed: config.0.world.cell_size
+                    * (2.0 + f32::from(u16::try_from(index % 3).unwrap_or(0)) * 0.4),
+            },
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.food.clone()),
+            Transform::from_xyz(
+                position.x + x * config.0.world.cell_size * 1.4,
+                top_height,
+                position.z + z * config.0.world.cell_size * 1.4,
+            )
+            .with_scale(Vec3::new(
+                config.0.world.cell_size * 0.25,
+                config.0.world.cell_size * 0.12,
+                config.0.world.cell_size * 0.5,
+            )),
+        ));
+    }
+}
+
+fn animate_falling_fish(time: Res<Time>, mut fish: Query<(&FallingFish, &mut Transform)>) {
+    for (fish, mut transform) in &mut fish {
+        transform.translation.y -= fish.fall_speed * time.delta_secs();
+        if transform.translation.y <= fish.floor_height {
+            transform.translation.y = fish.top_height;
+        }
+        transform.rotate_y(time.delta_secs() * 2.5);
+    }
+}
+
 fn update_tower_shooters(
     mut commands: Commands,
     time: Res<Time>,
@@ -4020,6 +4150,14 @@ fn handle_twitch_event(
                 }
                 return;
             }
+            if message.custom_reward_id.as_deref() == Some(FISH_GOD_REWARD_ID) {
+                injected.0.push_back(PendingChatCommand {
+                    actor_id: message.actor_id,
+                    display_name: message.display_name,
+                    command: ChatCommand::Praise,
+                });
+                return;
+            }
             match message.message.parse::<ChatCommand>() {
                 Ok(command) => injected.0.push_back(PendingChatCommand {
                     actor_id: message.actor_id,
@@ -4598,6 +4736,7 @@ fn town_event_from_id(requested: &StableId) -> Option<TownEvent> {
         "resource_boom" | "wood_boom" => Some(TownEvent::ResourceBoom(
             StableId::new("resource:wood").expect("static ID"),
         )),
+        "fish_god" | "fishgod" => Some(TownEvent::FishGod),
         _ => None,
     }
 }
@@ -5300,6 +5439,10 @@ fn process_injected_commands(
                             if !simulation.0.start_raid(5, 50, enemy, boss) {
                                 return Err("raid settings are invalid".to_owned());
                             }
+                        } else if event == TownEvent::FishGod {
+                            if !simulation.0.start_fish_god(true) {
+                                return Err("another event is active".to_owned());
+                            }
                         } else {
                             simulation.0.trigger_event(event);
                         }
@@ -5366,6 +5509,43 @@ fn process_injected_commands(
                     Ok(format!("revived {target_id}"))
                 })
             }
+            ChatCommand::Praise => {
+                if !simulation.0.actors.contains_key(&actor_id) {
+                    Err("join before praising the Fish God".to_owned())
+                } else if simulation.0.fish_god.is_none() {
+                    if simulation.0.start_fish_god(false) {
+                        simulation
+                            .0
+                            .praise_fish_god(&actor_id)
+                            .map(|_| "the Fish God answered; praise accepted (1/20)".to_owned())
+                            .map_err(|error| error.to_string())
+                    } else if simulation.0.active_event.is_some() {
+                        Err("another event is active".to_owned())
+                    } else {
+                        Ok("the Fish God did not answer this praise".to_owned())
+                    }
+                } else {
+                    simulation
+                        .0
+                        .praise_fish_god(&actor_id)
+                        .map(|completed| {
+                            if completed {
+                                "the Fish God was pleased: the town received 1,000 food".to_owned()
+                            } else {
+                                let event = simulation
+                                    .0
+                                    .fish_god
+                                    .as_ref()
+                                    .expect("incomplete praise retains event");
+                                format!(
+                                    "Fish God praise {}/{}",
+                                    event.praises_given, event.praises_required
+                                )
+                            }
+                        })
+                        .map_err(|error| error.to_string())
+                }
+            }
             ChatCommand::Experience => simulation
                 .0
                 .actors
@@ -5392,7 +5572,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy <amount> <resource>, !sell <amount> <resource>, !revive [player], !vote <technology>, !event <event>, !save, !help"
+                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy <amount> <resource>, !sell <amount> <resource>, !revive [player], !praise, !vote <technology>, !event <event>, !save, !help"
                     .to_owned(),
             ),
         };
@@ -5528,6 +5708,11 @@ fn active_event_text(simulation: &WorldSimulation) -> String {
             raid.current_wave,
             raid.total_waves,
             raid.tracked_enemies.len()
+        )
+    } else if let Some(event) = &simulation.fish_god {
+        format!(
+            "Fish God {}/{} ({:.0}s)",
+            event.praises_given, event.praises_required, event.remaining_seconds
         )
     } else {
         simulation
@@ -6596,6 +6781,7 @@ mod tests {
                 message: message.to_owned(),
                 is_broadcaster,
                 is_moderator: false,
+                custom_reward_id: None,
             })
         };
         let mut connection = TwitchConnection {
@@ -6616,6 +6802,30 @@ mod tests {
         let dispatched = commands.0.pop_front().unwrap();
         assert_eq!(dispatched.actor_id, StableId::new("twitch:42").unwrap());
         assert_eq!(dispatched.command, ChatCommand::Join);
+    }
+
+    #[test]
+    fn fish_god_channel_reward_dispatches_praise_without_command_text() {
+        let mut connection = TwitchConnection {
+            broadcaster_authorized: true,
+            ..default()
+        };
+        let mut commands = InjectedCommands::default();
+        handle_twitch_event(
+            TwitchEvent::Chat(twitch::TwitchChatEnvelope {
+                actor_id: StableId::new("twitch:fish").unwrap(),
+                user_id: "fish".to_owned(),
+                login: "fishfriend".to_owned(),
+                display_name: "FishFriend".to_owned(),
+                message: "Praise!".to_owned(),
+                is_broadcaster: false,
+                is_moderator: false,
+                custom_reward_id: Some(FISH_GOD_REWARD_ID.to_owned()),
+            }),
+            &mut connection,
+            &mut commands,
+        );
+        assert_eq!(commands.0.pop_front().unwrap().command, ChatCommand::Praise);
     }
 
     #[test]

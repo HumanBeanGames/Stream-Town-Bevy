@@ -98,7 +98,7 @@ In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
   stable chat grammar executes `!join`, `!role`, `!experience`/`!exp`, `!build`, `!upgrade`,
-  `!buy`, `!sell`, `!revive [player]`, `!vote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
+  `!buy`, `!sell`, `!revive [player]`, `!praise`, `!vote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
 HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
 spawn the converted building GLB, and round-trip through native saves. New
@@ -153,7 +153,16 @@ be defeated before each next wave, followed by a Minotaur Boss whose health is
 at least 1,000 and otherwise scales by 50 per player. Enemy archetype, camp
 timers and members, wave progress, tracked enemies, and the next stable enemy ID
 survive native saves; legacy enemy and camp names resolve back to catalog
-archetypes. Initial actors are
+archetypes.
+The shipping Fish God event is also live: its exact Unity channel-point reward
+ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten
+summon chance, 20-praise requirement, 300-second timeout, 1,000-food reward, and
+70% Fish God pet roll across joined Twitch players. `!event fish_god` provides a
+forced moderator/debug start. Event attempts, remaining time, praise progress,
+rewarded pet IDs, and resources persist in native saves. The converted Fish God
+GLB appears at town center while a deterministic falling-fish field provides the
+missing Unity VFX Graph equivalent; HUD and tools expose event progress and
+repeatable injection commands. Initial actors are
 placed by a deterministic flood fill from the connected town centre so combat
 and work targets are reachable rather than stranded on isolated land cells.
 

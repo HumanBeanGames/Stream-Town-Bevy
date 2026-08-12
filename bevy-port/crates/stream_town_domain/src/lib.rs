@@ -37,8 +37,8 @@ pub use save::{
     NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,
 };
 pub use simulation::{
-    ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState, MAX_ROLE_LEVEL, ObjectiveEvent,
-    ObjectiveProgress, RaidState, RoleProgress, Season, SimulationError, TechVote, TownEvent,
-    TownGoalState, Weather, WorldSimulation, required_role_experience,
+    ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState, FishGodState, MAX_ROLE_LEVEL,
+    ObjectiveEvent, ObjectiveProgress, RaidState, RoleProgress, Season, SimulationError, TechVote,
+    TownEvent, TownGoalState, Weather, WorldSimulation, required_role_experience,
 };
 pub use world::{GeneratedResource, GeneratedWorld, generate_world};

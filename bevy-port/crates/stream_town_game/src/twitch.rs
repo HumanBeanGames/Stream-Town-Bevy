@@ -309,6 +309,7 @@ pub struct TwitchChatEnvelope {
     pub message: String,
     pub is_broadcaster: bool,
     pub is_moderator: bool,
+    pub custom_reward_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -446,7 +447,8 @@ async fn run_transport(
                 match message {
                     ServerMessage::Privmsg(message)
                         if message.channel_login == config.channel_login
-                            && message.message_text.starts_with('!') =>
+                            && (message.message_text.starts_with('!')
+                                || message.source.tags.0.contains_key("custom-reward-id")) =>
                     {
                         events.send(TwitchEvent::Chat(envelope_from_privmsg(message)?))?;
                     }
@@ -487,6 +489,7 @@ fn envelope_from_privmsg(
     message: twitch_irc::message::PrivmsgMessage,
 ) -> Result<TwitchChatEnvelope> {
     let actor_id = StableId::new(format!("twitch:{}", message.sender.id))?;
+    let custom_reward_id = message.source.tags.0.get("custom-reward-id").cloned();
     Ok(TwitchChatEnvelope {
         actor_id,
         user_id: message.sender.id,
@@ -498,6 +501,7 @@ fn envelope_from_privmsg(
             .iter()
             .any(|badge| badge.name == "broadcaster"),
         is_moderator: message.badges.iter().any(|badge| badge.name == "moderator"),
+        custom_reward_id,
     })
 }
 
@@ -534,5 +538,20 @@ mod tests {
         .unwrap();
         assert_eq!(token.refresh_token, "rotated");
         assert!(token.expires_at_unix_seconds > token.created_at_unix_seconds);
+    }
+
+    #[test]
+    fn channel_point_reward_tag_survives_privmsg_conversion() {
+        use twitch_irc::message::{IRCMessage, PrivmsgMessage};
+
+        let raw = "@badge-info=;badges=;color=;custom-reward-id=5a760033-50b5-4e47-911b-d63993d2860c;display-name=Viewer;emotes=;id=message;mod=0;room-id=7;subscriber=0;tmi-sent-ts=1594545155039;user-id=42;user-type= :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #channel :Praise!";
+        let message = PrivmsgMessage::try_from(IRCMessage::parse(raw).unwrap()).unwrap();
+        let envelope = envelope_from_privmsg(message).unwrap();
+        assert_eq!(
+            envelope.custom_reward_id.as_deref(),
+            Some("5a760033-50b5-4e47-911b-d63993d2860c")
+        );
+        assert_eq!(envelope.actor_id.as_str(), "twitch:42");
+        assert_eq!(envelope.message, "Praise!");
     }
 }

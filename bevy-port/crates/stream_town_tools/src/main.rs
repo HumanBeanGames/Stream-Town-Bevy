@@ -696,6 +696,7 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 
 fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Runtime developer console");
+    ui.label("Fish God parity: channel reward 5a760033-50b5-4e47-911b-d63993d2860c maps to !praise; !event fish_god force-starts diagnostics.");
     ui.horizontal(|ui| {
         ui.text_edit_singleline(&mut state.command);
         if ui.button("Validate command").clicked() {
@@ -705,7 +706,18 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             };
         }
     });
-    ui.label("Save/load, spawn, vote/event injection, frame capture, and profiling will connect through the runtime bridge.");
+    ui.horizontal(|ui| {
+        if ui.button("Prepare Fish God start").clicked() {
+            "!event fish_god".clone_into(&mut state.command);
+        }
+        if ui.button("Prepare praise").clicked() {
+            "!praise".clone_into(&mut state.command);
+        }
+        if ui.button("Prepare raid").clicked() {
+            "!event raid".clone_into(&mut state.command);
+        }
+    });
+    ui.label("Commands can be injected in a debug launch through STREAM_TOWN_DEBUG_COMMANDS with semicolon delimiters.");
 }
 
 fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {

@@ -1376,6 +1376,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                                 })
                         }),
                         role_progression,
+                        unlocked_pets: BTreeSet::new(),
                     },
                 );
             }
