@@ -35,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town
-  economy; exhausted resource visuals are hidden. Content schema 11 converts each role's
+  economy; exhausted resource visuals are hidden. Content schema 13 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -84,7 +84,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 11 also promotes Unity `Placeable` and all six technology effect
+  Content schema 13 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -119,6 +119,19 @@ mistaken for production-ready systems.
   Constructed buildings block the deterministic grid, spawn their converted GLB
   with a primitive fallback, persist in native saves, and are reconstructed with
   their navigation regions on load.
+- Persistent ruler governance matching the shipping Unity flow. The first
+  election is scheduled after 30 seconds; new-ruler and hourly keep-ruler
+  ballots pause until the first vote, run for 120 seconds, accept one vote per
+  stable player, preserve deterministic first-option tie behavior, and restore
+  the previous role on replacement or resignation. Ruler identity, previous
+  role, ballot tallies/order, and cooldown persist in native saves, while the
+  one-time importer restores Unity ruler names and cooldowns. `!vote` routes to
+  governance while a ruler ballot is active and to technology otherwise.
+  Broadcaster/moderator identity survives Twitch dispatch for permission checks;
+  `!buy`, `!sell`, `!recruit`, `!recruits`, and `!save` enforce ruler-or-staff
+  access, and `!rulervote`/forced `!event` are staff-only. Recruiting creates
+  stable NPC actors and applies converted `HasUserLimit`/`BaseMaxUserLimit`
+  role constraints plus House-backed recruit capacity.
 - An opt-in Twitch transport using public-client device OAuth, `twitch-irc`,
   Tokio, Rustls, and OS credential-vault storage. It validates app/account/scopes,
   rotates public-client refresh tokens, revalidates hourly, preserves the
@@ -156,7 +169,7 @@ mistaken for production-ready systems.
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
   building storage contributions, stations, role target masks, and equipment into
-  422 technology objectives into content schema 11, preserves the remaining typed Unity
+  422 technology objectives into content schema 13, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -233,9 +246,11 @@ mistaken for production-ready systems.
 - Full Unity Twitch command coverage, per-command permissions/cooldowns, and
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
-  `twitch-irc` for reconnect and chat rate limiting; Unity's larger ruler,
-  game-master, player-action, recruitment, ruler-only enforcement, and event
-  command surface still remains. `!buy` and `!sell` use Unity's authored rates.
+  `twitch-irc` for reconnect and chat rate limiting; Unity's remaining camera,
+  recruit inspection/dismissal/re-role, game-master, player-action, cosmetic,
+  and queued-event command surface still remains. Core ruler election,
+  economy/recruitment, resignation, and ruler/staff enforcement are live.
+  `!buy` and `!sell` use Unity's authored rates.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of

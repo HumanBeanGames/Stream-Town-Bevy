@@ -55,7 +55,7 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   masks, all 15 equipment sets, all four reachable building storage components,
   all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
-  shooter, and 422 typed objectives from the production technology graph in content schema 12,
+  shooter, and 422 typed objectives from the production technology graph in content schema 13,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -98,7 +98,7 @@ In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
   stable chat grammar executes `!join`, `!role`, `!experience`/`!exp`, `!build`, `!upgrade`,
-  `!buy`, `!sell`, `!revive [player]`, `!praise`, `!vote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
+  `!buy`, `!sell`, `!recruit`, `!recruits`, `!resign`, `!revive [player]`, `!praise`, `!vote`, `!rulervote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
 HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
 spawn the converted building GLB, and round-trip through native saves. New
@@ -117,6 +117,17 @@ persisted technology set: the authored initial technologies expose Lumbermill,
   and selling update HUD-visible progress before the technology unlocks. A semicolon-delimited
 `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
+
+Ruler governance follows the shipping Unity rules: the first election is
+scheduled after 30 seconds, ballots wait indefinitely for the first vote and
+then run for 120 seconds, each joined player votes once, and elected rulers face
+an hourly yes/no retention vote. Ruler identity, previous role, active ballot,
+tallies, and cooldown survive native saves; the legacy importer restores ruler
+names and vote cooldowns. Election wins assign `role:ruler`, while replacement
+or `!resign` restores the prior role. `!buy`, `!sell`, `!recruit`, `!recruits`,
+and `!save` enforce ruler-or-staff access, while `!rulervote` and forced `!event`
+remain broadcaster/moderator commands. Recruiting creates stable NPC entities,
+consumes the House-backed recruit capacity, and persists normally.
 
 The Unity starting NPC roster is present as stable Defender, Logger, Miner,
 Gatherer, and Builder actors. Resource roles select their authored resource and

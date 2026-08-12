@@ -28,8 +28,8 @@ use stream_town_domain::{
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
     BuildingDef, BuildingState, ChatCommand, ContentCatalog, EnemyCampState, GameConfig,
     GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore,
-    ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, SavedActor, Season, StableId,
-    StationDef, TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
+    ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, Season,
+    StableId, StationDef, TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -81,8 +81,11 @@ struct SessionStats {
 #[derive(Clone, Debug)]
 struct PendingChatCommand {
     actor_id: StableId,
+    login_name: String,
     display_name: String,
     command: ChatCommand,
+    is_broadcaster: bool,
+    is_moderator: bool,
 }
 
 #[derive(Resource, Default)]
@@ -4038,8 +4041,11 @@ fn game_input(
     if keyboard.just_pressed(KeyCode::KeyJ) {
         injected.0.push_back(PendingChatCommand {
             actor_id: StableId::new("twitch:debug_viewer").expect("static ID"),
+            login_name: "debug_viewer".to_owned(),
             display_name: "debug_viewer".to_owned(),
             command: "!join".parse().expect("static chat command"),
+            is_broadcaster: true,
+            is_moderator: true,
         });
     }
     if !*injected_debug_commands {
@@ -4049,8 +4055,11 @@ fn game_input(
                 match command.trim().parse() {
                     Ok(command) => injected.0.push_back(PendingChatCommand {
                         actor_id: StableId::new("twitch:debug_viewer").expect("static ID"),
+                        login_name: "debug_viewer".to_owned(),
                         display_name: "debug_viewer".to_owned(),
                         command,
+                        is_broadcaster: true,
+                        is_moderator: true,
                     }),
                     Err(error) => warn!(command, %error, "ignored invalid debug command"),
                 }
@@ -4153,16 +4162,22 @@ fn handle_twitch_event(
             if message.custom_reward_id.as_deref() == Some(FISH_GOD_REWARD_ID) {
                 injected.0.push_back(PendingChatCommand {
                     actor_id: message.actor_id,
+                    login_name: message.login,
                     display_name: message.display_name,
                     command: ChatCommand::Praise,
+                    is_broadcaster: message.is_broadcaster,
+                    is_moderator: message.is_moderator,
                 });
                 return;
             }
             match message.message.parse::<ChatCommand>() {
                 Ok(command) => injected.0.push_back(PendingChatCommand {
                     actor_id: message.actor_id,
+                    login_name: message.login,
                     display_name: message.display_name,
                     command,
+                    is_broadcaster: message.is_broadcaster,
+                    is_moderator: message.is_moderator,
                 }),
                 Err(parse_error) => {
                     debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
@@ -5107,6 +5122,183 @@ fn spawn_runtime_building(
     }
 }
 
+fn require_staff(pending: &PendingChatCommand) -> Result<(), String> {
+    if pending.is_broadcaster || pending.is_moderator {
+        Ok(())
+    } else {
+        Err("this command requires broadcaster or moderator permission".to_owned())
+    }
+}
+
+fn require_ruler_or_staff(
+    simulation: &WorldSimulation,
+    pending: &PendingChatCommand,
+) -> Result<(), String> {
+    if simulation.is_ruler(&pending.actor_id) {
+        Ok(())
+    } else {
+        require_staff(pending)
+            .map_err(|_| "this command is restricted to the Ruler or staff".to_owned())
+    }
+}
+
+fn resolve_ruler_vote_option(
+    simulation: &WorldSimulation,
+    requested: &StableId,
+) -> Option<StableId> {
+    let vote = simulation.ruler_vote.as_ref()?;
+    if vote.kind == RulerVoteKind::KeepRuler {
+        return matches!(requested.as_str(), "yes" | "no").then(|| requested.clone());
+    }
+    if simulation.actors.contains_key(requested) {
+        return Some(requested.clone());
+    }
+    let prefixed = prefixed_id(requested, "twitch:");
+    if let Some(actor) = prefixed.filter(|actor| simulation.actors.contains_key(actor)) {
+        return Some(actor);
+    }
+    let normalized = requested.as_str().replace('_', " ");
+    simulation
+        .actors
+        .values()
+        .filter(|actor| actor.role.as_str() != "role:enemy" && actor.alive)
+        .find(|actor| {
+            actor
+                .login_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(requested.as_str()))
+                || actor
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| name.replace('_', " ").eq_ignore_ascii_case(&normalized))
+        })
+        .map(|actor| actor.id.clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recruit_npcs(
+    commands: &mut Commands,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    world: &GeneratedWorld,
+    render: &RenderAssets,
+    simulation: &mut WorldSimulation,
+    role: &StableId,
+    requested_amount: u16,
+) -> Result<String, String> {
+    let recruit_resource = StableId::new("resource:recruit").expect("static resource ID");
+    let current = simulation
+        .town_resources
+        .get(&recruit_resource)
+        .copied()
+        .unwrap_or_default();
+    let capacity = resource_storage_capacity(config, content, simulation, &recruit_resource);
+    let available = capacity.saturating_sub(current);
+    let amount = u32::from(requested_amount).min(available);
+    if amount == 0 {
+        return Err("the town has no recruit capacity".to_owned());
+    }
+    let role_definition = content
+        .roles
+        .get(role)
+        .ok_or_else(|| format!("unknown role {role}"))?;
+    let current_in_role = simulation
+        .actors
+        .values()
+        .filter(|actor| actor.role == *role)
+        .count();
+    let role_capacity = if role_definition.has_user_limit {
+        usize::from(role_definition.base_max_users).saturating_sub(current_in_role)
+    } else {
+        usize::MAX
+    };
+    let amount = amount.min(u32::try_from(role_capacity).unwrap_or(u32::MAX));
+    if amount == 0 {
+        return Err(format!("the {role} role is full"));
+    }
+    let archetype =
+        archetype_id_by_source(content, ArchetypeKind::Player, "Player_Character.prefab")
+            .unwrap_or_else(|| StableId::new("archetype:viewer").expect("static ID"));
+    let center = GridPos {
+        x: world.navigation.width() / 2,
+        z: world.navigation.height() / 2,
+    };
+    let base_scale = Vec3::new(
+        config.world.cell_size * 0.3,
+        config.world.cell_size * 0.55,
+        config.world.cell_size * 0.3,
+    );
+    let mut spawned = 0_u32;
+    for _ in 0..amount {
+        let mut sequence = u64::try_from(simulation.actors.len()).unwrap_or(u64::MAX);
+        let id = loop {
+            let candidate =
+                StableId::new(format!("npc:recruit_{sequence:08}")).expect("runtime recruit ID");
+            if !simulation.actors.contains_key(&candidate) {
+                break candidate;
+            }
+            sequence = sequence
+                .checked_add(1)
+                .ok_or_else(|| "runtime recruit identifier space exhausted".to_owned())?;
+        };
+        let desired = GridPos {
+            x: center
+                .x
+                .saturating_add(u16::try_from(sequence % 9).unwrap_or_default()),
+            z: center
+                .z
+                .saturating_add(u16::try_from((sequence / 9) % 9).unwrap_or_default()),
+        };
+        let position = nearest_walkable(world, desired)
+            .or_else(|| nearest_walkable(world, center))
+            .ok_or_else(|| "no walkable recruit spawn is available".to_owned())?;
+        if !simulation.join_player(id.clone(), position) {
+            continue;
+        }
+        simulation
+            .assign_role(&id, role.clone())
+            .map_err(|error| error.to_string())?;
+        if let Some(actor) = simulation.actors.get_mut(&id) {
+            actor.archetype = Some(archetype.clone());
+            actor.display_name = Some(format!("Recruit {}", sequence + 1));
+            actor.login_name = None;
+        }
+        let target = mirrored_target(world, position);
+        let world_position = grid_to_world_on_surface(position, config, world);
+        commands.spawn((
+            WorldEntity,
+            GridLocation(position),
+            Agent {
+                id,
+                kind: ActorKind::Player,
+                archetype: archetype.clone(),
+                goal: AgentGoal::Wander,
+                spawn: position,
+                origin: position,
+                path: Vec::new(),
+                path_index: 0,
+                target,
+                action_cooldown_seconds: 0.0,
+                health_regen_accumulator: 0.0,
+            },
+            AgentAnimation {
+                base_scale,
+                ..default()
+            },
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(actor_material(render, &ActorKind::Player, false)),
+            Transform::from_translation(world_position + Vec3::Y * base_scale.y * 0.5)
+                .with_scale(base_scale),
+        ));
+        spawned = spawned.saturating_add(1);
+    }
+    *simulation
+        .town_resources
+        .entry(recruit_resource)
+        .or_default() = current.saturating_add(spawned);
+    Ok(format!("recruited {spawned} {role}"))
+}
+
 fn send_command_feedback(connection: &TwitchConnection, display_name: &str, message: &str) {
     if let Some(transport) = &connection.transport {
         let _ = transport.send(TwitchControl::SendMessage(format!(
@@ -5135,9 +5327,14 @@ fn process_injected_commands(
     agents: Query<(&Agent, &GridLocation)>,
 ) {
     while let Some(pending) = queue.0.pop_front() {
-        let actor_id = pending.actor_id;
-        let command = pending.command;
-        let result: Result<String, String> = match &command {
+        let actor_id = pending.actor_id.clone();
+        let command = pending.command.clone();
+        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+            actor.display_name = Some(pending.display_name.clone());
+            actor.login_name = Some(pending.login_name.clone());
+        }
+        let result = (|| -> Result<String, String> {
+            match &command {
             ChatCommand::Join => {
                 if simulation.0.actors.contains_key(&actor_id) {
                     Ok("you are already in town".to_owned())
@@ -5168,6 +5365,8 @@ fn process_injected_commands(
                         });
                         if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
                             actor.archetype = Some(player_archetype.clone());
+                            actor.display_name = Some(pending.display_name.clone());
+                            actor.login_name = Some(pending.login_name.clone());
                         }
                         let base_scale = Vec3::new(
                             config.0.world.cell_size * 0.3,
@@ -5214,6 +5413,9 @@ fn process_injected_commands(
                     .filter(|role| content.0.roles.contains_key(role))
                     .ok_or_else(|| format!("unknown role {}", role.as_str()));
                 role.and_then(|role| {
+                    if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&actor_id) {
+                        return Err("the Ruler role is assigned by election".to_owned());
+                    }
                     simulation
                         .0
                         .assign_role(&actor_id, role.clone())
@@ -5321,6 +5523,7 @@ fn process_injected_commands(
                 })
             }
             ChatCommand::Sell { amount, resource } => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
                 let resource = prefixed_id(resource, "resource:")
                     .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
                 resource.and_then(|resource| {
@@ -5349,6 +5552,7 @@ fn process_injected_commands(
                 })
             }
             ChatCommand::Buy { amount, resource } => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
                 let resource = prefixed_id(resource, "resource:")
                     .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
                 resource.and_then(|resource| {
@@ -5378,6 +5582,25 @@ fn process_injected_commands(
                 })
             }
             ChatCommand::Vote(requested) => {
+                if simulation.0.ruler_vote.is_some() {
+                    let option = resolve_ruler_vote_option(&simulation.0, requested)
+                        .ok_or_else(|| format!("unknown ruler candidate {}", requested.as_str()));
+                    option.and_then(|option| {
+                        simulation
+                            .0
+                            .cast_ruler_vote(&actor_id, option.clone())
+                            .map(|()| {
+                                let label = simulation
+                                    .0
+                                    .actors
+                                    .get(&option)
+                                    .and_then(|actor| actor.display_name.as_deref())
+                                    .unwrap_or(option.as_str());
+                                format!("ruler vote for {label} accepted")
+                            })
+                            .map_err(|error| error.to_string())
+                    })
+                } else {
                 let technology = resolve_technology_id(&content.0, requested)
                     .ok_or_else(|| format!("unknown technology {}", requested.as_str()));
                 technology.and_then(|technology| {
@@ -5415,8 +5638,58 @@ fn process_injected_commands(
                         .map(|()| format!("voted for {}", node.display_name))
                         .map_err(|error| error.to_string())
                 })
+                }
             }
+            ChatCommand::Recruit { role, amount } => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                let role = prefixed_id(role, "role:")
+                    .filter(|role| content.0.roles.contains_key(role))
+                    .ok_or_else(|| format!("unknown role {}", role.as_str()))?;
+                if role.as_str() == "role:ruler" {
+                    Err("Ruler cannot be recruited".to_owned())
+                } else {
+                    recruit_npcs(
+                        &mut ecs,
+                        &config.0,
+                        &content.0,
+                        &world.generated,
+                        &render,
+                        &mut simulation.0,
+                        &role,
+                        *amount,
+                    )
+                }
+            }
+            ChatCommand::RecruitCount => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                let recruits = simulation
+                    .0
+                    .actors
+                    .keys()
+                    .filter(|id| id.as_str().starts_with("npc:recruit_"))
+                    .count();
+                Ok(format!("the town has {recruits} recruited NPCs"))
+            }
+            ChatCommand::StartRulerVote => {
+                require_staff(&pending)?;
+                let kind = if simulation.0.current_ruler.is_some() {
+                    RulerVoteKind::KeepRuler
+                } else {
+                    RulerVoteKind::NewRuler
+                };
+                simulation
+                    .0
+                    .start_ruler_vote(kind)
+                    .map(|()| "ruler vote started".to_owned())
+                    .map_err(|error| error.to_string())
+            }
+            ChatCommand::Resign => simulation
+                .0
+                .resign_ruler(&actor_id)
+                .map(|()| "you resigned; a new ruler vote started".to_owned())
+                .map_err(|error| error.to_string()),
             ChatCommand::TriggerEvent(event) => {
+                require_staff(&pending)?;
                 town_event_from_id(event)
                     .ok_or_else(|| format!("unknown event {}", event.as_str()))
                     .and_then(|event| {
@@ -5565,6 +5838,7 @@ fn process_injected_commands(
                         .ok_or_else(|| format!("{} has no authored progression", actor.role))
                 }),
             ChatCommand::Save => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
                 let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
                 save.store
                     .write(&snapshot)
@@ -5572,10 +5846,11 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy <amount> <resource>, !sell <amount> <resource>, !revive [player], !praise, !vote <technology>, !event <event>, !save, !help"
+                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy/!sell <amount> <resource> (Ruler), !recruit <role> [amount] (Ruler), !recruits, !resign, !revive [player], !praise, !vote <candidate|yes|no|technology>, !rulervote (staff), !event <event> (staff), !save, !help"
                     .to_owned(),
             ),
-        };
+            }
+        })();
         let message = match result {
             Ok(message) => message,
             Err(error) => format!("command rejected: {error}"),
@@ -5646,7 +5921,7 @@ fn update_hud(
         .filter(|actor| !actor.alive)
         .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | Goals: {} | Event: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} R:{} | Goals: {} | Event: {} | Governance: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -5658,8 +5933,10 @@ fn update_hud(
         town_resource_amount(&simulation.0, "resource:gold"),
         town_resource_amount(&simulation.0, "resource:ore"),
         town_resource_amount(&simulation.0, "resource:wood"),
+        town_resource_amount(&simulation.0, "resource:recruit"),
         town_goal_status(&content.0, &simulation.0),
         active_event_text(&simulation.0),
+        ruler_status(&simulation.0),
         feedback.0,
     );
 }
@@ -5719,6 +5996,48 @@ fn active_event_text(simulation: &WorldSimulation) -> String {
             .active_event
             .as_ref()
             .map_or_else(|| "none".to_owned(), |event| format!("{event:?}"))
+    }
+}
+
+fn ruler_status(simulation: &WorldSimulation) -> String {
+    if let Some(vote) = &simulation.ruler_vote {
+        let options = vote
+            .option_order
+            .iter()
+            .map(|option| {
+                let count = vote
+                    .votes
+                    .values()
+                    .filter(|selected| *selected == option)
+                    .count();
+                let label = simulation
+                    .actors
+                    .get(option)
+                    .and_then(|actor| actor.display_name.as_deref())
+                    .unwrap_or(option.as_str());
+                format!("{label} {count}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{:?} {:.0}s [{}]",
+            vote.kind, vote.remaining_seconds, options
+        )
+    } else if let Some(ruler) = &simulation.current_ruler {
+        let name = simulation
+            .actors
+            .get(ruler)
+            .and_then(|actor| actor.display_name.as_deref())
+            .unwrap_or(ruler.as_str());
+        format!(
+            "Ruler {name}; retention vote in {:.0}s",
+            simulation.ruler_vote_cooldown_seconds
+        )
+    } else {
+        format!(
+            "no ruler; election in {:.0}s",
+            simulation.ruler_vote_cooldown_seconds
+        )
     }
 }
 
@@ -6829,6 +7148,52 @@ mod tests {
     }
 
     #[test]
+    fn ruler_permissions_and_login_candidate_resolution_are_stable() {
+        let ruler = StableId::new("twitch:100").unwrap();
+        let viewer = StableId::new("twitch:200").unwrap();
+        let mut simulation = WorldSimulation::new(7);
+        assert!(simulation.join_player(ruler.clone(), GridPos { x: 1, z: 1 }));
+        assert!(simulation.join_player(viewer.clone(), GridPos { x: 2, z: 1 }));
+        simulation.actors.get_mut(&ruler).unwrap().login_name = Some("the_ruler".to_owned());
+        simulation.actors.get_mut(&ruler).unwrap().display_name = Some("The Ruler".to_owned());
+        simulation.set_ruler(ruler.clone()).unwrap();
+        simulation
+            .start_ruler_vote(RulerVoteKind::KeepRuler)
+            .unwrap();
+
+        let ordinary = PendingChatCommand {
+            actor_id: viewer,
+            login_name: "viewer".to_owned(),
+            display_name: "Viewer".to_owned(),
+            command: ChatCommand::RecruitCount,
+            is_broadcaster: false,
+            is_moderator: false,
+        };
+        assert!(require_ruler_or_staff(&simulation, &ordinary).is_err());
+        let ruler_command = PendingChatCommand {
+            actor_id: ruler,
+            login_name: "the_ruler".to_owned(),
+            display_name: "The Ruler".to_owned(),
+            command: ChatCommand::RecruitCount,
+            is_broadcaster: false,
+            is_moderator: false,
+        };
+        assert!(require_ruler_or_staff(&simulation, &ruler_command).is_ok());
+        assert_eq!(
+            resolve_ruler_vote_option(&simulation, &StableId::new("yes").unwrap()),
+            Some(StableId::new("yes").unwrap())
+        );
+        simulation.ruler_vote = None;
+        simulation
+            .start_ruler_vote(RulerVoteKind::NewRuler)
+            .unwrap();
+        assert_eq!(
+            resolve_ruler_vote_option(&simulation, &StableId::new("the_ruler").unwrap()),
+            Some(StableId::new("twitch:100").unwrap())
+        );
+    }
+
+    #[test]
     fn headless_vertical_slice_spawns_three_hundred_agents() {
         let config = GameConfig::default();
         let expected = usize::from(config.gameplay.initial_agents);
@@ -6875,8 +7240,11 @@ mod tests {
             .0
             .push_back(PendingChatCommand {
                 actor_id: StableId::new("twitch:debug_viewer").unwrap(),
+                login_name: "debug_viewer".to_owned(),
                 display_name: "debug_viewer".to_owned(),
                 command: "!join".parse().unwrap(),
+                is_broadcaster: true,
+                is_moderator: true,
             });
         app.update();
         let joined_count = app
@@ -6934,6 +7302,10 @@ mod tests {
             ChatCommand::SelectRole(StableId::new("builder").unwrap()),
             ChatCommand::Experience,
             ChatCommand::Build(available_building.0.clone()),
+            ChatCommand::Recruit {
+                role: StableId::new("miner").unwrap(),
+                amount: 2,
+            },
             ChatCommand::Vote(eligible_technology.clone()),
             ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),
             ChatCommand::Save,
@@ -6945,8 +7317,11 @@ mod tests {
                 .0
                 .push_back(PendingChatCommand {
                     actor_id: actor_id.clone(),
+                    login_name: "debug_viewer".to_owned(),
                     display_name: "debug_viewer".to_owned(),
                     command,
+                    is_broadcaster: true,
+                    is_moderator: true,
                 });
         }
         app.update();
@@ -6954,6 +7329,15 @@ mod tests {
         let (placed_building, saved_building_id, food_before_revive) = {
             let simulation = &app.world().resource::<SimulationRuntime>().0;
             assert_eq!(simulation.actors[&actor_id].role.as_str(), "role:builder");
+            assert_eq!(
+                simulation
+                    .actors
+                    .keys()
+                    .filter(|id| id.as_str().starts_with("npc:recruit_"))
+                    .count(),
+                2
+            );
+            assert_eq!(town_resource_amount(simulation, "resource:recruit"), 2);
             assert_eq!(simulation.buildings.len(), 1);
             let placed_building = simulation.buildings.values().next().unwrap().clone();
             assert!(!placed_building.complete);
@@ -7010,8 +7394,11 @@ mod tests {
             .0
             .push_back(PendingChatCommand {
                 actor_id: actor_id.clone(),
+                login_name: "debug_viewer".to_owned(),
                 display_name: "debug_viewer".to_owned(),
                 command: ChatCommand::Revive(None),
+                is_broadcaster: true,
+                is_moderator: true,
             });
         app.update();
         let simulation = &app.world().resource::<SimulationRuntime>().0;

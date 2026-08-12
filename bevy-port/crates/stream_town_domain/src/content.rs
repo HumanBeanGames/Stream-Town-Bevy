@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 12;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 13;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -175,6 +175,8 @@ pub struct RoleEquipmentDef {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RoleDef {
     pub display_name: String,
+    pub has_user_limit: bool,
+    pub base_max_users: u16,
     pub movement_speed_multiplier_per_thousand: u16,
     pub experience_multiplier_per_thousand: u32,
     pub base_action_amount: u32,

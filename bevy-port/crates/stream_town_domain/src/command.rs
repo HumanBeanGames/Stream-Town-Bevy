@@ -13,9 +13,13 @@ pub enum ChatCommand {
     Upgrade(StableId),
     Buy { amount: u32, resource: StableId },
     Sell { amount: u32, resource: StableId },
+    Recruit { role: StableId, amount: u16 },
+    RecruitCount,
     Revive(Option<StableId>),
     Praise,
     Vote(StableId),
+    StartRulerVote,
+    Resign,
     TriggerEvent(StableId),
     Experience,
     Save,
@@ -72,6 +76,26 @@ impl FromStr for ChatCommand {
                     Ok(Self::Sell { amount, resource })
                 }
             }
+            "recruit" => {
+                let role = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let amount = parts
+                    .next()
+                    .map(str::parse::<u16>)
+                    .transpose()
+                    .map_err(|_| CommandParseError::InvalidAmount)?
+                    .unwrap_or(1);
+                if amount == 0 {
+                    return Err(CommandParseError::InvalidAmount);
+                }
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::Recruit { role, amount })
+            }
             _ => {
                 let argument = parts.next();
                 if parts.next().is_some() {
@@ -82,6 +106,9 @@ impl FromStr for ChatCommand {
                     "experience" | "exp" => no_argument(argument, Self::Experience),
                     "save" => no_argument(argument, Self::Save),
                     "help" => no_argument(argument, Self::Help),
+                    "recruits" => no_argument(argument, Self::RecruitCount),
+                    "rulervote" => no_argument(argument, Self::StartRulerVote),
+                    "resign" => no_argument(argument, Self::Resign),
                     "role" => with_id(&command, argument, Self::SelectRole),
                     "build" => with_id(&command, argument, Self::Build),
                     "upgrade" | "level" => with_id(&command, argument, Self::Upgrade),
@@ -162,6 +189,16 @@ mod tests {
         );
         assert_eq!("!revive".parse(), Ok(ChatCommand::Revive(None)));
         assert_eq!("!praise".parse(), Ok(ChatCommand::Praise));
+        assert_eq!(
+            "!recruit miner 3".parse(),
+            Ok(ChatCommand::Recruit {
+                role: StableId::new("miner").unwrap(),
+                amount: 3,
+            })
+        );
+        assert_eq!("!recruits".parse(), Ok(ChatCommand::RecruitCount));
+        assert_eq!("!rulervote".parse(), Ok(ChatCommand::StartRulerVote));
+        assert_eq!("!resign".parse(), Ok(ChatCommand::Resign));
         assert_eq!(
             "!revive twitch:friend".parse(),
             Ok(ChatCommand::Revive(Some(

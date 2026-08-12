@@ -316,6 +316,9 @@ fn convert_export(
             id.clone(),
             RoleDef {
                 display_name,
+                has_user_limit: required_bool(asset, "HasUserLimit")?,
+                base_max_users: u16::try_from(required_u32(asset, "BaseMaxUserLimit")?)
+                    .with_context(|| format!("{} BaseMaxUserLimit is out of range", asset.path))?,
                 movement_speed_multiplier_per_thousand,
                 experience_multiplier_per_thousand: required_milli(asset, "ExpModifier")?,
                 base_action_amount: required_u32(asset, "BaseActionAmount")?,
@@ -2500,6 +2503,8 @@ mod tests {
                         field("MovementSpeedPerLevel", Value::from(0.05)),
                         field("BaseMaxResource", Value::from(0)),
                         field("MaxResourcePerLevel", Value::from(2.0)),
+                        field("HasUserLimit", Value::Bool(false)),
+                        field("BaseMaxUserLimit", Value::from(0)),
                         field("ExpModifier", Value::from(3.0)),
                         field("StationFlags", enum_value("Buildings")),
                     ],
@@ -2533,6 +2538,8 @@ mod tests {
         assert_eq!(catalog.source_records.len(), 4);
         let builder = StableId::new("role:builder").unwrap();
         assert_eq!(catalog.roles[&builder].base_action_amount, 1);
+        assert!(!catalog.roles[&builder].has_user_limit);
+        assert_eq!(catalog.roles[&builder].base_max_users, 0);
         assert_eq!(catalog.roles[&builder].base_action_milliseconds, 1_000);
         assert_eq!(catalog.roles[&builder].base_health, 100);
         assert_eq!(

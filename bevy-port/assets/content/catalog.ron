@@ -1,5 +1,5 @@
 (
-    schema_version: 12,
+    schema_version: 13,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -7932,6 +7932,8 @@
     roles: {
         "role:blacksmith": (
             display_name: "Blacksmith",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 1000,
             base_action_amount: 0,
@@ -7968,6 +7970,8 @@
         ),
         "role:builder": (
             display_name: "Builder",
+            has_user_limit: false,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 3000,
             base_action_amount: 1,
@@ -8010,6 +8014,8 @@
         ),
         "role:defender": (
             display_name: "Defender",
+            has_user_limit: true,
+            base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 1,
@@ -8052,6 +8058,8 @@
         ),
         "role:farmer": (
             display_name: "Farmer",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 500,
             base_action_amount: 1,
@@ -8095,6 +8103,8 @@
         ),
         "role:fisher": (
             display_name: "Fisher",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 1000,
             base_action_amount: 1,
@@ -8138,6 +8148,8 @@
         ),
         "role:gatherer": (
             display_name: "Gatherer",
+            has_user_limit: true,
+            base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 1000,
             base_action_amount: 1,
@@ -8181,6 +8193,8 @@
         ),
         "role:logger": (
             display_name: "Logger",
+            has_user_limit: true,
+            base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 1000,
             base_action_amount: 1,
@@ -8224,6 +8238,8 @@
         ),
         "role:miner": (
             display_name: "Miner",
+            has_user_limit: true,
+            base_max_users: 8,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 1000,
             base_action_amount: 1,
@@ -8267,6 +8283,8 @@
         ),
         "role:necromancer": (
             display_name: "Necromancer",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 5,
@@ -8309,6 +8327,8 @@
         ),
         "role:paladin": (
             display_name: "Paladin",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 1,
@@ -8351,6 +8371,8 @@
         ),
         "role:priest": (
             display_name: "Priest",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 2,
@@ -8393,6 +8415,8 @@
         ),
         "role:ranger": (
             display_name: "Ranger",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 1,
@@ -8435,6 +8459,8 @@
         ),
         "role:ruler": (
             display_name: "Ruler",
+            has_user_limit: true,
+            base_max_users: 1,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 7,
@@ -8477,6 +8503,8 @@
         ),
         "role:soldier": (
             display_name: "Soldier",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 5,
@@ -8519,6 +8547,8 @@
         ),
         "role:wizard": (
             display_name: "Wizard",
+            has_user_limit: true,
+            base_max_users: 0,
             movement_speed_multiplier_per_thousand: 3000,
             experience_multiplier_per_thousand: 5000,
             base_action_amount: 5,

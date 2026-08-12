@@ -10,6 +10,8 @@ use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
 pub const MAX_ROLE_LEVEL: u16 = 99;
+pub const RULER_VOTE_DURATION_SECONDS: f32 = 120.0;
+pub const RULER_VOTE_INTERVAL_SECONDS: f32 = 3_600.0;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RoleProgress {
@@ -54,6 +56,11 @@ pub enum TownEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ActorState {
     pub id: StableId,
+    /// Twitch display name or imported legacy username. Stable IDs remain authoritative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_name: Option<String>,
     pub role: StableId,
     /// Authored prefab archetype. Old native saves omit this field and use runtime fallbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,6 +127,21 @@ pub struct TechVote {
     pub votes: BTreeMap<StableId, bool>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum RulerVoteKind {
+    NewRuler,
+    KeepRuler,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RulerVoteState {
+    pub kind: RulerVoteKind,
+    pub remaining_seconds: f32,
+    pub votes: BTreeMap<StableId, StableId>,
+    /// Preserves Unity's first-option tie behavior while remaining deterministic.
+    pub option_order: Vec<StableId>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ObjectiveProgress {
     pub objective: StableId,
@@ -168,6 +190,19 @@ pub struct WorldSimulation {
     pub fish_god: Option<FishGodState>,
     #[serde(default)]
     pub fish_god_attempts: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_ruler: Option<StableId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruler_previous_role: Option<StableId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruler_vote: Option<RulerVoteState>,
+    #[serde(
+        default = "default_ruler_vote_cooldown",
+        skip_serializing_if = "is_default_ruler_vote_cooldown"
+    )]
+    pub ruler_vote_cooldown_seconds: f32,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub ruler_vote_scheduled: bool,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -204,6 +239,16 @@ pub enum SimulationError {
     ActorAlive(StableId),
     #[error("there is no active Fish God event")]
     NoFishGodEvent,
+    #[error("a ruler vote is already active")]
+    RulerVoteActive,
+    #[error("there is no active ruler vote")]
+    NoRulerVote,
+    #[error("{0} is not a valid ruler vote option")]
+    InvalidRulerVoteOption(StableId),
+    #[error("actor {0} is not the current ruler")]
+    NotRuler(StableId),
+    #[error("the current ruler cannot change role before resigning")]
+    RulerRoleLocked,
 }
 
 impl WorldSimulation {
@@ -228,6 +273,11 @@ impl WorldSimulation {
             active_raid: None,
             fish_god: None,
             fish_god_attempts: 0,
+            current_ruler: None,
+            ruler_previous_role: None,
+            ruler_vote: None,
+            ruler_vote_cooldown_seconds: 30.0,
+            ruler_vote_scheduled: true,
         }
     }
 
@@ -239,6 +289,8 @@ impl WorldSimulation {
             id.clone(),
             ActorState {
                 id,
+                display_name: None,
+                login_name: None,
                 role: StableId::new("role:villager").expect("static stable ID"),
                 archetype: None,
                 position,
@@ -272,6 +324,8 @@ impl WorldSimulation {
             id.clone(),
             ActorState {
                 id,
+                display_name: None,
+                login_name: None,
                 role: StableId::new("role:enemy").expect("static stable ID"),
                 archetype: Some(archetype),
                 position,
@@ -375,7 +429,171 @@ impl WorldSimulation {
         Ok(true)
     }
 
+    pub fn start_ruler_vote(&mut self, kind: RulerVoteKind) -> Result<(), SimulationError> {
+        if self.ruler_vote.is_some() {
+            return Err(SimulationError::RulerVoteActive);
+        }
+        let kind = if kind == RulerVoteKind::KeepRuler && self.current_ruler.is_none() {
+            RulerVoteKind::NewRuler
+        } else {
+            kind
+        };
+        let option_order = if kind == RulerVoteKind::KeepRuler {
+            vec![stable("yes"), stable("no")]
+        } else {
+            Vec::new()
+        };
+        self.ruler_vote = Some(RulerVoteState {
+            kind,
+            remaining_seconds: RULER_VOTE_DURATION_SECONDS,
+            votes: BTreeMap::new(),
+            option_order,
+        });
+        self.ruler_vote_scheduled = false;
+        Ok(())
+    }
+
+    pub fn cast_ruler_vote(
+        &mut self,
+        voter: &StableId,
+        option: StableId,
+    ) -> Result<(), SimulationError> {
+        if !self.actors.contains_key(voter) {
+            return Err(SimulationError::MissingActor(voter.clone()));
+        }
+        let kind = self
+            .ruler_vote
+            .as_ref()
+            .ok_or(SimulationError::NoRulerVote)?
+            .kind;
+        if self
+            .ruler_vote
+            .as_ref()
+            .is_some_and(|vote| vote.votes.contains_key(voter))
+        {
+            return Err(SimulationError::AlreadyVoted(voter.clone()));
+        }
+        match kind {
+            RulerVoteKind::KeepRuler => {
+                if !matches!(option.as_str(), "yes" | "no") {
+                    return Err(SimulationError::InvalidRulerVoteOption(option));
+                }
+            }
+            RulerVoteKind::NewRuler => {
+                self.actors
+                    .get(&option)
+                    .filter(|actor| actor.role.as_str() != "role:enemy" && actor.alive)
+                    .ok_or_else(|| SimulationError::InvalidRulerVoteOption(option.clone()))?;
+            }
+        }
+        let vote = self
+            .ruler_vote
+            .as_mut()
+            .expect("ruler vote was validated above");
+        if kind == RulerVoteKind::NewRuler && !vote.option_order.contains(&option) {
+            vote.option_order.push(option.clone());
+        }
+        vote.votes.insert(voter.clone(), option);
+        Ok(())
+    }
+
+    pub fn set_ruler(&mut self, actor: StableId) -> Result<(), SimulationError> {
+        if !self.actors.contains_key(&actor) {
+            return Err(SimulationError::MissingActor(actor));
+        }
+        if self.current_ruler.as_ref() == Some(&actor) {
+            return Ok(());
+        }
+        self.clear_ruler();
+        let previous_role = self.actors[&actor].role.clone();
+        let ruler_role = stable("role:ruler");
+        let state = self
+            .actors
+            .get_mut(&actor)
+            .expect("ruler candidate was validated");
+        state.role = ruler_role.clone();
+        state.role_progression.entry(ruler_role).or_default();
+        self.current_ruler = Some(actor);
+        self.ruler_previous_role = Some(previous_role);
+        Ok(())
+    }
+
+    pub fn clear_ruler(&mut self) {
+        if let Some(ruler) = self.current_ruler.take()
+            && let Some(actor) = self.actors.get_mut(&ruler)
+            && let Some(previous) = self.ruler_previous_role.take()
+        {
+            actor.role = previous.clone();
+            actor.role_progression.entry(previous).or_default();
+        }
+        self.ruler_previous_role = None;
+    }
+
+    pub fn resign_ruler(&mut self, actor: &StableId) -> Result<(), SimulationError> {
+        if self.current_ruler.as_ref() != Some(actor) {
+            return Err(SimulationError::NotRuler(actor.clone()));
+        }
+        self.clear_ruler();
+        self.ruler_vote = None;
+        self.start_ruler_vote(RulerVoteKind::NewRuler)
+    }
+
+    #[must_use]
+    pub fn is_ruler(&self, actor: &StableId) -> bool {
+        self.current_ruler.as_ref() == Some(actor)
+    }
+
+    /// Resolves a completed ballot and returns the elected/retained ruler.
+    pub fn resolve_ruler_vote(&mut self) -> Option<StableId> {
+        let vote = self.ruler_vote.as_ref()?;
+        if vote.remaining_seconds > f32::EPSILON || vote.votes.is_empty() {
+            return None;
+        }
+        let mut tallies = BTreeMap::<StableId, usize>::new();
+        for option in vote.votes.values() {
+            *tallies.entry(option.clone()).or_default() += 1;
+        }
+        let winner = vote
+            .option_order
+            .iter()
+            .cloned()
+            .fold(None::<(StableId, usize)>, |best, option| {
+                let tally = tallies.get(&option).copied().unwrap_or_default();
+                match best {
+                    Some((_, best_tally)) if best_tally >= tally => best,
+                    _ => Some((option, tally)),
+                }
+            })?
+            .0;
+        let kind = vote.kind;
+        self.ruler_vote = None;
+        match kind {
+            RulerVoteKind::NewRuler => {
+                self.set_ruler(winner.clone()).ok()?;
+                self.schedule_next_ruler_vote();
+                Some(winner)
+            }
+            RulerVoteKind::KeepRuler if winner.as_str() == "yes" => {
+                self.schedule_next_ruler_vote();
+                self.current_ruler.clone()
+            }
+            RulerVoteKind::KeepRuler => {
+                self.clear_ruler();
+                let _ = self.start_ruler_vote(RulerVoteKind::NewRuler);
+                None
+            }
+        }
+    }
+
+    pub fn schedule_next_ruler_vote(&mut self) {
+        self.ruler_vote_scheduled = true;
+        self.ruler_vote_cooldown_seconds = RULER_VOTE_INTERVAL_SECONDS;
+    }
+
     pub fn assign_role(&mut self, actor: &StableId, role: StableId) -> Result<(), SimulationError> {
+        if self.current_ruler.as_ref() == Some(actor) && role.as_str() != "role:ruler" {
+            return Err(SimulationError::RulerRoleLocked);
+        }
         let actor_state = self.actor_mut(actor)?;
         actor_state.role = role.clone();
         actor_state.station = None;
@@ -851,6 +1069,27 @@ impl WorldSimulation {
         if let Some(vote) = &mut self.active_vote {
             vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
         }
+        if self.ruler_vote.is_none() && self.ruler_vote_scheduled {
+            self.ruler_vote_cooldown_seconds =
+                (self.ruler_vote_cooldown_seconds - delta_seconds).max(0.0);
+            if self.ruler_vote_cooldown_seconds <= f32::EPSILON
+                && self.active_vote.is_none()
+                && self.active_event.is_none()
+            {
+                let kind = if self.current_ruler.is_some() {
+                    RulerVoteKind::KeepRuler
+                } else {
+                    RulerVoteKind::NewRuler
+                };
+                let _ = self.start_ruler_vote(kind);
+            }
+        }
+        if let Some(vote) = &mut self.ruler_vote
+            && !vote.votes.is_empty()
+        {
+            vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
+        }
+        let _ = self.resolve_ruler_vote();
         for actor in self.actors.values_mut().filter(|actor| !actor.alive) {
             if let Some(remaining) = actor.respawn_remaining_seconds.as_mut() {
                 *remaining = (*remaining - f64::from(delta_seconds)).max(0.0);
@@ -915,6 +1154,28 @@ fn deterministic_fish_god_value(seed: u64, attempt: u64) -> u64 {
     mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     mixed ^ (mixed >> 31)
+}
+
+fn stable(value: &str) -> StableId {
+    StableId::new(value).expect("static stable ID")
+}
+
+fn default_ruler_vote_cooldown() -> f32 {
+    30.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_ruler_vote_cooldown(value: &f32) -> bool {
+    (*value - default_ruler_vote_cooldown()).abs() <= f32::EPSILON
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 fn objective_increment(
@@ -1057,6 +1318,82 @@ mod tests {
         assert_eq!(
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
+        );
+    }
+
+    #[test]
+    fn scheduled_ruler_elections_pause_resolve_and_restore_roles() {
+        let mut simulation = WorldSimulation::new(7);
+        let first = id("twitch:first");
+        let second = id("twitch:second");
+        assert!(simulation.join_player(first.clone(), GridPos { x: 1, z: 1 }));
+        assert!(simulation.join_player(second.clone(), GridPos { x: 2, z: 1 }));
+        simulation.assign_role(&first, id("role:builder")).unwrap();
+        simulation.assign_role(&second, id("role:miner")).unwrap();
+
+        simulation.tick(30.0);
+        assert_eq!(
+            simulation.ruler_vote.as_ref().unwrap().kind,
+            RulerVoteKind::NewRuler
+        );
+        simulation.tick(60.0);
+        assert!(
+            (simulation.ruler_vote.as_ref().unwrap().remaining_seconds - 120.0).abs()
+                <= f32::EPSILON
+        );
+        simulation.cast_ruler_vote(&first, first.clone()).unwrap();
+        simulation.cast_ruler_vote(&second, second.clone()).unwrap();
+        simulation.tick(120.0);
+        assert_eq!(simulation.current_ruler, Some(first.clone()));
+        assert_eq!(simulation.actors[&first].role, id("role:ruler"));
+        assert_eq!(simulation.ruler_previous_role, Some(id("role:builder")));
+        assert!((simulation.ruler_vote_cooldown_seconds - 3_600.0).abs() <= f32::EPSILON);
+
+        simulation.tick(3_600.0);
+        assert_eq!(
+            simulation.ruler_vote.as_ref().unwrap().kind,
+            RulerVoteKind::KeepRuler
+        );
+        simulation.cast_ruler_vote(&first, id("no")).unwrap();
+        simulation.tick(120.0);
+        assert!(simulation.current_ruler.is_none());
+        assert_eq!(simulation.actors[&first].role, id("role:builder"));
+        assert_eq!(
+            simulation.ruler_vote.as_ref().unwrap().kind,
+            RulerVoteKind::NewRuler
+        );
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap(),
+            simulation
+        );
+    }
+
+    #[test]
+    fn ruler_vote_rejects_duplicates_and_invalid_candidates() {
+        let mut simulation = WorldSimulation::new(7);
+        let voter = id("twitch:voter");
+        assert!(simulation.join_player(voter.clone(), GridPos { x: 1, z: 1 }));
+        simulation
+            .start_ruler_vote(RulerVoteKind::NewRuler)
+            .unwrap();
+        assert!(matches!(
+            simulation.cast_ruler_vote(&voter, id("twitch:missing")),
+            Err(SimulationError::InvalidRulerVoteOption(_))
+        ));
+        simulation.cast_ruler_vote(&voter, voter.clone()).unwrap();
+        assert_eq!(
+            simulation.cast_ruler_vote(&voter, voter.clone()),
+            Err(SimulationError::AlreadyVoted(voter.clone()))
+        );
+        simulation.tick(120.0);
+        assert_eq!(simulation.current_ruler, Some(voter.clone()));
+        simulation.resign_ruler(&voter).unwrap();
+        assert!(simulation.current_ruler.is_none());
+        assert_eq!(
+            simulation.ruler_vote.as_ref().unwrap().kind,
+            RulerVoteKind::NewRuler
         );
     }
 

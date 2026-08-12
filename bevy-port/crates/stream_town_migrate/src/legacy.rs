@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ActorKind, ActorState, BuildingState, ContentCatalog, EnemyCampState, GameConfig, GridPos,
     LegacyMigrationMetadata, MAX_ROLE_LEVEL, NativeSaveStore, ObjectiveDef, ObjectiveKind,
-    ObjectiveProgress, RoleProgress, SavedActor, SavedTerrainMesh, StableId, TownGoalState,
-    WorldSimulation, WorldSnapshot, generate_world,
+    ObjectiveProgress, RULER_VOTE_INTERVAL_SECONDS, RoleProgress, SavedActor, SavedTerrainMesh,
+    StableId, TownGoalState, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAGIC: &[u8; 4] = b"STSV";
@@ -44,6 +44,8 @@ pub(crate) struct ImportReport {
 #[derive(Clone, Debug)]
 struct LegacyEntity {
     key: String,
+    display_name: Option<String>,
+    login_name: Option<String>,
     kind: ActorKind,
     archetype: String,
     position: [f32; 3],
@@ -73,6 +75,8 @@ struct LegacyDecodedSave {
     town_resources: BTreeMap<String, u32>,
     unlocked_technology: BTreeSet<String>,
     active_goal: Option<LegacyGoal>,
+    ruler_name: Option<String>,
+    ruler_vote_cooldown_seconds: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +100,8 @@ type LegacyWorldState = (
     BTreeMap<String, u32>,
     BTreeSet<String>,
     Option<LegacyGoal>,
+    Option<String>,
+    f32,
 );
 
 pub(crate) fn import_save(
@@ -267,8 +273,14 @@ impl<'a> BinaryParser<'a> {
             self.world_generation(schema_version)?;
         self.buildings()?;
         self.enemies()?;
-        let (world_age_seconds, town_resources, unlocked_technology, active_goal) =
-            self.world_state(schema_version)?;
+        let (
+            world_age_seconds,
+            town_resources,
+            unlocked_technology,
+            active_goal,
+            ruler_name,
+            ruler_vote_cooldown_seconds,
+        ) = self.world_state(schema_version)?;
         self.players(schema_version)?;
         ensure!(
             self.i32()? == PAYLOAD_TRAILER,
@@ -289,6 +301,8 @@ impl<'a> BinaryParser<'a> {
             town_resources,
             unlocked_technology,
             active_goal,
+            ruler_name,
+            ruler_vote_cooldown_seconds,
         })
     }
 
@@ -353,6 +367,8 @@ impl<'a> BinaryParser<'a> {
                 };
                 self.entities.push(LegacyEntity {
                     key: format!("resource:{guid}:{group_index}:{instance_index}"),
+                    display_name: None,
+                    login_name: None,
                     kind: ActorKind::Resource,
                     archetype: resource_type.clone(),
                     position,
@@ -420,6 +436,8 @@ impl<'a> BinaryParser<'a> {
         self.next_foliage_id += 1;
         self.entities.push(LegacyEntity {
             key: format!("foliage:{}:{key}", self.next_foliage_id),
+            display_name: None,
+            login_name: None,
             kind: ActorKind::Foliage,
             archetype,
             position,
@@ -442,6 +460,8 @@ impl<'a> BinaryParser<'a> {
             let guid = self.u32()?;
             self.entities.push(LegacyEntity {
                 key: format!("enemy_camp:{guid}:{index}"),
+                display_name: None,
+                login_name: None,
                 kind: ActorKind::EnemyCamp,
                 archetype: "enemy_camp".to_owned(),
                 position,
@@ -475,6 +495,8 @@ impl<'a> BinaryParser<'a> {
             }
             self.entities.push(LegacyEntity {
                 key: format!("building:{guid}:{index}"),
+                display_name: None,
+                login_name: None,
                 kind: ActorKind::Building,
                 archetype,
                 position,
@@ -504,6 +526,8 @@ impl<'a> BinaryParser<'a> {
             let _camp_pool = self.string()?;
             self.entities.push(LegacyEntity {
                 key: format!("enemy:{guid}:{index}"),
+                display_name: None,
+                login_name: None,
                 kind: ActorKind::Enemy,
                 archetype,
                 position,
@@ -535,10 +559,17 @@ impl<'a> BinaryParser<'a> {
             let amount = nonnegative_u32(self.i32()?);
             resources.entry(kind.to_owned()).or_insert(amount);
         }
-        let _is_current_ruler = self.boolean()?;
-        let _until_vote = self.f32()?;
-        let _ruler_name = self.string()?;
-        Ok((world_age.max(0.0), resources, unlocked, active_goal))
+        let is_current_ruler = self.boolean()?;
+        let until_vote = self.f32()?.max(0.0);
+        let ruler_name = self.string()?.filter(|name| !name.trim().is_empty());
+        Ok((
+            world_age.max(0.0),
+            resources,
+            unlocked,
+            active_goal,
+            is_current_ruler.then_some(ruler_name).flatten(),
+            until_vote,
+        ))
     }
 
     fn tech_tree(&mut self, schema: u32) -> Result<(bool, BTreeSet<String>, Option<LegacyGoal>)> {
@@ -648,6 +679,8 @@ impl<'a> BinaryParser<'a> {
             };
             self.entities.push(LegacyEntity {
                 key: format!("player:{identity}"),
+                display_name: (!twitch_name.is_empty()).then_some(twitch_name.clone()),
+                login_name: (!twitch_name.is_empty()).then_some(twitch_name.to_ascii_lowercase()),
                 kind: ActorKind::Player,
                 archetype: if twitch_name.is_empty() {
                     "viewer".to_owned()
@@ -804,6 +837,13 @@ fn decode_json(bytes: &[u8]) -> Result<LegacyDecodedSave> {
         .map(str::to_owned)
         .collect();
     let active_goal = json_active_goal(world);
+    let ruler_name = world
+        .get("IsCurrentRuler")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        .then(|| json_string(world, "RulerName", ""))
+        .filter(|name| !name.trim().is_empty());
+    let ruler_vote_cooldown_seconds = json_f32_default(world, "TimeUntillNextRulerVote").max(0.0);
     Ok(LegacyDecodedSave {
         schema_version,
         container_version: None,
@@ -815,6 +855,8 @@ fn decode_json(bytes: &[u8]) -> Result<LegacyDecodedSave> {
         town_resources,
         unlocked_technology,
         active_goal,
+        ruler_name,
+        ruler_vote_cooldown_seconds,
     })
 }
 
@@ -906,6 +948,8 @@ fn json_resources(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Result
                     "resource:{}:{group_index}:{index}",
                     json_u32_default(instance, "GUID")
                 ),
+                display_name: None,
+                login_name: None,
                 kind: ActorKind::Resource,
                 archetype: archetype.clone(),
                 position: [
@@ -945,6 +989,8 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                 {
                     entities.push(LegacyEntity {
                         key: format!("foliage:{layer}:{group_index}:{index}"),
+                        display_name: None,
+                        login_name: None,
                         kind: ActorKind::Foliage,
                         archetype: settings.clone(),
                         position: json_vec3(position)?,
@@ -969,6 +1015,8 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
             {
                 entities.push(LegacyEntity {
                     key: format!("foliage:{layer}:{index}"),
+                    display_name: None,
+                    login_name: None,
                     kind: ActorKind::Foliage,
                     archetype: json_string(instance, "SettingsId", "unknown"),
                     position: json_transform(instance.get("Transform").unwrap_or(&Value::Null))?,
@@ -995,6 +1043,8 @@ fn json_enemy_camps(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Resu
     {
         entities.push(LegacyEntity {
             key: format!("enemy_camp:{}:{index}", json_u32_default(camp, "GUID")),
+            display_name: None,
+            login_name: None,
             kind: ActorKind::EnemyCamp,
             archetype: "enemy_camp".to_owned(),
             position: json_transform(camp.get("Transform").unwrap_or(&Value::Null))?,
@@ -1019,6 +1069,8 @@ fn json_buildings(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> 
     {
         entities.push(LegacyEntity {
             key: format!("building:{}:{index}", json_u32_default(building, "GUID")),
+            display_name: None,
+            login_name: None,
             kind: ActorKind::Building,
             archetype: json_string(building, "BuildingType", "unknown"),
             position: json_transform(building.get("BuildingTranform").unwrap_or(&Value::Null))?,
@@ -1043,6 +1095,8 @@ fn json_enemies(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
     {
         entities.push(LegacyEntity {
             key: format!("enemy:{}:{index}", json_u32_default(enemy, "GUID")),
+            display_name: None,
+            login_name: None,
             kind: ActorKind::Enemy,
             archetype: json_string(enemy, "EnemyType", "unknown"),
             position: json_transform(enemy.get("Transform").unwrap_or(&Value::Null))?,
@@ -1111,6 +1165,8 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             .map_or(1, |progress| i32::from(progress.level));
         entities.push(LegacyEntity {
             key: format!("player:{key}"),
+            display_name: Some(json_string(player, "TwitchName", "viewer")),
+            login_name: Some(json_string(player, "TwitchName", "viewer").to_ascii_lowercase()),
             kind: ActorKind::Player,
             archetype: json_string(player, "TwitchName", "viewer"),
             position: json_transform(player.get("Transform").unwrap_or(&Value::Null))?,
@@ -1355,6 +1411,8 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                     id.clone(),
                     ActorState {
                         id,
+                        display_name: entity.display_name,
+                        login_name: entity.login_name,
                         role,
                         archetype: Some(archetype),
                         position,
@@ -1408,6 +1466,24 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
             }
             _ => {}
         }
+    }
+
+    simulation.ruler_vote_cooldown_seconds = RULER_VOTE_INTERVAL_SECONDS;
+    simulation.ruler_vote_scheduled = true;
+    if let Some(ruler_name) = decoded.ruler_name.as_deref()
+        && let Some(ruler) = simulation
+            .actors
+            .values()
+            .find(|actor| {
+                actor
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(ruler_name))
+            })
+            .map(|actor| actor.id.clone())
+    {
+        simulation.set_ruler(ruler)?;
+        simulation.ruler_vote_cooldown_seconds = decoded.ruler_vote_cooldown_seconds;
     }
 
     let source_schema_version = decoded.schema_version;
@@ -1704,6 +1780,8 @@ mod tests {
             }),
             entities: vec![LegacyEntity {
                 key: "player:test".to_owned(),
+                display_name: Some("test".to_owned()),
+                login_name: Some("test".to_owned()),
                 kind: ActorKind::Player,
                 archetype: "viewer".to_owned(),
                 position: [f32::MAX, 0.0, f32::MAX],
@@ -1718,6 +1796,8 @@ mod tests {
             town_resources: BTreeMap::new(),
             unlocked_technology: BTreeSet::new(),
             active_goal: None,
+            ruler_name: None,
+            ruler_vote_cooldown_seconds: 0.0,
         };
         let (snapshot, relocated) = convert(decoded, &GameConfig::default()).unwrap();
         assert_eq!(relocated, 1);
@@ -1770,6 +1850,9 @@ mod tests {
                 "EnemySaveData": [],
                 "WorldSaveData": {
                     "WorldAgeInSeconds": 99.0,
+                    "IsCurrentRuler": true,
+                    "TimeUntillNextRulerVote": 88.0,
+                    "RulerName": "Viewer",
                     "TechTree": {
                         "UnlockedTechIds": ["Forestry"],
                         "CurrentTechName": "Upgrade1Logger",
@@ -1828,7 +1911,7 @@ mod tests {
             .values()
             .find(|actor| actor.id.as_str().contains("player"))
             .unwrap();
-        assert_eq!(actor.role.as_str(), "role:builder");
+        assert_eq!(actor.role.as_str(), "role:ruler");
         assert_eq!(
             actor.role_progression[&StableId::new("role:builder").unwrap()],
             RoleProgress {
@@ -1843,6 +1926,16 @@ mod tests {
         assert_eq!(
             snapshot.simulation.active_goals[0].objectives[0].required_amount,
             10
+        );
+        assert_eq!(snapshot.simulation.current_ruler.as_ref(), Some(&actor.id));
+        assert!((snapshot.simulation.ruler_vote_cooldown_seconds - 88.0).abs() <= f32::EPSILON);
+        assert_eq!(
+            snapshot
+                .simulation
+                .ruler_previous_role
+                .as_ref()
+                .map(StableId::as_str),
+            Some("role:builder")
         );
     }
 
