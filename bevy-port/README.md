@@ -264,8 +264,9 @@ but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
 [`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). Rare/non-gameplay action
-emitters, exact weighted Unity tangent semantics, and custom WGSL shader parity
-remain presentation work. The Credits panels/fireworks/end fade and
+emitters and custom WGSL shader parity remain presentation work. Property curves
+support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
+shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.
 
 This is an early migration milestone, not a parity release. The repository-level

@@ -210,6 +210,13 @@ fn validate() -> Result<()> {
         .flat_map(|controller| &controller.transitions)
         .filter(|transition| transition.offset > f32::EPSILON)
         .count();
+    let weighted_property_keys = presentation
+        .clips
+        .values()
+        .flat_map(|clip| &clip.property_curves)
+        .flat_map(|curve| &curve.keys)
+        .filter(|key| key.weighted_mode != 0)
+        .count();
     if (
         presentation.schema_version,
         presentation.textures.len(),
@@ -230,6 +237,7 @@ fn validate() -> Result<()> {
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
         || (fixed_transitions, offset_transitions) != (166, 2)
+        || weighted_property_keys != 0
         || (presentation_state_machines, presentation_layers) != (45, 33)
         || presentation.avatar_masks.len() != 3
         || presentation

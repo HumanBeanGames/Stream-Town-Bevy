@@ -81,7 +81,8 @@ mistaken for production-ready systems.
   controller, its authored zero weight gives it no pose influence.
 - Presentation schema 9 retains 110 Unity float-property curves with 261 keys
   across 18 clips and all ten authored `PlayRoleActionAudio` events. The runtime
-  samples constant and unweighted Hermite segments; the Credits state uses the
+  samples constant, unweighted Hermite, and weighted Bezier segments (all 261
+  shipping keys are currently unweighted); the Credits state uses the
   converted seven-panel visibility timeline, two fireworks cues, and end fade,
   while actor level changes use the converted LevelUp position/alpha curves.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
@@ -292,8 +293,8 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Weighted Unity tangent semantics and the remaining rare/non-gameplay action
-  emitters. Direct and nested layer/state-machine routing, conditioned entries,
+- The remaining rare/non-gameplay action emitters. Direct and nested
+  layer/state-machine routing, conditioned entries,
   parent exits, masks, and property curves are converted and live.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete advanced

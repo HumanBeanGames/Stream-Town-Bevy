@@ -137,7 +137,7 @@ pub struct AnimationPropertyCurve {
 }
 
 impl AnimationPropertyCurve {
-    /// Samples Unity's unweighted Hermite/constant float curve semantics.
+    /// Samples Unity's constant, unweighted Hermite, and weighted Bezier semantics.
     #[must_use]
     pub fn sample(&self, time: f32) -> Option<f32> {
         let first = self.keys.first()?;
@@ -162,6 +162,29 @@ impl AnimationPropertyCurve {
             return Some(right.value);
         }
         let t = (time - left.time) / duration;
+        let out_weight = if left.weighted_mode & 2 != 0 {
+            left.out_weight
+        } else {
+            1.0 / 3.0
+        };
+        let in_weight = if right.weighted_mode & 1 != 0 {
+            right.in_weight
+        } else {
+            1.0 / 3.0
+        };
+        if left.weighted_mode & 2 != 0 || right.weighted_mode & 1 != 0 {
+            if out_weight <= f32::EPSILON && in_weight <= f32::EPSILON {
+                return Some(left.value + (right.value - left.value) * t);
+            }
+            let parameter = solve_weighted_curve_parameter(t, out_weight, in_weight);
+            return Some(cubic_bezier(
+                left.value,
+                left.value + left.out_slope.finite_value() * duration * out_weight,
+                right.value - right.in_slope.finite_value() * duration * in_weight,
+                right.value,
+                parameter,
+            ));
+        }
         let t2 = t * t;
         let t3 = t2 * t;
         Some(
@@ -171,6 +194,29 @@ impl AnimationPropertyCurve {
                 + (t3 - t2) * duration * right.in_slope.finite_value(),
         )
     }
+}
+
+fn solve_weighted_curve_parameter(time: f32, out_weight: f32, in_weight: f32) -> f32 {
+    let mut low = 0.0;
+    let mut high = 1.0;
+    for _ in 0..24 {
+        let parameter = (low + high) * 0.5;
+        let sampled_time = cubic_bezier(0.0, out_weight, 1.0 - in_weight, 1.0, parameter);
+        if sampled_time < time {
+            low = parameter;
+        } else {
+            high = parameter;
+        }
+    }
+    (low + high) * 0.5
+}
+
+fn cubic_bezier(start: f32, control_a: f32, control_b: f32, end: f32, time: f32) -> f32 {
+    let inverse = 1.0 - time;
+    inverse * inverse * inverse * start
+        + 3.0 * inverse * inverse * time * control_a
+        + 3.0 * inverse * time * time * control_b
+        + time * time * time * end
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -950,8 +996,9 @@ fn validate_property_curve(
                 && tangent_valid(key.out_slope)
                 && key.in_weight.is_finite()
                 && key.out_weight.is_finite()
-                && key.in_weight >= 0.0
-                && key.out_weight >= 0.0
+                && (0.0..=1.0).contains(&key.in_weight)
+                && (0.0..=1.0).contains(&key.out_weight)
+                && key.weighted_mode <= 3
         });
     if !path_valid
         || curve.attribute.trim().is_empty()
@@ -1142,6 +1189,43 @@ mod tests {
         hermite.keys[1].in_slope = AnimationTangent::Finite(0.0);
         hermite.keys[1].out_slope = AnimationTangent::Finite(0.0);
         assert!((hermite.sample(0.5).unwrap() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn property_curve_samples_weighted_bezier_segments() {
+        let mut curve = AnimationPropertyCurve {
+            target_path: "Panel".into(),
+            attribute: "m_Alpha".into(),
+            class_id: 225,
+            script_guid: None,
+            keys: vec![
+                AnimationFloatKeyframe {
+                    time: 0.0,
+                    value: 0.0,
+                    in_slope: AnimationTangent::Finite(0.0),
+                    out_slope: AnimationTangent::Finite(2.0),
+                    tangent_mode: 0,
+                    weighted_mode: 2,
+                    in_weight: 1.0 / 3.0,
+                    out_weight: 0.5,
+                },
+                AnimationFloatKeyframe {
+                    time: 1.0,
+                    value: 1.0,
+                    in_slope: AnimationTangent::Finite(0.0),
+                    out_slope: AnimationTangent::Finite(0.0),
+                    tangent_mode: 0,
+                    weighted_mode: 1,
+                    in_weight: 0.25,
+                    out_weight: 1.0 / 3.0,
+                },
+            ],
+        };
+        assert!((curve.sample(0.593_75).unwrap() - 0.875).abs() < 0.000_01);
+
+        curve.keys[0].out_weight = 0.0;
+        curve.keys[1].in_weight = 0.0;
+        assert!((curve.sample(0.25).unwrap() - 0.25).abs() < f32::EPSILON);
     }
 
     #[test]
