@@ -2805,13 +2805,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786542267.768778,
-    "ast_hash": "121d2de8233f75ce01b5c1f3e5893838",
+    "mtime": 1786551575.8908207,
+    "ast_hash": "581c6c6e87aa9b8b1fc5f89ada99e544",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786542267.767774,
-    "ast_hash": "74af606b7fedf20ee458f3507bf072bc",
+    "mtime": 1786551279.1379106,
+    "ast_hash": "518bd5c002afa46e1837735ea79f90e8",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2860,8 +2860,8 @@
     "semantic_hash": ""
   },
   ".github/workflows/bevy.yml": {
-    "mtime": 1786461126.8349621,
-    "ast_hash": "f81f7ea24ed31767d5119f284f3b3289",
+    "mtime": 1786552331.815348,
+    "ast_hash": "3415118f36eac81ed4eda9d848e4f87c",
     "semantic_hash": ""
   },
   ".windsurf/rules/architecture-rules.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786550810.8458745,
-    "ast_hash": "dbb1fb56f2c0fc598c076074fce4039d",
+    "mtime": 1786552331.8163483,
+    "ast_hash": "5785cf169c6aecde1a1258366ef736f6",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786544979.1141183,
-    "ast_hash": "6698a6a21b4b3a6cb6e3fabe148c2861",
+    "mtime": 1786552349.2323668,
+    "ast_hash": "656f1fbcac5463ba33c595427693f723",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -4347,6 +4347,11 @@
   "bevy-port/assets/audio/PROVENANCE.md": {
     "mtime": 1786537995.7406385,
     "ast_hash": "caf3c0bb924180dc957168128066669b",
+    "semantic_hash": ""
+  },
+  "bevy-port/xtask/src/lib.rs": {
+    "mtime": 1786551348.7275505,
+    "ast_hash": "31b65f1f90a643f73ffa2e8ed1c0723a",
     "semantic_hash": ""
   }
 }
