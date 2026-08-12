@@ -15,6 +15,7 @@ use bevy::{
         prelude::{AnimatableCurve, AnimatableKeyframeCurve},
     },
     asset::{AssetPlugin, RenderAssetUsages},
+    audio::{Pitch, Volume},
     camera::ScalingMode,
     color::LinearRgba,
     ecs::system::SystemParam,
@@ -472,6 +473,9 @@ struct CosmeticMaterialVariant {
 #[derive(Resource, Default)]
 struct CosmeticMaterialCache(Vec<CosmeticMaterialVariant>);
 
+#[derive(Resource, Default)]
+struct RoleActionAudioCache(BTreeMap<StableId, Handle<Pitch>>);
+
 #[derive(Component, Clone)]
 struct NativeAnimationSpec {
     graph: Handle<AnimationGraph>,
@@ -511,6 +515,14 @@ struct ConvertedAnimationLayerDriver {
     runtime: AnimationControllerRuntime,
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
     active: Vec<(AnimationNodeIndex, f32)>,
+    event_elapsed: BTreeMap<StableId, f32>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingRoleActionAudio {
+    actor: StableId,
+    clip: StableId,
+    display_name: String,
 }
 
 #[derive(Component, Clone)]
@@ -557,6 +569,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SelectedCell>()
             .init_resource::<EnvironmentPresentation>()
             .init_resource::<CosmeticMaterialCache>()
+            .init_resource::<RoleActionAudioCache>()
             .init_resource::<LevelUpPresentation>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
@@ -3941,6 +3954,7 @@ fn attach_converted_animations(
                 runtime,
                 nodes,
                 active: Vec::new(),
+                event_elapsed: BTreeMap::new(),
             });
         }
         if layers.is_empty() {
@@ -4621,13 +4635,17 @@ fn drive_native_animations(
 }
 
 fn drive_converted_animations(
+    mut commands: Commands,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
     mut players: Query<(&mut AnimationPlayer, &mut ConvertedAnimationDriver)>,
+    mut audio_cache: ResMut<RoleActionAudioCache>,
+    mut procedural_pitches: Option<ResMut<Assets<Pitch>>>,
 ) {
+    let mut audio_cues = Vec::new();
     for (mut player, mut driver) in &mut players {
         let Ok(agent) = agents.get(driver.actor_root) else {
             continue;
@@ -4737,9 +4755,18 @@ fn drive_converted_animations(
 
             let Ok(Some(selection)) = layer.runtime.motion_selection(controller) else {
                 layer.active.clear();
+                layer.event_elapsed.clear();
                 continue;
             };
             let desired = animation_nodes_for_selection(&selection, &layer.nodes);
+            collect_animation_audio_events(
+                &player,
+                layer,
+                &selection,
+                &presentation.0,
+                &agent.id,
+                &mut audio_cues,
+            );
             let state_speed = layer.runtime.state_speed(controller).unwrap_or(1.0);
             let changed = !same_animation_blend(&layer.active, &desired);
             if changed {
@@ -4762,6 +4789,125 @@ fn drive_converted_animations(
             layer.active = desired;
         }
         apply_animation_blend(&mut player, &combined);
+    }
+    if let Some(pitches) = procedural_pitches.as_mut() {
+        for cue in audio_cues {
+            let frequency = procedural_role_action_frequency(&cue.display_name, &cue.clip);
+            let source = audio_cache
+                .0
+                .entry(cue.clip.clone())
+                .or_insert_with(|| pitches.add(Pitch::new(frequency, Duration::from_millis(85))))
+                .clone();
+            commands.spawn((
+                Name::new(format!(
+                    "Role action audio: {} ({})",
+                    cue.display_name, cue.actor
+                )),
+                AudioPlayer(source),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.08)),
+            ));
+        }
+    }
+}
+
+fn collect_animation_audio_events(
+    player: &AnimationPlayer,
+    layer: &mut ConvertedAnimationLayerDriver,
+    selection: &AnimationBlendSelection,
+    presentation: &PresentationCatalog,
+    actor: &StableId,
+    output: &mut Vec<PendingRoleActionAudio>,
+) {
+    let mut selected = BTreeSet::new();
+    for motion in std::iter::once(&selection.first).chain(selection.second.as_ref()) {
+        if motion.weight <= f32::EPSILON {
+            continue;
+        }
+        selected.insert(motion.clip.clone());
+        let Some(node) = layer.nodes.get(&motion.clip) else {
+            continue;
+        };
+        let Some(active) = player.animation(*node) else {
+            layer.event_elapsed.remove(&motion.clip);
+            continue;
+        };
+        let current = active.elapsed();
+        let previous = layer.event_elapsed.insert(motion.clip.clone(), current);
+        let Some(clip) = presentation.clips.get(&motion.clip) else {
+            continue;
+        };
+        for event in &clip.events {
+            if event.function_name != "PlayRoleActionAudio" {
+                continue;
+            }
+            let occurrences =
+                animation_event_occurrences(event.time, clip.duration_seconds, previous, current);
+            for _ in 0..occurrences {
+                output.push(PendingRoleActionAudio {
+                    actor: actor.clone(),
+                    clip: motion.clip.clone(),
+                    display_name: clip.display_name.clone(),
+                });
+            }
+        }
+    }
+    layer
+        .event_elapsed
+        .retain(|clip, _| selected.contains(clip));
+}
+
+fn animation_event_occurrences(
+    event_time: f32,
+    duration: f32,
+    previous_elapsed: Option<f32>,
+    current_elapsed: f32,
+) -> u32 {
+    if !event_time.is_finite()
+        || !duration.is_finite()
+        || !current_elapsed.is_finite()
+        || event_time < 0.0
+        || duration <= f32::EPSILON
+        || event_time > duration
+    {
+        return 0;
+    }
+    let previous = previous_elapsed
+        .filter(|previous| previous.is_finite() && *previous <= current_elapsed)
+        .unwrap_or(-f32::EPSILON);
+    // The finite, non-negative cycle indices are intentionally quantized from
+    // continuous clip time; saturating float-to-integer casts protect corrupt
+    // or extremely long-running clocks without changing event boundaries.
+    #[allow(clippy::cast_possible_truncation)]
+    let first_cycle = (((previous - event_time) / duration).floor() as i64 + 1).max(0);
+    #[allow(clippy::cast_possible_truncation)]
+    let last_cycle = ((current_elapsed - event_time) / duration).floor() as i64;
+    if last_cycle < first_cycle {
+        0
+    } else {
+        u32::try_from(last_cycle - first_cycle + 1).unwrap_or(u32::MAX)
+    }
+}
+
+fn procedural_role_action_frequency(display_name: &str, clip: &StableId) -> f32 {
+    let name = display_name.to_ascii_lowercase();
+    if name.contains("bow") {
+        493.88
+    } else if name.contains("heal") || name.contains("pray") {
+        659.25
+    } else if name.contains("build") || name.contains("hammer") {
+        246.94
+    } else if name.contains("mine") || name.contains("mining") {
+        185.00
+    } else if name.contains("wood") || name.contains("cut") || name.contains("axe") {
+        220.00
+    } else if name.contains("sword") || name.contains("attack") {
+        146.83
+    } else {
+        let hash = clip.as_str().bytes().fold(2_166_136_261_u32, |hash, byte| {
+            hash.wrapping_mul(16_777_619) ^ u32::from(byte)
+        });
+        let semitone = u8::try_from(hash % 18).expect("modulo 18 fits u8");
+        196.0 * 2.0_f32.powf(f32::from(semitone) / 12.0)
     }
 }
 
@@ -9351,6 +9497,41 @@ mod tests {
             deterministic_animation_variant(&actor_id, "BowShoot", 4),
             deterministic_animation_variant(&actor_id, "BowShoot", 4)
         );
+    }
+
+    #[test]
+    fn animation_events_fire_once_per_elapsed_clip_cycle() {
+        assert_eq!(animation_event_occurrences(0.25, 1.0, None, 0.24), 0);
+        assert_eq!(animation_event_occurrences(0.25, 1.0, None, 0.25), 1);
+        assert_eq!(animation_event_occurrences(0.25, 1.0, Some(0.25), 1.24), 0);
+        assert_eq!(animation_event_occurrences(0.25, 1.0, Some(1.24), 1.25), 1);
+        assert_eq!(animation_event_occurrences(0.25, 1.0, Some(0.10), 3.10), 3);
+        assert_eq!(animation_event_occurrences(0.0, 1.0, None, 0.0), 1);
+        assert_eq!(animation_event_occurrences(0.25, 0.0, None, 1.0), 0);
+    }
+
+    #[test]
+    fn converted_role_audio_events_have_deterministic_procedural_cues() {
+        let presentation = embedded_presentation();
+        let clips: Vec<_> = presentation
+            .clips
+            .iter()
+            .filter(|(_, clip)| {
+                clip.events
+                    .iter()
+                    .any(|event| event.function_name == "PlayRoleActionAudio")
+            })
+            .collect();
+        assert_eq!(clips.len(), 10);
+        for (id, clip) in clips {
+            let frequency = procedural_role_action_frequency(&clip.display_name, id);
+            assert!(frequency.is_finite());
+            assert!((140.0..=660.0).contains(&frequency));
+            assert_eq!(
+                frequency.to_bits(),
+                procedural_role_action_frequency(&clip.display_name, id).to_bits()
+            );
+        }
     }
 
     #[test]

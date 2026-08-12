@@ -257,9 +257,12 @@ effective weights. The three AvatarMask assets retain 477 stable transform weigh
 (118 exclusions), and excluded bones are assigned to Bevy animation mask groups.
 Unity fixes layer zero to weight one; higher layers use their serialized default,
 so the shipping Character Top layer continues to evaluate its carry state machine
-but correctly has zero pose influence. Rare/non-gameplay action emitters, exact
-weighted Unity tangent semantics, animation-event audio playback, and custom WGSL
-shader parity remain presentation work. The Credits panels/fireworks/end fade and
+but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
+events dispatch once per animation cycle from Bevy's monotonic clip clock and play
+short deterministic procedural cues; their no-sample provenance is documented in
+[`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). Rare/non-gameplay action
+emitters, exact weighted Unity tangent semantics, and custom WGSL shader parity
+remain presentation work. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.
 
 This is an early migration milestone, not a parity release. The repository-level

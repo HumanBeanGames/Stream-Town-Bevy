@@ -236,7 +236,10 @@ mistaken for production-ready systems.
   files into 1,196 stable transform tracks with rig-relative reference poses.
   Presentation schema 8 additionally retains all 110 component/UI property
   curves (261 keys) across 18 clips—including the four transform-free clips—and
-  all ten authored animation events. Eleven authored 1D blend states retain their driving parameters and
+  all ten authored animation events. The runtime dispatches each converted
+  `PlayRoleActionAudio` event exactly once per crossed clip cycle and plays a
+  deterministic 85 ms procedural cue with documented no-sample provenance.
+  Eleven authored 1D blend states retain their driving parameters and
   thresholds, and transition conditions use typed Unity modes. The stale `Slam`
   and `Swipe` conditions are retained as two inferred Boolean parameters rather
   than silently discarded. It resolves inherited prefab/controller/model
@@ -286,8 +289,8 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Weighted Unity tangent semantics, animation-event audio playback,
-  transition-duration crossfades, and the remaining rare/non-gameplay action
+- Weighted Unity tangent semantics, transition-duration crossfades, and the
+  remaining rare/non-gameplay action
   emitters. Direct and nested layer/state-machine routing, conditioned entries,
   parent exits, masks, and property curves are converted and live.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
