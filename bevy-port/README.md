@@ -223,6 +223,9 @@ threshold blending; runtime movement feeds the authored velocity/5 `Move Speed`
 parameter into Idle/Walk/Run. Converted renderer descendants receive a cached
 Bevy PBR approximation of their first inherited Unity material, including
 PNG/TGA base textures, color, emission, metallic, smoothness, and alpha settings.
+Player GLB descendants also apply persisted body, hair, facial-hair, eye,
+hair-color, and eye-color selections in Unity's serialized order. Cosmetic
+material variants are cached per source material and helmets suppress hair.
 Nested controller layers/state machines, complete gameplay action emitters,
 exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
 and custom WGSL shader parity remain presentation work.

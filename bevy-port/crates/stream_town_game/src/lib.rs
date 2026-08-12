@@ -25,17 +25,55 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
-    ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
-    AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
-    BuildingAction, BuildingDef, BuildingDirection, BuildingState, CameraAction, CameraDirection,
-    ChatCommand, ContentCatalog, CustomizationKind, EnemyCampState, GameConfig, GeneratedWorld,
-    GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, ObjectiveEvent,
-    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, Season, StableId, StationDef,
-    TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
+    ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
+    AnimationControllerRuntime, AnimationTransformTrack, ArchetypeDef, ArchetypeKind,
+    ArchetypeScene, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef, BuildingDirection,
+    BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog, CustomizationKind,
+    EnemyCampState, GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode,
+    MaterialDef, NativeSaveStore, ObjectiveEvent, PresentationCatalog, RoleEquipmentDef,
+    RulerVoteKind, SavedActor, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation,
+    WorldSnapshot, generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
+const EYE_NODES: [&str; 10] = [
+    "Eyes_Angry",
+    "Eyes_Annoyed",
+    "Eyes_Cool",
+    "Eyes_Happy",
+    "Eyes_MissingEye",
+    "Eyes_Normal",
+    "Eyes_Pain",
+    "Eyes_Sad",
+    "Eyes_Wink",
+    "Eyes_Worried",
+];
+const HAIR_NODES: [&str; 7] = [
+    "Hair_Long_Ponytail",
+    "Hair_Long_Sidebraids",
+    "Hair_Medium_Side",
+    "Hair_Short_Bowlcut",
+    "Hair_Short_Normal",
+    "Hair_Short_Pushup",
+    "Hair_Short_Sideswept",
+];
+const FACIAL_HAIR_NODES: [&str; 2] = ["FacialHair_Long_Beard", "FacialHair_Medium_Beard"];
+const HAIR_COLORS: [[f32; 3]; 6] = [
+    [0.019_607_844, 0.019_607_844, 0.019_607_844],
+    [0.575_471_7, 0.176_441_8, 0.176_441_8],
+    [0.839_622_6, 0.678_662_4, 0.099_012_084],
+    [0.5, 0.287_401_7, 0.134_433_95],
+    [0.127_714_48, 0.660_377_4, 0.216_843_2],
+    [0.129_411_74, 0.599_905_3, 0.658_823_55],
+];
+const EYE_COLORS: [[f32; 3]; 5] = [
+    [0.133_333_34, 0.098_039_22, 0.098_039_22],
+    [0.191_883_25, 0.543_265_76, 0.830_188_7],
+    [0.402_439_36, 0.726_415_1, 0.085_662_15],
+    [0.743_859, 0.792_452_8, 0.790_356_93],
+    [0.801_886_8, 0.693_535_1, 0.086_997_17],
+];
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
@@ -366,6 +404,38 @@ struct EquipmentNode {
     name: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CosmeticNodeKind {
+    Eyes,
+    Hair,
+    FacialHair,
+}
+
+#[derive(Component)]
+struct CosmeticNode {
+    actor_root: Entity,
+    kind: CosmeticNodeKind,
+    index: u8,
+}
+
+#[derive(Component)]
+struct CosmeticRenderer {
+    actor_root: Entity,
+    kind: CosmeticNodeKind,
+    base_material: Handle<StandardMaterial>,
+    applied_color: Option<u8>,
+}
+
+struct CosmeticMaterialVariant {
+    base_material: Handle<StandardMaterial>,
+    kind: CosmeticNodeKind,
+    color: u8,
+    material: Handle<StandardMaterial>,
+}
+
+#[derive(Resource, Default)]
+struct CosmeticMaterialCache(Vec<CosmeticMaterialVariant>);
+
 #[derive(Component, Clone)]
 struct NativeAnimationSpec {
     graph: Handle<AnimationGraph>,
@@ -434,6 +504,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
             .init_resource::<EnvironmentPresentation>()
+            .init_resource::<CosmeticMaterialCache>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
                     PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
@@ -454,6 +525,12 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     tag_equipment_nodes,
                     sync_equipment_nodes.after(tag_equipment_nodes),
+                    tag_cosmetic_nodes,
+                    sync_cosmetic_nodes.after(tag_cosmetic_nodes),
+                    tag_cosmetic_renderers.after(apply_material_overrides),
+                    sync_cosmetic_materials
+                        .after(tag_cosmetic_renderers)
+                        .after(apply_material_overrides),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3773,6 +3850,214 @@ fn sync_equipment_nodes(
         } else {
             Visibility::Hidden
         };
+    }
+}
+
+fn cosmetic_node(name: &str) -> Option<(CosmeticNodeKind, u8)> {
+    EYE_NODES
+        .iter()
+        .position(|candidate| *candidate == name)
+        .map(|index| {
+            (
+                CosmeticNodeKind::Eyes,
+                u8::try_from(index).expect("eye index fits"),
+            )
+        })
+        .or_else(|| {
+            HAIR_NODES
+                .iter()
+                .position(|candidate| *candidate == name)
+                .map(|index| {
+                    (
+                        CosmeticNodeKind::Hair,
+                        u8::try_from(index).expect("hair index fits"),
+                    )
+                })
+        })
+        .or_else(|| {
+            FACIAL_HAIR_NODES
+                .iter()
+                .position(|candidate| *candidate == name)
+                .map(|index| {
+                    (
+                        CosmeticNodeKind::FacialHair,
+                        u8::try_from(index).expect("facial-hair index fits"),
+                    )
+                })
+        })
+}
+
+#[allow(clippy::type_complexity)]
+fn tag_cosmetic_nodes(
+    mut commands: Commands,
+    agents: Query<Entity, With<Agent>>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(Entity, &Name), (Without<CosmeticNode>, Without<Agent>)>,
+) {
+    for (entity, name) in &nodes {
+        let Some((kind, index)) = cosmetic_node(name.as_str()) else {
+            continue;
+        };
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            if agents.contains(ancestor) {
+                commands.entity(entity).insert(CosmeticNode {
+                    actor_root: ancestor,
+                    kind,
+                    index,
+                });
+                break;
+            }
+        }
+    }
+}
+
+fn cosmetic_node_visible(
+    customization: ActorCustomization,
+    kind: CosmeticNodeKind,
+    index: u8,
+    helmet_equipped: bool,
+) -> bool {
+    match kind {
+        CosmeticNodeKind::Eyes => customization.eyes == index,
+        CosmeticNodeKind::Hair => customization.hair == index && !helmet_equipped,
+        CosmeticNodeKind::FacialHair => customization.facial_hair == index,
+    }
+}
+
+fn sync_cosmetic_nodes(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<&Agent>,
+    mut nodes: Query<(&CosmeticNode, &mut Visibility)>,
+) {
+    for (node, mut visibility) in &mut nodes {
+        let Ok(agent) = agents.get(node.actor_root) else {
+            continue;
+        };
+        let Some(actor) = simulation.0.actors.get(&agent.id) else {
+            continue;
+        };
+        let helmet_equipped = content
+            .0
+            .roles
+            .get(&actor.role)
+            .and_then(|role| role.equipment.as_ref())
+            .and_then(|equipment| equipment.helmet_node.as_ref())
+            .is_some();
+        *visibility =
+            if cosmetic_node_visible(actor.customization, node.kind, node.index, helmet_equipped) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+    }
+}
+
+fn tag_cosmetic_renderers(
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    agents: Query<Entity, With<Agent>>,
+    renderers: Query<
+        (Entity, &MeshMaterial3d<StandardMaterial>),
+        Added<MeshMaterial3d<StandardMaterial>>,
+    >,
+) {
+    for (entity, material) in &renderers {
+        let mut ancestor = entity;
+        let mut cosmetic_kind = None;
+        for _ in 0..64 {
+            cosmetic_kind = cosmetic_kind.or_else(|| {
+                names
+                    .get(ancestor)
+                    .ok()
+                    .and_then(|name| cosmetic_node(name.as_str()))
+                    .map(|(kind, _)| kind)
+            });
+            if let (true, Some(kind)) = (agents.contains(ancestor), cosmetic_kind) {
+                commands.entity(entity).insert(CosmeticRenderer {
+                    actor_root: ancestor,
+                    kind,
+                    base_material: material.0.clone(),
+                    applied_color: None,
+                });
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+    }
+}
+
+fn cosmetic_color(customization: ActorCustomization, kind: CosmeticNodeKind) -> (u8, [f32; 3]) {
+    match kind {
+        CosmeticNodeKind::Eyes => {
+            let index = usize::from(customization.eye_color).min(EYE_COLORS.len() - 1);
+            (
+                u8::try_from(index).expect("eye color index fits"),
+                EYE_COLORS[index],
+            )
+        }
+        CosmeticNodeKind::Hair | CosmeticNodeKind::FacialHair => {
+            let index = usize::from(customization.hair_color).min(HAIR_COLORS.len() - 1);
+            (
+                u8::try_from(index).expect("hair color index fits"),
+                HAIR_COLORS[index],
+            )
+        }
+    }
+}
+
+fn sync_cosmetic_materials(
+    simulation: Res<SimulationRuntime>,
+    agents: Query<&Agent>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut cache: ResMut<CosmeticMaterialCache>,
+    mut renderers: Query<(&mut CosmeticRenderer, &mut MeshMaterial3d<StandardMaterial>)>,
+) {
+    let Some(mut materials) = materials else {
+        return;
+    };
+    for (mut cosmetic, mut renderer_material) in &mut renderers {
+        let Ok(agent) = agents.get(cosmetic.actor_root) else {
+            continue;
+        };
+        let Some(actor) = simulation.0.actors.get(&agent.id) else {
+            continue;
+        };
+        let (color_index, color) = cosmetic_color(actor.customization, cosmetic.kind);
+        if cosmetic.applied_color == Some(color_index) {
+            continue;
+        }
+        let material = if let Some(variant) = cache.0.iter().find(|variant| {
+            variant.base_material == cosmetic.base_material
+                && variant.kind == cosmetic.kind
+                && variant.color == color_index
+        }) {
+            variant.material.clone()
+        } else {
+            let Some(mut material) = materials.get(&cosmetic.base_material).cloned() else {
+                continue;
+            };
+            material.base_color = Color::srgb(color[0], color[1], color[2]);
+            let handle = materials.add(material);
+            cache.0.push(CosmeticMaterialVariant {
+                base_material: cosmetic.base_material.clone(),
+                kind: cosmetic.kind,
+                color: color_index,
+                material: handle.clone(),
+            });
+            handle
+        };
+        renderer_material.0 = material;
+        cosmetic.applied_color = Some(color_index);
     }
 }
 
@@ -8186,6 +8471,80 @@ mod tests {
             "Body_Logger_Slim",
             false
         ));
+    }
+
+    #[test]
+    fn cosmetic_nodes_preserve_unity_order_and_visibility_rules() {
+        for (index, name) in EYE_NODES.iter().enumerate() {
+            assert_eq!(
+                cosmetic_node(name),
+                Some((CosmeticNodeKind::Eyes, u8::try_from(index).unwrap()))
+            );
+        }
+        for (index, name) in HAIR_NODES.iter().enumerate() {
+            assert_eq!(
+                cosmetic_node(name),
+                Some((CosmeticNodeKind::Hair, u8::try_from(index).unwrap()))
+            );
+        }
+        for (index, name) in FACIAL_HAIR_NODES.iter().enumerate() {
+            assert_eq!(
+                cosmetic_node(name),
+                Some((CosmeticNodeKind::FacialHair, u8::try_from(index).unwrap()))
+            );
+        }
+        assert_eq!(cosmetic_node("Helmet_Defender"), None);
+
+        let customization = ActorCustomization {
+            eyes: 3,
+            hair: 6,
+            facial_hair: 1,
+            hair_color: 4,
+            eye_color: 1,
+            body_type: 2,
+        };
+        assert!(cosmetic_node_visible(
+            customization,
+            CosmeticNodeKind::Eyes,
+            3,
+            false
+        ));
+        assert!(!cosmetic_node_visible(
+            customization,
+            CosmeticNodeKind::Eyes,
+            2,
+            false
+        ));
+        assert!(cosmetic_node_visible(
+            customization,
+            CosmeticNodeKind::Hair,
+            6,
+            false
+        ));
+        assert!(!cosmetic_node_visible(
+            customization,
+            CosmeticNodeKind::Hair,
+            6,
+            true
+        ));
+        assert!(cosmetic_node_visible(
+            customization,
+            CosmeticNodeKind::FacialHair,
+            1,
+            true
+        ));
+        assert_eq!(
+            cosmetic_color(customization, CosmeticNodeKind::Hair),
+            (4, HAIR_COLORS[4])
+        );
+        assert_eq!(
+            cosmetic_color(customization, CosmeticNodeKind::FacialHair),
+            (4, HAIR_COLORS[4])
+        );
+        assert_eq!(
+            cosmetic_color(customization, CosmeticNodeKind::Eyes),
+            (1, EYE_COLORS[1])
+        );
     }
 
     #[test]

@@ -149,8 +149,11 @@ mistaken for production-ready systems.
   progression queries, available-role and building catalogs, stable building/
   recruit IDs and item info, explicit station/target selection, Town Hall unstuck,
   location ping, town stats, ruler camera movement/reset, moderator role changes,
-  and all six customization selectors. Selected targets and body type affect live
-  ECS behavior and presentation.
+  and all six customization selectors. Selected targets and every customization
+  choice affect live ECS behavior and presentation: exact Unity list ordering is
+  retained for 10 eye, seven hair, and two facial-hair meshes; the three role-body
+  variants, five eye colors, and six shared hair/beard colors bind to converted
+  GLB descendants; helmets hide hair as in `CharacterModelHandler`.
 - Pet parity covers subscriber Red Panda entitlement, Unity's deterministic
   one-in-5,000 gathering unlocks for Giraffe, Duck, and Butterfly, the Fish God
   reward, `!pets`/`!pet`, converted GLB followers, and native/legacy persistence.
@@ -254,8 +257,6 @@ mistaken for production-ready systems.
   controller interpreter can execute direct state transitions, but gameplay
   systems still need to emit every gathering/building/combat action
   parameter and nested state-machine exits currently fall back to Locomotion.
-  The three authored role-body variants can be selected and persisted; hair,
-  eye, facial-hair, and color values persist but still await renderer bindings.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
@@ -281,8 +282,7 @@ mistaken for production-ready systems.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
-  and customization data now map into native actor state; renderer bindings for
-  non-body cosmetic selections remain presentation work.
+  and customization data now map into native actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
   layout, live runtime bridging, release packaging, frame capture, and profiling
   controls.
