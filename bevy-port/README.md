@@ -282,6 +282,10 @@ pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes.
 Missing converted assets retain the resource-cube fallback.
 
+Resource workers also mirror Unity's storage backpressure: they stop acquiring
+and gathering from nodes while the role's technology-expanded town storage is
+full, retain any carried overflow, and resume automatically when capacity opens.
+
 For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
 `STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.

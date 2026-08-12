@@ -2984,6 +2984,23 @@ fn resource_for_role(content: &ContentCatalog, role: &StableId) -> Option<Stable
     content.roles.get(role)?.resource.clone()
 }
 
+fn actor_resource_storage_has_room(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &ActorState,
+) -> bool {
+    let Some(resource) = resource_for_role(content, &actor.role) else {
+        return true;
+    };
+    simulation
+        .town_resources
+        .get(&resource)
+        .copied()
+        .unwrap_or_default()
+        < resource_storage_capacity(config, content, simulation, &resource)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EffectiveRoleStats {
     level: u16,
@@ -3741,6 +3758,9 @@ fn next_agent_goal(
             return (AgentGoal::Construct(building), approach);
         }
     }
+    if !actor_resource_storage_has_room(config, content, simulation, actor) {
+        return (AgentGoal::Wander, mirrored_target(world, current));
+    }
     let carried = actor
         .inventory
         .values()
@@ -3821,6 +3841,10 @@ fn complete_agent_goal(
     let mut action_presentation = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
+            let actor = simulation.actors.get(actor_id)?;
+            if !actor_resource_storage_has_room(config, content, simulation, actor) {
+                return None;
+            }
             let gathering_pet = simulation.actors.get(actor_id).and_then(|actor| {
                 actor.id.as_str().starts_with("twitch:").then_some(())?;
                 match actor.role.as_str() {
@@ -12897,6 +12921,128 @@ mod tests {
         );
         assert!(simulation.actors[&actor_id].inventory.is_empty());
         assert_eq!(simulation.town_resources[&resource.kind], 10);
+    }
+
+    #[test]
+    fn full_town_storage_pauses_gathering_and_preserves_carried_overflow() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let resource = world
+            .resources
+            .first()
+            .expect("default world contains resources")
+            .clone();
+        let role = match resource.kind.as_str() {
+            "resource:wood" => "role:logger",
+            "resource:ore" => "role:miner",
+            _ => "role:gatherer",
+        };
+        let actor_id = StableId::new("npc:storage_backpressure_test").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), resource.position));
+        simulation
+            .assign_role(&actor_id, StableId::new(role).unwrap())
+            .unwrap();
+        simulation
+            .actors
+            .get_mut(&actor_id)
+            .unwrap()
+            .inventory
+            .insert(resource.kind.clone(), 10);
+        let capacity = resource_storage_capacity(&config, &content, &simulation, &resource.kind);
+        simulation
+            .town_resources
+            .insert(resource.kind.clone(), capacity);
+        let resource_amount = resource.amount;
+
+        let (goal, _) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &actor_id,
+            resource.position,
+        );
+        assert_eq!(goal, AgentGoal::Wander);
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &actor_id,
+                &AgentGoal::Gather(resource.id.clone()),
+                resource.position,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            world
+                .resources
+                .iter()
+                .find(|candidate| candidate.id == resource.id)
+                .unwrap()
+                .amount,
+            resource_amount
+        );
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &actor_id,
+            &AgentGoal::Deposit,
+            resource.position,
+        );
+        assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 10);
+
+        simulation
+            .town_resources
+            .insert(resource.kind.clone(), capacity - 1);
+        let (goal, _) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &actor_id,
+            resource.position,
+        );
+        assert_eq!(goal, AgentGoal::Deposit);
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &actor_id,
+            &goal,
+            resource.position,
+        );
+        assert_eq!(simulation.town_resources[&resource.kind], capacity);
+        assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 9);
+
+        simulation
+            .town_resources
+            .insert(resource.kind.clone(), capacity - 10);
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &actor_id,
+            &AgentGoal::Deposit,
+            resource.position,
+        );
+        assert!(simulation.actors[&actor_id].inventory.is_empty());
+        let (goal, _) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &actor_id,
+            resource.position,
+        );
+        assert!(matches!(goal, AgentGoal::Gather(_)));
     }
 
     #[test]

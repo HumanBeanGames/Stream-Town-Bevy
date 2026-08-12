@@ -350,6 +350,13 @@ mistaken for production-ready systems.
   and one `TargetHealth.TakeDamage` call per action. The migration therefore
   preserves single-target melee/projectile attacks instead of inventing an
   unauthored area-damage rule.
+- Resource workers now honor Unity's town-storage backpressure before acquiring
+  or gathering from another node. Full technology-expanded storage sends the
+  actor back to its idle route while preserving carried overflow, and gathering
+  resumes when capacity becomes available.
+- A full source/settings search found no per-command cooldown state in the
+  shipping Unity Twitch dispatcher; its runtime data retains only last-command
+  diagnostics. That unauthored subsystem is no longer listed as parity work.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -383,8 +390,7 @@ mistaken for production-ready systems.
   Tower, station
   effects derived from building level beyond current activation/range behavior,
   and every reachable balance rule from the Unity scenes.
-- Per-command cooldowns and exact production
-  outbound response wording. The authenticated IRC path now includes player
+- Exact production outbound response wording. The authenticated IRC path now includes player
   role/health/progression, role/station/target selection, unstuck/ping,
   pets and cosmetics, catalogs/info/town stats, recruit inspection/dismissal/
   re-role, camera movement/reset, moderator role assignment, governance,
@@ -460,6 +466,6 @@ Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
 action emitters and remaining chunked LOD work,
 particle fields, remaining custom-shader parity, the
-exact command cooldown/wording behavior, and the recorded reference-machine GPU
+exact production command wording, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
