@@ -64,7 +64,7 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   all 11 reachable building role-slot modifiers,
   all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
-  shooter, and 422 typed objectives from the production technology graph in content schema 15,
+  shooter, and 422 typed objectives from the production technology graph in content schema 16,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -196,9 +196,10 @@ apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks
 spawn visible homing ECS projectiles with distinct violet, converted-arrow, and
 orange fireball presentation. Towers share the converted Arrow GLB and Unity's
 two-second tapering grey trail. Melee hits and projectile arrivals emit the
-authored 0.25-second physical burst or a typed fire/necrotic variant. Priests
-select the nearest injured player,
-heal on their authored cadence, and release full-health targets. Successful
+authored 0.25-second physical burst or a typed fire/necrotic variant. Converted
+enemy target masks select valid players and buildings; zero-health buildings
+are removed and release their navigation region. Priests select the nearest
+injured player, heal on their authored cadence, and release full-health targets. Successful
 heals emit the Unity-authored 1.2-second target burst plus a purpose-built
 five-second green channel field using the serialized 0/0.289/1/0 size curve.
 Automatic, paid, and game-master revives emit a larger gold-accented variant.
@@ -282,6 +283,12 @@ diagnostic actor clutter without changing the validated production default.
 and revival cues together for a repeatable gameplay-VFX capture.
 `STREAM_TOWN_SMOKE_COMBAT_VFX=1` retriggers the four typed impact/trail styles
 and frames the converted Arrow GLB for a repeatable combat-VFX capture.
+`STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction/repair smoke, the
+spark-emitting construction hit, building-level arrows, and persistent
+damage fire/smoke together. Enemy `TargetSensor` masks are authoritative in
+content schema 16: ordinary enemies choose the nearest allowed actor/building,
+while the battering ram attacks only construction and buildings. Zero-health
+buildings are removed and release their dirty navigation region.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger

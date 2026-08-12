@@ -908,6 +908,20 @@ impl WorldSimulation {
         Ok(u32::try_from(state.health.saturating_sub(before)).unwrap_or_default())
     }
 
+    pub fn damage_building(
+        &mut self,
+        building: &StableId,
+        amount: u32,
+    ) -> Result<i32, SimulationError> {
+        let state = self
+            .buildings
+            .get_mut(building)
+            .ok_or_else(|| SimulationError::MissingBuilding(building.clone()))?;
+        let amount = i32::try_from(amount).unwrap_or(i32::MAX);
+        state.health = state.health.saturating_sub(amount).max(0);
+        Ok(state.health)
+    }
+
     pub fn upgrade_building(
         &mut self,
         building: &StableId,
@@ -1548,6 +1562,39 @@ mod tests {
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
         );
+    }
+
+    #[test]
+    fn building_damage_and_repair_preserve_health_bounds() {
+        let building = id("building:damage_test");
+        let mut simulation = WorldSimulation::new(11);
+        simulation.buildings.insert(
+            building.clone(),
+            BuildingState {
+                id: building.clone(),
+                archetype: id("archetype:building"),
+                position: GridPos { x: 2, z: 3 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+        assert_eq!(
+            simulation.damage_building(&building, 25),
+            Ok(BUILDING_MAX_HEALTH - 25)
+        );
+        assert_eq!(simulation.repair_building(&building, 10), Ok(10));
+        assert_eq!(
+            simulation.buildings[&building].health,
+            BUILDING_MAX_HEALTH - 15
+        );
+        assert_eq!(simulation.damage_building(&building, u32::MAX), Ok(0));
+        assert_eq!(
+            simulation.repair_building(&building, u32::MAX),
+            Ok(u32::try_from(BUILDING_MAX_HEALTH).unwrap())
+        );
+        assert_eq!(simulation.buildings[&building].health, BUILDING_MAX_HEALTH);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 (
-    schema_version: 15,
+    schema_version: 16,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -1652,6 +1652,14 @@
                 action_amount: 2,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:122de980ba16c8d44a0149e18fe5b03e": (
@@ -1925,6 +1933,14 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:1ebf70d17d1f1a048ac8af03f7400737": (
@@ -1987,6 +2003,14 @@
                 action_amount: 3,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:216e6a0e74fb05841804c87d47dc5ead": (
@@ -2471,6 +2495,14 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:3d0b3ca82df27d84e874a3337e471441": (
@@ -4051,6 +4083,14 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:7358640a0fe0e20439150c08750cecac": (
@@ -4908,6 +4948,14 @@
                 action_amount: 30,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 10000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:94690280dced35541b76136d86cb001c": (
@@ -5760,6 +5808,14 @@
                 action_amount: 5,
                 action_milliseconds: 3000,
                 action_range_milli_cells: 10000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:b3437b5dafe6a15489132833187dc592": (
@@ -6011,6 +6067,14 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                    "target:injured_player",
+                    "target:player",
+                ],
             )),
         ),
         "archetype:prefab:bb5331581e5fa8f44ad53933b712895d": (
@@ -6950,6 +7014,12 @@
                 action_amount: 20,
                 action_milliseconds: 2000,
                 action_range_milli_cells: 3000,
+                targets_all: false,
+                target_kinds: [
+                    "target:building",
+                    "target:construction",
+                    "target:damaged_building",
+                ],
             )),
         ),
         "archetype:prefab:ed617ade83fb3674abae4072fb62decd": (

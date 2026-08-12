@@ -63,6 +63,17 @@ const TOWER_TRAIL_SECONDS: f32 = 2.0;
 const TOWER_TRAIL_WIDTH: f32 = 0.1;
 const FIREBALL_SIZE: f32 = 0.4;
 const FIREBALL_TRAIL_SIZE: f32 = 0.3;
+const BUILDING_HIT_SECONDS: f32 = 0.5;
+const BUILDING_HIT_SMOKE_SPEED: f32 = 3.0;
+const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
+const BUILDING_HIT_SMOKE_SIZE: f32 = 0.5;
+const BUILDING_HIT_SPARK_SIZE: f32 = 0.25;
+const BUILDING_LEVEL_UP_SECONDS: f32 = 1.5;
+const BUILDING_LEVEL_UP_ARROW_SIZE: f32 = 0.5;
+const BUILDING_LEVEL_UP_TILE_SIZE: f32 = 4.0;
+const BUILDING_DAMAGED_RADIUS: f32 = 1.403_639_8;
+const BUILDING_DAMAGED_FIRE_AMOUNT: u16 = 128;
+const BUILDING_DAMAGED_SMOKE_AMOUNT: u16 = 200;
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -440,6 +451,10 @@ struct RenderAssets {
     projectile_arrow: Handle<StandardMaterial>,
     projectile_necrotic: Handle<StandardMaterial>,
     impact_physical: Handle<StandardMaterial>,
+    building_smoke: Handle<StandardMaterial>,
+    building_spark: Handle<StandardMaterial>,
+    building_fire: Handle<StandardMaterial>,
+    building_upgrade: Handle<StandardMaterial>,
     healing_green: Handle<StandardMaterial>,
     healing_gold: Handle<StandardMaterial>,
     authored_building: Handle<BuildingMaterial>,
@@ -513,6 +528,7 @@ enum AgentGoal {
     Gather(StableId),
     Deposit,
     Attack(StableId),
+    AttackBuilding(StableId),
     Heal(StableId),
     Construct(StableId),
 }
@@ -603,6 +619,14 @@ enum ActionPresentation {
         source: GridPos,
         target: GridPos,
     },
+    BuildingWork {
+        target: GridPos,
+        sparks: bool,
+    },
+    BuildingDestroyed {
+        building: StableId,
+        target: GridPos,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -627,6 +651,32 @@ struct CombatImpactParticle {
     origin: Vec3,
     velocity: Vec3,
     base_scale: Vec3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildingEffectKind {
+    WorkSmoke,
+    WorkSpark,
+    LevelArrow,
+    DamageSmoke,
+    DamageFire,
+}
+
+#[derive(Component)]
+struct BuildingEffectParticle {
+    kind: BuildingEffectKind,
+    elapsed_seconds: f32,
+    duration_seconds: f32,
+    origin: Vec3,
+    velocity: Vec3,
+    base_scale: Vec3,
+    phase: f32,
+}
+
+#[derive(Component, Default)]
+struct BuildingDamageEmitter {
+    cooldown_seconds: f32,
+    sequence: u32,
 }
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
@@ -953,6 +1003,9 @@ impl Plugin for StreamTownGamePlugin {
                     move_combat_projectiles.after(update_tower_shooters),
                     animate_combat_effects.after(move_combat_projectiles),
                     repeat_combat_smoke.after(animate_combat_effects),
+                    emit_damaged_building_effects.after(move_agents),
+                    animate_building_effects.after(emit_damaged_building_effects),
+                    repeat_building_smoke.after(animate_building_effects),
                     update_enemy_encounters.after(move_combat_projectiles),
                     sync_fish_god_presentation.after(update_enemy_encounters),
                     animate_falling_fish.after(sync_fish_god_presentation),
@@ -1158,6 +1211,7 @@ fn setup_rendering(
     let resource_closeup = std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some();
     let healing_closeup = std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some();
     let combat_closeup = std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some();
+    let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1173,6 +1227,8 @@ fn setup_rendering(
                     42.0
                 } else if combat_closeup {
                     48.0
+                } else if building_closeup {
+                    58.0
                 } else {
                     520.0
                 },
@@ -1310,6 +1366,33 @@ fn setup_rendering(
         impact_physical: materials.add(StandardMaterial {
             base_color: Color::srgba(1.0, 1.0, 1.0, 0.66),
             emissive: LinearRgba::new(1.2, 1.2, 1.2, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        building_smoke: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.21, 0.21, 0.21, 0.69),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        building_spark: materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.34, 0.02, 0.96),
+            emissive: LinearRgba::new(7.5, 0.48, 0.01, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        building_fire: materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.18, 0.01, 0.86),
+            emissive: LinearRgba::new(8.5, 0.32, 0.01, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        building_upgrade: materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.66, 0.05, 0.9),
+            emissive: LinearRgba::new(7.0, 2.1, 0.05, 1.0),
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
@@ -1940,6 +2023,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 34.0, focus.y + 38.0, focus.z + 34.0)
                 .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
+                .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
                 .map_or(Vec3::ZERO, |position| {
@@ -2054,6 +2141,7 @@ fn generate_and_spawn_world(
                 applied_level: u16::MAX,
                 applied_age: 1,
             },
+            BuildingDamageEmitter::default(),
             Transform::from_translation(hall)
                 .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
         ));
@@ -2078,6 +2166,7 @@ fn generate_and_spawn_world(
                 applied_level: u16::MAX,
                 applied_age: 1,
             },
+            BuildingDamageEmitter::default(),
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(render.building.clone()),
             Transform::from_xyz(hall.x, hall.y + size.y * 0.5, hall.z).with_scale(size),
@@ -2104,6 +2193,11 @@ fn generate_and_spawn_world(
         && let Some(town_hall) = simulation.buildings.get_mut(&town_hall_id)
     {
         town_hall.health = health;
+    }
+    if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some()
+        && let Some(town_hall) = simulation.buildings.get_mut(&town_hall_id)
+    {
+        town_hall.health = BUILDING_MAX_HEALTH / 3;
     }
     simulation.town_resources = config.0.gameplay.starting_town_resources.clone();
     simulation.unlocked_technology.extend(
@@ -2372,6 +2466,10 @@ fn generate_and_spawn_world(
         let focus = grid_to_world_on_surface(centre, &config.0, &generated)
             + Vec3::Y * config.0.world.cell_size * 0.35;
         spawn_combat_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
+    }
+    if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some() {
+        let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+        spawn_building_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
     }
     commands.insert_resource(WorldRuntime {
         generated,
@@ -2912,6 +3010,24 @@ fn is_healer_role(role: &StableId) -> bool {
     role.as_str() == "role:priest"
 }
 
+fn enemy_targets_kind(content: &ContentCatalog, actor: &ActorState, target: &str) -> bool {
+    actor_archetype(content, actor)
+        .and_then(|archetype| archetype.enemy.as_ref())
+        .is_some_and(|enemy| {
+            enemy.targets_all || enemy.target_kinds.iter().any(|id| id.as_str() == target)
+        })
+}
+
+fn enemy_targets_buildings(content: &ContentCatalog, actor: &ActorState) -> bool {
+    [
+        "target:building",
+        "target:damaged_building",
+        "target:construction",
+    ]
+    .into_iter()
+    .any(|target| enemy_targets_kind(content, actor, target))
+}
+
 fn is_ranged_role(role: &StableId) -> bool {
     matches!(
         role.as_str(),
@@ -3155,6 +3271,17 @@ fn building_def_for_archetype<'a>(
         .find(|building| building.archetype == *archetype)
 }
 
+fn building_visual_grid(content: &ContentCatalog, building: &BuildingState) -> GridPos {
+    let footprint = building_def_for_archetype(content, &building.archetype)
+        .map_or([1, 1], |definition| {
+            rotated_footprint(definition.footprint, building.rotation_quarter_turns)
+        });
+    GridPos {
+        x: building.position.x.saturating_add(footprint[0] / 2),
+        z: building.position.z.saturating_add(footprint[1] / 2),
+    }
+}
+
 fn building_approach(
     world: &GeneratedWorld,
     position: GridPos,
@@ -3331,18 +3458,88 @@ fn next_agent_goal(
             );
         }
     }
-    let combat_target = if actor.role.as_str() == "role:enemy" {
-        simulation
-            .actors
-            .values()
-            .filter(|target| target.alive && target.role.as_str() != "role:enemy")
-            .min_by_key(|target| {
-                (
-                    target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
-                    target.id.clone(),
-                )
+    if actor.role.as_str() == "role:enemy" {
+        let player_target = enemy_targets_kind(content, actor, "target:player")
+            .then(|| {
+                simulation
+                    .actors
+                    .values()
+                    .filter(|target| target.alive && target.role.as_str() != "role:enemy")
+                    .map(|target| {
+                        (
+                            target.position.x.abs_diff(current.x)
+                                + target.position.z.abs_diff(current.z),
+                            target.id.clone(),
+                            target.position,
+                        )
+                    })
+                    .min_by_key(|(distance, id, _)| (*distance, id.clone()))
             })
-    } else if is_combat_role(&actor.role) {
+            .flatten();
+        let building_target = enemy_targets_buildings(content, actor)
+            .then(|| {
+                simulation
+                    .buildings
+                    .values()
+                    .filter(|building| building.health > 0)
+                    .filter_map(|building| {
+                        let definition = building_def_for_archetype(content, &building.archetype)?;
+                        let approach = building_approach(
+                            world,
+                            building.position,
+                            rotated_footprint(
+                                definition.footprint,
+                                building.rotation_quarter_turns,
+                            ),
+                            current,
+                        )?;
+                        Some((
+                            approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
+                            building.id.clone(),
+                            approach,
+                        ))
+                    })
+                    .min_by_key(|(distance, id, _)| (*distance, id.clone()))
+            })
+            .flatten();
+        let action_range = role_action_range_cells(content, simulation, actor);
+        match (player_target, building_target) {
+            (Some((player_distance, player, position)), Some((building_distance, _, _)))
+                if player_distance <= building_distance =>
+            {
+                return (
+                    AgentGoal::Attack(player),
+                    if player_distance <= action_range {
+                        current
+                    } else {
+                        position
+                    },
+                );
+            }
+            (_, Some((distance, building, approach))) => {
+                return (
+                    AgentGoal::AttackBuilding(building),
+                    if distance <= action_range {
+                        current
+                    } else {
+                        approach
+                    },
+                );
+            }
+            (Some((distance, player, position)), None) => {
+                return (
+                    AgentGoal::Attack(player),
+                    if distance <= action_range {
+                        current
+                    } else {
+                        position
+                    },
+                );
+            }
+            (None, None) => {}
+        }
+    }
+    let combat_target = if is_combat_role(&actor.role) {
         let mut candidates: Vec<_> = simulation
             .actors
             .values()
@@ -3619,6 +3816,54 @@ fn complete_agent_goal(
                 }
             }
         }
+        AgentGoal::AttackBuilding(building_id) => {
+            let attacker = simulation.actors.get(actor_id)?;
+            let building = simulation.buildings.get(building_id)?;
+            if !attacker.alive || building.health <= 0 {
+                return None;
+            }
+            let building_position = building_visual_grid(content, building);
+            let building_origin = building.position;
+            let building_footprint =
+                building_def_for_archetype(content, &building.archetype).map(|definition| {
+                    rotated_footprint(definition.footprint, building.rotation_quarter_turns)
+                });
+            match simulation.damage_building(building_id, action_amount) {
+                Ok(remaining) if action_amount > 0 => {
+                    if remaining == 0 {
+                        if let Some(footprint) = building_footprint
+                            && let Some(region) = building_region(building_origin, footprint, world)
+                        {
+                            let _ = world.navigation.set_blocked(region, false);
+                        }
+                        simulation.buildings.remove(building_id);
+                        for actor in simulation.actors.values_mut() {
+                            if actor.station.as_ref() == Some(building_id)
+                                || actor.preferred_target.as_ref() == Some(building_id)
+                            {
+                                actor.station = None;
+                                actor.preferred_target = None;
+                            }
+                        }
+                        action_presentation = Some(ActionPresentation::BuildingDestroyed {
+                            building: building_id.clone(),
+                            target: building_position,
+                        });
+                    } else {
+                        action_presentation = Some(ActionPresentation::BuildingWork {
+                            target: building_position,
+                            sparks: true,
+                        });
+                    }
+                    true
+                }
+                Ok(_) => false,
+                Err(error) => {
+                    warn!(actor = %actor_id, building = %building_id, %error, "building attack failed");
+                    false
+                }
+            }
+        }
         AgentGoal::Heal(target_id) => {
             let healer = simulation.actors.get(actor_id)?;
             let target = simulation.actors.get(target_id)?;
@@ -3655,6 +3900,10 @@ fn complete_agent_goal(
                 .buildings
                 .get(building_id)
                 .is_some_and(|building| !building.complete);
+            let building_position = simulation
+                .buildings
+                .get(building_id)
+                .map(|building| building_visual_grid(content, building));
             let archetype = simulation
                 .buildings
                 .get(building_id)
@@ -3681,7 +3930,14 @@ fn complete_agent_goal(
                             &ObjectiveEvent::BuildingBuilt(building),
                         );
                     }
-                    action_amount > 0 && (was_incomplete || complete)
+                    let succeeded = action_amount > 0 && (was_incomplete || complete);
+                    if succeeded && let Some(target) = building_position {
+                        action_presentation = Some(ActionPresentation::BuildingWork {
+                            target,
+                            sparks: was_incomplete,
+                        });
+                    }
+                    succeeded
                 }
                 Err(error) => {
                     warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
@@ -3986,6 +4242,309 @@ fn animate_combat_effects(
         transform.rotation *= Quat::from_rotation_y(time.delta_secs() * 5.0);
         transform.scale = impact.base_scale * (1.0 - progress).sqrt();
     }
+}
+
+fn building_effect_material(
+    render: &RenderAssets,
+    kind: BuildingEffectKind,
+) -> Handle<StandardMaterial> {
+    match kind {
+        BuildingEffectKind::WorkSmoke | BuildingEffectKind::DamageSmoke => {
+            render.building_smoke.clone()
+        }
+        BuildingEffectKind::WorkSpark => render.building_spark.clone(),
+        BuildingEffectKind::DamageFire => render.building_fire.clone(),
+        BuildingEffectKind::LevelArrow => render.building_upgrade.clone(),
+    }
+}
+
+fn spawn_building_particle(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    kind: BuildingEffectKind,
+    origin: Vec3,
+    velocity: Vec3,
+    base_scale: Vec3,
+    duration_seconds: f32,
+    phase: f32,
+) {
+    commands.spawn((
+        WorldEntity,
+        BuildingEffectParticle {
+            kind,
+            elapsed_seconds: 0.0,
+            duration_seconds,
+            origin,
+            velocity,
+            base_scale,
+            phase,
+        },
+        Mesh3d(render.cube.clone()),
+        MeshMaterial3d(building_effect_material(render, kind)),
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
+        Transform::from_translation(origin).with_scale(Vec3::ZERO),
+    ));
+}
+
+fn spawn_building_work_effect(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    origin: Vec3,
+    sparks: bool,
+    cell_size: f32,
+) {
+    for index in 0..5_u16 {
+        let phase = f32::from(index) / 5.0;
+        let angle = phase * std::f32::consts::TAU + 0.35;
+        let particle_origin =
+            origin + Vec3::new(angle.cos(), 0.16 + phase * 0.24, angle.sin()) * cell_size * 0.34;
+        spawn_building_particle(
+            commands,
+            render,
+            BuildingEffectKind::WorkSmoke,
+            particle_origin,
+            Vec3::new(
+                angle.cos() * 0.22,
+                BUILDING_HIT_SMOKE_SPEED,
+                angle.sin() * 0.22,
+            ) * cell_size,
+            Vec3::splat(BUILDING_HIT_SMOKE_SIZE * cell_size * 0.34),
+            BUILDING_HIT_SECONDS,
+            phase,
+        );
+    }
+    if !sparks {
+        return;
+    }
+    for index in 0..8_u16 {
+        let phase = f32::from(index) / 8.0;
+        let angle = phase * std::f32::consts::TAU;
+        spawn_building_particle(
+            commands,
+            render,
+            BuildingEffectKind::WorkSpark,
+            origin + Vec3::Y * cell_size * 0.35,
+            Vec3::new(angle.cos(), 0.28 + f32::from(index % 3) * 0.12, angle.sin())
+                * BUILDING_HIT_SPARK_SPEED
+                * cell_size
+                * 0.16,
+            Vec3::new(0.045, BUILDING_HIT_SPARK_SIZE, 0.045) * cell_size,
+            BUILDING_HIT_SECONDS,
+            phase,
+        );
+    }
+}
+
+fn spawn_building_level_up_effect(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    origin: Vec3,
+    cell_size: f32,
+) {
+    let radius = BUILDING_LEVEL_UP_TILE_SIZE * cell_size * 0.38;
+    for index in 0..8_u16 {
+        let phase = f32::from(index) / 8.0;
+        let angle = phase * std::f32::consts::TAU;
+        let arrow_origin = origin + Vec3::new(angle.cos() * radius, 0.1, angle.sin() * radius);
+        spawn_building_particle(
+            commands,
+            render,
+            BuildingEffectKind::LevelArrow,
+            arrow_origin,
+            Vec3::Y * cell_size * (1.15 + phase * 0.55),
+            Vec3::new(0.12, BUILDING_LEVEL_UP_ARROW_SIZE, 0.12) * cell_size,
+            BUILDING_LEVEL_UP_SECONDS,
+            phase,
+        );
+    }
+}
+
+fn building_damage_intensity(health: i32, complete: bool) -> f32 {
+    if !complete || health <= 0 {
+        return 0.0;
+    }
+    let health_ratio = building_damage_value(health);
+    ((0.65 - health_ratio) / 0.65).clamp(0.0, 1.0)
+}
+
+fn emit_damaged_building_effects(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    simulation: Res<SimulationRuntime>,
+    render: Res<RenderAssets>,
+    mut buildings: Query<(
+        &RuntimeBuilding,
+        &BuildingPresentation,
+        &mut BuildingDamageEmitter,
+    )>,
+) {
+    for (runtime, presentation, mut emitter) in &mut buildings {
+        let Some(building) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let intensity = building_damage_intensity(building.health, building.complete);
+        if intensity <= f32::EPSILON {
+            emitter.cooldown_seconds = 0.0;
+            continue;
+        }
+        emitter.cooldown_seconds -= time.delta_secs();
+        if emitter.cooldown_seconds > 0.0 {
+            continue;
+        }
+        let cell_size = config.0.world.cell_size;
+        let phase =
+            f32::from(u16::try_from(emitter.sequence % 16).expect("sequence is bounded")) / 16.0;
+        let angle = phase * std::f32::consts::TAU * 2.618_034;
+        let radial = BUILDING_DAMAGED_RADIUS * cell_size * (0.18 + 0.38 * intensity);
+        let origin = presentation.base_translation
+            + Vec3::new(angle.cos() * radial, cell_size * 0.44, angle.sin() * radial);
+        spawn_building_particle(
+            &mut commands,
+            &render,
+            BuildingEffectKind::DamageSmoke,
+            origin,
+            Vec3::new(
+                angle.cos() * 0.16,
+                0.78 + intensity * 0.52,
+                angle.sin() * 0.16,
+            ) * cell_size,
+            Vec3::splat(cell_size * (0.22 + intensity * 0.18)),
+            1.55,
+            phase,
+        );
+        if emitter.sequence.is_multiple_of(2) {
+            spawn_building_particle(
+                &mut commands,
+                &render,
+                BuildingEffectKind::DamageFire,
+                origin,
+                Vec3::Y * cell_size * (0.45 + intensity * 0.35),
+                Vec3::new(0.16, 0.4, 0.16) * cell_size * (0.65 + intensity * 0.45),
+                0.72,
+                phase,
+            );
+        }
+        emitter.sequence = emitter.sequence.wrapping_add(1);
+        let authored_density =
+            f32::from(BUILDING_DAMAGED_FIRE_AMOUNT) / f32::from(BUILDING_DAMAGED_SMOKE_AMOUNT);
+        emitter.cooldown_seconds = (0.22 - intensity * 0.12) / authored_density.max(0.1);
+    }
+}
+
+fn animate_building_effects(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut effects: Query<(Entity, &mut BuildingEffectParticle, &mut Transform)>,
+) {
+    for (entity, mut effect, mut transform) in &mut effects {
+        effect.elapsed_seconds += time.delta_secs();
+        let progress = effect.elapsed_seconds / effect.duration_seconds;
+        if progress >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let envelope = (std::f32::consts::PI * progress).sin().max(0.0);
+        match effect.kind {
+            BuildingEffectKind::WorkSmoke => {
+                transform.translation = effect.origin + effect.velocity * effect.elapsed_seconds;
+                transform.scale = effect.base_scale * envelope.sqrt() * (0.72 + progress * 0.8);
+                transform.rotation *= Quat::from_rotation_y(time.delta_secs() * 1.6);
+            }
+            BuildingEffectKind::WorkSpark => {
+                transform.translation = effect.origin
+                    + effect.velocity * effect.elapsed_seconds
+                    + Vec3::NEG_Y * 0.5 * 9.8 * effect.elapsed_seconds.powi(2);
+                transform.scale = effect.base_scale * (1.0 - progress);
+                transform.rotation *= Quat::from_rotation_z(time.delta_secs() * 9.0);
+            }
+            BuildingEffectKind::LevelArrow => {
+                transform.translation = effect.origin + effect.velocity * effect.elapsed_seconds;
+                transform.scale = effect.base_scale * envelope.sqrt();
+                transform.rotation =
+                    Quat::from_rotation_y(effect.phase * std::f32::consts::TAU + progress * 0.35);
+            }
+            BuildingEffectKind::DamageSmoke => {
+                transform.translation = effect.origin + effect.velocity * effect.elapsed_seconds;
+                transform.scale = effect.base_scale * envelope.sqrt() * (0.6 + progress * 1.45);
+                transform.rotation *= Quat::from_rotation_y(time.delta_secs() * 0.8);
+            }
+            BuildingEffectKind::DamageFire => {
+                transform.translation = effect.origin + effect.velocity * effect.elapsed_seconds;
+                let flicker = 0.78 + (progress * 31.0 + effect.phase * 13.0).sin().abs() * 0.32;
+                transform.scale = effect.base_scale * envelope * flicker;
+                transform.rotation *= Quat::from_rotation_y(time.delta_secs() * 4.0);
+            }
+        }
+    }
+}
+
+fn spawn_building_smoke_field(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    focus: Vec3,
+    cell_size: f32,
+) {
+    let spacing = cell_size * 3.4;
+    spawn_building_work_effect(
+        commands,
+        render,
+        focus - Vec3::X * spacing,
+        false,
+        cell_size,
+    );
+    spawn_building_work_effect(commands, render, focus, true, cell_size);
+    spawn_building_level_up_effect(commands, render, focus + Vec3::X * spacing, cell_size);
+    for sequence in 0..10_u16 {
+        let phase = f32::from(sequence) / 10.0;
+        let angle = phase * std::f32::consts::TAU;
+        let origin = focus
+            + Vec3::Z * spacing
+            + Vec3::new(angle.cos(), 0.4, angle.sin()) * BUILDING_DAMAGED_RADIUS * cell_size;
+        spawn_building_particle(
+            commands,
+            render,
+            if sequence.is_multiple_of(3) {
+                BuildingEffectKind::DamageFire
+            } else {
+                BuildingEffectKind::DamageSmoke
+            },
+            origin,
+            Vec3::Y * cell_size * if sequence.is_multiple_of(3) { 0.7 } else { 1.0 },
+            Vec3::splat(cell_size * 0.32),
+            if sequence.is_multiple_of(3) {
+                0.72
+            } else {
+                1.55
+            },
+            phase,
+        );
+    }
+}
+
+fn repeat_building_smoke(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    render: Res<RenderAssets>,
+    world: Res<WorldRuntime>,
+    mut cooldown_seconds: Local<f32>,
+) {
+    if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_none() {
+        return;
+    }
+    *cooldown_seconds -= time.delta_secs();
+    if *cooldown_seconds > 0.0 {
+        return;
+    }
+    let centre = GridPos {
+        x: config.0.world.width / 2,
+        z: config.0.world.height / 2,
+    };
+    let focus = grid_to_world_on_surface(centre, &config.0, &world.generated);
+    spawn_building_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
+    *cooldown_seconds = 0.82;
 }
 
 fn healing_effect_duration(kind: HealingEffectKind) -> f32 {
@@ -4580,7 +5139,7 @@ fn action_cooldown(
     goal: &AgentGoal,
 ) -> f32 {
     let fallback = match goal {
-        AgentGoal::Attack(_) | AgentGoal::Heal(_) => 1.0,
+        AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_) | AgentGoal::Heal(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) => 0.75,
         AgentGoal::Deposit => 0.25,
@@ -4589,7 +5148,7 @@ fn action_cooldown(
     let Some(actor) = simulation.actors.get(actor) else {
         return fallback;
     };
-    if matches!(goal, AgentGoal::Attack(_))
+    if matches!(goal, AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_))
         && let Some(enemy) =
             actor_archetype(content, actor).and_then(|archetype| archetype.enemy.as_ref())
     {
@@ -4597,7 +5156,11 @@ fn action_cooldown(
     }
     let base = if matches!(
         goal,
-        AgentGoal::Attack(_) | AgentGoal::Construct(_) | AgentGoal::Gather(_) | AgentGoal::Heal(_)
+        AgentGoal::Attack(_)
+            | AgentGoal::AttackBuilding(_)
+            | AgentGoal::Construct(_)
+            | AgentGoal::Gather(_)
+            | AgentGoal::Heal(_)
     ) {
         effective_role_stats(content, simulation, actor).map_or(fallback, |stats| {
             milli_units_as_f32(stats.action_milliseconds).max(0.1)
@@ -4627,6 +5190,7 @@ fn move_agents(
         &AgentAnimation,
         &mut Transform,
     )>,
+    buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation.0.tick(time.delta_secs());
@@ -4847,6 +5411,31 @@ fn move_agents(
                                     config.0.world.cell_size,
                                 );
                             }
+                            ActionPresentation::BuildingWork { target, sparks } => {
+                                spawn_building_work_effect(
+                                    &mut commands,
+                                    &render,
+                                    grid_to_world_on_surface(target, &config.0, &world.generated),
+                                    sparks,
+                                    config.0.world.cell_size,
+                                );
+                            }
+                            ActionPresentation::BuildingDestroyed { building, target } => {
+                                let origin =
+                                    grid_to_world_on_surface(target, &config.0, &world.generated);
+                                spawn_building_work_effect(
+                                    &mut commands,
+                                    &render,
+                                    origin,
+                                    true,
+                                    config.0.world.cell_size * 1.5,
+                                );
+                                if let Some((entity, _)) =
+                                    buildings.iter().find(|(_, runtime)| runtime.id == building)
+                                {
+                                    commands.entity(entity).despawn();
+                                }
+                            }
                         }
                     }
                     agent.action_cooldown_seconds =
@@ -4936,8 +5525,10 @@ fn building_construction_stage(health: i32, complete: bool) -> u8 {
 
 #[allow(clippy::type_complexity)]
 fn sync_building_presentation(
+    mut commands: Commands,
     simulation: Res<SimulationRuntime>,
     content: Res<RuntimeContent>,
+    config: Res<RuntimeConfig>,
     render: Res<RenderAssets>,
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
@@ -4967,6 +5558,14 @@ fn sync_building_presentation(
             && presentation.applied_age == age
         {
             continue;
+        }
+        if presentation.applied_level != u16::MAX && state.level > presentation.applied_level {
+            spawn_building_level_up_effect(
+                &mut commands,
+                &render,
+                presentation.base_translation,
+                config.0.world.cell_size,
+            );
         }
         if presentation.applied_age != age {
             if let (Some((_, building)), Some(mut world_asset), Some(asset_server)) =
@@ -6646,6 +7245,7 @@ fn agent_action_animation(
         AgentGoal::Gather(_)
         | AgentGoal::Construct(_)
         | AgentGoal::Attack(_)
+        | AgentGoal::AttackBuilding(_)
         | AgentGoal::Heal(_) => content
             .roles
             .get(&actor.role)
@@ -8668,6 +9268,7 @@ fn spawn_runtime_building(
                 applied_level: u16::MAX,
                 applied_age: age,
             },
+            BuildingDamageEmitter::default(),
             Transform::from_translation(world_position)
                 .with_rotation(rotation)
                 .with_scale(base_scale),
@@ -8691,6 +9292,7 @@ fn spawn_runtime_building(
                 applied_level: u16::MAX,
                 applied_age: age,
             },
+            BuildingDamageEmitter::default(),
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(if building.complete {
                 render.building.clone()
@@ -10698,7 +11300,12 @@ fn update_hud(
         .count();
     let attacking = agents
         .iter()
-        .filter(|agent| matches!(agent.goal, AgentGoal::Attack(_)))
+        .filter(|agent| {
+            matches!(
+                agent.goal,
+                AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_)
+            )
+        })
         .count();
     let healing = agents
         .iter()
@@ -11985,6 +12592,101 @@ mod tests {
     }
 
     #[test]
+    fn battering_ram_targets_and_damages_buildings_from_authored_mask() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let battering_ram = archetype_id_by_source(
+            &content,
+            ArchetypeKind::Enemy,
+            "Enemy_Goblin_BatteringRam.prefab",
+        )
+        .unwrap();
+        let enemy_health = content.archetypes[&battering_ram]
+            .health
+            .as_ref()
+            .and_then(|health| i32::try_from(health.max_health).ok())
+            .expect("battering ram has valid authored health");
+        let enemy_id = StableId::new("actor:battering_ram_test").unwrap();
+        let building_id = StableId::new("building:ram_target").unwrap();
+        let enemy_position = GridPos { x: 22, z: 22 };
+        let building_position = GridPos { x: 23, z: 22 };
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.spawn_enemy(
+            enemy_id.clone(),
+            battering_ram.clone(),
+            enemy_position,
+            enemy_health,
+        ));
+        simulation.buildings.insert(
+            building_id.clone(),
+            BuildingState {
+                id: building_id.clone(),
+                archetype: content.buildings[&StableId::new("building:house").unwrap()]
+                    .archetype
+                    .clone(),
+                position: building_position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+        let (goal, target) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &enemy_id,
+            enemy_position,
+        );
+        assert_eq!(goal, AgentGoal::AttackBuilding(building_id.clone()));
+        assert_eq!(target, enemy_position);
+        let presentation = complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &enemy_id,
+            &goal,
+            enemy_position,
+        );
+        assert!(matches!(
+            presentation,
+            Some(ActionPresentation::BuildingWork {
+                target,
+                sparks: true,
+            }) if target == building_visual_grid(&content, &simulation.buildings[&building_id])
+        ));
+        assert_eq!(
+            simulation.buildings[&building_id].health,
+            BUILDING_MAX_HEALTH - 20
+        );
+        let footprint = content.buildings[&StableId::new("building:house").unwrap()].footprint;
+        let region = building_region(building_position, footprint, &world).unwrap();
+        world.navigation.set_blocked(region, true).unwrap();
+        simulation.buildings.get_mut(&building_id).unwrap().health = 20;
+        let presentation = complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &enemy_id,
+            &goal,
+            enemy_position,
+        );
+        assert!(matches!(
+            presentation,
+            Some(ActionPresentation::BuildingDestroyed {
+                building,
+                target: _,
+            }) if building == building_id
+        ));
+        assert!(!simulation.buildings.contains_key(&building_id));
+        assert!(world.navigation.is_walkable(region.min));
+    }
+
+    #[test]
     fn priest_prioritizes_and_heals_the_nearest_injured_player() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -12443,6 +13145,25 @@ mod tests {
         assert!((building_damage_value(0) - 0.0).abs() < f32::EPSILON);
         assert!((building_damage_value(-100) - 0.0).abs() < f32::EPSILON);
         assert!((building_damage_value(BUILDING_MAX_HEALTH * 2) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn building_effects_preserve_authored_vfx_contracts() {
+        assert!((BUILDING_HIT_SECONDS - 0.5).abs() < f32::EPSILON);
+        assert!((BUILDING_HIT_SMOKE_SPEED - 3.0).abs() < f32::EPSILON);
+        assert!((BUILDING_HIT_SPARK_SPEED - 12.0).abs() < f32::EPSILON);
+        assert!((BUILDING_HIT_SMOKE_SIZE - 0.5).abs() < f32::EPSILON);
+        assert!((BUILDING_HIT_SPARK_SIZE - 0.25).abs() < f32::EPSILON);
+        assert!((BUILDING_LEVEL_UP_SECONDS - 1.5).abs() < f32::EPSILON);
+        assert!((BUILDING_LEVEL_UP_ARROW_SIZE - 0.5).abs() < f32::EPSILON);
+        assert!((BUILDING_LEVEL_UP_TILE_SIZE - 4.0).abs() < f32::EPSILON);
+        assert!((BUILDING_DAMAGED_RADIUS - 1.403_639_8).abs() < f32::EPSILON);
+        assert_eq!(BUILDING_DAMAGED_FIRE_AMOUNT, 128);
+        assert_eq!(BUILDING_DAMAGED_SMOKE_AMOUNT, 200);
+        assert!(building_damage_intensity(BUILDING_MAX_HEALTH, true).abs() < f32::EPSILON);
+        assert!(building_damage_intensity(BUILDING_MAX_HEALTH / 2, false).abs() < f32::EPSILON);
+        assert!(building_damage_intensity(BUILDING_MAX_HEALTH / 2, true) > 0.0);
+        assert!(building_damage_intensity(0, true).abs() < f32::EPSILON);
     }
 
     #[test]

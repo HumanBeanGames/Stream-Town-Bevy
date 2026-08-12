@@ -35,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town
-  economy; exhausted resource visuals are hidden. Content schema 15 converts each role's
+  economy; exhausted resource visuals are hidden. Content schema 16 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -58,7 +58,7 @@ mistaken for production-ready systems.
   shields, and helmets; toggles carry-only props from authoritative inventory;
   and drives translated `CarryWood`/`CarryHip` parameters. The content tool shows
   station masks/ranges/capacities and role equipment bindings.
-- Content schema 15 preserves every role's exact Unity `AnimationName` action
+- Content schema 16 preserves every role's exact Unity `AnimationName` action
   parameter and authored variant count. Live gather, construction, attack, and
   heal goals now drive the converted Player controller's `Action`, role trigger,
   `AnimationIndex`, and remapped `ActionSpeed` parameters, while locomotion,
@@ -111,7 +111,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 15 also promotes Unity `Placeable` and all six technology effect
+  Content schema 16 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -228,7 +228,7 @@ mistaken for production-ready systems.
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
   building storage and role-slot contributions, stations, role target masks, and equipment into
-  422 technology objectives in content schema 15, preserves the remaining typed Unity
+  422 technology objectives in content schema 16, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -326,6 +326,15 @@ mistaken for production-ready systems.
   short-lived ECS trail/impact entities. Melee damage and every projectile
   arrival emit the appropriate physical, arrow, fire, or necrotic impact, with
   a repeatable DirectX 12 smoke field covering all four styles.
+- Content schema 16 promotes every enemy prefab's serialized `TargetSensor`
+  mask into typed target IDs. The live selector now chooses the nearest valid
+  player or building; the battering ram's building-only mask is preserved, and
+  destroyed buildings release their deterministic navigation region. Building
+  construction/repair, enemy hits, upgrades, and damage now drive purpose-built
+  Bevy effects using the Unity VFX Graph values: 0.5-second work smoke/sparks,
+  1.5-second level arrows, and health-scaled persistent fire/smoke over the
+  authored 1.4036398 spawn radius. The existing per-building WGSL
+  `_DestructionValue` response remains the underlying damage material layer.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,

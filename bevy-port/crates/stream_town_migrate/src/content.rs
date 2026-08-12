@@ -791,6 +791,14 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
         .and_then(|value| u32::try_from(value).ok())
         .filter(|value| *value > 0)
         .with_context(|| format!("{} enemy attack amount is invalid", asset.path))?;
+    let sensor = components
+        .clone()
+        .find(|component| component_type(component) == "Sensors.TargetSensor")
+        .with_context(|| format!("{} enemy has no target sensor", asset.path))?;
+    let target_mask = component_field_value(sensor, "_targetMask")
+        .and_then(Value::as_object)
+        .with_context(|| format!("{} enemy target mask is invalid", asset.path))?;
+    let (targets_all, target_kinds) = mask_ids(target_mask, "target")?;
     Ok(Some(EnemyDef {
         enemy_type: stable_id("enemy", &slug(enemy_type))?,
         pool,
@@ -798,6 +806,8 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
         action_amount,
         action_milliseconds: positive_milli(action, "_actionRate")?,
         action_range_milli_cells: positive_milli(action, "_actionRange")?,
+        targets_all,
+        target_kinds,
     }))
 }
 
@@ -2166,12 +2176,29 @@ mod tests {
                         field("_actionRange", Value::from(2.0)),
                     ],
                 ),
+                component(
+                    "Sensors.TargetSensor, Assembly-CSharp",
+                    vec![field(
+                        "_targetMask",
+                        serde_json::json!({"Index": -1, "Name": null, "RawValue": 3841}),
+                    )],
+                ),
             ],
         });
         let converted = enemy_definition(&enemy, &pools).unwrap().unwrap();
         assert_eq!(converted.enemy_type.as_str(), "enemy:goblin");
         assert_eq!(converted.additional_health_milli_per_player, 200);
         assert_eq!(converted.action_milliseconds, 1_000);
+        assert_eq!(
+            converted.target_kinds,
+            BTreeSet::from([
+                stable_id("target", "player").unwrap(),
+                stable_id("target", "building").unwrap(),
+                stable_id("target", "damaged_building").unwrap(),
+                stable_id("target", "construction").unwrap(),
+                stable_id("target", "injured_player").unwrap(),
+            ])
+        );
 
         let mut transform = component(
             "UnityEngine.Transform, UnityEngine.CoreModule",
