@@ -27,3 +27,27 @@ jobs:
       - run: cargo check --workspace --all-targets
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: cargo run -p xtask -- validate
+      - run: cargo run -p xtask -- stress --agents 300
+
+  package-windows:
+    runs-on: windows-latest
+    needs: validate
+    if: github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: bevy-port
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bevy-port
+      - run: cargo run -p xtask -- package-windows --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stream-town-windows-x86_64
+          path: bevy-port/dist/stream-town-windows-x86_64.zip
+          if-no-files-found: error

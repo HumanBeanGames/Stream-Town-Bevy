@@ -23,12 +23,29 @@ enum Command {
         #[arg(long, default_value_t = 300)]
         agents: u32,
     },
+    /// Build and validate a portable Windows release archive.
+    PackageWindows {
+        #[arg(long, default_value = "dist")]
+        output: std::path::PathBuf,
+        #[arg(long)]
+        skip_build: bool,
+    },
 }
 
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Validate => validate(),
         Command::Stress { agents } => stress(agents),
+        Command::PackageWindows { output, skip_build } => {
+            let report = xtask::package_windows(Path::new("."), &output, skip_build)?;
+            println!(
+                "Packaged {} files ({} bytes) at {}",
+                report.files,
+                report.bytes,
+                report.archive.display()
+            );
+            Ok(())
+        }
     }
 }
 

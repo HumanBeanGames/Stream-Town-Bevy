@@ -316,7 +316,16 @@ mistaken for production-ready systems.
   paths. Twitch setup is connected to the OS vault; the general runtime panel
   remains a diagnostic shell rather than a connected control surface.
 - Windows CI covering formatting, compilation, Clippy, tests, and repository
-  validation.
+  validation. The focused tools app now runs repository validation and optimized
+  Windows packaging as real background jobs. The package workflow atomically
+  produces a validated ZIP containing the game/tools executables, runtime
+  assets, README, and GPL license; CI publishes the green archive as an
+  artifact.
+- A measured 300-agent presentation LOD: 16 actors use authored GLB rigs and
+  shared animation graphs while the remaining crowd uses lightweight capsule
+  visuals without changing authoritative gameplay or persistence. The recorded
+  1920×1080 DX12 reference run reached 10.74 ms average and 14.25 ms p95 across
+  559 post-warmup frames on the documented reference machine.
 
 ## Not yet at parity
 
@@ -347,10 +356,12 @@ mistaken for production-ready systems.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
   and customization data now map into native actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
-  layout, live runtime bridging, release packaging, frame capture, and profiling
-  controls.
-- The reference-machine 60 FPS GPU gate, screenshot baselines, launch-through-
-  credits gameplay acceptance suite, and Windows release artifacts.
+  layout, live runtime bridging, integrated frame capture, and profiling
+  controls beyond the command-line GPU harness.
+- Curated screenshot baselines, a launch-through-credits gameplay acceptance
+  suite, signed/notarized distribution, and a hosted Windows release. The
+  unsigned CI/local Windows archive and measured reference-machine 60 FPS gate
+  are now implemented.
 
 ## Validation
 

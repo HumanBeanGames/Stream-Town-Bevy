@@ -30,7 +30,15 @@ cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export
 cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
 cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
+cargo run -p xtask -- package-windows --output dist
 ```
+
+The Windows packager builds optimized game and tools executables, bundles the
+validated runtime assets, README, and GPL license, validates safe archive paths
+and required files, and atomically writes
+`dist/stream-town-windows-x86_64.zip`. The tools Validation tab can launch the
+same repository validator and release-packaging jobs. CI publishes the validated
+ZIP as a branch artifact after the full test job passes.
 
 Generate the ignored neutral Unity export from the repository root with the
 exact editor version recorded by the project:

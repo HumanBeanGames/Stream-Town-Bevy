@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    process::Command,
     sync::{Arc, Mutex, mpsc},
     thread,
 };
@@ -76,6 +78,7 @@ struct ToolState {
     twitch_device: Option<DeviceAuthorization>,
     twitch_validation: Option<TokenValidation>,
     game_master_ids: String,
+    tool_job_events: Option<Arc<Mutex<mpsc::Receiver<ToolJobEvent>>>>,
 }
 
 #[derive(Debug)]
@@ -84,6 +87,12 @@ enum TwitchToolEvent {
     Authorized(TokenValidation),
     Diagnostic(TokenValidation),
     Cleared,
+    Error(String),
+}
+
+#[derive(Debug)]
+enum ToolJobEvent {
+    Finished(String),
     Error(String),
 }
 
@@ -143,6 +152,7 @@ impl Default for ToolState {
             twitch_device: None,
             twitch_validation: None,
             game_master_ids,
+            tool_job_events: None,
         }
     }
 }
@@ -182,6 +192,7 @@ fn tools_ui(
     mut inspector: ResMut<ToolInspector>,
 ) -> Result {
     poll_twitch_tool_events(&mut state);
+    poll_tool_job_events(&mut state);
     let context = contexts.ctx_mut()?;
     let mut viewport_ui = egui::Ui::new(
         context.clone(),
@@ -1138,7 +1149,85 @@ fn validation_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             (_, _, Err(error)) => format!("Presentation catalog error: {error}"),
         };
     }
+    let busy = state.tool_job_events.is_some();
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(!busy, egui::Button::new("Run repository validation"))
+            .clicked()
+        {
+            start_xtask_job(state, "Validation", ["validate"]);
+        }
+        if ui
+            .add_enabled(!busy, egui::Button::new("Build Windows release package"))
+            .clicked()
+        {
+            start_xtask_job(state, "Windows package", ["package-windows"]);
+        }
+    });
     ui.label("Checks include stable IDs, dangling references, technology cycles, GLB hashes/headers, and deterministic baselines.");
+    ui.label("Release packaging builds optimized game/tools executables, includes only runtime assets plus GPL attribution, validates the archive, and writes dist/stream-town-windows-x86_64.zip.");
+}
+
+fn poll_tool_job_events(state: &mut ToolState) {
+    let event = state
+        .tool_job_events
+        .as_ref()
+        .and_then(|receiver| receiver.lock().ok())
+        .and_then(|receiver| receiver.try_recv().ok());
+    match event {
+        Some(ToolJobEvent::Finished(message) | ToolJobEvent::Error(message)) => {
+            state.status = message;
+            state.tool_job_events = None;
+        }
+        None => {}
+    }
+}
+
+fn start_xtask_job<const N: usize>(
+    state: &mut ToolState,
+    label: &'static str,
+    args: [&'static str; N],
+) {
+    let (sender, receiver) = mpsc::channel();
+    state.tool_job_events = Some(Arc::new(Mutex::new(receiver)));
+    state.status = format!("{label} is running...");
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-xtask".to_owned())
+        .spawn(move || {
+            let outcome = Command::new("cargo")
+                .current_dir(&workspace)
+                .arg("run")
+                .arg("-p")
+                .arg("xtask")
+                .arg("--")
+                .args(args)
+                .output();
+            let event = match outcome {
+                Ok(output) if output.status.success() => {
+                    let summary = String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .last()
+                        .unwrap_or("completed successfully")
+                        .to_owned();
+                    ToolJobEvent::Finished(format!("{label} complete: {summary}"))
+                }
+                Ok(output) => {
+                    let error = String::from_utf8_lossy(&output.stderr)
+                        .lines()
+                        .last()
+                        .unwrap_or("unknown error")
+                        .to_owned();
+                    ToolJobEvent::Error(format!("{label} failed: {error}"))
+                }
+                Err(error) => ToolJobEvent::Error(format!("Could not start {label}: {error}")),
+            };
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start {label} worker: {error}");
+        state.tool_job_events = None;
+    }
 }
 
 fn inspector_tab(ui: &mut egui::Ui) {
