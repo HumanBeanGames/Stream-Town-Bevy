@@ -35,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town
-  economy; exhausted resource visuals are hidden. Content schema 9 converts each role's
+  economy; exhausted resource visuals are hidden. Content schema 10 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -70,7 +70,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 9 also promotes Unity `Placeable` and all six technology effect
+  Content schema 10 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -81,6 +81,15 @@ mistaken for production-ready systems.
   Unlocked effects now reduce placement and upgrade costs, cap deposits against
   technology-expanded storage, modify health/movement/action/combat rules, and
   switch constructed GLBs to their age-two scene variants.
+  All 422 objectives in the reachable production technology graph are typed,
+  including build/build-any,
+  collect, kill/kill-any, buy/buy-any, and sell/sell-any targets and amounts. A
+  winning vote starts a persistent town goal instead of unlocking immediately;
+  deposits, completed construction, enemy kills, and the restored `!buy`/`!sell`
+  path advance it, with the technology unlocked only after every objective is
+  complete. Goal progress appears in the HUD, round-trips through native saves,
+  and current legacy JSON/binary objective progress is restored when it matches
+  the converted technology.
   The same schema converts all four reachable `ResourceStorageModifier`
   components: House contributes recruit capacity, while Food/Ore/Wood Storage
   contribute 1,000 units at level one and use the authored 2,000 x level x 3
@@ -133,7 +142,7 @@ mistaken for production-ready systems.
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
   building storage contributions, stations, role target masks, and equipment into
-  content schema 9, preserves the remaining typed Unity
+  422 technology objectives into content schema 10, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -210,7 +219,8 @@ mistaken for production-ready systems.
   production outbound response wording. The authenticated IRC path currently
   executes the complete stable Bevy grammar listed above and relies on
   `twitch-irc` for reconnect and chat rate limiting; Unity's larger ruler,
-  game-master, player-action, trade, and event command surface still remains.
+  game-master, player-action, recruitment, ruler-only enforcement, and event
+  command surface still remains. `!buy` and `!sell` use Unity's authored rates.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of

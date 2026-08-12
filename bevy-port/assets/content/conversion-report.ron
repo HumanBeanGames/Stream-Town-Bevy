@@ -15,10 +15,11 @@
     technology_groups: 20,
     technology_edges: 362,
     technology_roots: 1,
+    objectives: 422,
     warnings: [
         "building footprints use the authored two-unit BuildingPlacer grid; Torch falls back to prefab bounds",
         "prefab archetypes retain spawn-critical component types and converted GLB scene dependencies",
-        "detailed Unity building, role, unlock, and objective fields are retained in source_records",
+        "Unity technology objectives are promoted to typed semantic records; remaining authored fields are retained in source_records",
     ],
     outputs: [
         "assets/content/catalog.ron",

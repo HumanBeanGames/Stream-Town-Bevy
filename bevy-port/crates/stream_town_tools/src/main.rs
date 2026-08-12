@@ -578,6 +578,30 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         });
         ui.label("Description");
         ui.text_edit_multiline(&mut draft.description);
+        if let Some(node) = state.catalog.technology.nodes.get(&draft.id) {
+            ui.label(format!("Authored objectives ({})", node.objectives.len()));
+            for objective_id in &node.objectives {
+                if let Some(objective) = state.catalog.objectives.get(objective_id) {
+                    ui.monospace(format!(
+                        "{objective_id}: {:?} 0/{}{}{}{}",
+                        objective.kind,
+                        objective.required_amount,
+                        objective
+                            .resource
+                            .as_ref()
+                            .map_or_else(String::new, |id| format!(" resource={id}")),
+                        objective
+                            .building
+                            .as_ref()
+                            .map_or_else(String::new, |id| format!(" building={id}")),
+                        objective
+                            .enemy
+                            .as_ref()
+                            .map_or_else(String::new, |id| format!(" enemy={id}")),
+                    ));
+                }
+            }
+        }
         ui.label("Prerequisite stable IDs (comma separated)");
         ui.text_edit_singleline(&mut draft.prerequisites);
         ui.horizontal(|ui| {

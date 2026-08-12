@@ -10,8 +10,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, RoleDef, RoleEquipmentDef, StableId, StationDef,
-    StorageContribution, TechGroup, TechNode, TechTree,
+    BuildingDef, ContentCatalog, ObjectiveDef, ObjectiveKind, RoleDef, RoleEquipmentDef, StableId,
+    StationDef, StorageContribution, TechGroup, TechNode, TechTree,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -44,6 +44,7 @@ pub struct ContentConversionReport {
     pub technology_groups: usize,
     pub technology_edges: usize,
     pub technology_roots: usize,
+    pub objectives: usize,
     pub warnings: Vec<String>,
     pub outputs: Vec<String>,
 }
@@ -374,6 +375,7 @@ fn convert_export(
     }
 
     let mut nodes = BTreeMap::new();
+    let mut objectives = BTreeMap::new();
     let mut groups = BTreeMap::<StableId, TechGroup>::new();
     for guid in &technology_guids {
         let asset = required_guid_asset(&assets_by_guid, guid, TECH_NODE_TYPE)?;
@@ -392,7 +394,9 @@ fn convert_export(
             .nodes
             .push(id.clone());
         let unlocks = generated_record_ids(asset, "<Unlocks>k__BackingField", "unlock")?;
-        let objectives = generated_record_ids(asset, "<Objectives>k__BackingField", "objective")?;
+        let node_objectives = objective_definitions(asset)?;
+        let objective_ids = node_objectives.keys().cloned().collect();
+        objectives.extend(node_objectives);
         nodes.insert(
             id.clone(),
             TechNode {
@@ -412,7 +416,7 @@ fn convert_export(
                 global_stat_boost_percent,
                 role_stat_boost_percent,
                 aged_buildings: aged_buildings(asset)?,
-                objectives,
+                objectives: objective_ids,
                 group: Some(group_id),
                 age: required_enum(asset, "<Age>k__BackingField")?,
                 tier: required_i64(asset, "<Tier>k__BackingField")?
@@ -437,6 +441,7 @@ fn convert_export(
         archetypes,
         buildings,
         roles,
+        objectives,
         technology: TechTree { nodes, groups },
         source_records,
     };
@@ -467,12 +472,13 @@ fn convert_export(
         technology_groups: catalog.technology.groups.len(),
         technology_edges,
         technology_roots,
+        objectives: catalog.objectives.len(),
         warnings: vec![
             "building footprints use the authored two-unit BuildingPlacer grid; Torch falls back to prefab bounds"
                 .to_owned(),
             "prefab archetypes retain spawn-critical component types and converted GLB scene dependencies"
                 .to_owned(),
-            "detailed Unity building, role, unlock, and objective fields are retained in source_records"
+            "Unity technology objectives are promoted to typed semantic records; remaining authored fields are retained in source_records"
                 .to_owned(),
         ],
         outputs: Vec::new(),
@@ -1246,6 +1252,73 @@ fn generated_record_ids(asset: &UnityAsset, prefix: &str, kind: &str) -> Result<
         .collect()
 }
 
+fn objective_definitions(asset: &UnityAsset) -> Result<BTreeMap<StableId, ObjectiveDef>> {
+    let prefix = "<Objectives>k__BackingField";
+    let size = required_u32(asset, &format!("{prefix}.Array.size"))?;
+    let mut objectives = BTreeMap::new();
+    for index in 0..size {
+        let field = format!("{prefix}.Array.data[{index}]");
+        let kind_name = required_enum(asset, &format!("{field}.<ObjectiveType>k__BackingField"))?;
+        let kind = match kind_name.as_str() {
+            "Build" => ObjectiveKind::Build,
+            "Build Any" => ObjectiveKind::BuildAny,
+            "Collect" => ObjectiveKind::Collect,
+            "Kill" => ObjectiveKind::Kill,
+            "Kill Any" => ObjectiveKind::KillAny,
+            "Earn Per Hour" => ObjectiveKind::EarnPerHour,
+            "Sell" => ObjectiveKind::Sell,
+            "Sell Any" => ObjectiveKind::SellAny,
+            "Buy" => ObjectiveKind::Buy,
+            "Buy Any" => ObjectiveKind::BuyAny,
+            unknown => bail!("{} has unsupported objective type {unknown}", asset.path),
+        };
+        let required_amount = required_u32(asset, &format!("{field}.<IntValue>k__BackingField"))?;
+        let float_value = required_f64(asset, &format!("{field}.<FloatValue>k__BackingField"))?;
+        let float_value_milli = (float_value * 1_000.0)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} objective float value is out of range", asset.path))?;
+        let resource = matches!(
+            kind,
+            ObjectiveKind::Collect
+                | ObjectiveKind::EarnPerHour
+                | ObjectiveKind::Sell
+                | ObjectiveKind::Buy
+        )
+        .then(|| {
+            required_enum(asset, &format!("{field}.<ResourceType>k__BackingField"))
+                .and_then(|value| stable_id("resource", &slug(&value)))
+        })
+        .transpose()?;
+        let building = matches!(kind, ObjectiveKind::Build)
+            .then(|| {
+                required_enum(asset, &format!("{field}.<BuildingType>k__BackingField"))
+                    .and_then(|value| stable_id("building", &slug(&value)))
+            })
+            .transpose()?;
+        let enemy = matches!(kind, ObjectiveKind::Kill)
+            .then(|| {
+                required_enum(asset, &format!("{field}.<EnemyType>k__BackingField"))
+                    .and_then(|value| stable_id("enemy", &slug(&value)))
+            })
+            .transpose()?;
+        let id = StableId::new(format!("objective:{}:{index}", asset.guid))?;
+        objectives.insert(
+            id,
+            ObjectiveDef {
+                kind,
+                required_amount,
+                float_value_milli,
+                resource,
+                building,
+                enemy,
+            },
+        );
+    }
+    Ok(objectives)
+}
+
 fn building_level_caps(asset: &UnityAsset) -> Result<BTreeMap<StableId, u16>> {
     let size = required_u32(asset, "<Unlocks>k__BackingField.Array.size")?;
     let mut caps = BTreeMap::new();
@@ -1684,7 +1757,10 @@ mod tests {
                     "<Unlocks>k__BackingField.Array.size",
                     Value::from(if name == "Root" { 6 } else { 0 }),
                 ),
-                field("<Objectives>k__BackingField.Array.size", Value::from(0)),
+                field(
+                    "<Objectives>k__BackingField.Array.size",
+                    Value::from(i32::from(name == "Child")),
+                ),
                 field("<Age>k__BackingField", enum_value("Age 1")),
                 field("<Tier>k__BackingField", Value::from(1)),
                 field("<IsUnlocked>k__BackingField", Value::Bool(name == "Root")),
@@ -1696,6 +1772,26 @@ mod tests {
                     "<Children>k__BackingField.Array.data[0].<NextTech>k__BackingField",
                     reference_value(child, TECH_NODE_TYPE),
                 ));
+            }
+            if name == "Child" {
+                fields.extend([
+                    field(
+                        "<Objectives>k__BackingField.Array.data[0].<ObjectiveType>k__BackingField",
+                        enum_value("Collect"),
+                    ),
+                    field(
+                        "<Objectives>k__BackingField.Array.data[0].<IntValue>k__BackingField",
+                        Value::from(25),
+                    ),
+                    field(
+                        "<Objectives>k__BackingField.Array.data[0].<FloatValue>k__BackingField",
+                        Value::from(0.0),
+                    ),
+                    field(
+                        "<Objectives>k__BackingField.Array.data[0].<ResourceType>k__BackingField",
+                        enum_value("Wood"),
+                    ),
+                ]);
             }
             if name == "Root" {
                 fields.extend([
@@ -1954,6 +2050,7 @@ mod tests {
         assert_eq!(report.technology_nodes, 2);
         assert_eq!(report.technology_edges, 1);
         assert_eq!(report.technology_roots, 1);
+        assert_eq!(report.objectives, 1);
         assert_eq!(catalog.source_records.len(), 4);
         let builder = StableId::new("role:builder").unwrap();
         assert_eq!(catalog.roles[&builder].base_action_amount, 1);
@@ -2015,6 +2112,13 @@ mod tests {
         );
         assert!(root_node.aged_buildings.contains(&town_hall));
         assert_eq!(catalog.technology.nodes[&child].prerequisites, vec![root]);
+        let objective = &catalog.objectives[&catalog.technology.nodes[&child].objectives[0]];
+        assert_eq!(objective.kind, ObjectiveKind::Collect);
+        assert_eq!(objective.required_amount, 25);
+        assert_eq!(
+            objective.resource,
+            Some(StableId::new("resource:wood").unwrap())
+        );
         catalog.validate().unwrap();
 
         let encoded = ron::to_string(&catalog).unwrap();

@@ -101,12 +101,13 @@ fn validate() -> Result<()> {
         archetype_scenes,
         content.buildings.len(),
         content.roles.len(),
+        content.objectives.len(),
         content.technology.nodes.len(),
         content.technology.groups.len(),
         technology_edges,
         technology_roots,
         content.source_records.len(),
-    ) != (9, 215, 288, 26, 15, 363, 20, 362, 1, 404)
+    ) != (10, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -245,7 +246,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 404 semantic records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

@@ -52,8 +52,9 @@ building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's action, XP multiplier,
 level curves, health, defense, movement, carry, resource-affinity, station/target
-masks, all 15 equipment sets, and all four reachable building storage components
-in content schema 9, and follows nested prefabs to
+  masks, all 15 equipment sets, all four reachable building storage components,
+  and 422 typed objectives from the production technology graph in content schema 10,
+  and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
@@ -94,8 +95,8 @@ broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
-stable chat grammar executes `!join`, `!role`, `!experience`/`!exp`, `!build`, `!upgrade`, `!vote`,
-`!event`, `!save`, and `!help` with catalog/prerequisite validation and
+  stable chat grammar executes `!join`, `!role`, `!experience`/`!exp`, `!build`, `!upgrade`,
+  `!buy`, `!sell`, `!vote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
 HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
 spawn the converted building GLB, and round-trip through native saves. New
@@ -108,8 +109,10 @@ contributions, modify actor health/movement/action/combat percentages, and selec
 age-two GLB variants for constructed buildings. Building placement also respects
 the converted Unity `Placeable` flag and the
 persisted technology set: the authored initial technologies expose Lumbermill,
-Stonemason, Tower, and Windmill, while later votes expose the buildings named by
-their `Unlock Building` effects. A semicolon-delimited
+  Stonemason, Tower, and Windmill, while later votes expose the buildings named by
+  their `Unlock Building` effects. Winning votes with authored objectives now
+  start persistent town goals; gathering deposits, construction, combat, buying,
+  and selling update HUD-visible progress before the technology unlocks. A semicolon-delimited
 `STREAM_TOWN_DEBUG_COMMANDS` value can inject the same path
 for repeatable diagnostics.
 

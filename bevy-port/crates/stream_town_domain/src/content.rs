@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 9;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 10;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -17,6 +17,8 @@ pub struct ContentCatalog {
     pub archetypes: BTreeMap<StableId, ArchetypeDef>,
     pub buildings: BTreeMap<StableId, BuildingDef>,
     pub roles: BTreeMap<StableId, RoleDef>,
+    #[serde(default)]
+    pub objectives: BTreeMap<StableId, ObjectiveDef>,
     pub technology: TechTree,
     #[serde(default)]
     pub source_records: BTreeMap<StableId, AuthoredRecord>,
@@ -148,6 +150,36 @@ pub struct RoleDef {
     pub granted_abilities: Vec<StableId>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectiveKind {
+    Build,
+    BuildAny,
+    Collect,
+    Kill,
+    KillAny,
+    EarnPerHour,
+    Sell,
+    SellAny,
+    Buy,
+    BuyAny,
+}
+
+/// An authored technology objective. Optional targets are populated only for
+/// objective kinds that use them, avoiding Unity's misleading enum defaults.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ObjectiveDef {
+    pub kind: ObjectiveKind,
+    pub required_amount: u32,
+    pub float_value_milli: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<StableId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub building: Option<StableId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enemy: Option<StableId>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct TechTree {
     pub nodes: BTreeMap<StableId, TechNode>,
@@ -277,6 +309,18 @@ pub enum ContentError {
         technology: StableId,
         role: StableId,
     },
+    #[error("technology {technology} references missing objective {objective}")]
+    MissingTechnologyObjective {
+        technology: StableId,
+        objective: StableId,
+    },
+    #[error("objective {objective} references missing building {building}")]
+    MissingObjectiveBuilding {
+        objective: StableId,
+        building: StableId,
+    },
+    #[error("objective {0} has a zero required amount")]
+    InvalidObjectiveAmount(StableId),
 }
 
 impl ContentCatalog {
@@ -361,6 +405,19 @@ impl ContentCatalog {
                 }
             }
         }
+        for (id, objective) in &self.objectives {
+            if objective.required_amount == 0 {
+                return Err(ContentError::InvalidObjectiveAmount(id.clone()));
+            }
+            if let Some(building) = &objective.building
+                && !self.buildings.contains_key(building)
+            {
+                return Err(ContentError::MissingObjectiveBuilding {
+                    objective: id.clone(),
+                    building: building.clone(),
+                });
+            }
+        }
         for (technology_id, technology) in &self.technology.nodes {
             for building in technology
                 .building_level_caps
@@ -381,6 +438,14 @@ impl ContentCatalog {
                     return Err(ContentError::MissingTechnologyRole {
                         technology: technology_id.clone(),
                         role: role.clone(),
+                    });
+                }
+            }
+            for objective in &technology.objectives {
+                if !self.objectives.contains_key(objective) {
+                    return Err(ContentError::MissingTechnologyObjective {
+                        technology: technology_id.clone(),
+                        objective: objective.clone(),
                     });
                 }
             }

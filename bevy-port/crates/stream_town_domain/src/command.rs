@@ -11,6 +11,8 @@ pub enum ChatCommand {
     SelectRole(StableId),
     Build(StableId),
     Upgrade(StableId),
+    Buy { amount: u32, resource: StableId },
+    Sell { amount: u32, resource: StableId },
     Vote(StableId),
     TriggerEvent(StableId),
     Experience,
@@ -30,6 +32,8 @@ pub enum CommandParseError {
     TooManyArguments,
     #[error("invalid content identifier: {0}")]
     InvalidId(String),
+    #[error("trade amount must be a positive integer")]
+    InvalidAmount,
 }
 
 impl FromStr for ChatCommand {
@@ -42,23 +46,55 @@ impl FromStr for ChatCommand {
             .strip_prefix('!')
             .ok_or(CommandParseError::MissingPrefix)?
             .to_ascii_lowercase();
-        let argument = parts.next();
-        if parts.next().is_some() {
-            return Err(CommandParseError::TooManyArguments);
-        }
         match command.as_str() {
-            "join" => no_argument(argument, Self::Join),
-            "experience" | "exp" => no_argument(argument, Self::Experience),
-            "save" => no_argument(argument, Self::Save),
-            "help" => no_argument(argument, Self::Help),
-            "role" => with_id(&command, argument, Self::SelectRole),
-            "build" => with_id(&command, argument, Self::Build),
-            "upgrade" | "level" => with_id(&command, argument, Self::Upgrade),
-            "vote" => with_id(&command, argument, Self::Vote),
-            "event" => with_id(&command, argument, Self::TriggerEvent),
-            _ => Err(CommandParseError::Unknown(command)),
+            "buy" | "sell" => {
+                let amount = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?
+                    .parse::<u32>()
+                    .map_err(|_| CommandParseError::InvalidAmount)?;
+                if amount == 0 {
+                    return Err(CommandParseError::InvalidAmount);
+                }
+                let resource = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                if command == "buy" {
+                    Ok(Self::Buy { amount, resource })
+                } else {
+                    Ok(Self::Sell { amount, resource })
+                }
+            }
+            _ => {
+                let argument = parts.next();
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                match command.as_str() {
+                    "join" => no_argument(argument, Self::Join),
+                    "experience" | "exp" => no_argument(argument, Self::Experience),
+                    "save" => no_argument(argument, Self::Save),
+                    "help" => no_argument(argument, Self::Help),
+                    "role" => with_id(&command, argument, Self::SelectRole),
+                    "build" => with_id(&command, argument, Self::Build),
+                    "upgrade" | "level" => with_id(&command, argument, Self::Upgrade),
+                    "vote" => with_id(&command, argument, Self::Vote),
+                    "event" => with_id(&command, argument, Self::TriggerEvent),
+                    _ => Err(CommandParseError::Unknown(command)),
+                }
+            }
         }
     }
+}
+
+fn content_id(value: &str) -> Result<StableId, CommandParseError> {
+    StableId::new(value.to_ascii_lowercase().replace(' ', "_"))
+        .map_err(|error| CommandParseError::InvalidId(error.to_string()))
 }
 
 fn no_argument(
@@ -101,6 +137,20 @@ mod tests {
         assert_eq!(
             "!upgrade house".parse(),
             Ok(ChatCommand::Upgrade(StableId::new("house").unwrap()))
+        );
+        assert_eq!(
+            "!buy 25 wood".parse(),
+            Ok(ChatCommand::Buy {
+                amount: 25,
+                resource: StableId::new("wood").unwrap(),
+            })
+        );
+        assert_eq!(
+            "!sell 10 resource:ore".parse(),
+            Ok(ChatCommand::Sell {
+                amount: 10,
+                resource: StableId::new("resource:ore").unwrap(),
+            })
         );
         assert!(matches!(
             "build house".parse::<ChatCommand>(),

@@ -12,8 +12,9 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ActorKind, ActorState, BuildingState, GameConfig, GridPos, LegacyMigrationMetadata,
-    MAX_ROLE_LEVEL, NativeSaveStore, RoleProgress, SavedActor, SavedTerrainMesh, StableId,
+    ActorKind, ActorState, BuildingState, ContentCatalog, GameConfig, GridPos,
+    LegacyMigrationMetadata, MAX_ROLE_LEVEL, NativeSaveStore, ObjectiveDef, ObjectiveKind,
+    ObjectiveProgress, RoleProgress, SavedActor, SavedTerrainMesh, StableId, TownGoalState,
     WorldSimulation, WorldSnapshot, generate_world,
 };
 
@@ -71,7 +72,31 @@ struct LegacyDecodedSave {
     world_age_seconds: f64,
     town_resources: BTreeMap<String, u32>,
     unlocked_technology: BTreeSet<String>,
+    active_goal: Option<LegacyGoal>,
 }
+
+#[derive(Clone, Debug)]
+struct LegacyGoal {
+    technology: String,
+    objectives: Vec<LegacyObjective>,
+}
+
+#[derive(Clone, Debug)]
+struct LegacyObjective {
+    objective_type: String,
+    resource_type: String,
+    building_type: String,
+    enemy_type: String,
+    required_amount: u32,
+    amount: u32,
+}
+
+type LegacyWorldState = (
+    f64,
+    BTreeMap<String, u32>,
+    BTreeSet<String>,
+    Option<LegacyGoal>,
+);
 
 pub(crate) fn import_save(
     source: &Path,
@@ -242,7 +267,7 @@ impl<'a> BinaryParser<'a> {
             self.world_generation(schema_version)?;
         self.buildings()?;
         self.enemies()?;
-        let (world_age_seconds, town_resources, unlocked_technology) =
+        let (world_age_seconds, town_resources, unlocked_technology, active_goal) =
             self.world_state(schema_version)?;
         self.players(schema_version)?;
         ensure!(
@@ -263,6 +288,7 @@ impl<'a> BinaryParser<'a> {
             world_age_seconds,
             town_resources,
             unlocked_technology,
+            active_goal,
         })
     }
 
@@ -492,14 +518,11 @@ impl<'a> BinaryParser<'a> {
         Ok(())
     }
 
-    fn world_state(
-        &mut self,
-        schema: u32,
-    ) -> Result<(f64, BTreeMap<String, u32>, BTreeSet<String>)> {
+    fn world_state(&mut self, schema: u32) -> Result<LegacyWorldState> {
         let world_age = f64::from(self.f32()?);
         let _last_event = self.i32()?;
         let _time_since_last_event = self.i32()?;
-        let (_tech_available, unlocked) = self.tech_tree(schema)?;
+        let (_tech_available, unlocked, active_goal) = self.tech_tree(schema)?;
         let mut resources = BTreeMap::new();
         if let Some(count) = self.count(MAX_SMALL_COLLECTION)? {
             for _ in 0..count {
@@ -515,10 +538,10 @@ impl<'a> BinaryParser<'a> {
         let _is_current_ruler = self.boolean()?;
         let _until_vote = self.f32()?;
         let _ruler_name = self.string()?;
-        Ok((world_age.max(0.0), resources, unlocked))
+        Ok((world_age.max(0.0), resources, unlocked, active_goal))
     }
 
-    fn tech_tree(&mut self, schema: u32) -> Result<(bool, BTreeSet<String>)> {
+    fn tech_tree(&mut self, schema: u32) -> Result<(bool, BTreeSet<String>, Option<LegacyGoal>)> {
         let available = self.boolean()?;
         let ids = self
             .list(MAX_SMALL_COLLECTION, Self::string)?
@@ -526,14 +549,18 @@ impl<'a> BinaryParser<'a> {
         let positional = self
             .list(MAX_SMALL_COLLECTION, Self::boolean)?
             .unwrap_or_default();
-        let _current = self.string()?;
+        let current = self.string()?.unwrap_or_default();
+        let mut objectives = Vec::new();
         if let Some(objective_count) = self.count(MAX_SMALL_COLLECTION)? {
             for _ in 0..objective_count {
-                for _ in 0..4 {
-                    let _ = self.string()?;
-                }
-                let _required = self.i32()?;
-                let _amount = self.i32()?;
+                objectives.push(LegacyObjective {
+                    objective_type: self.string()?.unwrap_or_default(),
+                    resource_type: self.string()?.unwrap_or_default(),
+                    building_type: self.string()?.unwrap_or_default(),
+                    enemy_type: self.string()?.unwrap_or_default(),
+                    required_amount: nonnegative_u32(self.i32()?),
+                    amount: nonnegative_u32(self.i32()?),
+                });
             }
         }
         if schema >= 3 && self.boolean()? {
@@ -553,7 +580,11 @@ impl<'a> BinaryParser<'a> {
                 unlocked.insert(format!("legacy_index_{index}"));
             }
         }
-        Ok((available, unlocked))
+        let active_goal = (!current.is_empty() && !objectives.is_empty()).then_some(LegacyGoal {
+            technology: current,
+            objectives,
+        });
+        Ok((available, unlocked, active_goal))
     }
 
     fn players(&mut self, schema: u32) -> Result<()> {
@@ -772,6 +803,7 @@ fn decode_json(bytes: &[u8]) -> Result<LegacyDecodedSave> {
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect();
+    let active_goal = json_active_goal(world);
     Ok(LegacyDecodedSave {
         schema_version,
         container_version: None,
@@ -782,6 +814,29 @@ fn decode_json(bytes: &[u8]) -> Result<LegacyDecodedSave> {
         world_age_seconds,
         town_resources,
         unlocked_technology,
+        active_goal,
+    })
+}
+
+fn json_active_goal(world: &Value) -> Option<LegacyGoal> {
+    let tree = world.get("TechTree")?;
+    let technology = tree.get("CurrentTechName")?.as_str()?.to_owned();
+    let objectives = tree
+        .get("CurrentTechData")?
+        .as_array()?
+        .iter()
+        .map(|objective| LegacyObjective {
+            objective_type: json_string(objective, "ObjectiveType", ""),
+            resource_type: json_string(objective, "ResourceType", ""),
+            building_type: json_string(objective, "BuildingType", ""),
+            enemy_type: json_string(objective, "EnemyType", ""),
+            required_amount: nonnegative_u32(json_i32_default(objective, "RequiredAmount")),
+            amount: nonnegative_u32(json_i32_default(objective, "Amount")),
+        })
+        .collect::<Vec<_>>();
+    (!technology.is_empty() && !objectives.is_empty()).then_some(LegacyGoal {
+        technology,
+        objectives,
     })
 }
 
@@ -1200,6 +1255,13 @@ fn legacy_role_name(value: i32) -> String {
 }
 
 fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnapshot, u32)> {
+    let content: ContentCatalog = ron::from_str(include_str!(
+        "../../../assets/content/catalog.ron"
+    ))
+    .context("checked-in content catalog could not be parsed for legacy reference mapping")?;
+    content
+        .validate()
+        .context("checked-in content catalog is invalid")?;
     let mut world_config = config.world.clone();
     if let Some(seed) = decoded.terrain_seed {
         world_config.seed = u64::from(u32::from_ne_bytes(seed.to_ne_bytes()));
@@ -1215,7 +1277,12 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
     for technology in &decoded.unlocked_technology {
         simulation
             .unlocked_technology
-            .insert(content_id("technology", technology)?);
+            .insert(resolve_legacy_technology(&content, technology)?);
+    }
+    if let Some(goal) = &decoded.active_goal
+        && let Some(restored) = restore_legacy_goal(&content, goal)
+    {
+        simulation.active_goals.push(restored);
     }
 
     let mut actors = Vec::with_capacity(decoded.entities.len());
@@ -1388,6 +1455,82 @@ fn content_id(prefix: &str, value: &str) -> Result<StableId> {
     StableId::new(format!("{prefix}:{component}")).map_err(Into::into)
 }
 
+fn resolve_legacy_technology(content: &ContentCatalog, name: &str) -> Result<StableId> {
+    content
+        .technology
+        .nodes
+        .iter()
+        .find(|(_, technology)| technology.display_name.eq_ignore_ascii_case(name))
+        .map_or_else(|| content_id("technology", name), |(id, _)| Ok(id.clone()))
+}
+
+fn restore_legacy_goal(content: &ContentCatalog, legacy: &LegacyGoal) -> Option<TownGoalState> {
+    let (technology, node) = content
+        .technology
+        .nodes
+        .iter()
+        .find(|(_, node)| node.display_name.eq_ignore_ascii_case(&legacy.technology))?;
+    let mut unmatched = node.objectives.clone();
+    let mut objectives = Vec::new();
+    for saved in &legacy.objectives {
+        let index = unmatched.iter().position(|objective| {
+            content
+                .objectives
+                .get(objective)
+                .is_some_and(|definition| legacy_objective_matches(definition, saved))
+        })?;
+        let objective = unmatched.remove(index);
+        objectives.push(ObjectiveProgress {
+            objective,
+            amount: saved.amount.min(saved.required_amount),
+            required_amount: saved.required_amount.max(1),
+        });
+    }
+    (!objectives.is_empty()).then_some(TownGoalState {
+        technology: technology.clone(),
+        objectives,
+    })
+}
+
+fn legacy_objective_matches(definition: &ObjectiveDef, legacy: &LegacyObjective) -> bool {
+    let kind = match legacy
+        .objective_type
+        .to_ascii_lowercase()
+        .replace(' ', "_")
+        .as_str()
+    {
+        "build" => ObjectiveKind::Build,
+        "buildany" | "build_any" => ObjectiveKind::BuildAny,
+        "collect" => ObjectiveKind::Collect,
+        "kill" => ObjectiveKind::Kill,
+        "killany" | "kill_any" => ObjectiveKind::KillAny,
+        "earnperhour" | "earn_per_hour" => ObjectiveKind::EarnPerHour,
+        "sell" => ObjectiveKind::Sell,
+        "sellany" | "sell_any" => ObjectiveKind::SellAny,
+        "buy" => ObjectiveKind::Buy,
+        "buyany" | "buy_any" => ObjectiveKind::BuyAny,
+        _ => return false,
+    };
+    definition.kind == kind
+        && objective_target_matches(
+            definition.resource.as_ref(),
+            "resource",
+            &legacy.resource_type,
+        )
+        && objective_target_matches(
+            definition.building.as_ref(),
+            "building",
+            &legacy.building_type,
+        )
+        && objective_target_matches(definition.enemy.as_ref(), "enemy", &legacy.enemy_type)
+}
+
+fn objective_target_matches(target: Option<&StableId>, prefix: &str, legacy: &str) -> bool {
+    target.is_none_or(|target| {
+        content_id(prefix, legacy).is_ok_and(|legacy_target| legacy_target == *target)
+    })
+}
+
 fn sanitize_component(value: &str, maximum: usize) -> String {
     let mut output = String::with_capacity(value.len().min(maximum));
     let mut previous_separator = false;
@@ -1530,6 +1673,7 @@ mod tests {
             world_age_seconds: 12.0,
             town_resources: BTreeMap::new(),
             unlocked_technology: BTreeSet::new(),
+            active_goal: None,
         };
         let (snapshot, relocated) = convert(decoded, &GameConfig::default()).unwrap();
         assert_eq!(relocated, 1);
@@ -1582,7 +1726,18 @@ mod tests {
                 "EnemySaveData": [],
                 "WorldSaveData": {
                     "WorldAgeInSeconds": 99.0,
-                    "TechTree": { "UnlockedTechIds": ["Forestry"] },
+                    "TechTree": {
+                        "UnlockedTechIds": ["Forestry"],
+                        "CurrentTechName": "Upgrade1Logger",
+                        "CurrentTechData": [{
+                            "ObjectiveType": "Collect",
+                            "ResourceType": "Wood",
+                            "BuildingType": "Townhall",
+                            "EnemyType": "Goblin",
+                            "RequiredAmount": 10,
+                            "Amount": 4
+                        }]
+                    },
                     "TownResources": [{ "ResourceType": "Wood", "Amount": 12 }]
                 }
             },
@@ -1606,6 +1761,10 @@ mod tests {
         assert_eq!(decoded.terrain_seed, Some(77));
         assert_eq!(decoded.entities.len(), 2);
         assert!(decoded.unlocked_technology.contains("Forestry"));
+        assert_eq!(
+            decoded.active_goal.as_ref().unwrap().objectives[0].amount,
+            4
+        );
         assert_eq!(
             decoded
                 .entities
@@ -1635,6 +1794,12 @@ mod tests {
         );
         let station = actor.station.as_ref().unwrap();
         assert!(snapshot.simulation.buildings.contains_key(station));
+        assert_eq!(snapshot.simulation.active_goals.len(), 1);
+        assert_eq!(snapshot.simulation.active_goals[0].objectives[0].amount, 4);
+        assert_eq!(
+            snapshot.simulation.active_goals[0].objectives[0].required_amount,
+            10
+        );
     }
 
     fn binary_fixture(schema: u32, trailer: i32) -> Vec<u8> {

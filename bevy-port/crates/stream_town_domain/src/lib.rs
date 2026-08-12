@@ -19,8 +19,8 @@ pub use command::{ChatCommand, CommandParseError};
 pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, RoleDef, RoleEquipmentDef, StationDef,
-    StorageContribution, TechGroup, TechNode, TechTree,
+    BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, ObjectiveDef, ObjectiveKind, RoleDef,
+    RoleEquipmentDef, StationDef, StorageContribution, TechGroup, TechNode, TechTree,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
@@ -36,7 +36,8 @@ pub use save::{
     NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,
 };
 pub use simulation::{
-    ActorState, BUILDING_MAX_HEALTH, BuildingState, MAX_ROLE_LEVEL, RoleProgress, Season,
-    SimulationError, TechVote, TownEvent, Weather, WorldSimulation, required_role_experience,
+    ActorState, BUILDING_MAX_HEALTH, BuildingState, MAX_ROLE_LEVEL, ObjectiveEvent,
+    ObjectiveProgress, RoleProgress, Season, SimulationError, TechVote, TownEvent, TownGoalState,
+    Weather, WorldSimulation, required_role_experience,
 };
 pub use world::{GeneratedResource, GeneratedWorld, generate_world};

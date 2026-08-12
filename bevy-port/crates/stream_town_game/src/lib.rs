@@ -27,10 +27,12 @@ use stream_town_domain::{
     ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
     BuildingDef, BuildingState, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, PresentationCatalog,
-    RoleEquipmentDef, SavedActor, Season, StableId, StationDef, TownEvent, Weather,
-    WorldSimulation, WorldSnapshot, generate_world,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, ObjectiveEvent,
+    PresentationCatalog, RoleEquipmentDef, SavedActor, Season, StableId, StationDef, TownEvent,
+    Weather, WorldSimulation, WorldSnapshot, generate_world,
 };
+
+const MAX_TOWN_GOALS: usize = 2;
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
@@ -1807,8 +1809,31 @@ fn complete_agent_goal(
                     )
                 })
                 .collect();
+            let resources_before = simulation.town_resources.clone();
             match simulation.deposit_all_with_capacities(actor_id, &capacities) {
-                Ok(amount) => amount > 0,
+                Ok(amount) => {
+                    if amount > 0 {
+                        let gained: Vec<_> = simulation
+                            .town_resources
+                            .iter()
+                            .filter_map(|(resource, current)| {
+                                let previous =
+                                    resources_before.get(resource).copied().unwrap_or_default();
+                                current
+                                    .saturating_sub(previous)
+                                    .gt(&0)
+                                    .then(|| (resource.clone(), current.saturating_sub(previous)))
+                            })
+                            .collect();
+                        for (resource, amount) in gained {
+                            let _ = simulation.record_objective_event(
+                                &content.objectives,
+                                &ObjectiveEvent::ResourceGained { resource, amount },
+                            );
+                        }
+                    }
+                    amount > 0
+                }
                 Err(error) => {
                     warn!(actor = %actor_id, %error, "resource deposit action failed");
                     false
@@ -1829,6 +1854,7 @@ fn complete_agent_goal(
             {
                 return;
             }
+            let target_is_enemy = target.role.as_str() == "role:enemy";
             let damage = if attacker.role.as_str() == "role:enemy" {
                 12
             } else {
@@ -1838,7 +1864,17 @@ fn complete_agent_goal(
                 .map_or(0, |stats| stats.damage_reduction_percent);
             let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
             match simulation.damage_actor(target_id, damage) {
-                Ok(_) => damage > 0,
+                Ok(killed) => {
+                    if killed && target_is_enemy {
+                        let _ = simulation.record_objective_event(
+                            &content.objectives,
+                            &ObjectiveEvent::EnemyKilled(
+                                StableId::new("enemy:goblin").expect("static stable ID"),
+                            ),
+                        );
+                    }
+                    damage > 0
+                }
                 Err(error) => {
                     warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
                     false
@@ -1850,8 +1886,27 @@ fn complete_agent_goal(
                 .buildings
                 .get(building_id)
                 .is_some_and(|building| !building.complete);
+            let archetype = simulation
+                .buildings
+                .get(building_id)
+                .map(|building| building.archetype.clone());
             match simulation.work_on_building(building_id, action_amount) {
-                Ok(_) => was_incomplete && action_amount > 0,
+                Ok(complete) => {
+                    if was_incomplete
+                        && complete
+                        && let Some(building) = archetype.as_ref().and_then(|archetype| {
+                            content.buildings.iter().find_map(|(id, definition)| {
+                                (definition.archetype == *archetype).then_some(id.clone())
+                            })
+                        })
+                    {
+                        let _ = simulation.record_objective_event(
+                            &content.objectives,
+                            &ObjectiveEvent::BuildingBuilt(building),
+                        );
+                    }
+                    was_incomplete && action_amount > 0
+                }
                 Err(error) => {
                     warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
                     false
@@ -1930,6 +1985,24 @@ fn move_agents(
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation.0.tick(time.delta_secs());
+    if let Some(technology) = simulation
+        .0
+        .active_vote
+        .as_ref()
+        .filter(|vote| vote.remaining_seconds <= f32::EPSILON)
+        .map(|vote| vote.technology.clone())
+    {
+        let objectives = content
+            .0
+            .technology
+            .nodes
+            .get(&technology)
+            .map_or(&[][..], |node| node.objectives.as_slice());
+        let _ =
+            simulation
+                .0
+                .resolve_technology_vote(objectives, &content.0.objectives, MAX_TOWN_GOALS);
+    }
     if let Some(weather) = debug_weather_override() {
         simulation.0.weather = weather;
     }
@@ -4182,6 +4255,63 @@ fn process_injected_commands(
                         .map_err(|error| error.to_string())
                 })
             }
+            ChatCommand::Sell { amount, resource } => {
+                let resource = prefixed_id(resource, "resource:")
+                    .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
+                resource.and_then(|resource| {
+                    simulation
+                        .0
+                        .sell_resource(&resource, *amount)
+                        .map(|(sold, gold)| {
+                            let _ = simulation.0.record_objective_event(
+                                &content.0.objectives,
+                                &ObjectiveEvent::ResourceGained {
+                                    resource: StableId::new("resource:gold")
+                                        .expect("static stable ID"),
+                                    amount: gold,
+                                },
+                            );
+                            let _ = simulation.0.record_objective_event(
+                                &content.0.objectives,
+                                &ObjectiveEvent::ResourceSold {
+                                    resource: resource.clone(),
+                                    amount: sold,
+                                },
+                            );
+                            format!("sold {sold} {resource} for {gold} gold")
+                        })
+                        .map_err(|error| error.to_string())
+                })
+            }
+            ChatCommand::Buy { amount, resource } => {
+                let resource = prefixed_id(resource, "resource:")
+                    .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
+                resource.and_then(|resource| {
+                    let capacity =
+                        resource_storage_capacity(&config.0, &content.0, &simulation.0, &resource);
+                    simulation
+                        .0
+                        .buy_resource(resource.clone(), *amount, capacity)
+                        .map(|(bought, gold)| {
+                            let _ = simulation.0.record_objective_event(
+                                &content.0.objectives,
+                                &ObjectiveEvent::ResourceGained {
+                                    resource: resource.clone(),
+                                    amount: bought,
+                                },
+                            );
+                            let _ = simulation.0.record_objective_event(
+                                &content.0.objectives,
+                                &ObjectiveEvent::ResourceBought {
+                                    resource: resource.clone(),
+                                    amount: bought,
+                                },
+                            );
+                            format!("bought {bought} {resource} for {gold} gold")
+                        })
+                        .map_err(|error| error.to_string())
+                })
+            }
             ChatCommand::Vote(requested) => {
                 let technology = resolve_technology_id(&content.0, requested)
                     .ok_or_else(|| format!("unknown technology {}", requested.as_str()));
@@ -4189,6 +4319,9 @@ fn process_injected_commands(
                     let node = &content.0.technology.nodes[&technology];
                     if node.unavailable {
                         return Err(format!("{} is unavailable", node.display_name));
+                    }
+                    if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
+                        return Err("the town already has the maximum active goals".to_owned());
                     }
                     if simulation.0.unlocked_technology.contains(&technology) {
                         return Err(format!("{} is already unlocked", node.display_name));
@@ -4252,7 +4385,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !vote <technology>, !event <event>, !save, !help"
+                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy <amount> <resource>, !sell <amount> <resource>, !vote <technology>, !event <event>, !save, !help"
                     .to_owned(),
             ),
         };
@@ -4270,12 +4403,17 @@ fn process_injected_commands(
 fn update_hud(
     stats: Res<SessionStats>,
     twitch: Res<TwitchConnection>,
+    content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     feedback: Res<CommandFeedback>,
     agents: Query<&Agent>,
     mut hud: Single<&mut Text, With<Hud>>,
 ) {
-    if !stats.is_changed() && !twitch.is_changed() && !feedback.is_changed() {
+    if !stats.is_changed()
+        && !twitch.is_changed()
+        && !feedback.is_changed()
+        && !simulation.is_changed()
+    {
         return;
     }
     let first_id = agents
@@ -4317,7 +4455,7 @@ fn update_hud(
         .filter(|actor| !actor.alive)
         .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | Goals: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -4329,8 +4467,39 @@ fn update_hud(
         town_resource_amount(&simulation.0, "resource:gold"),
         town_resource_amount(&simulation.0, "resource:ore"),
         town_resource_amount(&simulation.0, "resource:wood"),
+        town_goal_status(&content.0, &simulation.0),
         feedback.0,
     );
+}
+
+fn town_goal_status(content: &ContentCatalog, simulation: &WorldSimulation) -> String {
+    let Some(goal) = simulation.active_goals.first() else {
+        return "none".to_owned();
+    };
+    let name = content
+        .technology
+        .nodes
+        .get(&goal.technology)
+        .map_or(goal.technology.as_str(), |technology| {
+            technology.display_name.as_str()
+        });
+    let progress = goal
+        .objectives
+        .iter()
+        .filter_map(|progress| {
+            content
+                .objectives
+                .get(&progress.objective)
+                .map(|definition| {
+                    format!(
+                        "{:?} {}/{}",
+                        definition.kind, progress.amount, progress.required_amount
+                    )
+                })
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name} [{progress}]")
 }
 
 fn town_resource_amount(simulation: &WorldSimulation, resource: &str) -> u32 {

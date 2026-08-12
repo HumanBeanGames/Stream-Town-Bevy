@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{GridPos, StableId};
+use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
 pub const MAX_ROLE_LEVEL: u16 = 99;
@@ -83,6 +83,28 @@ pub struct TechVote {
     pub votes: BTreeMap<StableId, bool>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ObjectiveProgress {
+    pub objective: StableId,
+    pub amount: u32,
+    pub required_amount: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TownGoalState {
+    pub technology: StableId,
+    pub objectives: Vec<ObjectiveProgress>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObjectiveEvent {
+    BuildingBuilt(StableId),
+    ResourceGained { resource: StableId, amount: u32 },
+    EnemyKilled(StableId),
+    ResourceSold { resource: StableId, amount: u32 },
+    ResourceBought { resource: StableId, amount: u32 },
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct WorldSimulation {
     pub schema_version: u32,
@@ -96,6 +118,8 @@ pub struct WorldSimulation {
     pub buildings: BTreeMap<StableId, BuildingState>,
     pub unlocked_technology: BTreeSet<StableId>,
     pub active_vote: Option<TechVote>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_goals: Vec<TownGoalState>,
     pub active_event: Option<TownEvent>,
 }
 
@@ -127,6 +151,8 @@ pub enum SimulationError {
     AlreadyVoted(StableId),
     #[error("trade amount must be non-zero")]
     EmptyTrade,
+    #[error("resource {0} cannot be traded")]
+    InvalidTradeResource(StableId),
 }
 
 impl WorldSimulation {
@@ -144,6 +170,7 @@ impl WorldSimulation {
             buildings: BTreeMap::new(),
             unlocked_technology: BTreeSet::new(),
             active_vote: None,
+            active_goals: Vec::new(),
             active_event: None,
         }
     }
@@ -377,6 +404,90 @@ impl WorldSimulation {
         Ok(())
     }
 
+    /// Resolves an expired vote. A successful vote starts its objectives; the
+    /// technology unlock is intentionally deferred until the goal completes.
+    pub fn resolve_technology_vote(
+        &mut self,
+        objective_ids: &[StableId],
+        definitions: &BTreeMap<StableId, ObjectiveDef>,
+        max_goals: usize,
+    ) -> Option<StableId> {
+        let vote = self.active_vote.as_ref()?;
+        if vote.remaining_seconds > f32::EPSILON {
+            return None;
+        }
+        let approvals = vote.votes.values().filter(|approve| **approve).count();
+        let rejections = vote.votes.len().saturating_sub(approvals);
+        let technology = vote.technology.clone();
+        if approvals > rejections
+            && !objective_ids.is_empty()
+            && self.active_goals.len() >= max_goals
+        {
+            return None;
+        }
+        self.active_vote = None;
+        if approvals <= rejections {
+            return None;
+        }
+        if objective_ids.is_empty() {
+            self.unlocked_technology.insert(technology.clone());
+            return Some(technology);
+        }
+        self.active_goals.push(TownGoalState {
+            technology: technology.clone(),
+            objectives: objective_ids
+                .iter()
+                .filter_map(|objective| {
+                    definitions
+                        .get(objective)
+                        .map(|definition| ObjectiveProgress {
+                            objective: objective.clone(),
+                            amount: 0,
+                            required_amount: definition.required_amount,
+                        })
+                })
+                .collect(),
+        });
+        Some(technology)
+    }
+
+    pub fn record_objective_event(
+        &mut self,
+        definitions: &BTreeMap<StableId, ObjectiveDef>,
+        event: &ObjectiveEvent,
+    ) -> Vec<StableId> {
+        for goal in &mut self.active_goals {
+            for progress in &mut goal.objectives {
+                let Some(definition) = definitions.get(&progress.objective) else {
+                    continue;
+                };
+                let increment = objective_increment(definition, progress.required_amount, event);
+                progress.amount = progress
+                    .amount
+                    .saturating_add(increment)
+                    .min(progress.required_amount);
+            }
+        }
+        let completed: Vec<_> = self
+            .active_goals
+            .iter()
+            .filter(|goal| {
+                goal.objectives.iter().all(|progress| {
+                    definitions
+                        .get(&progress.objective)
+                        .is_some_and(|_| progress.amount >= progress.required_amount)
+                })
+            })
+            .map(|goal| goal.technology.clone())
+            .collect();
+        if !completed.is_empty() {
+            self.active_goals
+                .retain(|goal| !completed.contains(&goal.technology));
+            self.unlocked_technology.extend(completed.iter().cloned());
+        }
+        completed
+    }
+
     pub fn trade(
         &mut self,
         offered_resource: &StableId,
@@ -408,6 +519,88 @@ impl WorldSimulation {
         Ok(())
     }
 
+    /// Applies Unity's authored 0.25 sell rate and 0.5 sell tax.
+    pub fn sell_resource(
+        &mut self,
+        resource: &StableId,
+        requested_amount: u32,
+    ) -> Result<(u32, u32), SimulationError> {
+        validate_trade_resource(resource)?;
+        if requested_amount == 0 {
+            return Err(SimulationError::EmptyTrade);
+        }
+        let available = self
+            .town_resources
+            .get(resource)
+            .copied()
+            .unwrap_or_default();
+        let sold = requested_amount.min(available);
+        if sold == 0 {
+            return Err(SimulationError::InsufficientResource {
+                resource: resource.clone(),
+                required: requested_amount,
+                available,
+            });
+        }
+        *self
+            .town_resources
+            .get_mut(resource)
+            .expect("positive availability guarantees a resource entry") -= sold;
+        // Unity truncates after the base rate and again after tax.
+        let gross = sold / 4;
+        let gold = gross.saturating_sub(gross / 2);
+        *self
+            .town_resources
+            .entry(StableId::new("resource:gold").expect("static stable ID"))
+            .or_default() += gold;
+        Ok((sold, gold))
+    }
+
+    /// Applies Unity's authored 0.25 rate divided by its 0.6 buy tax, bounded
+    /// by available gold and deterministic storage capacity.
+    pub fn buy_resource(
+        &mut self,
+        resource: StableId,
+        requested_amount: u32,
+        capacity: u32,
+    ) -> Result<(u32, u32), SimulationError> {
+        validate_trade_resource(&resource)?;
+        if requested_amount == 0 {
+            return Err(SimulationError::EmptyTrade);
+        }
+        let current = self
+            .town_resources
+            .get(&resource)
+            .copied()
+            .unwrap_or_default();
+        let available_gold = self
+            .town_resources
+            .get(&StableId::new("resource:gold").expect("static stable ID"))
+            .copied()
+            .unwrap_or_default();
+        let storage_limited = requested_amount.min(capacity.saturating_sub(current));
+        let mut bought = storage_limited;
+        let mut cost = bought.saturating_mul(5) / 12;
+        if cost > available_gold {
+            bought =
+                u32::try_from(u64::from(available_gold).saturating_mul(12) / 5).unwrap_or(u32::MAX);
+            cost = bought.saturating_mul(5) / 12;
+        }
+        if bought == 0 {
+            return Err(SimulationError::InsufficientResource {
+                resource: StableId::new("resource:gold").expect("static stable ID"),
+                required: 1,
+                available: available_gold,
+            });
+        }
+        *self
+            .town_resources
+            .entry(StableId::new("resource:gold").expect("static stable ID"))
+            .or_default() -= cost;
+        *self.town_resources.entry(resource).or_default() += bought;
+        Ok((bought, cost))
+    }
+
     pub fn trigger_event(&mut self, event: TownEvent) {
         self.active_event = Some(event);
     }
@@ -431,14 +624,6 @@ impl WorldSimulation {
 
         if let Some(vote) = &mut self.active_vote {
             vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
-            if vote.remaining_seconds <= f32::EPSILON {
-                let approvals = vote.votes.values().filter(|vote| **vote).count();
-                let rejections = vote.votes.len().saturating_sub(approvals);
-                if approvals > rejections {
-                    self.unlocked_technology.insert(vote.technology.clone());
-                }
-                self.active_vote = None;
-            }
         }
     }
 
@@ -470,6 +655,61 @@ impl WorldSimulation {
                 .expect("validated resource cost") -= *required;
         }
         Ok(())
+    }
+}
+
+fn validate_trade_resource(resource: &StableId) -> Result<(), SimulationError> {
+    if matches!(
+        resource.as_str(),
+        "resource:wood" | "resource:ore" | "resource:food"
+    ) {
+        Ok(())
+    } else {
+        Err(SimulationError::InvalidTradeResource(resource.clone()))
+    }
+}
+
+fn objective_increment(
+    definition: &ObjectiveDef,
+    required_amount: u32,
+    event: &ObjectiveEvent,
+) -> u32 {
+    match (definition.kind, event) {
+        (ObjectiveKind::Build, ObjectiveEvent::BuildingBuilt(building))
+            if definition.building.as_ref() == Some(building) =>
+        {
+            1
+        }
+        (ObjectiveKind::BuildAny, ObjectiveEvent::BuildingBuilt(_))
+        | (ObjectiveKind::KillAny, ObjectiveEvent::EnemyKilled(_)) => 1,
+        (ObjectiveKind::Collect, ObjectiveEvent::ResourceGained { resource, amount })
+            if definition.resource.as_ref() == Some(resource) =>
+        {
+            *amount
+        }
+        (ObjectiveKind::EarnPerHour, ObjectiveEvent::ResourceGained { resource, .. })
+            if definition.resource.as_ref() == Some(resource) =>
+        {
+            required_amount
+        }
+        (ObjectiveKind::Kill, ObjectiveEvent::EnemyKilled(enemy))
+            if definition.enemy.as_ref() == Some(enemy) =>
+        {
+            1
+        }
+        (ObjectiveKind::Sell, ObjectiveEvent::ResourceSold { resource, amount })
+            if definition.resource.as_ref() == Some(resource) =>
+        {
+            *amount
+        }
+        (ObjectiveKind::SellAny, ObjectiveEvent::ResourceSold { amount, .. })
+        | (ObjectiveKind::BuyAny, ObjectiveEvent::ResourceBought { amount, .. }) => *amount,
+        (ObjectiveKind::Buy, ObjectiveEvent::ResourceBought { resource, amount })
+            if definition.resource.as_ref() == Some(resource) =>
+        {
+            *amount
+        }
+        _ => 0,
     }
 }
 
@@ -549,6 +789,7 @@ mod tests {
             .unwrap();
         simulation.cast_vote(&player, true).unwrap();
         simulation.tick(10.0);
+        simulation.resolve_technology_vote(&[], &BTreeMap::new(), 2);
         assert!(
             simulation
                 .unlocked_technology
@@ -572,6 +813,105 @@ mod tests {
     }
 
     #[test]
+    fn technology_vote_starts_persistent_goal_and_unlocks_after_all_objectives() {
+        let mut simulation = WorldSimulation::new(42);
+        let player = id("actor:viewer");
+        let technology = id("tech:forestry");
+        let collect = id("objective:collect_wood");
+        let build = id("objective:build_any");
+        let wood = id("resource:wood");
+        assert!(simulation.join_player(player.clone(), GridPos { x: 0, z: 0 }));
+        simulation
+            .start_technology_vote(technology.clone(), 1.0)
+            .unwrap();
+        simulation.cast_vote(&player, true).unwrap();
+        simulation.tick(1.0);
+        assert_eq!(
+            simulation.resolve_technology_vote(
+                &[collect.clone(), build.clone()],
+                &BTreeMap::from([
+                    (
+                        collect.clone(),
+                        ObjectiveDef {
+                            kind: ObjectiveKind::Collect,
+                            required_amount: 10,
+                            float_value_milli: 0,
+                            resource: Some(wood.clone()),
+                            building: None,
+                            enemy: None,
+                        },
+                    ),
+                    (
+                        build.clone(),
+                        ObjectiveDef {
+                            kind: ObjectiveKind::BuildAny,
+                            required_amount: 1,
+                            float_value_milli: 0,
+                            resource: None,
+                            building: None,
+                            enemy: None,
+                        },
+                    ),
+                ]),
+                2,
+            ),
+            Some(technology.clone())
+        );
+        assert!(!simulation.unlocked_technology.contains(&technology));
+
+        let definitions = BTreeMap::from([
+            (
+                collect,
+                ObjectiveDef {
+                    kind: ObjectiveKind::Collect,
+                    required_amount: 10,
+                    float_value_milli: 0,
+                    resource: Some(wood.clone()),
+                    building: None,
+                    enemy: None,
+                },
+            ),
+            (
+                build,
+                ObjectiveDef {
+                    kind: ObjectiveKind::BuildAny,
+                    required_amount: 1,
+                    float_value_milli: 0,
+                    resource: None,
+                    building: None,
+                    enemy: None,
+                },
+            ),
+        ]);
+        assert!(
+            simulation
+                .record_objective_event(
+                    &definitions,
+                    &ObjectiveEvent::ResourceGained {
+                        resource: wood,
+                        amount: 10,
+                    },
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            simulation.record_objective_event(
+                &definitions,
+                &ObjectiveEvent::BuildingBuilt(id("building:house")),
+            ),
+            vec![technology.clone()]
+        );
+        assert!(simulation.active_goals.is_empty());
+        assert!(simulation.unlocked_technology.contains(&technology));
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap(),
+            simulation
+        );
+    }
+
+    #[test]
     fn capped_deposit_preserves_inventory_overflow() {
         let mut simulation = WorldSimulation::new(42);
         let player = id("twitch:viewer");
@@ -585,5 +925,26 @@ mod tests {
         assert_eq!(deposited, 10);
         assert_eq!(simulation.town_resources[&wood], 100);
         assert_eq!(simulation.actors[&player].inventory[&wood], 15);
+    }
+
+    #[test]
+    fn authored_trade_rates_clamp_to_stock_gold_and_capacity() {
+        let mut simulation = WorldSimulation::new(42);
+        let wood = id("resource:wood");
+        let ore = id("resource:ore");
+        let gold = id("resource:gold");
+        simulation.town_resources.insert(wood.clone(), 100);
+        simulation.town_resources.insert(gold.clone(), 10);
+
+        assert_eq!(simulation.sell_resource(&wood, 40), Ok((40, 5)));
+        assert_eq!(simulation.town_resources[&wood], 60);
+        assert_eq!(simulation.town_resources[&gold], 15);
+        assert_eq!(simulation.buy_resource(ore.clone(), 100, 20), Ok((20, 8)));
+        assert_eq!(simulation.town_resources[&ore], 20);
+        assert_eq!(simulation.town_resources[&gold], 7);
+        assert!(matches!(
+            simulation.sell_resource(&gold, 1),
+            Err(SimulationError::InvalidTradeResource(_))
+        ));
     }
 }
