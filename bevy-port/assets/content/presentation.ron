@@ -1,5 +1,5 @@
 (
-    schema_version: 10,
+    schema_version: 11,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -812,6 +812,7 @@
             perceptual_roughness: 1.0,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
                 "_AlphaClip": 0.0,
@@ -859,6 +860,12 @@
             alpha_mode: opaque,
             textures: {
                 "_Misc_Noises_Texture_01": "texture:854c813354f78c447a56eed49c7fc29c",
+            },
+            texture_transforms: {
+                "_Misc_Noises_Texture_01": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 0.0,
@@ -909,6 +916,16 @@
             textures: {
                 "_MainTexture": "texture:854c813354f78c447a56eed49c7fc29c",
                 "_Texture0": "texture:854c813354f78c447a56eed49c7fc29c",
+            },
+            texture_transforms: {
+                "_MainTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_Texture0": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AutumnPower": 0.0,
@@ -967,6 +984,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: blend,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_AlphaToMask": 0.0,
@@ -1025,6 +1043,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_BlendHeight": 1.0,
                 "_BumpScale": 1.0,
@@ -1077,6 +1096,20 @@
                 "_MainTex": "texture:1b30082104b5358478b36284b51ced67",
                 "_MainTexture": "texture:1b30082104b5358478b36284b51ced67",
             },
+            texture_transforms: {
+                "_BaseMap": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_MainTex": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_MainTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+            },
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_Blend": 0.0,
@@ -1120,6 +1153,12 @@
             alpha_mode: mask,
             textures: {
                 "_BaseMap": "texture:249b56713c41a9441a7e577522b22d64",
+            },
+            texture_transforms: {
+                "_BaseMap": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 1.0,
@@ -1184,6 +1223,12 @@
             textures: {
                 "_Texture0": "texture:1b30082104b5358478b36284b51ced67",
             },
+            texture_transforms: {
+                "_Texture0": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+            },
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_Blend": 0.0,
@@ -1235,6 +1280,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_AtmosphereThickness": 0.93,
@@ -1283,6 +1329,12 @@
             textures: {
                 "_NoiseTexture": "texture:1b30082104b5358478b36284b51ced67",
             },
+            texture_transforms: {
+                "_NoiseTexture": (
+                    scale: (100.0, 100.0),
+                    offset: (0.0, 0.0),
+                ),
+            },
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_Blend": 0.0,
@@ -1329,6 +1381,16 @@
             textures: {
                 "_BaseMap": "texture:91119041de0e63347aabc5c0326e5a4b",
                 "_MainTex": "texture:91119041de0e63347aabc5c0326e5a4b",
+            },
+            texture_transforms: {
+                "_BaseMap": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_MainTex": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
@@ -1377,6 +1439,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_BlendHeight": 1.0,
                 "_BumpScale": 1.0,
@@ -1426,6 +1489,12 @@
             alpha_mode: opaque,
             textures: {
                 "_TextureSample0": "texture:1b30082104b5358478b36284b51ced67",
+            },
+            texture_transforms: {
+                "_TextureSample0": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 0.0,
@@ -1486,6 +1555,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_BlendHeight": 1.0,
                 "_BumpScale": 1.0,
@@ -1534,6 +1604,7 @@
             perceptual_roughness: 1.0,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
                 "_AlphaClip": 0.0,
@@ -1578,6 +1649,7 @@
             perceptual_roughness: 1.0,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_BumpScale": 1.0,
                 "_DetailNormalMapScale": 1.0,
@@ -1607,6 +1679,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_BlendHeight": -0.5,
                 "_BumpScale": 1.0,
@@ -1655,6 +1728,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_Blend": 0.0,
@@ -1699,6 +1773,16 @@
             textures: {
                 "_MainTexture": "texture:1b30082104b5358478b36284b51ced67",
                 "_NoiseTexture": "texture:854c813354f78c447a56eed49c7fc29c",
+            },
+            texture_transforms: {
+                "_MainTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_NoiseTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 0.0,
@@ -1751,6 +1835,16 @@
                 "_MainGameTexture_01": "texture:1b30082104b5358478b36284b51ced67",
                 "_Misc_Noises_Texture_01": "texture:854c813354f78c447a56eed49c7fc29c",
             },
+            texture_transforms: {
+                "_MainGameTexture_01": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_Misc_Noises_Texture_01": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+            },
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_Blend": 0.0,
@@ -1796,6 +1890,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: blend,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_ASEOutlineWidth": 0.0,
                 "_Alpha": 0.568,
@@ -1832,6 +1927,12 @@
             alpha_mode: opaque,
             textures: {
                 "_Texture0": "texture:1b30082104b5358478b36284b51ced67",
+            },
+            texture_transforms: {
+                "_Texture0": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 0.0,
@@ -1884,6 +1985,7 @@
             perceptual_roughness: 1.0,
             alpha_mode: blend,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
                 "_AlphaClip": 0.0,
@@ -1929,6 +2031,12 @@
             alpha_mode: opaque,
             textures: {
                 "_Texture0": "texture:1b30082104b5358478b36284b51ced67",
+            },
+            texture_transforms: {
+                "_Texture0": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 0.0,
@@ -1983,6 +2091,16 @@
             textures: {
                 "_MainTexture": "texture:1b30082104b5358478b36284b51ced67",
                 "_NoiseTexture": "texture:854c813354f78c447a56eed49c7fc29c",
+            },
+            texture_transforms: {
+                "_MainTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_NoiseTexture": (
+                    scale: (0.5, 0.5),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_Alpha": 1.0,
@@ -2069,6 +2187,7 @@
             perceptual_roughness: 1.0,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
                 "_AlphaClip": 0.0,
@@ -2118,6 +2237,16 @@
                 "_BaseMap": "texture:1b30082104b5358478b36284b51ced67",
                 "_MainTex": "texture:1b30082104b5358478b36284b51ced67",
             },
+            texture_transforms: {
+                "_BaseMap": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_MainTex": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+            },
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
                 "_AlphaClip": 0.0,
@@ -2163,6 +2292,12 @@
             alpha_mode: opaque,
             textures: {
                 "_Misc_Noises_Texture_01": "texture:854c813354f78c447a56eed49c7fc29c",
+            },
+            texture_transforms: {
+                "_Misc_Noises_Texture_01": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AlphaClip": 0.0,
@@ -2211,6 +2346,24 @@
                 "_MasterTexture": "texture:1b30082104b5358478b36284b51ced67",
                 "_NoiseTexture": "texture:854c813354f78c447a56eed49c7fc29c",
                 "_WaterNormal": "texture:e2fc4084ba465c5499792ab5dc578fa8",
+            },
+            texture_transforms: {
+                "_MainTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_MasterTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_NoiseTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_WaterNormal": (
+                    scale: (81.2, 200.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_Alpha": 0.5,
@@ -2306,6 +2459,7 @@
             perceptual_roughness: 1.0,
             alpha_mode: opaque,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_BumpScale": 1.0,
                 "_DetailNormalMapScale": 1.0,
@@ -2337,6 +2491,16 @@
             textures: {
                 "_BaseMap": "texture:8a170c65750d749149170f25544ac422",
                 "_MainTex": "texture:8a170c65750d749149170f25544ac422",
+            },
+            texture_transforms: {
+                "_BaseMap": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_MainTex": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_AddPrecomputedVelocity": 0.0,
@@ -2382,6 +2546,7 @@
             perceptual_roughness: 0.5,
             alpha_mode: blend,
             textures: {},
+            texture_transforms: {},
             custom_properties: {
                 "_AlphaClip": 0.0,
                 "_AlphaToMask": 0.0,
@@ -2443,6 +2608,20 @@
                 "_MainTexture": "texture:1b30082104b5358478b36284b51ced67",
                 "_Texture0": "texture:1b30082104b5358478b36284b51ced67",
                 "_characterTexture": "texture:1b30082104b5358478b36284b51ced67",
+            },
+            texture_transforms: {
+                "_MainTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_Texture0": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
+                "_characterTexture": (
+                    scale: (1.0, 1.0),
+                    offset: (0.0, 0.0),
+                ),
             },
             custom_properties: {
                 "_ASEOutlineWidth": 0.00007,

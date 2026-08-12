@@ -222,6 +222,11 @@ fn validate() -> Result<()> {
         .values()
         .map(|material| material.custom_vectors.len())
         .sum::<usize>();
+    let material_texture_transforms = presentation
+        .materials
+        .values()
+        .map(|material| material.texture_transforms.len())
+        .sum::<usize>();
     if (
         presentation.schema_version,
         presentation.textures.len(),
@@ -238,12 +243,13 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (10, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
+    ) != (11, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
         || (fixed_transitions, offset_transitions) != (166, 2)
         || weighted_property_keys != 0
         || material_vector_properties != 141
+        || material_texture_transforms != 32
         || (presentation_state_machines, presentation_layers) != (45, 33)
         || presentation.avatar_masks.len() != 3
         || presentation

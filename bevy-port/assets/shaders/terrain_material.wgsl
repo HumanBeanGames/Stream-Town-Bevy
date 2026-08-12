@@ -11,6 +11,7 @@ struct TerrainMaterialUniform {
     grass_color_b: vec4<f32>,
     season_tint: vec4<f32>,
     texture_uv_blend_tint: vec4<f32>,
+    grid_scale_offset: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -41,7 +42,12 @@ fn fragment(
         terrain_material.grass_color_b,
         height_blend,
     );
-    let grid_uv = fract(in.world_position.xz * terrain_material.texture_uv_blend_tint.xy);
+    let grid_uv = fract(
+        in.world_position.xz
+            * terrain_material.texture_uv_blend_tint.xy
+            * terrain_material.grid_scale_offset.xy
+            + terrain_material.grid_scale_offset.zw,
+    );
     let grid = textureSample(grid_texture, grid_sampler, grid_uv).g;
     let authored_grid = mix(color_a, color_b, grid);
     let broad_noise = textureSample(

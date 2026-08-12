@@ -13,6 +13,8 @@ struct WaterMaterialUniform {
     wind_speed_noise_alpha: vec4<f32>,
     scale_foam_ice: vec4<f32>,
     season_tint: vec4<f32>,
+    main_scale_offset: vec4<f32>,
+    noise_scale_offset: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -36,9 +38,16 @@ fn fragment(
     let time = view_bindings::globals.time;
     let scale = water_material.scale_foam_ice.x;
     let world_uv = in.world_position.xz / scale;
-    let primary_uv = fract(world_uv + wind * time);
+    let primary_uv = fract(
+        (world_uv + wind * time) * water_material.main_scale_offset.xy
+            + water_material.main_scale_offset.zw,
+    );
     let secondary_uv = fract(
-        in.world_position.xz / 94.0 + (vec2<f32>(1.0, 1.0) - wind) * 0.01 * time,
+        (
+            in.world_position.xz / 94.0
+                + (vec2<f32>(1.0, 1.0) - wind) * 0.01 * time
+        ) * water_material.main_scale_offset.xy
+            + water_material.main_scale_offset.zw,
     );
     let primary = textureSample(main_texture, main_sampler, primary_uv).a;
     let secondary = textureSample(main_texture, main_sampler, secondary_uv).a;
@@ -48,7 +57,11 @@ fn fragment(
     let broad = textureSample(
         noise_texture,
         noise_sampler,
-        fract(in.world_position.xz * 0.002 + wind * time * 0.005),
+        fract(
+            (in.world_position.xz * 0.002 + wind * time * 0.005)
+                * water_material.noise_scale_offset.xy
+                + water_material.noise_scale_offset.zw,
+        ),
     );
     var color = mix(water_material.deep_color, water_material.surface_color, broad.g);
     color = mix(color, vec4<f32>(1.0, 1.0, 1.0, 0.0), clamp(wind_noise, 0.0, 1.0));
@@ -57,12 +70,24 @@ fn fragment(
     let foam_a = textureSample(
         noise_texture,
         noise_sampler,
-        fract(in.world_position.xz * foam_scale + wind * time * water_material.wind_speed_noise_alpha.z),
+        fract(
+            (
+                in.world_position.xz * foam_scale
+                    + wind * time * water_material.wind_speed_noise_alpha.z
+            ) * water_material.noise_scale_offset.xy
+                + water_material.noise_scale_offset.zw,
+        ),
     ).a;
     let foam_b = textureSample(
         noise_texture,
         noise_sampler,
-        fract(in.world_position.zx * foam_scale - wind * time * water_material.wind_speed_noise_alpha.z),
+        fract(
+            (
+                in.world_position.zx * foam_scale
+                    - wind * time * water_material.wind_speed_noise_alpha.z
+            ) * water_material.noise_scale_offset.xy
+                + water_material.noise_scale_offset.zw,
+        ),
     ).a;
     let foam = smoothstep(1.35, 1.75, foam_a + foam_b);
     color = mix(color, water_material.foam_color, foam);

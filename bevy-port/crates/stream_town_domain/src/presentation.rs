@@ -62,12 +62,30 @@ pub struct MaterialDef {
     pub alpha_mode: MaterialAlphaMode,
     #[serde(default)]
     pub textures: BTreeMap<String, StableId>,
+    /// Unity texture-environment tiling and offset, keyed by shader property.
+    #[serde(default)]
+    pub texture_transforms: BTreeMap<String, TextureTransform>,
     /// Unity properties that need a custom WGSL material rather than Bevy PBR.
     #[serde(default)]
     pub custom_properties: BTreeMap<String, f32>,
     /// Unity color/vector properties retained for custom WGSL materials.
     #[serde(default)]
     pub custom_vectors: BTreeMap<String, [f32; 4]>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TextureTransform {
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+}
+
+impl Default for TextureTransform {
+    fn default() -> Self {
+        Self {
+            scale: [1.0; 2],
+            offset: [0.0; 2],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -676,6 +694,22 @@ impl PresentationCatalog {
                     property: property.clone(),
                 });
             }
+            if let Some(property) =
+                material
+                    .texture_transforms
+                    .iter()
+                    .find_map(|(property, transform)| {
+                        (!material.textures.contains_key(property)
+                            || !transform.scale.into_iter().all(f32::is_finite)
+                            || !transform.offset.into_iter().all(f32::is_finite))
+                        .then_some(property)
+                    })
+            {
+                return Err(PresentationError::InvalidMaterialParameter {
+                    material: id.clone(),
+                    property: property.clone(),
+                });
+            }
             for texture in material.textures.values() {
                 if !self.textures.contains_key(texture) {
                     return Err(PresentationError::MissingTexture {
@@ -1148,6 +1182,7 @@ mod tests {
                     perceptual_roughness: 1.0,
                     alpha_mode: MaterialAlphaMode::Opaque,
                     textures: BTreeMap::from([("_MainTex".into(), missing.clone())]),
+                    texture_transforms: BTreeMap::new(),
                     custom_properties: BTreeMap::new(),
                     custom_vectors: BTreeMap::new(),
                 },
@@ -1317,6 +1352,7 @@ mod tests {
             perceptual_roughness: 1.0,
             alpha_mode: MaterialAlphaMode::Opaque,
             textures: BTreeMap::new(),
+            texture_transforms: BTreeMap::new(),
             custom_properties: BTreeMap::new(),
             custom_vectors: BTreeMap::new(),
         };

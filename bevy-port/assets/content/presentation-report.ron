@@ -1,10 +1,11 @@
 (
-    schema_version: 10,
+    schema_version: 11,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
     custom_shader_materials: 33,
     material_vector_properties: 141,
+    material_texture_transforms: 32,
     material_prefab_bindings: 141,
     material_slots: 181,
     model_material_bindings: 241,

@@ -63,10 +63,10 @@ caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
 The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions with 141 retained
-Unity vector/color shader parameters, 75 clip records,
+Unity vector/color shader parameters and 32 texture transforms, 75 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 10 also
+`.anim` files into 1,196 stable transform tracks. Presentation schema 11 also
 retains 110 component/UI property curves with 261 keys across 18 clips, including
 the four transform-free clips, plus all ten authored animation events, and
 fixed/normalized duration plus destination offset for all 166 transitions. It retains

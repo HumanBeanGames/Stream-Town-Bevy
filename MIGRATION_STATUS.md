@@ -79,7 +79,7 @@ mistaken for production-ready systems.
   targets become Bevy animation mask groups. Character's Top `Carry`/`CarryHip`
   state machine follows live inventory parameters but, matching its source
   controller, its authored zero weight gives it no pose influence.
-- Presentation schema 10 retains 110 Unity float-property curves with 261 keys
+- Presentation schema 11 retains 110 Unity float-property curves with 261 keys
   across 18 clips and all ten authored `PlayRoleActionAudio` events. The runtime
   samples constant, unweighted Hermite, and weighted Bezier segments (all 261
   shipping keys are currently unweighted); the Credits state uses the
@@ -231,12 +231,13 @@ mistaken for production-ready systems.
 - A versioned presentation RON converter and YAML fallback that packages all
   133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
   materials with shader source, PBR approximations, texture slots, and custom
-  shader properties, including 141 authored vector/color parameters, and
+  shader properties, including 141 authored vector/color parameters and 32
+  scale/offset transforms for reachable texture slots, and
   translates all 31 Animator controllers into 94 stable
   states, 166 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
   files into 1,196 stable transform tracks with rig-relative reference poses.
-  Presentation schema 10 additionally retains all 110 component/UI property
+  Presentation schema 11 additionally retains all 110 component/UI property
   curves (261 keys) across 18 clips—including the four transform-free clips—and
   all ten authored animation events. The runtime dispatches each converted
   `PlayRoleActionAudio` event exactly once per crossed clip cycle and plays a

@@ -37,7 +37,7 @@ pub use presentation::{
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
     AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
-    PresentationError, RendererMaterialBinding, TextureDef,
+    PresentationError, RendererMaterialBinding, TextureDef, TextureTransform,
 };
 pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,

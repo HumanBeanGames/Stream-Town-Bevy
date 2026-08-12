@@ -20,6 +20,7 @@ use bevy::{
     color::LinearRgba,
     ecs::system::SystemParam,
     gltf::{GltfMaterialName, GltfMeshName},
+    math::Affine2,
     mesh::Indices,
     pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
@@ -232,6 +233,7 @@ struct TerrainMaterialUniform {
     grass_color_b: Vec4,
     season_tint: Vec4,
     texture_uv_blend_tint: Vec4,
+    grid_scale_offset: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -260,6 +262,8 @@ struct WaterMaterialUniform {
     wind_speed_noise_alpha: Vec4,
     scale_foam_ice: Vec4,
     season_tint: Vec4,
+    main_scale_offset: Vec4,
+    noise_scale_offset: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -971,10 +975,14 @@ fn standard_material(
     presentation: &PresentationCatalog,
     asset_server: Option<&AssetServer>,
 ) -> StandardMaterial {
+    let primary_texture = primary_material_texture_entry(material, presentation);
     let base_color_texture = asset_server.and_then(|asset_server| {
-        primary_material_texture(material, presentation)
-            .map(|path| asset_server.load(path.to_owned()))
+        primary_texture.map(|(_, path)| asset_server.load(path.to_owned()))
     });
+    let texture_transform = primary_texture
+        .and_then(|(slot, _)| material.texture_transforms.get(slot))
+        .copied()
+        .unwrap_or_default();
     let alpha_mode = match material.alpha_mode {
         AuthoredAlphaMode::Opaque => AlphaMode::Opaque,
         AuthoredAlphaMode::Mask => AlphaMode::Mask(0.5),
@@ -997,6 +1005,11 @@ fn standard_material(
         metallic: material.metallic,
         perceptual_roughness: material.perceptual_roughness,
         alpha_mode,
+        uv_transform: Affine2::from_scale_angle_translation(
+            Vec2::from_array(texture_transform.scale),
+            0.0,
+            Vec2::from_array(texture_transform.offset),
+        ),
         ..default()
     }
 }
@@ -1023,6 +1036,10 @@ fn terrain_material(
             .unwrap_or(fallback)
     };
     let texture_uv = vector("_TextureUV", [0.5, 0.5, 0.0, 0.0]);
+    let grid_transform = authored
+        .and_then(|material| material.texture_transforms.get("_MainTexture"))
+        .copied()
+        .unwrap_or_default();
     let grid_texture = authored.and_then(|material| {
         asset_server.and_then(|asset_server| {
             material
@@ -1056,6 +1073,12 @@ fn terrain_material(
                     texture_uv[1],
                     f32::from(config.world.water_level_centimetres) * 0.01,
                     scalar("_BlendHeight", 1.0).max(0.01),
+                ),
+                grid_scale_offset: Vec4::new(
+                    grid_transform.scale[0],
+                    grid_transform.scale[1],
+                    grid_transform.offset[0],
+                    grid_transform.offset[1],
                 ),
             },
             grid_texture,
@@ -1095,6 +1118,14 @@ fn water_material(
         })
     };
     let wind = vector("_windDirection", [1.0, 0.0, 0.0, 0.0]);
+    let main_transform = authored
+        .and_then(|material| material.texture_transforms.get("_MainTexture"))
+        .copied()
+        .unwrap_or_default();
+    let noise_transform = authored
+        .and_then(|material| material.texture_transforms.get("_NoiseTexture"))
+        .copied()
+        .unwrap_or_default();
     let surface = Vec4::from_array(vector("_SurfaceColor", [0.071, 0.867, 0.886, 1.0]));
     WaterMaterial {
         base: StandardMaterial {
@@ -1127,6 +1158,18 @@ fn water_material(
                     0.47 / surface.z.max(0.001),
                     0.62,
                 ),
+                main_scale_offset: Vec4::new(
+                    main_transform.scale[0],
+                    main_transform.scale[1],
+                    main_transform.offset[0],
+                    main_transform.offset[1],
+                ),
+                noise_scale_offset: Vec4::new(
+                    noise_transform.scale[0],
+                    noise_transform.scale[1],
+                    noise_transform.offset[0],
+                    noise_transform.offset[1],
+                ),
             },
             main_texture: texture("_MainTexture"),
             noise_texture: texture("_NoiseTexture"),
@@ -1134,10 +1177,10 @@ fn water_material(
     }
 }
 
-fn primary_material_texture<'a>(
+fn primary_material_texture_entry<'a>(
     material: &'a MaterialDef,
     presentation: &'a PresentationCatalog,
-) -> Option<&'a str> {
+) -> Option<(&'a str, &'a str)> {
     const PRIORITY: [&str; 8] = [
         "_BaseMap",
         "_BaseColorMap",
@@ -1150,10 +1193,14 @@ fn primary_material_texture<'a>(
     ];
     PRIORITY
         .iter()
-        .filter_map(|slot| material.textures.get(*slot))
-        .chain(material.textures.values())
-        .find_map(|id| presentation.textures.get(id))
-        .map(|texture| texture.asset_path.as_str())
+        .filter_map(|slot| material.textures.get_key_value(*slot))
+        .chain(material.textures.iter())
+        .find_map(|(slot, id)| {
+            presentation
+                .textures
+                .get(id)
+                .map(|texture| (slot.as_str(), texture.asset_path.as_str()))
+        })
 }
 
 fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
@@ -10756,7 +10803,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 10);
+        assert_eq!(presentation.schema_version, 11);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(
@@ -10767,10 +10814,22 @@ mod tests {
                 .sum::<usize>(),
             141
         );
+        assert_eq!(
+            presentation
+                .materials
+                .values()
+                .map(|material| material.texture_transforms.len())
+                .sum::<usize>(),
+            32
+        );
         let terrain = terrain_material(&presentation, &GameConfig::default(), None);
         assert!(terrain.extension.grid_texture.is_none());
         assert!((terrain.extension.parameters.texture_uv_blend_tint.z - -1.8).abs() < f32::EPSILON);
         assert!((terrain.extension.parameters.texture_uv_blend_tint.w - 1.0).abs() < f32::EPSILON);
+        assert_eq!(
+            terrain.extension.parameters.grid_scale_offset,
+            Vec4::new(1.0, 1.0, 0.0, 0.0)
+        );
         assert!(
             terrain
                 .extension
@@ -10796,6 +10855,22 @@ mod tests {
         );
         assert!((water.extension.parameters.wind_speed_noise_alpha.z - 0.02).abs() < f32::EPSILON);
         assert!((water.extension.parameters.scale_foam_ice.y - 3.71).abs() < f32::EPSILON);
+        assert_eq!(
+            water.extension.parameters.main_scale_offset,
+            Vec4::new(1.0, 1.0, 0.0, 0.0)
+        );
+        let water_definition = presentation
+            .materials
+            .values()
+            .find(|material| material.source_path == WATER_MATERIAL_PATH)
+            .unwrap();
+        assert!(
+            water_definition.texture_transforms["_WaterNormal"]
+                .scale
+                .into_iter()
+                .zip([81.2, 200.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
         assert!((water_ice_strength(Season::Spring) - 0.0).abs() < f32::EPSILON);
         assert!((water_ice_strength(Season::Winter) - 1.0).abs() < f32::EPSILON);
         assert_eq!(presentation.controllers.len(), 31);

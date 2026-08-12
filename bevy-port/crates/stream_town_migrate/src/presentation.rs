@@ -14,7 +14,7 @@ use stream_town_domain::{
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
     AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
-    RendererMaterialBinding, StableId, TextureDef,
+    RendererMaterialBinding, StableId, TextureDef, TextureTransform,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -25,6 +25,7 @@ pub struct PresentationConversionReport {
     pub materials: usize,
     pub custom_shader_materials: usize,
     pub material_vector_properties: usize,
+    pub material_texture_transforms: usize,
     pub material_prefab_bindings: usize,
     pub material_slots: usize,
     pub model_material_bindings: usize,
@@ -197,7 +198,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 10,
+        schema_version: 11,
         textures,
         materials,
         clips,
@@ -217,7 +218,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 10,
+        schema_version: 11,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -232,6 +233,11 @@ pub fn convert(
             .materials
             .values()
             .map(|material| material.custom_vectors.len())
+            .sum(),
+        material_texture_transforms: catalog
+            .materials
+            .values()
+            .map(|material| material.texture_transforms.len())
             .sum(),
         material_prefab_bindings: catalog.prefab_materials.len(),
         material_slots: catalog.prefab_materials.values().map(Vec::len).sum(),
@@ -437,6 +443,7 @@ fn convert_materials(
             MaterialAlphaMode::Opaque
         };
         let mut textures = BTreeMap::new();
+        let mut texture_transforms = BTreeMap::new();
         for (slot, value) in texture_values {
             let Some(path) = value
                 .get("m_Texture")
@@ -451,6 +458,11 @@ fn convert_materials(
             let texture_asset = assets_by_path
                 .get(path)
                 .with_context(|| format!("{} references unexported texture {path}", asset.path))?;
+            let transform = TextureTransform {
+                scale: vec2_value(value.get("m_Scale"), [1.0; 2]),
+                offset: vec2_value(value.get("m_Offset"), [0.0; 2]),
+            };
+            texture_transforms.insert(slot.clone(), transform);
             textures.insert(slot, texture_id(&texture_asset.guid)?);
         }
         let custom_properties = floats
@@ -498,6 +510,7 @@ fn convert_materials(
                 perceptual_roughness: 1.0 - smoothness,
                 alpha_mode,
                 textures,
+                texture_transforms,
                 custom_properties,
                 custom_vectors,
             },
@@ -2041,6 +2054,22 @@ fn named_values(asset: &UnityAsset, prefix: &str) -> BTreeMap<String, Value> {
                     .expect("generated object")
                     .insert("m_Texture".to_owned(), field.value.clone());
             }
+            Some(".second.m_Scale") => {
+                values
+                    .entry(index)
+                    .or_insert_with(|| Value::Object(serde_json::Map::default()))
+                    .as_object_mut()
+                    .expect("generated object")
+                    .insert("m_Scale".to_owned(), field.value.clone());
+            }
+            Some(".second.m_Offset") => {
+                values
+                    .entry(index)
+                    .or_insert_with(|| Value::Object(serde_json::Map::default()))
+                    .as_object_mut()
+                    .expect("generated object")
+                    .insert("m_Offset".to_owned(), field.value.clone());
+            }
             _ => {}
         }
     }
@@ -2071,6 +2100,20 @@ fn color_value(value: Option<&Value>, fallback: [f32; 4]) -> [f32; 4] {
         component("b", fallback[2]),
         component("a", fallback[3]),
     ]
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn vec2_value(value: Option<&Value>, fallback: [f32; 2]) -> [f32; 2] {
+    let Some(value) = value.and_then(Value::as_object) else {
+        return fallback;
+    };
+    let component = |name: &str, fallback: f32| {
+        value
+            .get(name)
+            .and_then(Value::as_f64)
+            .map_or(fallback, |value| value as f32)
+    };
+    [component("x", fallback[0]), component("y", fallback[1])]
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -2497,6 +2540,18 @@ AvatarMask:
                     path: "m_SavedProperties.m_Colors.Array.data[0].second".into(),
                     value: serde_json::json!({"r": 0.1, "g": 0.2, "b": 0.3, "a": 0.4}),
                 },
+                UnityField {
+                    path: "m_SavedProperties.m_TexEnvs.Array.data[0].first".into(),
+                    value: Value::String("_MainTex".into()),
+                },
+                UnityField {
+                    path: "m_SavedProperties.m_TexEnvs.Array.data[0].second.m_Scale".into(),
+                    value: serde_json::json!({"x": 2.0, "y": 3.0}),
+                },
+                UnityField {
+                    path: "m_SavedProperties.m_TexEnvs.Array.data[0].second.m_Offset".into(),
+                    value: serde_json::json!({"x": 0.25, "y": 0.5}),
+                },
             ],
             dependencies: Vec::new(),
             game_object: None,
@@ -2513,6 +2568,19 @@ AvatarMask:
             color
                 .into_iter()
                 .zip([0.1, 0.2, 0.3, 0.4])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        let texture_values = named_values(&asset, "m_SavedProperties.m_TexEnvs.Array.data[");
+        assert!(
+            vec2_value(texture_values["_MainTex"].get("m_Scale"), [1.0; 2])
+                .into_iter()
+                .zip([2.0, 3.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            vec2_value(texture_values["_MainTex"].get("m_Offset"), [0.0; 2])
+                .into_iter()
+                .zip([0.25, 0.5])
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
     }
