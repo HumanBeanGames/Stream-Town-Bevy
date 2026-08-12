@@ -53,7 +53,8 @@ and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's action, XP multiplier,
 level curves, health, defense, movement, carry, resource-affinity, station/target
   masks, all 15 equipment sets, all four reachable building storage components,
-  and 422 typed objectives from the production technology graph in content schema 10,
+  all 42 reachable prefab health definitions, the Tower's consolidated projectile
+  shooter, and 422 typed objectives from the production technology graph in content schema 11,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -96,7 +97,7 @@ In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to return to the menu. The
   stable chat grammar executes `!join`, `!role`, `!experience`/`!exp`, `!build`, `!upgrade`,
-  `!buy`, `!sell`, `!vote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
+  `!buy`, `!sell`, `!revive [player]`, `!vote`, `!event`, `!save`, and `!help` with catalog/prerequisite validation and
 HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
 choose a valid site near the actor or selected cell, update grid occupancy,
 spawn the converted building GLB, and round-trip through native saves. New
@@ -132,9 +133,16 @@ add the authored level-scaled capacity; Houses add recruit slots. A capped
 deposit leaves overflow on the actor until spending or new construction creates
 space.
 Node depletion and carried inventories are part of native save/load state.
-The starting Defender and Goblin also run a live melee loop: acquire a living
-target, path into range, exchange deterministic damage once per second, trigger
-Death at zero health, and respawn/Revive after five seconds. Initial actors are
+Combat roles acquire a living target and path into authored range. Melee roles
+apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks
+spawn visible homing ECS projectiles. Priests select the nearest injured player,
+heal on their authored cadence, and release full-health targets. Completed Towers
+launch their converted one-damage projectile every three seconds at the nearest
+enemy within 10 cells. Players trigger Death at zero health and use Unity's
+authored 60-second automatic revival. `!revive` pays 400 food for self-revival;
+Priests and Paladins can pay 200 food to revive another stable Twitch actor and
+receive role XP. Pending revival time and actor health survive native saves.
+Initial actors are
 placed by a deterministic flood fill from the connected town centre so combat
 and work targets are reachable rather than stranded on isolated land cells.
 

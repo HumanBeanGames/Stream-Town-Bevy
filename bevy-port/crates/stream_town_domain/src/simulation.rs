@@ -58,6 +58,8 @@ pub struct ActorState {
     pub health: i32,
     pub max_health: i32,
     pub alive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respawn_remaining_seconds: Option<f64>,
     pub inventory: BTreeMap<StableId, u32>,
     /// Stable runtime building ID, or `building:townhall` for the initial station.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +155,8 @@ pub enum SimulationError {
     EmptyTrade,
     #[error("resource {0} cannot be traded")]
     InvalidTradeResource(StableId),
+    #[error("actor {0} is not dead")]
+    ActorAlive(StableId),
 }
 
 impl WorldSimulation {
@@ -188,6 +192,7 @@ impl WorldSimulation {
                 health: 100,
                 max_health: 100,
                 alive: true,
+                respawn_remaining_seconds: None,
                 inventory: BTreeMap::new(),
                 station: None,
                 role_progression: BTreeMap::from([(
@@ -362,7 +367,56 @@ impl WorldSimulation {
         let damage = i32::try_from(damage).unwrap_or(i32::MAX);
         actor_state.health = actor_state.health.saturating_sub(damage).max(0);
         actor_state.alive = actor_state.health > 0;
+        if actor_state.alive {
+            actor_state.respawn_remaining_seconds = None;
+        }
         Ok(!actor_state.alive)
+    }
+
+    pub fn schedule_respawn(
+        &mut self,
+        actor: &StableId,
+        duration_seconds: f64,
+    ) -> Result<(), SimulationError> {
+        let actor_state = self.actor_mut(actor)?;
+        if actor_state.alive {
+            return Err(SimulationError::ActorAlive(actor.clone()));
+        }
+        actor_state.respawn_remaining_seconds = Some(duration_seconds.max(0.0));
+        Ok(())
+    }
+
+    pub fn heal_actor(&mut self, actor: &StableId, amount: u32) -> Result<u32, SimulationError> {
+        let actor_state = self.actor_mut(actor)?;
+        if !actor_state.alive {
+            return Err(SimulationError::ActorDead(actor.clone()));
+        }
+        let previous = actor_state.health;
+        actor_state.health = actor_state
+            .health
+            .saturating_add(i32::try_from(amount).unwrap_or(i32::MAX))
+            .min(actor_state.max_health);
+        Ok(u32::try_from(actor_state.health.saturating_sub(previous)).unwrap_or(u32::MAX))
+    }
+
+    /// Revives an actor after atomically paying the authored town-food cost.
+    pub fn revive_actor_with_food_cost(
+        &mut self,
+        actor: &StableId,
+        position: GridPos,
+        food_cost: u32,
+    ) -> Result<(), SimulationError> {
+        if self
+            .actors
+            .get(actor)
+            .ok_or_else(|| SimulationError::MissingActor(actor.clone()))?
+            .alive
+        {
+            return Err(SimulationError::ActorAlive(actor.clone()));
+        }
+        let food = StableId::new("resource:food").expect("static resource ID");
+        self.spend_resources(&BTreeMap::from([(food, food_cost)]))?;
+        self.respawn_actor(actor, position)
     }
 
     pub fn respawn_actor(
@@ -374,6 +428,7 @@ impl WorldSimulation {
         actor_state.position = position;
         actor_state.health = actor_state.max_health;
         actor_state.alive = true;
+        actor_state.respawn_remaining_seconds = None;
         Ok(())
     }
 
@@ -625,6 +680,11 @@ impl WorldSimulation {
         if let Some(vote) = &mut self.active_vote {
             vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
         }
+        for actor in self.actors.values_mut().filter(|actor| !actor.alive) {
+            if let Some(remaining) = actor.respawn_remaining_seconds.as_mut() {
+                *remaining = (*remaining - f64::from(delta_seconds)).max(0.0);
+            }
+        }
     }
 
     fn actor_mut(&mut self, actor: &StableId) -> Result<&mut ActorState, SimulationError> {
@@ -810,6 +870,55 @@ mod tests {
             ron::from_str::<WorldSimulation>(&encoded).unwrap(),
             simulation
         );
+    }
+
+    #[test]
+    fn healing_and_food_revives_preserve_health_invariants() {
+        let mut simulation = WorldSimulation::new(42);
+        let actor = id("twitch:wounded");
+        let food = id("resource:food");
+        let spawn = GridPos { x: 4, z: 5 };
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 2 }));
+
+        assert!(!simulation.damage_actor(&actor, 30).unwrap());
+        assert_eq!(simulation.heal_actor(&actor, 12), Ok(12));
+        assert_eq!(simulation.actors[&actor].health, 82);
+        assert_eq!(simulation.heal_actor(&actor, 1_000), Ok(18));
+        assert_eq!(simulation.actors[&actor].health, 100);
+
+        assert!(simulation.damage_actor(&actor, 1_000).unwrap());
+        assert!(matches!(
+            simulation.heal_actor(&actor, 1),
+            Err(SimulationError::ActorDead(_))
+        ));
+        simulation.schedule_respawn(&actor, 60.0).unwrap();
+        simulation.tick(0.25);
+        assert_eq!(
+            simulation.actors[&actor].respawn_remaining_seconds,
+            Some(59.75)
+        );
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap(),
+            simulation
+        );
+        simulation.town_resources.insert(food.clone(), 399);
+        assert!(matches!(
+            simulation.revive_actor_with_food_cost(&actor, spawn, 400),
+            Err(SimulationError::InsufficientResource { .. })
+        ));
+        simulation.town_resources.insert(food.clone(), 400);
+        simulation
+            .revive_actor_with_food_cost(&actor, spawn, 400)
+            .unwrap();
+        assert!(simulation.actors[&actor].alive);
+        assert_eq!(simulation.actors[&actor].position, spawn);
+        assert_eq!(simulation.actors[&actor].health, 100);
+        assert_eq!(simulation.town_resources[&food], 0);
+        assert!(matches!(
+            simulation.revive_actor_with_food_cost(&actor, spawn, 400),
+            Err(SimulationError::ActorAlive(_))
+        ));
     }
 
     #[test]

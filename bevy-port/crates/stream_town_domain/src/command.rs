@@ -13,6 +13,7 @@ pub enum ChatCommand {
     Upgrade(StableId),
     Buy { amount: u32, resource: StableId },
     Sell { amount: u32, resource: StableId },
+    Revive(Option<StableId>),
     Vote(StableId),
     TriggerEvent(StableId),
     Experience,
@@ -85,6 +86,7 @@ impl FromStr for ChatCommand {
                     "upgrade" | "level" => with_id(&command, argument, Self::Upgrade),
                     "vote" => with_id(&command, argument, Self::Vote),
                     "event" => with_id(&command, argument, Self::TriggerEvent),
+                    "revive" => optional_id(argument).map(Self::Revive),
                     _ => Err(CommandParseError::Unknown(command)),
                 }
             }
@@ -121,6 +123,10 @@ fn with_id(
         .map_err(|error| CommandParseError::InvalidId(error.to_string()))
 }
 
+fn optional_id(argument: Option<&str>) -> Result<Option<StableId>, CommandParseError> {
+    argument.map(content_id).transpose()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +157,13 @@ mod tests {
                 amount: 10,
                 resource: StableId::new("resource:ore").unwrap(),
             })
+        );
+        assert_eq!("!revive".parse(), Ok(ChatCommand::Revive(None)));
+        assert_eq!(
+            "!revive twitch:friend".parse(),
+            Ok(ChatCommand::Revive(Some(
+                StableId::new("twitch:friend").unwrap()
+            )))
         );
         assert!(matches!(
             "build house".parse::<ChatCommand>(),

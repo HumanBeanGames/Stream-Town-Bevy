@@ -1360,6 +1360,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         health: entity.health,
                         max_health: entity.health.max(1),
                         alive: entity.health > 0,
+                        respawn_remaining_seconds: None,
                         inventory,
                         station: entity.station_reference.as_ref().map(|reference| {
                             building_ids

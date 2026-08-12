@@ -134,6 +134,7 @@ struct RenderAssets {
     selection: Handle<StandardMaterial>,
     rain: Handle<StandardMaterial>,
     snow: Handle<StandardMaterial>,
+    projectile: Handle<StandardMaterial>,
     presentation_materials: BTreeMap<StableId, Handle<StandardMaterial>>,
 }
 
@@ -154,7 +155,6 @@ struct Agent {
     path_index: usize,
     target: GridPos,
     action_cooldown_seconds: f32,
-    respawn_seconds: f32,
     health_regen_accumulator: f64,
 }
 
@@ -165,6 +165,7 @@ enum AgentGoal {
     Gather(StableId),
     Deposit,
     Attack(StableId),
+    Heal(StableId),
     Construct(StableId),
 }
 
@@ -185,6 +186,34 @@ struct TownHall;
 #[derive(Component)]
 struct RuntimeBuilding {
     id: StableId,
+}
+
+#[derive(Component)]
+struct TowerShooter {
+    building: StableId,
+    cooldown_seconds: f32,
+}
+
+#[derive(Component)]
+struct CombatProjectile {
+    source: ProjectileSource,
+    target: StableId,
+    damage: u32,
+    speed_cells_per_second: f32,
+}
+
+#[derive(Clone)]
+enum ProjectileSource {
+    Actor(StableId),
+    Building(StableId),
+}
+
+#[derive(Clone)]
+struct ProjectileSpawn {
+    source: ProjectileSource,
+    target: StableId,
+    damage: u32,
+    speed_cells_per_second: f32,
 }
 
 #[derive(Component)]
@@ -332,6 +361,14 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     tag_equipment_nodes,
                     sync_equipment_nodes.after(tag_equipment_nodes),
+                )
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_tower_shooters.after(move_agents),
+                    move_combat_projectiles.after(update_tower_shooters),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -561,6 +598,12 @@ fn setup_rendering(
         snow: materials.add(StandardMaterial {
             base_color: Color::srgba(0.94, 0.98, 1.0, 0.92),
             alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        projectile: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.58, 0.12),
+            emissive: LinearRgba::new(3.5, 1.1, 0.08, 1.0),
             unlit: true,
             ..default()
         }),
@@ -973,7 +1016,6 @@ fn generate_and_spawn_world(
                 path_index: 0,
                 target,
                 action_cooldown_seconds: 0.0,
-                respawn_seconds: 0.0,
                 health_regen_accumulator: 0.0,
             },
             AgentAnimation {
@@ -1402,6 +1444,35 @@ fn is_combat_role(role: &StableId) -> bool {
     )
 }
 
+fn is_healer_role(role: &StableId) -> bool {
+    role.as_str() == "role:priest"
+}
+
+fn is_ranged_role(role: &StableId) -> bool {
+    matches!(
+        role.as_str(),
+        "role:necromancer" | "role:ranger" | "role:wizard"
+    )
+}
+
+fn actor_archetype<'a>(
+    content: &'a ContentCatalog,
+    actor: &ActorState,
+) -> Option<&'a ArchetypeDef> {
+    let (kind, source) = if actor.role.as_str() == "role:enemy" {
+        (ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
+    } else {
+        (ArchetypeKind::Player, "Player_Character.prefab")
+    };
+    archetype_by_source(content, kind, source)
+}
+
+fn authored_respawn_milliseconds(content: &ContentCatalog, actor: &ActorState) -> Option<u32> {
+    actor_archetype(content, actor)
+        .and_then(|archetype| archetype.health.as_ref())
+        .and_then(|health| health.revive_milliseconds)
+}
+
 fn town_hall_grid_position(config: &GameConfig) -> GridPos {
     GridPos {
         x: (config.world.width / 2 + 4).min(config.world.width - 2),
@@ -1622,11 +1693,53 @@ fn next_agent_goal(
         return (AgentGoal::Wander, current);
     }
     let station = assigned_station(content, simulation, config, actor);
+    if is_healer_role(&actor.role) {
+        let mut candidates: Vec<_> = simulation
+            .actors
+            .values()
+            .filter(|target| {
+                target.id != actor.id
+                    && target.alive
+                    && target.role.as_str() != "role:enemy"
+                    && target.health < target.max_health
+            })
+            .filter(|target| {
+                station.is_none_or(|station| within_station_range(target.position, station))
+            })
+            .collect();
+        if let Some(station) = station {
+            candidates.sort_by_key(|target| {
+                (
+                    target.position.x.abs_diff(station.position.x)
+                        + target.position.z.abs_diff(station.position.z),
+                    target.id.clone(),
+                )
+            });
+            candidates.truncate(usize::from(station.definition.max_targets));
+        }
+        if let Some(target) = candidates.into_iter().min_by_key(|target| {
+            (
+                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
+                target.id.clone(),
+            )
+        }) {
+            let distance =
+                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
+            return (
+                AgentGoal::Heal(target.id.clone()),
+                if distance <= role_action_range_cells(content, simulation, actor) {
+                    current
+                } else {
+                    target.position
+                },
+            );
+        }
+    }
     let combat_target = if actor.role.as_str() == "role:enemy" {
         simulation
             .actors
             .values()
-            .filter(|target| target.alive && target.role.as_str() == "role:defender")
+            .filter(|target| target.alive && target.role.as_str() != "role:enemy")
             .min_by_key(|target| {
                 (
                     target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
@@ -1767,24 +1880,22 @@ fn complete_agent_goal(
     actor_id: &StableId,
     goal: &AgentGoal,
     current: GridPos,
-) {
+) -> Option<ProjectileSpawn> {
     if !simulation.actors.contains_key(actor_id) {
-        return;
+        return None;
     }
     let stats = simulation
         .actors
         .get(actor_id)
         .and_then(|actor| effective_role_stats(content, simulation, actor));
     let action_amount = stats.map_or(1, |stats| stats.action_amount);
+    let mut projectile_spawn = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
-            let Some(resource) = world
+            let resource = world
                 .resources
                 .iter_mut()
-                .find(|resource| resource.id == *resource_id && resource.amount > 0)
-            else {
-                return;
-            };
+                .find(|resource| resource.id == *resource_id && resource.amount > 0)?;
             let amount = resource.amount.min(action_amount);
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
@@ -1841,42 +1952,57 @@ fn complete_agent_goal(
             }
         }
         AgentGoal::Attack(target_id) => {
-            let Some(attacker) = simulation.actors.get(actor_id) else {
-                return;
-            };
-            let Some(target) = simulation.actors.get(target_id) else {
-                return;
-            };
+            let attacker = simulation.actors.get(actor_id)?;
+            let target = simulation.actors.get(target_id)?;
             if !attacker.alive
                 || !target.alive
                 || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
                     > role_action_range_cells(content, simulation, attacker)
             {
-                return;
+                return None;
             }
-            let target_is_enemy = target.role.as_str() == "role:enemy";
             let damage = if attacker.role.as_str() == "role:enemy" {
                 12
             } else {
                 action_amount
             };
-            let defense = effective_role_stats(content, simulation, target)
-                .map_or(0, |stats| stats.damage_reduction_percent);
-            let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
-            match simulation.damage_actor(target_id, damage) {
-                Ok(killed) => {
-                    if killed && target_is_enemy {
-                        let _ = simulation.record_objective_event(
-                            &content.objectives,
-                            &ObjectiveEvent::EnemyKilled(
-                                StableId::new("enemy:goblin").expect("static stable ID"),
-                            ),
-                        );
+            if is_ranged_role(&attacker.role) {
+                projectile_spawn = Some(ProjectileSpawn {
+                    source: ProjectileSource::Actor(actor_id.clone()),
+                    target: target_id.clone(),
+                    damage,
+                    speed_cells_per_second: 12.0,
+                });
+                damage > 0
+            } else {
+                let defense = effective_role_stats(content, simulation, target)
+                    .map_or(0, |stats| stats.damage_reduction_percent);
+                let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
+                match apply_combat_damage(simulation, content, target_id, damage) {
+                    Ok(_) => damage > 0,
+                    Err(error) => {
+                        warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
+                        false
                     }
-                    damage > 0
                 }
+            }
+        }
+        AgentGoal::Heal(target_id) => {
+            let healer = simulation.actors.get(actor_id)?;
+            let target = simulation.actors.get(target_id)?;
+            if !healer.alive
+                || !target.alive
+                || target.role.as_str() == "role:enemy"
+                || target.health >= target.max_health
+                || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
+                    > role_action_range_cells(content, simulation, healer)
+            {
+                return None;
+            }
+            match simulation.heal_actor(target_id, action_amount) {
+                Ok(restored) => restored > 0,
                 Err(error) => {
-                    warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
+                    warn!(actor = %actor_id, target = %target_id, %error, "healing action failed");
                     false
                 }
             }
@@ -1934,6 +2060,182 @@ fn complete_agent_goal(
             actor.health = actor.max_health;
         }
     }
+    projectile_spawn
+}
+
+fn apply_combat_damage(
+    simulation: &mut WorldSimulation,
+    content: &ContentCatalog,
+    target_id: &StableId,
+    damage: u32,
+) -> Result<bool, stream_town_domain::SimulationError> {
+    let target_is_enemy = simulation
+        .actors
+        .get(target_id)
+        .is_some_and(|target| target.role.as_str() == "role:enemy");
+    let killed = simulation.damage_actor(target_id, damage)?;
+    if killed && target_is_enemy {
+        let _ = simulation.record_objective_event(
+            &content.objectives,
+            &ObjectiveEvent::EnemyKilled(StableId::new("enemy:goblin").expect("static stable ID")),
+        );
+    }
+    Ok(killed)
+}
+
+fn spawn_combat_projectile(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    config: &GameConfig,
+    origin: Vec3,
+    projectile: ProjectileSpawn,
+) {
+    let scale = config.world.cell_size * 0.14;
+    commands.spawn((
+        WorldEntity,
+        CombatProjectile {
+            source: projectile.source,
+            target: projectile.target,
+            damage: projectile.damage,
+            speed_cells_per_second: projectile.speed_cells_per_second,
+        },
+        Mesh3d(render.cube.clone()),
+        MeshMaterial3d(render.projectile.clone()),
+        Transform::from_translation(origin + Vec3::Y * config.world.cell_size * 0.35)
+            .with_scale(Vec3::splat(scale)),
+    ));
+}
+
+fn move_combat_projectiles(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    mut simulation: ResMut<SimulationRuntime>,
+    actors: Query<(&Agent, &Transform), Without<CombatProjectile>>,
+    mut projectiles: Query<(Entity, &CombatProjectile, &mut Transform), Without<Agent>>,
+) {
+    let positions: BTreeMap<_, _> = actors
+        .iter()
+        .map(|(agent, transform)| (agent.id.clone(), transform.translation))
+        .collect();
+    for (entity, projectile, mut transform) in &mut projectiles {
+        let source_valid = match &projectile.source {
+            ProjectileSource::Actor(actor) => simulation
+                .0
+                .actors
+                .get(actor)
+                .is_some_and(|actor| actor.alive),
+            ProjectileSource::Building(building) => simulation
+                .0
+                .buildings
+                .get(building)
+                .is_some_and(|building| building.complete),
+        };
+        let Some(target) = simulation.0.actors.get(&projectile.target) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(target_position) = positions.get(&projectile.target).copied() else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if !source_valid || !target.alive {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let target_position = target_position + Vec3::Y * config.0.world.cell_size * 0.35;
+        let delta = target_position - transform.translation;
+        let step = projectile.speed_cells_per_second * config.0.world.cell_size * time.delta_secs();
+        if delta.length_squared() <= step.max(0.1).powi(2) {
+            let defense = simulation
+                .0
+                .actors
+                .get(&projectile.target)
+                .and_then(|target| effective_role_stats(&content.0, &simulation.0, target))
+                .map_or(0, |stats| stats.damage_reduction_percent);
+            let damage = percentage_reduced(
+                projectile.damage,
+                i32::try_from(defense).unwrap_or(i32::MAX),
+            );
+            if let Err(error) =
+                apply_combat_damage(&mut simulation.0, &content.0, &projectile.target, damage)
+            {
+                warn!(target = %projectile.target, %error, "projectile impact failed");
+            }
+            commands.entity(entity).despawn();
+        } else {
+            transform.translation += delta.normalize_or_zero() * step;
+            transform.look_to(delta.normalize_or_zero(), Vec3::Y);
+        }
+    }
+}
+
+fn update_tower_shooters(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    render: Res<RenderAssets>,
+    simulation: Res<SimulationRuntime>,
+    mut towers: Query<(&RuntimeBuilding, &Transform, &mut TowerShooter)>,
+) {
+    for (runtime, transform, mut tower) in &mut towers {
+        tower.cooldown_seconds = (tower.cooldown_seconds - time.delta_secs()).max(0.0);
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        if !state.complete || tower.cooldown_seconds > f32::EPSILON {
+            continue;
+        }
+        let Some((definition, shooter)) = building_def_for_archetype(&content.0, &state.archetype)
+            .and_then(|definition| {
+                definition
+                    .projectile_shooter
+                    .as_ref()
+                    .map(|shooter| (definition, shooter))
+            })
+        else {
+            continue;
+        };
+        let centre = GridPos {
+            x: state.position.x.saturating_add(definition.footprint[0] / 2),
+            z: state.position.z.saturating_add(definition.footprint[1] / 2),
+        };
+        let range_cells = shooter.range_milli_cells.div_ceil(1_000);
+        let Some(target) = simulation
+            .0
+            .actors
+            .values()
+            .filter(|actor| actor.alive && actor.role.as_str() == "role:enemy")
+            .filter(|actor| {
+                u32::from(actor.position.x.abs_diff(centre.x))
+                    + u32::from(actor.position.z.abs_diff(centre.z))
+                    <= range_cells
+            })
+            .min_by_key(|actor| {
+                (
+                    actor.position.x.abs_diff(centre.x) + actor.position.z.abs_diff(centre.z),
+                    actor.id.clone(),
+                )
+            })
+        else {
+            continue;
+        };
+        spawn_combat_projectile(
+            &mut commands,
+            &render,
+            &config.0,
+            transform.translation + Vec3::Y * config.0.world.cell_size * 0.5,
+            ProjectileSpawn {
+                source: ProjectileSource::Building(tower.building.clone()),
+                target: target.id.clone(),
+                damage: shooter.damage,
+                speed_cells_per_second: milli_units_as_f32(shooter.movement_milli_cells_per_second),
+            },
+        );
+        tower.cooldown_seconds = milli_units_as_f32(shooter.fire_milliseconds);
+    }
 }
 
 fn action_cooldown(
@@ -1943,7 +2245,7 @@ fn action_cooldown(
     goal: &AgentGoal,
 ) -> f32 {
     let fallback = match goal {
-        AgentGoal::Attack(_) => 1.0,
+        AgentGoal::Attack(_) | AgentGoal::Heal(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) => 0.75,
         AgentGoal::Deposit => 0.25,
@@ -1954,7 +2256,7 @@ fn action_cooldown(
     };
     let base = if matches!(
         goal,
-        AgentGoal::Attack(_) | AgentGoal::Construct(_) | AgentGoal::Gather(_)
+        AgentGoal::Attack(_) | AgentGoal::Construct(_) | AgentGoal::Gather(_) | AgentGoal::Heal(_)
     ) {
         effective_role_stats(content, simulation, actor).map_or(fallback, |stats| {
             milli_units_as_f32(stats.action_milliseconds).max(0.1)
@@ -1970,9 +2272,11 @@ fn action_cooldown(
 }
 
 fn move_agents(
+    mut commands: Commands,
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    render: Res<RenderAssets>,
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
@@ -2009,11 +2313,19 @@ fn move_agents(
     for (mut agent, mut location, animation, mut transform) in &mut agents {
         agent.action_cooldown_seconds =
             (agent.action_cooldown_seconds - time.delta_secs()).max(0.0);
-        if let Some(role_stats) = simulation
+        if let Some((role_stats, regeneration_requires_food)) = simulation
             .0
             .actors
             .get(&agent.id)
-            .and_then(|actor| effective_role_stats(&content.0, &simulation.0, actor))
+            .filter(|actor| actor.alive)
+            .and_then(|actor| {
+                effective_role_stats(&content.0, &simulation.0, actor).map(|stats| {
+                    let requires_food = actor_archetype(&content.0, actor)
+                        .and_then(|archetype| archetype.health.as_ref())
+                        .is_some_and(|health| health.regeneration_requires_food);
+                    (stats, requires_food)
+                })
+            })
         {
             let desired_max = i32::try_from(role_stats.max_health)
                 .unwrap_or(i32::MAX)
@@ -2031,6 +2343,24 @@ fn move_agents(
                 agent.health_regen_accumulator -= 1.0;
                 regenerated += 1;
             }
+            if regeneration_requires_food && regenerated > 0 {
+                let food = StableId::new("resource:food").expect("static stable ID");
+                let required = u32::try_from(regenerated).expect("regeneration is non-negative");
+                let available = simulation
+                    .0
+                    .town_resources
+                    .get(&food)
+                    .copied()
+                    .unwrap_or_default();
+                if available >= required {
+                    simulation
+                        .0
+                        .town_resources
+                        .insert(food, available - required);
+                } else {
+                    regenerated = 0;
+                }
+            }
             if let Some(actor) = simulation.0.actors.get_mut(&agent.id) {
                 let increase = desired_max.saturating_sub(actor.max_health).max(0);
                 actor.max_health = desired_max;
@@ -2047,16 +2377,50 @@ fn move_agents(
             .get(&agent.id)
             .is_some_and(|actor| actor.alive);
         if alive {
-            agent.respawn_seconds = 0.0;
+            if let Some(actor_position) = simulation
+                .0
+                .actors
+                .get(&agent.id)
+                .map(|actor| actor.position)
+                && actor_position != location.0
+            {
+                let mut world_position =
+                    grid_to_world_on_surface(actor_position, &config.0, &world.generated);
+                if !animation.native {
+                    world_position.y += animation.base_scale.y * 0.5;
+                }
+                transform.translation = world_position;
+                location.0 = actor_position;
+                agent.origin = actor_position;
+                agent.target = mirrored_target(&world.generated, actor_position);
+                agent.path.clear();
+                agent.path_index = 0;
+                agent.action_cooldown_seconds = 0.0;
+            }
         } else {
             agent.path.clear();
             agent.goal = AgentGoal::Wander;
             agent.health_regen_accumulator = 0.0;
-            if agent.respawn_seconds <= 0.0 {
-                agent.respawn_seconds = 5.0;
+            let remaining = simulation
+                .0
+                .actors
+                .get(&agent.id)
+                .and_then(|actor| actor.respawn_remaining_seconds);
+            if remaining.is_none() {
+                let Some(duration) = simulation
+                    .0
+                    .actors
+                    .get(&agent.id)
+                    .and_then(|actor| authored_respawn_milliseconds(&content.0, actor))
+                else {
+                    continue;
+                };
+                let _ = simulation
+                    .0
+                    .schedule_respawn(&agent.id, f64::from(duration) / 1_000.0);
+                continue;
             }
-            agent.respawn_seconds = (agent.respawn_seconds - time.delta_secs()).max(0.0);
-            if agent.respawn_seconds > 0.0 {
+            if remaining.is_some_and(|remaining| remaining > f64::EPSILON) {
                 continue;
             }
             let spawn = nearest_walkable(&world.generated, agent.spawn).unwrap_or(agent.spawn);
@@ -2078,7 +2442,7 @@ fn move_agents(
             if !agent.path.is_empty() {
                 stats.paths_completed += 1;
                 if location.0 == agent.target && agent.action_cooldown_seconds <= f32::EPSILON {
-                    complete_agent_goal(
+                    if let Some(projectile) = complete_agent_goal(
                         &mut simulation.0,
                         &mut world.generated,
                         &config.0,
@@ -2086,7 +2450,15 @@ fn move_agents(
                         &agent.id,
                         &agent.goal,
                         location.0,
-                    );
+                    ) {
+                        spawn_combat_projectile(
+                            &mut commands,
+                            &render,
+                            &config.0,
+                            transform.translation,
+                            projectile,
+                        );
+                    }
                     agent.action_cooldown_seconds =
                         action_cooldown(&content.0, &simulation.0, &agent.id, &agent.goal);
                 }
@@ -3500,6 +3872,7 @@ fn load_input(
             &asset_root.0,
             &render,
             saved,
+            building,
             &content.0.archetypes[&building.archetype],
             saved.position,
             building.footprint,
@@ -3535,7 +3908,6 @@ fn load_input(
         agent.path_index = 0;
         agent.target = mirrored_target(&world.generated, position);
         agent.action_cooldown_seconds = 0.0;
-        agent.respawn_seconds = 0.0;
         location.0 = position;
         transform.translation = world_position;
         restored_ids.insert(saved.id.clone());
@@ -3566,7 +3938,6 @@ fn load_input(
                 path_index: 0,
                 target: mirrored_target(&world.generated, position),
                 action_cooldown_seconds: 0.0,
-                respawn_seconds: 0.0,
                 health_regen_accumulator: 0.0,
             },
             AgentAnimation {
@@ -3986,6 +4357,7 @@ fn spawn_runtime_building(
     asset_root: &Path,
     render: &RenderAssets,
     building: &BuildingState,
+    definition: &BuildingDef,
     archetype: &ArchetypeDef,
     position: GridPos,
     footprint: [u16; 2],
@@ -4004,6 +4376,15 @@ fn spawn_runtime_building(
         GridLocation(position),
         Transform::from_translation(world_position),
     ));
+    if definition.projectile_shooter.is_some() {
+        entity.insert(TowerShooter {
+            building: building.id.clone(),
+            cooldown_seconds: definition
+                .projectile_shooter
+                .as_ref()
+                .map_or(0.0, |shooter| milli_units_as_f32(shooter.fire_milliseconds)),
+        });
+    }
     if let Some(scene) = archetype_scene_for_age(archetype, age).filter(|scene| {
         asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
     }) {
@@ -4123,7 +4504,6 @@ fn process_injected_commands(
                                 path_index: 0,
                                 target,
                                 action_cooldown_seconds: 0.0,
-                                respawn_seconds: 0.0,
                                 health_regen_accumulator: 0.0,
                             },
                             AgentAnimation {
@@ -4211,6 +4591,7 @@ fn process_injected_commands(
                         &asset_root.0,
                         &render,
                         &simulation.0.buildings[&runtime_id],
+                        building,
                         &content.0.archetypes[&building.archetype],
                         position,
                         building.footprint,
@@ -4359,6 +4740,66 @@ fn process_injected_commands(
                         "event started".to_owned()
                     })
             }
+            ChatCommand::Revive(requested) => {
+                let self_revive = requested.is_none();
+                let target_id = requested
+                    .as_ref()
+                    .map_or_else(|| Some(actor_id.clone()), |requested| prefixed_id(requested, "twitch:"))
+                    .ok_or_else(|| "invalid revive target".to_owned());
+                target_id.and_then(|target_id| {
+                    if !self_revive {
+                        let role = simulation
+                            .0
+                            .actors
+                            .get(&actor_id)
+                            .map(|actor| actor.role.as_str())
+                            .ok_or_else(|| "join before reviving another player".to_owned())?;
+                        if !matches!(role, "role:priest" | "role:paladin") {
+                            return Err(
+                                "only a Priest or Paladin can revive another player".to_owned(),
+                            );
+                        }
+                        if target_id == actor_id {
+                            return Err("use !revive without a target to revive yourself".to_owned());
+                        }
+                    }
+                    let position = simulation
+                        .0
+                        .actors
+                        .get(&target_id)
+                        .map(|actor| actor.position)
+                        .ok_or_else(|| format!("unknown player {target_id}"))?;
+                    let spawn = nearest_walkable(&world.generated, position).unwrap_or(position);
+                    let maximum_health = simulation
+                        .0
+                        .actors
+                        .get(&target_id)
+                        .map_or(0, |actor| {
+                            u32::try_from(actor.max_health.max(0)).unwrap_or(u32::MAX)
+                        });
+                    simulation
+                        .0
+                        .revive_actor_with_food_cost(
+                            &target_id,
+                            spawn,
+                            if self_revive { 400 } else { 200 },
+                        )
+                        .map_err(|error| error.to_string())?;
+                    if !self_revive {
+                        let experience_multiplier = content
+                            .0
+                            .roles
+                            .get(&simulation.0.actors[&actor_id].role)
+                            .map_or(1_000, |role| role.experience_multiplier_per_thousand);
+                        let _ = simulation.0.grant_role_experience(
+                            &actor_id,
+                            maximum_health,
+                            experience_multiplier,
+                        );
+                    }
+                    Ok(format!("revived {target_id}"))
+                })
+            }
             ChatCommand::Experience => simulation
                 .0
                 .actors
@@ -4385,7 +4826,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy <amount> <resource>, !sell <amount> <resource>, !vote <technology>, !event <event>, !save, !help"
+                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy <amount> <resource>, !sell <amount> <resource>, !revive [player], !vote <technology>, !event <event>, !save, !help"
                     .to_owned(),
             ),
         };
@@ -4432,6 +4873,10 @@ fn update_hud(
         .iter()
         .filter(|agent| matches!(agent.goal, AgentGoal::Attack(_)))
         .count();
+    let healing = agents
+        .iter()
+        .filter(|agent| matches!(agent.goal, AgentGoal::Heal(_)))
+        .count();
     let constructing = agents
         .iter()
         .filter(|agent| matches!(agent.goal, AgentGoal::Construct(_)))
@@ -4455,7 +4900,7 @@ fn update_hud(
         .filter(|actor| !actor.alive)
         .count();
     hud.0 = format!(
-        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | Goals: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "{} agents | {:.0}s | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} | Goals: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         agents.iter().len(),
         stats.elapsed_seconds,
         stats.paths_completed,
@@ -4933,6 +5378,88 @@ mod tests {
             (action_cooldown(&content, &simulation, &defender, &goal) - expected_cooldown).abs()
                 <= f32::EPSILON
         );
+    }
+
+    #[test]
+    fn priest_prioritizes_and_heals_the_nearest_injured_player() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let priest_position = GridPos { x: 32, z: 32 };
+        let patient_position = GridPos { x: 33, z: 32 };
+        let priest = StableId::new("npc:priest_test").unwrap();
+        let patient = StableId::new("npc:patient_test").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(priest.clone(), priest_position));
+        assert!(simulation.join_player(patient.clone(), patient_position));
+        simulation
+            .assign_role(&priest, StableId::new("role:priest").unwrap())
+            .unwrap();
+        simulation.damage_actor(&patient, 20).unwrap();
+
+        let (goal, target) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &priest,
+            priest_position,
+        );
+        assert_eq!(goal, AgentGoal::Heal(patient.clone()));
+        assert_eq!(target, priest_position);
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &priest,
+                &goal,
+                priest_position,
+            )
+            .is_none()
+        );
+        assert_eq!(simulation.actors[&patient].health, 82);
+    }
+
+    #[test]
+    fn ranged_roles_emit_projectiles_instead_of_instant_damage() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let ranger_position = GridPos { x: 32, z: 32 };
+        let enemy_position = GridPos { x: 38, z: 32 };
+        let ranger = StableId::new("npc:ranger_test").unwrap();
+        let enemy = StableId::new("actor:enemy_ranged_test").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(ranger.clone(), ranger_position));
+        assert!(simulation.join_player(enemy.clone(), enemy_position));
+        simulation
+            .assign_role(&ranger, StableId::new("role:ranger").unwrap())
+            .unwrap();
+        simulation
+            .assign_role(&enemy, StableId::new("role:enemy").unwrap())
+            .unwrap();
+        let (goal, _) = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &ranger,
+            ranger_position,
+        );
+        let projectile = complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &ranger,
+            &goal,
+            ranger_position,
+        )
+        .unwrap();
+        assert_eq!(projectile.target, enemy);
+        assert_eq!(simulation.actors[&projectile.target].health, 100);
     }
 
     #[test]
@@ -5573,30 +6100,36 @@ mod tests {
         }
         app.update();
 
-        let simulation = &app.world().resource::<SimulationRuntime>().0;
-        assert_eq!(simulation.actors[&actor_id].role.as_str(), "role:builder");
-        assert_eq!(simulation.buildings.len(), 1);
-        let placed_building = simulation.buildings.values().next().unwrap().clone();
-        assert!(!placed_building.complete);
-        assert_eq!(placed_building.health, BUILDING_MAX_HEALTH / 10);
-        for resource in [
-            "resource:food",
-            "resource:gold",
-            "resource:ore",
-            "resource:wood",
-        ] {
-            let resource_id = StableId::new(resource).unwrap();
+        let (placed_building, saved_building_id, food_before_revive) = {
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            assert_eq!(simulation.actors[&actor_id].role.as_str(), "role:builder");
+            assert_eq!(simulation.buildings.len(), 1);
+            let placed_building = simulation.buildings.values().next().unwrap().clone();
+            assert!(!placed_building.complete);
+            assert_eq!(placed_building.health, BUILDING_MAX_HEALTH / 10);
+            for resource in [
+                "resource:food",
+                "resource:gold",
+                "resource:ore",
+                "resource:wood",
+            ] {
+                let resource_id = StableId::new(resource).unwrap();
+                assert_eq!(
+                    town_resource_amount(simulation, resource),
+                    5_000 - available_building.2[&resource_id]
+                );
+            }
             assert_eq!(
-                town_resource_amount(simulation, resource),
-                5_000 - available_building.2[&resource_id]
+                simulation.active_vote.as_ref().map(|vote| &vote.technology),
+                Some(&eligible_technology)
             );
-        }
-        assert_eq!(
-            simulation.active_vote.as_ref().map(|vote| &vote.technology),
-            Some(&eligible_technology)
-        );
-        assert_eq!(simulation.active_event, Some(TownEvent::Festival));
-        let saved_building_id = simulation.buildings.keys().next().unwrap().clone();
+            assert_eq!(simulation.active_event, Some(TownEvent::Festival));
+            (
+                placed_building,
+                simulation.buildings.keys().next().unwrap().clone(),
+                town_resource_amount(simulation, "resource:food"),
+            )
+        };
         let runtime_building_ids: Vec<_> = app
             .world_mut()
             .query::<&RuntimeBuilding>()
@@ -5615,6 +6148,32 @@ mod tests {
                 .resource::<CommandFeedback>()
                 .0
                 .contains("commands: !join")
+        );
+        app.world_mut()
+            .resource_mut::<SimulationRuntime>()
+            .0
+            .damage_actor(&actor_id, u32::MAX)
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<InjectedCommands>()
+            .0
+            .push_back(PendingChatCommand {
+                actor_id: actor_id.clone(),
+                display_name: "debug_viewer".to_owned(),
+                command: ChatCommand::Revive(None),
+            });
+        app.update();
+        let simulation = &app.world().resource::<SimulationRuntime>().0;
+        assert!(simulation.actors[&actor_id].alive);
+        assert_eq!(
+            town_resource_amount(simulation, "resource:food"),
+            food_before_revive - 400
+        );
+        assert!(
+            app.world()
+                .resource::<CommandFeedback>()
+                .0
+                .contains("revived twitch:debug_viewer")
         );
     }
 

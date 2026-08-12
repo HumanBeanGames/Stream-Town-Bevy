@@ -10,8 +10,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, ObjectiveDef, ObjectiveKind, RoleDef, RoleEquipmentDef, StableId,
-    StationDef, StorageContribution, TechGroup, TechNode, TechTree,
+    BuildingDef, ContentCatalog, HealthDef, ObjectiveDef, ObjectiveKind, ProjectileShooterDef,
+    RoleDef, RoleEquipmentDef, StableId, StationDef, StorageContribution, TechGroup, TechNode,
+    TechTree,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -264,6 +265,7 @@ fn convert_export(
                 level_cost_multiplier_per_thousand,
                 storage: storage_contributions(prefab)?,
                 station: station_definition(prefab)?,
+                projectile_shooter: projectile_shooter_definition(prefab)?,
             },
         );
         insert_source_record(&mut source_records, id, asset)?;
@@ -622,6 +624,141 @@ fn station_definition(asset: &UnityAsset) -> Result<Option<StationDef>> {
     }))
 }
 
+fn health_definition(asset: &UnityAsset) -> Result<Option<HealthDef>> {
+    let Some(component) = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component) == "Units.HealthHandler")
+    else {
+        return Ok(None);
+    };
+    let integer = |path: &str| {
+        component_field_value(component, path)
+            .and_then(Value::as_i64)
+            .with_context(|| format!("{} health component is missing {path}", asset.path))
+    };
+    let numeric = |path: &str| {
+        component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .with_context(|| format!("{} health component is missing {path}", asset.path))
+    };
+    let max_health = u32::try_from(integer("_maxHealth")?)
+        .with_context(|| format!("{} health maximum is out of range", asset.path))?;
+    if max_health == 0 {
+        bail!("{} health maximum must be positive", asset.path);
+    }
+    let regeneration = numeric("_healthRegen")?;
+    if !regeneration.is_finite() || regeneration < 0.0 {
+        bail!(
+            "{} health regeneration must be finite and non-negative",
+            asset.path
+        );
+    }
+    let regeneration_milli_per_second = (regeneration * 1_000.0)
+        .round()
+        .to_string()
+        .parse()
+        .with_context(|| format!("{} health regeneration is out of range", asset.path))?;
+    let regeneration_requires_food = component_field_value(component, "_regenRequiresFood")
+        .and_then(Value::as_bool)
+        .with_context(|| {
+            format!(
+                "{} health component is missing _regenRequiresFood",
+                asset.path
+            )
+        })?;
+    let revive_milliseconds = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component) == "Character.PlayerDeathHandler")
+        .map(|death| {
+            let seconds = component_field_value(death, "_reviveTime")
+                .and_then(Value::as_f64)
+                .with_context(|| format!("{} death handler is missing _reviveTime", asset.path))?;
+            if !seconds.is_finite() || seconds <= 0.0 {
+                bail!("{} revive time must be positive", asset.path);
+            }
+            (seconds * 1_000.0)
+                .round()
+                .to_string()
+                .parse()
+                .with_context(|| format!("{} revive time is out of range", asset.path))
+        })
+        .transpose()?;
+    Ok(Some(HealthDef {
+        max_health,
+        regeneration_milli_per_second,
+        regeneration_requires_food,
+        revive_milliseconds,
+    }))
+}
+
+fn projectile_shooter_definition(asset: &UnityAsset) -> Result<Option<ProjectileShooterDef>> {
+    let components: Vec<_> = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Buildings.ProjectileShooter")
+        .collect();
+    let Some(component) = components.first().copied() else {
+        return Ok(None);
+    };
+    let numeric = |path: &str| {
+        component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .with_context(|| format!("{} projectile shooter has invalid {path}", asset.path))
+    };
+    let integer = |path: &str| {
+        component_field_value(component, path)
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .with_context(|| format!("{} projectile shooter has invalid {path}", asset.path))
+    };
+    let scaled = |path: &str, scale: f64| -> Result<u32> {
+        (numeric(path)? * scale)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} projectile shooter {path} is out of range", asset.path))
+    };
+    let definition = ProjectileShooterDef {
+        projectile_pool: component_field_value(component, "ProjectilePoolName")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("{} projectile pool name is invalid", asset.path))?
+            .to_owned(),
+        // Authored Unity distances use two world units per Bevy grid cell.
+        movement_milli_cells_per_second: scaled("_moveSpeed", 500.0)?,
+        damage: integer("_damage")?,
+        range_milli_cells: scaled("_range", 500.0)?,
+        fire_milliseconds: scaled("_fireRate", 1_000.0)?,
+    };
+    for candidate in components.iter().skip(1) {
+        for path in [
+            "ProjectilePoolName",
+            "_moveSpeed",
+            "_damage",
+            "_range",
+            "_fireRate",
+        ] {
+            if component_field_value(candidate, path) != component_field_value(component, path) {
+                bail!(
+                    "{} contains inconsistent projectile shooter variants",
+                    asset.path
+                );
+            }
+        }
+    }
+    Ok(Some(definition))
+}
+
 fn role_equipment(asset: &UnityAsset) -> Result<BTreeMap<String, RoleEquipmentDef>> {
     let component = asset
         .game_object
@@ -820,6 +957,7 @@ fn convert_archetypes(
             footprint,
             scenes,
             component_types,
+            health: health_definition(asset)?,
         };
         if let Some((building, _)) = active_building {
             let previous = building_archetypes.insert(building.clone(), (id.clone(), footprint));
@@ -1655,6 +1793,66 @@ mod tests {
         assert_eq!(station.max_targets, 10);
         assert_eq!(station.update_milliseconds, 3_000);
         assert_eq!(station.search_range_milli_cells, 50_000);
+    }
+
+    #[test]
+    fn converts_health_revival_and_projectile_shooters() {
+        let mut player = asset("player", PLAYER_PREFAB, "UnityEngine.GameObject", vec![]);
+        player.game_object = Some(UnityGameObject {
+            components: vec![
+                component(
+                    "Units.HealthHandler, Assembly-CSharp",
+                    vec![
+                        field("_maxHealth", Value::from(100)),
+                        field("_healthRegen", Value::from(1.25)),
+                        field("_regenRequiresFood", Value::Bool(true)),
+                    ],
+                ),
+                component(
+                    "Character.PlayerDeathHandler, Assembly-CSharp",
+                    vec![field("_reviveTime", Value::from(60.0))],
+                ),
+            ],
+        });
+        assert_eq!(
+            health_definition(&player).unwrap(),
+            Some(HealthDef {
+                max_health: 100,
+                regeneration_milli_per_second: 1_250,
+                regeneration_requires_food: true,
+                revive_milliseconds: Some(60_000),
+            })
+        );
+
+        let mut tower = asset("tower", "tower.prefab", "UnityEngine.GameObject", vec![]);
+        let shooter = || {
+            component(
+                "Buildings.ProjectileShooter, Assembly-CSharp",
+                vec![
+                    field(
+                        "ProjectilePoolName",
+                        Value::String("TowerProjectile".into()),
+                    ),
+                    field("_moveSpeed", Value::from(30.0)),
+                    field("_damage", Value::from(1)),
+                    field("_range", Value::from(20.0)),
+                    field("_fireRate", Value::from(3.0)),
+                ],
+            )
+        };
+        tower.game_object = Some(UnityGameObject {
+            components: vec![shooter(), shooter()],
+        });
+        assert_eq!(
+            projectile_shooter_definition(&tower).unwrap(),
+            Some(ProjectileShooterDef {
+                projectile_pool: "TowerProjectile".into(),
+                movement_milli_cells_per_second: 15_000,
+                damage: 1,
+                range_milli_cells: 10_000,
+                fire_milliseconds: 3_000,
+            })
+        );
     }
 
     #[test]

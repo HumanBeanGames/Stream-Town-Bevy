@@ -1,5 +1,5 @@
 (
-    schema_version: 10,
+    schema_version: 11,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -47,6 +47,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 150,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:bowyard": (
             display_name: "Building_Bowyard",
@@ -91,6 +96,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 150,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:castle": (
             display_name: "Building_Castle",
@@ -136,6 +146,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:farm": (
             display_name: "Building_Farm",
@@ -181,6 +196,11 @@
                 "Utils.SelectionBase",
                 "Utils.SimpleLookAtCamera",
             ],
+            health: Some((
+                max_health: 20,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:fishinghut": (
             display_name: "Building_Station_FishingHut",
@@ -229,6 +249,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 100,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:foodstorage": (
             display_name: "Building_Storage_Food",
@@ -281,6 +306,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:forge": (
             display_name: "Building_Forge",
@@ -328,6 +358,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:fountain": (
             display_name: "Building_Fountain",
@@ -371,6 +406,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 500,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:gate": (
             display_name: "Building_Gate",
@@ -424,6 +464,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 20,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:house": (
             display_name: "Building_House",
@@ -477,6 +522,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 50,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:lumbermill": (
             display_name: "Building_Station_Lumbermill",
@@ -529,6 +579,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:marketplace": (
             display_name: "Building_Marketplace",
@@ -574,6 +629,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:monastery": (
             display_name: "Building_Monastery",
@@ -619,6 +679,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:necrotower": (
             display_name: "Building_NecroTower",
@@ -664,6 +729,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:orestorage": (
             display_name: "Building_Storage_Ore",
@@ -716,6 +786,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:statue_1": (
             display_name: "Building_Statue_01",
@@ -759,6 +834,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:statue_2": (
             display_name: "Building_Statue_02",
@@ -802,6 +882,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:statue_3": (
             display_name: "Building_Statue_03",
@@ -845,6 +930,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:stonemason": (
             display_name: "Building_Station_Stonemason",
@@ -899,6 +989,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:torch": (
             display_name: "Building_Torch",
@@ -931,6 +1026,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:tower": (
             display_name: "Building_Station_Tower",
@@ -986,6 +1086,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 150,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:townhall": (
             display_name: "Building_Station_TownHall",
@@ -1038,6 +1143,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 250,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:wall": (
             display_name: "Building_Wall",
@@ -1125,6 +1235,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:windmill": (
             display_name: "Building_Station_Windmill",
@@ -1178,6 +1293,11 @@
                 "Utils.SimpleRotateOnAxis",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:wizardtower": (
             display_name: "Building_Tower_Wizard",
@@ -1223,6 +1343,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 300,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:building:woodstorage": (
             display_name: "Building_Storage_Wood",
@@ -1275,6 +1400,11 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:02f49d28bc79e8d4abe52c26016f832a": (
             display_name: "Enemy_Stakes_1",
@@ -1510,6 +1640,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 50,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:122de980ba16c8d44a0149e18fe5b03e": (
             display_name: "Env_Necrolands_Debris_15_03",
@@ -1770,6 +1905,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:1ebf70d17d1f1a048ac8af03f7400737": (
             display_name: "Enemy_Minotaur",
@@ -1819,6 +1959,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 25,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:216e6a0e74fb05841804c87d47dc5ead": (
             display_name: "Model_Goblin",
@@ -2202,6 +2347,11 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:3bc849c280f7d414eb16c899177fec32": (
             display_name: "BasicResourceProcessor",
@@ -2285,6 +2435,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:3d0b3ca82df27d84e874a3337e471441": (
             display_name: "VFX_Clouds",
@@ -3464,6 +3619,11 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:67977e08e12e26c4e8718c4a5f45c09b": (
             display_name: "Env_Necrolands_Bones_Troll_01",
@@ -3847,6 +4007,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:7358640a0fe0e20439150c08750cecac": (
             display_name: "Env_Necrolands_Ruins_08",
@@ -3959,6 +4124,11 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 1000,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:76e8cb4141c7a1d4bbde5cc25be9eb97": (
             display_name: "Foliage_Mushrooms",
@@ -4272,6 +4442,11 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 1000,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:8267f536b825b4d458e5059583c7189b": (
             display_name: "Enemy_Fence_3",
@@ -4656,6 +4831,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 1000,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:94690280dced35541b76136d86cb001c": (
             display_name: "Enemy_Goblin_Skull",
@@ -4865,6 +5045,12 @@
                 "Utils.SelectionBase",
                 "Utils.SimpleLookAtCamera",
             ],
+            health: Some((
+                max_health: 100,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: true,
+                revive_milliseconds: Some(60000),
+            )),
         ),
         "archetype:prefab:97829354dc8e71641b1de898259bc8e6": (
             display_name: "UI_CurrentEvent",
@@ -5489,6 +5675,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 5,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:b3437b5dafe6a15489132833187dc592": (
             display_name: "Model_Goblin_Boss",
@@ -5727,6 +5918,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 15,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:bb5331581e5fa8f44ad53933b712895d": (
             display_name: "VFX_Chimney_Smoke",
@@ -5943,6 +6139,11 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 1000,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:cf52cf1722672cb46aaff51dc1eabc28": (
             display_name: "Env_Necrolands_Ruins_03",
@@ -6308,6 +6509,11 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            health: Some((
+                max_health: 10,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:e238e41d271a3499d872bc15929f24ec": (
             display_name: "UI_BuildMenu_Tooltip",
@@ -6643,6 +6849,11 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            health: Some((
+                max_health: 50,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+            )),
         ),
         "archetype:prefab:ed617ade83fb3674abae4072fb62decd": (
             display_name: "UI_ExitToMainMenu",
@@ -7466,6 +7677,13 @@
                 max_targets: 10,
                 update_milliseconds: 3000,
                 search_range_milli_cells: 7500,
+            )),
+            projectile_shooter: Some((
+                projectile_pool: "TowerProjectile",
+                movement_milli_cells_per_second: 15000,
+                damage: 1,
+                range_milli_cells: 10000,
+                fire_milliseconds: 3000,
             )),
         ),
         "building:townhall": (

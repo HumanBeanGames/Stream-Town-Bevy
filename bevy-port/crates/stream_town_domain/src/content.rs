@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 10;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 11;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -35,6 +35,18 @@ pub struct ArchetypeDef {
     pub footprint: [u16; 2],
     pub scenes: Vec<ArchetypeScene>,
     pub component_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<HealthDef>,
+}
+
+/// Authored `HealthHandler` and optional player-revival behavior attached to a prefab.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HealthDef {
+    pub max_health: u32,
+    pub regeneration_milli_per_second: i64,
+    pub regeneration_requires_food: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revive_milliseconds: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,6 +92,18 @@ pub struct BuildingDef {
     pub storage: Vec<StorageContribution>,
     #[serde(default)]
     pub station: Option<StationDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projectile_shooter: Option<ProjectileShooterDef>,
+}
+
+/// A Unity `ProjectileShooter` reduced to deterministic grid-space values.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProjectileShooterDef {
+    pub projectile_pool: String,
+    pub movement_milli_cells_per_second: u32,
+    pub damage: u32,
+    pub range_milli_cells: u32,
+    pub fire_milliseconds: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -286,6 +310,10 @@ pub enum ContentError {
     },
     #[error("building {0} has invalid station timing, range, or target capacity")]
     InvalidStation(StableId),
+    #[error("building {0} has invalid projectile shooter values")]
+    InvalidProjectileShooter(StableId),
+    #[error("archetype {0} has invalid health or revival values")]
+    InvalidHealth(StableId),
     #[error("role {role} equipment contains an empty renderer node for {slot}")]
     EmptyEquipmentNode { role: StableId, slot: &'static str },
     #[error("archetype {0} has an empty footprint")]
@@ -357,6 +385,13 @@ impl ContentCatalog {
                     defaults,
                 });
             }
+            if archetype.health.as_ref().is_some_and(|health| {
+                health.max_health == 0
+                    || health.regeneration_milli_per_second < 0
+                    || health.revive_milliseconds == Some(0)
+            }) {
+                return Err(ContentError::InvalidHealth(id.clone()));
+            }
         }
         for (id, building) in &self.buildings {
             if building.footprint[0] == 0 || building.footprint[1] == 0 {
@@ -387,6 +422,15 @@ impl ContentCatalog {
                     || station.search_range_milli_cells == 0
             }) {
                 return Err(ContentError::InvalidStation(id.clone()));
+            }
+            if building.projectile_shooter.as_ref().is_some_and(|shooter| {
+                shooter.projectile_pool.trim().is_empty()
+                    || shooter.movement_milli_cells_per_second == 0
+                    || shooter.damage == 0
+                    || shooter.range_milli_cells == 0
+                    || shooter.fire_milliseconds == 0
+            }) {
+                return Err(ContentError::InvalidProjectileShooter(id.clone()));
             }
         }
         for (id, role) in &self.roles {

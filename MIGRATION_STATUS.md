@@ -35,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town
-  economy; exhausted resource visuals are hidden. Content schema 10 converts each role's
+  economy; exhausted resource visuals are hidden. Content schema 11 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -58,11 +58,25 @@ mistaken for production-ready systems.
   shields, and helmets; toggles carry-only props from authoritative inventory;
   and drives translated `CarryWood`/`CarryHip` parameters. The content tool shows
   station masks/ranges/capacities and role equipment bindings.
-- Combat roles acquire living enemies while the Goblin holds its ground and
-  retaliates. Both sides path into range, attack on a one-second cadence, apply
-  deterministic role-specific damage, enter the controller's Death state at
-  zero health, wait five seconds, respawn on a connected stable cell, and emit
-  the Revive transition. Actor health is captured in native snapshots.
+- Combat roles acquire living enemies while Goblins acquire the nearest living
+  player and retaliate. Melee roles apply deterministic damage in range;
+  Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
+  whose damage lands on impact. Priests prioritize the nearest injured player,
+  path into authored range, heal on their role cadence, and stop at full health.
+  Death enters the converted controller state; player revival uses the Unity
+  prefab's authored 60-second delay, returns actors to a connected spawn cell,
+  and emits the Revive transition. `!revive` spends the authored 400 food for
+  self-revival, while Priests and Paladins can spend 200 food to revive another
+  stable Twitch actor and earn Unity-equivalent role XP. Dead enemies remain
+  inactive for their owning spawner/event system rather than receiving the old
+  five-second placeholder respawn. Actor health and pending revival time persist
+  in native snapshots.
+- The Tower's two identical Unity `ProjectileShooter` variants are consolidated
+  into one typed definition: 1 damage, three-second fire cadence, 10-cell range,
+  and 15-cell/second projectiles. Completed Tower entities target the nearest
+  living enemy and launch the same visible ECS projectile path used by ranged
+  actors. The converter also promotes all 42 reachable prefab `HealthHandler`
+  records, including regeneration food requirements and player revival timing.
 - Player-placed buildings now follow Unity's health-driven construction
   lifecycle. They start at 10% health, Builder-role actors select a reachable
   perimeter cell and work on the nearest incomplete structure, presentation
@@ -70,7 +84,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 10 also promotes Unity `Placeable` and all six technology effect
+  Content schema 11 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -142,7 +156,7 @@ mistaken for production-ready systems.
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
   building storage contributions, stations, role target masks, and equipment into
-  422 technology objectives into content schema 10, preserves the remaining typed Unity
+  422 technology objectives into content schema 11, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -209,7 +223,8 @@ mistaken for production-ready systems.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
-  projectiles/area attacks/healing beyond the live melee combat loop, station
+  area attacks, additional enemy archetype behaviors/spawners, combat buildings
+  beyond the Tower, healing/revival VFX, station
   effects derived from building level beyond current activation/range behavior,
   and every reachable balance rule from the Unity scenes.
 - Age changes for the always-present Town Hall still require its underlying

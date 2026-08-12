@@ -341,6 +341,17 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             ui.monospace(format!("target: {kind}"));
                         }
                     }
+                    if let Some(shooter) = &building.projectile_shooter {
+                        ui.separator();
+                        ui.label(format!(
+                            "Projectile: {} damage every {:.1}s, {:.1}-cell range, {:.1} cells/s",
+                            shooter.damage,
+                            f64::from(shooter.fire_milliseconds) / 1_000.0,
+                            f64::from(shooter.range_milli_cells) / 1_000.0,
+                            f64::from(shooter.movement_milli_cells_per_second) / 1_000.0,
+                        ));
+                        ui.monospace(format!("Unity pool: {}", shooter.projectile_pool));
+                    }
                 });
             }
         });
