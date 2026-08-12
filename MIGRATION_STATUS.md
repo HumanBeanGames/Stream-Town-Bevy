@@ -373,6 +373,10 @@ mistaken for production-ready systems.
   every imported node simultaneously. Wall and gate adjacency also follows the
   shipping Unity tile-value model/rotation tables; placeholder cubes retain the
   old scale-based construction fallback.
+- Completed gates now preserve Unity's asymmetric traversal rule: player A* may
+  cross their occupied cells while enemies still see the same cells as blocked.
+  Gates under construction remain blocked for everyone, and the exception is
+  derived from stable building state after placement and native-save restore.
 - A full source/settings search found no per-command cooldown state in the
   shipping Unity Twitch dispatcher; its runtime data retains only last-command
   diagnostics. That unauthored subsystem is no longer listed as parity work.

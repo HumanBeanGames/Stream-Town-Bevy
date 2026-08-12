@@ -1,7 +1,7 @@
 pub mod twitch;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -5405,6 +5405,52 @@ fn action_cooldown(
     }
 }
 
+fn completed_player_gate_cells(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> HashSet<GridPos> {
+    let Some(gate) = content
+        .buildings
+        .get(&StableId::new("building:gate").expect("static ID"))
+    else {
+        return HashSet::new();
+    };
+    simulation
+        .buildings
+        .values()
+        .filter(|building| building.complete && building.archetype == gate.archetype)
+        .flat_map(|building| {
+            let footprint = rotated_footprint(gate.footprint, building.rotation_quarter_turns);
+            (0..footprint[1]).flat_map(move |z| {
+                (0..footprint[0]).map(move |x| GridPos {
+                    x: building.position.x.saturating_add(x),
+                    z: building.position.z.saturating_add(z),
+                })
+            })
+        })
+        .collect()
+}
+
+fn agent_path(
+    navigation: &stream_town_domain::NavGrid,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    kind: &ActorKind,
+    start: GridPos,
+    goal: GridPos,
+) -> Vec<GridPos> {
+    let path = if *kind == ActorKind::Player {
+        navigation.find_path_with_exceptions(
+            start,
+            goal,
+            &completed_player_gate_cells(content, simulation),
+        )
+    } else {
+        navigation.find_path(start, goal)
+    };
+    path.unwrap_or_else(|_| vec![start])
+}
+
 fn move_agents(
     mut commands: Commands,
     time: Res<Time>,
@@ -5684,11 +5730,14 @@ fn move_agents(
             );
             agent.goal = goal;
             agent.target = target;
-            agent.path = world
-                .generated
-                .navigation
-                .find_path(location.0, agent.target)
-                .unwrap_or_else(|_| vec![location.0]);
+            agent.path = agent_path(
+                &world.generated.navigation,
+                &content.0,
+                &simulation.0,
+                &agent.kind,
+                location.0,
+                agent.target,
+            );
             agent.path_index = usize::from(agent.path.len() > 1);
         }
         let Some(next) = agent.path.get(agent.path_index).copied() else {
@@ -14182,6 +14231,73 @@ mod tests {
         )
         .unwrap();
         assert!(corner.source_model.ends_with("Age01_Wall_Corner.fbx"));
+    }
+
+    #[test]
+    fn completed_gates_open_player_routes_but_remain_blocked_for_enemies() {
+        let content = embedded_content();
+        let gate_id = StableId::new("building:gate").unwrap();
+        let definition = &content.buildings[&gate_id];
+        let runtime_id = StableId::new("building:gate_test").unwrap();
+        let mut simulation = WorldSimulation::new(42);
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id,
+                archetype: definition.archetype.clone(),
+                position: GridPos { x: 2, z: 1 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+        let mut navigation =
+            stream_town_domain::NavGrid::new(5, 3, vec![false; 15], vec![0; 15]).unwrap();
+        navigation
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: GridPos { x: 2, z: 0 },
+                    max: GridPos { x: 2, z: 2 },
+                },
+                true,
+            )
+            .unwrap();
+        let start = GridPos { x: 0, z: 1 };
+        let goal = GridPos { x: 4, z: 1 };
+        let player_path = agent_path(
+            &navigation,
+            &content,
+            &simulation,
+            &ActorKind::Player,
+            start,
+            goal,
+        );
+        assert!(player_path.contains(&GridPos { x: 2, z: 1 }));
+        assert_eq!(player_path.last(), Some(&goal));
+        assert_eq!(
+            agent_path(
+                &navigation,
+                &content,
+                &simulation,
+                &ActorKind::Enemy,
+                start,
+                goal,
+            ),
+            vec![start]
+        );
+        simulation.buildings.values_mut().next().unwrap().complete = false;
+        assert_eq!(
+            agent_path(
+                &navigation,
+                &content,
+                &simulation,
+                &ActorKind::Player,
+                start,
+                goal,
+            ),
+            vec![start]
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap, HashSet},
 };
 
 use serde::{Deserialize, Serialize};
@@ -144,10 +144,26 @@ impl NavGrid {
         start: GridPos,
         goal: GridPos,
     ) -> Result<Vec<GridPos>, NavigationError> {
+        self.find_path_with_exceptions(start, goal, &HashSet::new())
+    }
+
+    /// Finds a route while treating selected in-bounds blocked cells as walkable.
+    /// This preserves one authoritative occupancy grid while supporting actor-specific
+    /// passages such as completed town gates.
+    pub fn find_path_with_exceptions(
+        &self,
+        start: GridPos,
+        goal: GridPos,
+        walkable_exceptions: &HashSet<GridPos>,
+    ) -> Result<Vec<GridPos>, NavigationError> {
         if !self.contains(start) || !self.contains(goal) {
             return Err(NavigationError::OutsideGrid);
         }
-        if !self.is_walkable(start) || !self.is_walkable(goal) {
+        let walkable = |position| {
+            self.is_walkable(position)
+                || (self.contains(position) && walkable_exceptions.contains(&position))
+        };
+        if !walkable(start) || !walkable(goal) {
             return Err(NavigationError::BlockedEndpoint);
         }
         if start == goal {
@@ -170,7 +186,9 @@ impl NavGrid {
             if current.cost > costs[&current.position] {
                 continue;
             }
-            for neighbour in self.neighbours(current.position) {
+            for neighbour in
+                Self::neighbour_candidates(current.position).filter(|position| walkable(*position))
+            {
                 let height_delta =
                     (i32::from(self.height_at(neighbour).expect("neighbour is in bounds"))
                         - i32::from(
@@ -198,7 +216,7 @@ impl NavGrid {
             .then(|| usize::from(position.z) * usize::from(self.width) + usize::from(position.x))
     }
 
-    fn neighbours(&self, position: GridPos) -> impl Iterator<Item = GridPos> + '_ {
+    fn neighbour_candidates(position: GridPos) -> impl Iterator<Item = GridPos> {
         let candidates = [
             position
                 .x
@@ -217,10 +235,7 @@ impl NavGrid {
                 .checked_add(1)
                 .map(|z| GridPos { x: position.x, z }),
         ];
-        candidates
-            .into_iter()
-            .flatten()
-            .filter(|position| self.is_walkable(*position))
+        candidates.into_iter().flatten()
     }
 }
 
@@ -267,6 +282,29 @@ mod tests {
             .unwrap();
         assert!(path.iter().any(|position| position.z == 7));
         assert_eq!(grid.take_dirty_regions().len(), 1);
+    }
+
+    #[test]
+    fn actor_specific_exception_opens_only_the_requested_blocked_cell() {
+        let mut grid = NavGrid::new(5, 3, vec![false; 15], vec![0; 15]).unwrap();
+        grid.set_blocked(
+            DirtyRegion {
+                min: GridPos { x: 2, z: 0 },
+                max: GridPos { x: 2, z: 2 },
+            },
+            true,
+        )
+        .unwrap();
+        let start = GridPos { x: 0, z: 1 };
+        let goal = GridPos { x: 4, z: 1 };
+        assert_eq!(grid.find_path(start, goal), Err(NavigationError::NoRoute));
+        let gate = GridPos { x: 2, z: 1 };
+        let path = grid
+            .find_path_with_exceptions(start, goal, &HashSet::from([gate]))
+            .unwrap();
+        assert!(path.contains(&gate));
+        assert_eq!(path.first(), Some(&start));
+        assert_eq!(path.last(), Some(&goal));
     }
 
     #[test]

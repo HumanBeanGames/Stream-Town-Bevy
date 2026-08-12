@@ -311,7 +311,10 @@ spark-emitting construction hit, building-level arrows, and persistent
 damage fire/smoke together. Enemy `TargetSensor` masks are authoritative in
 content schema 20: ordinary enemies choose the nearest allowed actor/building,
 while the battering ram attacks only construction and buildings. Zero-health
-buildings are removed and release their dirty navigation region.
+buildings are removed and release their dirty navigation region. Completed
+gates are actor-aware passages: player routes may cross their occupied cells
+while enemy routes remain blocked, matching the shipping Unity rule; gate
+construction sites remain blocked to both sides.
 `STREAM_TOWN_SMOKE_FOLIAGE=1` frames the generated foliage field for a
 repeatable land/shoreline visual capture.
 `STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated
