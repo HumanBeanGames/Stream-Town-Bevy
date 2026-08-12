@@ -17,6 +17,8 @@ pub struct PresentationCatalog {
     #[serde(default)]
     pub controllers: BTreeMap<StableId, AnimationControllerDef>,
     #[serde(default)]
+    pub avatar_masks: BTreeMap<StableId, AvatarMaskDef>,
+    #[serde(default)]
     pub prefab_bindings: BTreeMap<String, PrefabPresentationBinding>,
     /// Effective material dependencies after following nested prefab/model sources.
     #[serde(default)]
@@ -228,7 +230,31 @@ pub struct AnimationLayerDef {
     pub blend_mode: AnimationLayerBlendMode,
     pub default_weight: f32,
     #[serde(default)]
-    pub avatar_mask_guid: Option<String>,
+    pub avatar_mask: Option<StableId>,
+}
+
+impl AnimationLayerDef {
+    /// Unity fixes the base layer's runtime influence at one even though the
+    /// controller YAML serializes its `m_DefaultWeight` as zero.
+    #[must_use]
+    pub fn effective_weight(&self, layer_index: usize) -> f32 {
+        if layer_index == 0 {
+            1.0
+        } else {
+            self.default_weight
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AvatarMaskDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    /// Unity's humanoid body-part mask, retained losslessly for future humanoid rigs.
+    pub humanoid_body_mask_hex: String,
+    /// Slash-separated transform paths. An empty path represents the Animator root.
+    pub transform_weights: BTreeMap<String, f32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -322,6 +348,24 @@ pub enum PresentationError {
         state: StableId,
         reason: String,
     },
+    #[error("avatar mask {mask} has invalid transform {path}: {reason}")]
+    InvalidAvatarMask {
+        mask: StableId,
+        path: String,
+        reason: String,
+    },
+    #[error("controller {controller} layer {layer} references missing avatar mask {mask}")]
+    MissingAvatarMask {
+        controller: StableId,
+        layer: String,
+        mask: StableId,
+    },
+    #[error("controller {controller} layer {layer} has invalid default weight: {reason}")]
+    InvalidAnimationLayerWeight {
+        controller: StableId,
+        layer: String,
+        reason: String,
+    },
     #[error("prefab {prefab_guid} references missing controller {controller}")]
     MissingController {
         prefab_guid: String,
@@ -338,6 +382,41 @@ pub enum PresentationError {
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (id, mask) in &self.avatar_masks {
+            if mask.source_path.contains('\\')
+                || mask.source_path.contains("..")
+                || !Path::new(&mask.source_path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("mask"))
+                || mask.humanoid_body_mask_hex.is_empty()
+                || mask.humanoid_body_mask_hex.len() % 2 != 0
+                || !mask
+                    .humanoid_body_mask_hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(PresentationError::InvalidAvatarMask {
+                    mask: id.clone(),
+                    path: mask.source_path.clone(),
+                    reason: "source path and body mask must be portable Unity mask data".into(),
+                });
+            }
+            for (path, weight) in &mask.transform_weights {
+                let path_valid = !path.contains('\\')
+                    && (path.is_empty()
+                        || path
+                            .split('/')
+                            .all(|segment| !segment.is_empty() && !matches!(segment, "." | "..")));
+                if !path_valid || !matches!(*weight, 0.0 | 1.0) {
+                    return Err(PresentationError::InvalidAvatarMask {
+                        mask: id.clone(),
+                        path: path.clone(),
+                        reason: "transform paths must be portable and weights must be binary"
+                            .into(),
+                    });
+                }
+            }
+        }
         for (id, texture) in &self.textures {
             let extension_valid = Path::new(&texture.asset_path)
                 .extension()
@@ -411,10 +490,27 @@ impl PresentationCatalog {
                 }
             }
             for layer in &controller.layers {
+                if !layer.default_weight.is_finite() || !(0.0..=1.0).contains(&layer.default_weight)
+                {
+                    return Err(PresentationError::InvalidAnimationLayerWeight {
+                        controller: controller_id.clone(),
+                        layer: layer.display_name.clone(),
+                        reason: "weight must be within 0..=1".into(),
+                    });
+                }
                 if !controller.state_machines.contains_key(&layer.state_machine) {
                     return Err(PresentationError::MissingStateMachine {
                         controller: controller_id.clone(),
                         state_machine: layer.state_machine.clone(),
+                    });
+                }
+                if let Some(mask) = &layer.avatar_mask
+                    && !self.avatar_masks.contains_key(mask)
+                {
+                    return Err(PresentationError::MissingAvatarMask {
+                        controller: controller_id.clone(),
+                        layer: layer.display_name.clone(),
+                        mask: mask.clone(),
                     });
                 }
             }
@@ -685,6 +781,66 @@ mod tests {
             Err(PresentationError::MissingTexture {
                 material,
                 texture: missing,
+            })
+        );
+    }
+
+    #[test]
+    fn animator_base_layer_has_fixed_runtime_weight() {
+        let layer = AnimationLayerDef {
+            display_name: "Base Layer".into(),
+            state_machine: StableId::new("animation_state_machine:test:1").unwrap(),
+            blend_mode: AnimationLayerBlendMode::Override,
+            default_weight: 0.0,
+            avatar_mask: None,
+        };
+        assert!((layer.effective_weight(0) - 1.0).abs() < f32::EPSILON);
+        assert!(layer.effective_weight(1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn rejects_dangling_avatar_mask_reference() {
+        let controller_id = StableId::new("controller:test").unwrap();
+        let machine_id = StableId::new("animation_state_machine:test:1").unwrap();
+        let mask_id = StableId::new("avatar_mask:missing").unwrap();
+        let catalog = PresentationCatalog {
+            schema_version: 6,
+            controllers: BTreeMap::from([(
+                controller_id.clone(),
+                AnimationControllerDef {
+                    display_name: "Test".into(),
+                    source_guid: "a".repeat(32),
+                    source_path: "Assets/Test.controller".into(),
+                    parameters: Vec::new(),
+                    states: BTreeMap::new(),
+                    transitions: Vec::new(),
+                    state_machines: BTreeMap::from([(
+                        machine_id.clone(),
+                        AnimationStateMachineDef {
+                            display_name: "Base Layer".into(),
+                            states: Vec::new(),
+                            child_state_machines: Vec::new(),
+                            default_state: None,
+                        },
+                    )]),
+                    layers: vec![AnimationLayerDef {
+                        display_name: "Base Layer".into(),
+                        state_machine: machine_id,
+                        blend_mode: AnimationLayerBlendMode::Override,
+                        default_weight: 0.0,
+                        avatar_mask: Some(mask_id.clone()),
+                    }],
+                    default_states: Vec::new(),
+                },
+            )]),
+            ..PresentationCatalog::default()
+        };
+        assert_eq!(
+            catalog.validate(),
+            Err(PresentationError::MissingAvatarMask {
+                controller: controller_id,
+                layer: "Base Layer".into(),
+                mask: mask_id,
             })
         );
     }

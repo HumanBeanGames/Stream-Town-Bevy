@@ -444,7 +444,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 ui.collapsing(format!("{}  ({id})", controller.display_name), |ui| {
                     ui.monospace(format!("Unity controller: {}", controller.source_path));
                     ui.label(format!(
-                        "{} parameters ({} inferred), {} states, {} transitions, {} layer defaults",
+                        "{} parameters ({} inferred), {} states, {} transitions, {} layers",
                         controller.parameters.len(),
                         controller
                             .parameters
@@ -453,8 +453,32 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             .count(),
                         controller.states.len(),
                         controller.transitions.len(),
-                        controller.default_states.len()
+                        controller.layers.len()
                     ));
+                    for (index, layer) in controller.layers.iter().enumerate() {
+                        let mask = layer
+                            .avatar_mask
+                            .as_ref()
+                            .and_then(|id| state.presentation.avatar_masks.get(id));
+                        ui.monospace(format!(
+                            "{}: {:?}, weight {:.2}{}",
+                            layer.display_name,
+                            layer.blend_mode,
+                            layer.effective_weight(index),
+                            mask.map_or_else(String::new, |mask| format!(
+                                ", mask {} ({} enabled / {} disabled transforms)",
+                                mask.display_name,
+                                mask.transform_weights
+                                    .values()
+                                    .filter(|weight| (**weight - 1.0).abs() < f32::EPSILON)
+                                    .count(),
+                                mask.transform_weights
+                                    .values()
+                                    .filter(|weight| **weight < f32::EPSILON)
+                                    .count()
+                            ))
+                        ));
+                    }
                     for state_def in controller.states.values() {
                         ui.label(format!(
                             "{} (speed {:.2}, {} motions{})",

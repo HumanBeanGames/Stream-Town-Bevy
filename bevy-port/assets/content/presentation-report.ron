@@ -1,5 +1,5 @@
 (
-    schema_version: 5,
+    schema_version: 6,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -14,6 +14,9 @@
     controller_transitions: 166,
     controller_state_machines: 45,
     controller_layers: 33,
+    avatar_masks: 3,
+    avatar_mask_transforms: 477,
+    disabled_avatar_mask_transforms: 118,
     inferred_parameters: 2,
     prefab_bindings: 22,
     native_animation_bindings: 18,

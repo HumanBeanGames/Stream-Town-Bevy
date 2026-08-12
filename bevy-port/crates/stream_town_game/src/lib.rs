@@ -26,13 +26,14 @@ use bevy::{
 };
 use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
-    AnimationControllerRuntime, AnimationTransformTrack, ArchetypeDef, ArchetypeKind,
-    ArchetypeScene, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef, BuildingDirection,
-    BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog, CustomizationKind,
-    EnemyCampState, GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode,
-    MaterialDef, NativeSaveStore, ObjectiveEvent, PresentationCatalog, RoleEquipmentDef,
-    RulerVoteKind, SavedActor, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation,
-    WorldSnapshot, generate_world,
+    AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
+    AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, AvatarMaskDef,
+    BUILDING_MAX_HEALTH, BuildingAction, BuildingDef, BuildingDirection, BuildingState,
+    CameraAction, CameraDirection, ChatCommand, ContentCatalog, CustomizationKind, EnemyCampState,
+    GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
+    NativeSaveStore, ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind,
+    SavedActor, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation, WorldSnapshot,
+    generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -3777,31 +3778,48 @@ fn attach_converted_animations(
         let layer_specs: Vec<_> = controller
             .layers
             .iter()
+            .enumerate()
             .filter_map(|layer| {
+                let (layer_index, layer) = layer;
                 let machine = controller.state_machines.get(&layer.state_machine)?;
                 let state = machine.default_state.clone()?;
-                Some((layer.display_name.clone(), layer.blend_mode, state))
+                Some((layer_index, layer.clone(), state))
             })
             .collect();
         let layer_specs = if layer_specs.is_empty() {
             vec![(
-                "Base Layer".to_owned(),
-                stream_town_domain::AnimationLayerBlendMode::Override,
+                0,
+                AnimationLayerDef {
+                    display_name: "Base Layer".to_owned(),
+                    state_machine: StableId::new("animation_state_machine:fallback:base")
+                        .expect("fallback animation state-machine ID is valid"),
+                    blend_mode: AnimationLayerBlendMode::Override,
+                    default_weight: 0.0,
+                    avatar_mask: None,
+                },
                 spec.state.clone(),
             )]
         } else {
             layer_specs
         };
         let mut layers = Vec::new();
-        for (display_name, blend_mode, state) in layer_specs {
-            let parent = match blend_mode {
-                stream_town_domain::AnimationLayerBlendMode::Override => {
-                    graph.add_blend(1.0, composition)
-                }
-                stream_town_domain::AnimationLayerBlendMode::Additive => {
-                    graph.add_additive_blend(1.0, composition)
-                }
-            };
+        for (layer_index, layer, state) in layer_specs {
+            let mask = register_avatar_mask(
+                &mut graph,
+                u32::try_from(layer_index).expect("Animator layer count fits a Bevy mask"),
+                layer
+                    .avatar_mask
+                    .as_ref()
+                    .and_then(|mask| presentation.0.avatar_masks.get(mask)),
+                &targets,
+            );
+            let parent = add_animation_layer_branch(
+                &mut graph,
+                layer.blend_mode,
+                layer.effective_weight(layer_index),
+                mask,
+                composition,
+            );
             let nodes = converted
                 .iter()
                 .filter(|(clip, _)| state_layer_owns_clip(controller, &state, clip))
@@ -3812,7 +3830,7 @@ fn attach_converted_animations(
                 continue;
             };
             layers.push(ConvertedAnimationLayerDriver {
-                display_name,
+                display_name: layer.display_name,
                 fallback_state: state,
                 runtime,
                 nodes,
@@ -3857,6 +3875,48 @@ fn attach_converted_animations(
             "attached translated Unity animation controller"
         );
     }
+}
+
+fn add_animation_layer_branch(
+    graph: &mut AnimationGraph,
+    blend_mode: AnimationLayerBlendMode,
+    weight: f32,
+    mask: u64,
+    parent: AnimationNodeIndex,
+) -> AnimationNodeIndex {
+    match (blend_mode, mask) {
+        (AnimationLayerBlendMode::Override, 0) => graph.add_blend(weight, parent),
+        (AnimationLayerBlendMode::Override, mask) => {
+            graph.add_blend_with_mask(mask, weight, parent)
+        }
+        (AnimationLayerBlendMode::Additive, 0) => graph.add_additive_blend(weight, parent),
+        (AnimationLayerBlendMode::Additive, mask) => {
+            graph.add_additive_blend_with_mask(mask, weight, parent)
+        }
+    }
+}
+
+fn register_avatar_mask(
+    graph: &mut AnimationGraph,
+    mask_group: u32,
+    authored: Option<&AvatarMaskDef>,
+    targets: &BTreeMap<String, (Entity, Transform)>,
+) -> u64 {
+    let Some(authored) = authored else {
+        return 0;
+    };
+    let mut excluded = false;
+    for path in targets.keys() {
+        if authored
+            .transform_weights
+            .get(path)
+            .is_some_and(|weight| weight.abs() < f32::EPSILON)
+        {
+            graph.add_target_to_mask_group(path.split('/').collect(), mask_group);
+            excluded = true;
+        }
+    }
+    if excluded { 1_u64 << mask_group } else { 0 }
 }
 
 fn state_layer_owns_clip(
@@ -9605,7 +9665,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 5);
+        assert_eq!(presentation.schema_version, 6);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.controllers.len(), 31);
@@ -9650,6 +9710,20 @@ mod tests {
         assert_eq!(controller.layers.len(), 2);
         assert_eq!(controller.layers[0].display_name, "Base Layer");
         assert_eq!(controller.layers[1].display_name, "Top");
+        assert!((controller.layers[0].effective_weight(0) - 1.0).abs() < f32::EPSILON);
+        assert!(controller.layers[1].effective_weight(1).abs() < f32::EPSILON);
+        let base_mask = controller.layers[0]
+            .avatar_mask
+            .as_ref()
+            .and_then(|mask| presentation.avatar_masks.get(mask))
+            .unwrap();
+        assert_eq!(base_mask.display_name, "Player_All");
+        assert!(
+            base_mask
+                .transform_weights
+                .values()
+                .all(|weight| (*weight - 1.0).abs() < f32::EPSILON)
+        );
         for (role_id, role) in &content.roles {
             let parameter = controller
                 .parameters
@@ -9754,6 +9828,39 @@ mod tests {
         let retargeted = retargeted_animation_clip(idle, &targets).unwrap();
         assert!(!retargeted.curves().is_empty());
         assert!(retargeted.duration() >= idle.duration_seconds);
+    }
+
+    #[test]
+    fn authored_layer_weight_and_mask_configure_bevy_graph_branch() {
+        let mut graph = AnimationGraph::new();
+        let composition = graph.add_additive_blend(1.0, graph.root);
+        let path = "CharacterArmature/Body/UpperArm_R";
+        let target = path.split('/').collect::<AnimationTargetId>();
+        let targets =
+            BTreeMap::from([(path.to_owned(), (Entity::PLACEHOLDER, Transform::IDENTITY))]);
+        let authored = AvatarMaskDef {
+            display_name: "Left Arm".into(),
+            source_guid: "a".repeat(32),
+            source_path: "Assets/LeftArm.mask".into(),
+            humanoid_body_mask_hex: "01000000".into(),
+            transform_weights: BTreeMap::from([(path.to_owned(), 0.0)]),
+        };
+        let mask = register_avatar_mask(&mut graph, 3, Some(&authored), &targets);
+        let branch = add_animation_layer_branch(
+            &mut graph,
+            AnimationLayerBlendMode::Additive,
+            0.25,
+            mask,
+            composition,
+        );
+        assert_eq!(mask, 1 << 3);
+        assert_eq!(graph.mask_groups[&target], 1 << 3);
+        assert!(matches!(
+            graph.graph[branch].node_type,
+            AnimationNodeType::Add
+        ));
+        assert!((graph.graph[branch].weight - 0.25).abs() < f32::EPSILON);
+        assert_eq!(graph.graph[branch].mask, 1 << 3);
     }
 
     #[test]

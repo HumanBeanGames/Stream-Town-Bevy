@@ -63,7 +63,7 @@ caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
 The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
-31 controller definitions, 94 stable states, 165 transitions, and inherited
+31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
 `.anim` files into 1,196 stable transform tracks; four property/UI-only clips do
 not contain transform curves. It also retains 11 authored 1D blend states and
@@ -239,14 +239,17 @@ controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use
 that controller contract as well. Presentation schema 4 preserves the 32
 shipping states with active float speed parameters and applies their authored
-base-speed multiplier during playback. Presentation schema 5 also preserves all
+base-speed multiplier during playback. Presentation schema 6 also preserves all
 45 state machines and 33 layers; the runtime follows conditioned child-machine
 entries and parent defaults/exits. Independent layer runtimes share live parameters
-and route their clips through Bevy override/additive graph nodes; Character's Top
-carry layer therefore composes with Base locomotion/action. Translated avatar-mask
-bone filtering, exact layer weights, rare/non-gameplay action emitters,
-exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
-and custom WGSL shader parity remain presentation work.
+and route their clips through Bevy override/additive graph nodes with Unity-correct
+effective weights. The three AvatarMask assets retain 477 stable transform weights
+(118 exclusions), and excluded bones are assigned to Bevy animation mask groups.
+Unity fixes layer zero to weight one; higher layers use their serialized default,
+so the shipping Character Top layer continues to evaluate its carry state machine
+but correctly has zero pose influence. Rare/non-gameplay action emitters, exact
+Unity curve tangents, property/UI animation, exact multi-slot assignment, and
+custom WGSL shader parity remain presentation work.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

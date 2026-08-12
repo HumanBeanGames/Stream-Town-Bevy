@@ -149,6 +149,7 @@ namespace StreamTown.Migration
                 record.GameObject = ExportGameObject(gameObject, path, warnings);
             else if (main is ScriptableObject
                 || main is Material
+                || main is AvatarMask
                 || main is RuntimeAnimatorController
                 || main is AnimationClip)
                 record.SerializedFields = SerializeObject(main, warnings, path);
@@ -528,7 +529,7 @@ namespace StreamTown.Migration
             string extension = Path.GetExtension(normalized);
             bool supported = new[]
             {
-                ".unity", ".prefab", ".asset", ".anim", ".controller", ".overridecontroller",
+                ".unity", ".prefab", ".asset", ".anim", ".controller", ".overridecontroller", ".mask",
                 ".fbx", ".obj", ".blend", ".mat", ".shader", ".shadergraph", ".png", ".tga",
                 ".jpg", ".jpeg", ".psd", ".vfx", ".wav", ".ogg", ".mp3", ".json", ".txt", ".bytes"
             }.Contains(extension);
@@ -551,6 +552,7 @@ namespace StreamTown.Migration
                 case ".controller": return "animator_controller";
                 case ".overridecontroller": return "animator_override_controller";
                 case ".anim": return "animation_clip";
+                case ".mask": return "avatar_mask";
                 case ".fbx": case ".obj": case ".blend": return "model";
                 case ".mat": return "material";
                 case ".shader": case ".shadergraph": return "shader";

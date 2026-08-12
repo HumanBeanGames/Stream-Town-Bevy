@@ -11,8 +11,9 @@ use stream_town_domain::{
     AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
     AnimationLayerBlendMode, AnimationLayerDef, AnimationMotionDef, AnimationParameterDef,
     AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
-    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, MaterialAlphaMode,
-    MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId, TextureDef,
+    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, AvatarMaskDef,
+    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId,
+    TextureDef,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -32,6 +33,9 @@ pub struct PresentationConversionReport {
     pub controller_transitions: usize,
     pub controller_state_machines: usize,
     pub controller_layers: usize,
+    pub avatar_masks: usize,
+    pub avatar_mask_transforms: usize,
+    pub disabled_avatar_mask_transforms: usize,
     pub inferred_parameters: usize,
     pub prefab_bindings: usize,
     pub native_animation_bindings: usize,
@@ -72,6 +76,8 @@ struct UnityField {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct UnityReference {
+    #[serde(default)]
+    guid: Option<String>,
     #[serde(default)]
     path: Option<String>,
 }
@@ -165,6 +171,7 @@ pub fn convert(
     let materials = convert_materials(&export, &assets_by_path)?;
     let prefab_materials = convert_prefab_materials(&export, &assets_by_path, &materials);
     let mut clips = convert_clips(&export, &root)?;
+    let avatar_masks = convert_avatar_masks(&export, &root)?;
     let controllers = convert_controllers(&export, &root, &assets_by_guid, &mut clips)?;
     let prefab_bindings = convert_prefab_bindings(&export, &assets_by_path, &controllers);
     assign_clip_rigs_and_reference_poses(
@@ -175,11 +182,12 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 5,
+        schema_version: 6,
         textures,
         materials,
         clips,
         controllers,
+        avatar_masks,
         prefab_bindings,
         prefab_materials,
     };
@@ -192,7 +200,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 5,
+        schema_version: 6,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -235,6 +243,18 @@ pub fn convert(
             .values()
             .map(|controller| controller.layers.len())
             .sum(),
+        avatar_masks: catalog.avatar_masks.len(),
+        avatar_mask_transforms: catalog
+            .avatar_masks
+            .values()
+            .map(|mask| mask.transform_weights.len())
+            .sum(),
+        disabled_avatar_mask_transforms: catalog
+            .avatar_masks
+            .values()
+            .flat_map(|mask| mask.transform_weights.values())
+            .filter(|weight| weight.abs() < f32::EPSILON)
+            .count(),
         inferred_parameters: catalog
             .controllers
             .values()
@@ -626,6 +646,97 @@ fn convert_controllers(
         controllers.insert(controller_id(&asset.guid)?, controller);
     }
     Ok(controllers)
+}
+
+fn convert_avatar_masks(
+    export: &UnityExport,
+    unity_root: &Path,
+) -> Result<BTreeMap<StableId, AvatarMaskDef>> {
+    let mut sources = BTreeMap::<String, (String, String)>::new();
+    for asset in export
+        .assets
+        .iter()
+        .filter(|asset| is_avatar_mask_path(&asset.path))
+    {
+        sources.insert(asset.guid.clone(), (asset.path.clone(), asset.name.clone()));
+    }
+    for dependency in export
+        .assets
+        .iter()
+        .flat_map(|asset| asset.dependencies.iter())
+    {
+        let Some((guid, path)) = dependency.guid.as_deref().zip(dependency.path.as_deref()) else {
+            continue;
+        };
+        if is_avatar_mask_path(path) {
+            let display_name = Path::new(path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("AvatarMask")
+                .to_owned();
+            sources
+                .entry(guid.to_owned())
+                .or_insert_with(|| (path.to_owned(), display_name));
+        }
+    }
+
+    sources
+        .into_iter()
+        .map(|(guid, (path, fallback_name))| {
+            let source = unity_root.join(&path);
+            let contents = fs::read_to_string(&source)
+                .with_context(|| format!("failed to read avatar mask {}", source.display()))?;
+            let mask = parse_avatar_mask(&guid, &path, &fallback_name, &contents)?;
+            Ok((avatar_mask_id(&guid)?, mask))
+        })
+        .collect()
+}
+
+fn parse_avatar_mask(
+    guid: &str,
+    source_path: &str,
+    fallback_name: &str,
+    contents: &str,
+) -> Result<AvatarMaskDef> {
+    let documents = parse_yaml_documents(contents)?;
+    let document = documents
+        .iter()
+        .find(|document| document.class_id == 319)
+        .with_context(|| format!("{source_path} has no Unity AvatarMask document"))?;
+    let mut transform_weights = BTreeMap::new();
+    let mut index = 0;
+    while index < document.lines.len() {
+        let Some(path) = document.lines[index]
+            .trim_start()
+            .strip_prefix("- m_Path:")
+            .map(str::trim)
+        else {
+            index += 1;
+            continue;
+        };
+        let weight = document.lines[index + 1..]
+            .iter()
+            .take_while(|line| !line.trim_start().starts_with("- m_Path:"))
+            .find_map(|line| line.trim().strip_prefix("m_Weight:").map(str::trim))
+            .with_context(|| format!("avatar mask {source_path} path {path:?} has no weight"))?
+            .parse::<f32>()
+            .with_context(|| {
+                format!("avatar mask {source_path} path {path:?} has invalid weight")
+            })?;
+        transform_weights.insert(path.to_owned(), weight);
+        index += 1;
+    }
+    Ok(AvatarMaskDef {
+        display_name: scalar(&document.lines, "m_Name:")
+            .unwrap_or(fallback_name)
+            .to_owned(),
+        source_guid: guid.to_owned(),
+        source_path: source_path.to_owned(),
+        humanoid_body_mask_hex: scalar(&document.lines, "m_Mask:")
+            .unwrap_or_default()
+            .to_owned(),
+        transform_weights,
+    })
 }
 
 fn parse_controller(
@@ -1391,10 +1502,10 @@ fn parse_layers(
                 _ => AnimationLayerBlendMode::Override,
             },
             default_weight: scalar_f32(block, "m_DefaultWeight:").unwrap_or(1.0),
-            avatar_mask_guid: block.iter().find_map(|line| {
+            avatar_mask: block.iter().find_map(|line| {
                 line.trim_start()
                     .starts_with("m_Mask:")
-                    .then(|| reference_guid(line).map(str::to_owned))
+                    .then(|| reference_guid(line).and_then(|guid| avatar_mask_id(guid).ok()))
                     .flatten()
             }),
         });
@@ -1561,6 +1672,12 @@ fn is_texture_path(path: &str) -> bool {
         })
 }
 
+fn is_avatar_mask_path(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mask"))
+}
+
 fn glb_asset_path(source_model: &str) -> String {
     let relative = source_model.strip_prefix("Assets/").unwrap_or(source_model);
     let stem = relative
@@ -1583,6 +1700,10 @@ fn clip_id(guid: &str) -> Result<StableId> {
 
 fn controller_id(guid: &str) -> Result<StableId> {
     StableId::new(format!("controller:{guid}")).map_err(Into::into)
+}
+
+fn avatar_mask_id(guid: &str) -> Result<StableId> {
+    StableId::new(format!("avatar_mask:{guid}")).map_err(Into::into)
 }
 
 fn animation_state_id(controller_guid: &str, file_id: i64) -> Result<StableId> {
@@ -1753,6 +1874,38 @@ AnimatorController:
         let state = controller.states.values().next().unwrap();
         assert_eq!(state.speed_parameter.as_deref(), Some("AnimationSpeed"));
         assert_eq!(clips.len(), 1);
+    }
+
+    #[test]
+    fn parses_binary_unity_avatar_mask_paths() {
+        let yaml = r"%YAML 1.1
+--- !u!319 &31900000
+AvatarMask:
+  m_Name: Arms
+  m_Mask: 01000000
+  m_Elements:
+  - m_Path:
+    m_Weight: 1
+  - m_Path: CharacterArmature/Body
+    m_Weight: 0
+  - m_Path: CharacterArmature/Body/UpperArm_L
+    m_Weight: 1
+";
+        let mask = parse_avatar_mask(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Assets/Arms.mask",
+            "Fallback",
+            yaml,
+        )
+        .unwrap();
+        assert_eq!(mask.display_name, "Arms");
+        assert_eq!(mask.humanoid_body_mask_hex, "01000000");
+        assert_eq!(mask.transform_weights.len(), 3);
+        assert!(mask.transform_weights["CharacterArmature/Body"].abs() < f32::EPSILON);
+        assert!(
+            (mask.transform_weights["CharacterArmature/Body/UpperArm_L"] - 1.0).abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]

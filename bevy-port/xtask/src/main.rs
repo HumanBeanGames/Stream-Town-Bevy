@@ -214,10 +214,24 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (5, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
+    ) != (6, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
         || (presentation_state_machines, presentation_layers) != (45, 33)
+        || presentation.avatar_masks.len() != 3
+        || presentation
+            .avatar_masks
+            .values()
+            .map(|mask| mask.transform_weights.len())
+            .sum::<usize>()
+            != 477
+        || presentation
+            .avatar_masks
+            .values()
+            .flat_map(|mask| mask.transform_weights.values())
+            .filter(|weight| weight.abs() < f32::EPSILON)
+            .count()
+            != 118
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }

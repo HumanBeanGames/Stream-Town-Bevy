@@ -66,15 +66,19 @@ mistaken for production-ready systems.
   Presentation schema 4 also preserves the 32 shipping Animator states with an
   active float speed parameter; Bevy multiplies each state's authored base speed
   by that live parameter, including every Player action bound to `ActionSpeed`.
-- Presentation schema 5 preserves all 45 state machines and 33 controller layers,
-  including layer roots, nested children, default states, blend modes, avatar-mask
-  GUIDs, Any State ownership, entry transitions, and state-machine destinations.
+- Presentation schema 6 preserves all 45 state machines and 33 controller layers,
+  including layer roots, nested children, default states, blend modes, stable
+  avatar-mask references, Any State ownership, entry transitions, and state-machine destinations.
   The runtime follows the active base hierarchy into conditioned child entries and
   returns child exits through their parent default instead of a hard-coded reset.
 - Converted controller layers now keep independent state runtimes with shared live
-  parameters. Their clips are routed beneath Bevy override/additive graph nodes, so
-  Character's Base locomotion/action and Top `Carry`/`CarryHip` states can run at
-  the same time; the Top layer follows live inventory-driven carry parameters.
+  parameters. Their clips are routed beneath Bevy override/additive graph nodes
+  with Unity-correct weights: layer zero is fixed at one, while later layers use
+  their serialized defaults. All three AvatarMask assets retain 477 transform
+  weights (118 disabled), stable references, and humanoid-body mask bytes; disabled
+  targets become Bevy animation mask groups. Character's Top `Carry`/`CarryHip`
+  state machine follows live inventory parameters but, matching its source
+  controller, its authored zero weight gives it no pose influence.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
@@ -222,7 +226,7 @@ mistaken for production-ready systems.
   133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
   materials with shader source, PBR approximations, texture slots, and custom
   shader properties, and translates all 31 Animator controllers into 94 stable
-  states, 165 transitions, parameter schemas, layer defaults, and 75 referenced
+  states, 166 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
   files into 1,196 stable transform tracks with rig-relative reference poses;
   the remaining four clips contain property/UI animation rather than transform
@@ -356,9 +360,8 @@ presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
-storage, stat, and building-age effects. It is still missing translated avatar-mask
-bone filtering and exact layer weights, rare/non-gameplay action emitters,
-production terrain/foliage shaders beyond the new environment palettes and
+storage, stat, and building-age effects. It is still missing rare/non-gameplay
+action emitters, production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
