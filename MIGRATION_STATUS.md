@@ -71,6 +71,10 @@ mistaken for production-ready systems.
   GUIDs, Any State ownership, entry transitions, and state-machine destinations.
   The runtime follows the active base hierarchy into conditioned child entries and
   returns child exits through their parent default instead of a hard-coded reset.
+- Converted controller layers now keep independent state runtimes with shared live
+  parameters. Their clips are routed beneath Bevy override/additive graph nodes, so
+  Character's Base locomotion/action and Top `Carry`/`CarryHip` states can run at
+  the same time; the Top layer follows live inventory-driven carry parameters.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
@@ -352,8 +356,8 @@ presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
-storage, stat, and building-age effects. It is still missing simultaneous additive
-layer pose composition and avatar-mask application, rare/non-gameplay action emitters,
+storage, stat, and building-age effects. It is still missing translated avatar-mask
+bone filtering and exact layer weights, rare/non-gameplay action emitters,
 production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU

@@ -218,6 +218,9 @@ authoritative simulation. For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
+`STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
+with one wood so the independent Top additive layer enters its authored Carry
+state deterministically.
 `STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
@@ -238,8 +241,10 @@ that controller contract as well. Presentation schema 4 preserves the 32
 shipping states with active float speed parameters and applies their authored
 base-speed multiplier during playback. Presentation schema 5 also preserves all
 45 state machines and 33 layers; the runtime follows conditioned child-machine
-entries and parent defaults/exits for the active base hierarchy. Simultaneous
-additive-layer pose composition, avatar-mask application, rare/non-gameplay action emitters,
+entries and parent defaults/exits. Independent layer runtimes share live parameters
+and route their clips through Bevy override/additive graph nodes; Character's Top
+carry layer therefore composes with Base locomotion/action. Translated avatar-mask
+bone filtering, exact layer weights, rare/non-gameplay action emitters,
 exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
 and custom WGSL shader parity remain presentation work.
 

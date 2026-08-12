@@ -11,7 +11,7 @@ use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody, SpatialQuery, Spatia
 use bevy::{
     animation::{
         AnimatedBy, AnimationClip, AnimationTargetId, animated_field,
-        graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
+        graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex, AnimationNodeType},
         prelude::{AnimatableCurve, AnimatableKeyframeCurve},
     },
     asset::{AssetPlugin, RenderAssetUsages},
@@ -464,12 +464,17 @@ struct ActorAnimationDriver {
 struct ConvertedAnimationDriver {
     actor_root: Entity,
     controller: StableId,
+    layers: Vec<ConvertedAnimationLayerDriver>,
+    last_alive: Option<bool>,
+    active_action: Option<String>,
+}
+
+struct ConvertedAnimationLayerDriver {
+    display_name: String,
     fallback_state: StableId,
     runtime: AnimationControllerRuntime,
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
     active: Vec<(AnimationNodeIndex, f32)>,
-    last_alive: Option<bool>,
-    active_action: Option<String>,
 }
 
 #[derive(Component, Clone)]
@@ -1197,6 +1202,12 @@ fn generate_and_spawn_world(
         };
         if let Some(actor) = simulation.actors.get_mut(&actor_id) {
             actor.archetype.clone_from(&authored_archetype);
+            if spawned == 1 && std::env::var_os("STREAM_TOWN_DEBUG_CARRY").is_some() {
+                actor.role = StableId::new("role:logger").expect("static ID");
+                actor
+                    .inventory
+                    .insert(StableId::new("resource:wood").expect("static ID"), 1);
+            }
             if let Some(health) = authored_archetype
                 .as_ref()
                 .and_then(|id| content.0.archetypes.get(id))
@@ -3761,17 +3772,60 @@ fn attach_converted_animations(
         if converted.is_empty() {
             continue;
         }
-        let (graph, graph_nodes) =
-            AnimationGraph::from_clips(converted.iter().map(|(_, clip)| clip.clone()));
-        let nodes: BTreeMap<_, _> = converted
+        let mut graph = AnimationGraph::new();
+        let composition = graph.add_additive_blend(1.0, graph.root);
+        let layer_specs: Vec<_> = controller
+            .layers
             .iter()
-            .zip(graph_nodes)
-            .map(|((clip, _), node)| (clip.clone(), node))
+            .filter_map(|layer| {
+                let machine = controller.state_machines.get(&layer.state_machine)?;
+                let state = machine.default_state.clone()?;
+                Some((layer.display_name.clone(), layer.blend_mode, state))
+            })
             .collect();
-        let Ok(runtime) = AnimationControllerRuntime::in_state(controller, spec.state.clone())
-        else {
-            continue;
+        let layer_specs = if layer_specs.is_empty() {
+            vec![(
+                "Base Layer".to_owned(),
+                stream_town_domain::AnimationLayerBlendMode::Override,
+                spec.state.clone(),
+            )]
+        } else {
+            layer_specs
         };
+        let mut layers = Vec::new();
+        for (display_name, blend_mode, state) in layer_specs {
+            let parent = match blend_mode {
+                stream_town_domain::AnimationLayerBlendMode::Override => {
+                    graph.add_blend(1.0, composition)
+                }
+                stream_town_domain::AnimationLayerBlendMode::Additive => {
+                    graph.add_additive_blend(1.0, composition)
+                }
+            };
+            let nodes = converted
+                .iter()
+                .filter(|(clip, _)| state_layer_owns_clip(controller, &state, clip))
+                .map(|(clip, handle)| (clip.clone(), graph.add_clip(handle.clone(), 1.0, parent)))
+                .collect();
+            let Ok(runtime) = AnimationControllerRuntime::in_state(controller, state.clone())
+            else {
+                continue;
+            };
+            layers.push(ConvertedAnimationLayerDriver {
+                display_name,
+                fallback_state: state,
+                runtime,
+                nodes,
+                active: Vec::new(),
+            });
+        }
+        if layers.is_empty() {
+            continue;
+        }
+        debug_assert!(matches!(
+            graph.graph[composition].node_type,
+            AnimationNodeType::Add
+        ));
         let graph = animation_graphs.add(graph);
         for (path, (entity, _)) in &targets {
             commands.entity(*entity).insert((
@@ -3785,10 +3839,7 @@ fn attach_converted_animations(
             ConvertedAnimationDriver {
                 actor_root,
                 controller: spec.controller.clone(),
-                fallback_state: spec.state.clone(),
-                runtime,
-                nodes,
-                active: Vec::new(),
+                layers,
                 last_alive: None,
                 active_action: None,
             },
@@ -3801,10 +3852,55 @@ fn attach_converted_animations(
             controller = %spec.controller,
             state = %spec.state,
             clips = converted.len(),
+            layers = controller.layers.len().max(1),
             targets = targets.len(),
             "attached translated Unity animation controller"
         );
     }
+}
+
+fn state_layer_owns_clip(
+    controller: &stream_town_domain::AnimationControllerDef,
+    layer_state: &StableId,
+    clip: &StableId,
+) -> bool {
+    let Some(root) = controller.layers.iter().find_map(|layer| {
+        controller
+            .state_machines
+            .get(&layer.state_machine)
+            .and_then(|machine| {
+                (machine.default_state.as_ref() == Some(layer_state))
+                    .then_some(&layer.state_machine)
+            })
+    }) else {
+        return true;
+    };
+    state_machine_state_ids(controller, root).any(|state| {
+        controller.states[state]
+            .motions
+            .iter()
+            .any(|motion| &motion.clip == clip)
+    })
+}
+
+fn state_machine_state_ids<'a>(
+    controller: &'a stream_town_domain::AnimationControllerDef,
+    root: &'a StableId,
+) -> impl Iterator<Item = &'a StableId> {
+    let mut pending = vec![root];
+    let mut states = Vec::new();
+    let mut visited = BTreeSet::new();
+    while let Some(machine_id) = pending.pop() {
+        if !visited.insert(machine_id) {
+            continue;
+        }
+        let Some(machine) = controller.state_machines.get(machine_id) else {
+            continue;
+        };
+        states.extend(&machine.states);
+        pending.extend(&machine.child_state_machines);
+    }
+    states.into_iter()
 }
 
 fn animation_root_name(clip: &AnimationClipDef) -> Option<&str> {
@@ -4379,14 +4475,18 @@ fn drive_converted_animations(
         } else {
             0.0
         };
-        let _ = driver.runtime.set_float("Move Speed", move_speed);
+        for layer in &mut driver.layers {
+            let _ = layer.runtime.set_float("Move Speed", move_speed);
+        }
 
         if let Some(alive) = simulation.0.actors.get(&agent.id).map(|actor| actor.alive) {
             if let Some(previous) = driver.last_alive
                 && alive != previous
             {
                 let trigger = if alive { "Revive" } else { "Death" };
-                let _ = driver.runtime.set_trigger(trigger);
+                for layer in &mut driver.layers {
+                    let _ = layer.runtime.set_trigger(trigger);
+                }
             }
             driver.last_alive = Some(alive);
         }
@@ -4394,24 +4494,28 @@ fn drive_converted_animations(
             let action = agent_action_animation(&content.0, agent, actor);
             if driver.active_action.as_deref() != action.as_deref() {
                 if let Some(previous) = driver.active_action.take() {
-                    let _ = driver.runtime.reset_trigger(&previous);
+                    for layer in &mut driver.layers {
+                        let _ = layer.runtime.reset_trigger(&previous);
+                    }
                 }
-                let _ = driver.runtime.set_boolean("Action", action.is_some());
+                for layer in &mut driver.layers {
+                    let _ = layer.runtime.set_boolean("Action", action.is_some());
+                }
                 if let Some(action) = &action {
-                    let _ = driver.runtime.set_trigger(action);
                     let variants = content
                         .0
                         .roles
                         .get(&actor.role)
                         .map_or(1, |role| role.action_animation_variants.max(1));
                     let index = deterministic_animation_variant(&agent.id, action, variants);
-                    let _ = driver
-                        .runtime
-                        .set_integer("AnimationIndex", i32::from(index));
-                    let _ = driver.runtime.set_float(
-                        "ActionSpeed",
-                        action_animation_speed(&content.0, &simulation.0, actor),
-                    );
+                    let speed = action_animation_speed(&content.0, &simulation.0, actor);
+                    for layer in &mut driver.layers {
+                        let _ = layer.runtime.set_trigger(action);
+                        let _ = layer
+                            .runtime
+                            .set_integer("AnimationIndex", i32::from(index));
+                        let _ = layer.runtime.set_float("ActionSpeed", speed);
+                    }
                 }
                 driver.active_action = action;
             }
@@ -4422,56 +4526,76 @@ fn drive_converted_animations(
                 .get(&actor.role)
                 .and_then(|role| role.equipment.as_ref())
                 .and_then(|equipment| equipment.carry_animation.as_deref());
-            let _ = driver
-                .runtime
-                .set_boolean("CarryWood", carrying && carry_kind == Some("Carry Wood"));
-            let _ = driver
-                .runtime
-                .set_boolean("CarryHip", carrying && carry_kind == Some("Carry Hip"));
+            for layer in &mut driver.layers {
+                let _ = layer
+                    .runtime
+                    .set_boolean("CarryWood", carrying && carry_kind == Some("Carry Wood"));
+                let _ = layer
+                    .runtime
+                    .set_boolean("CarryHip", carrying && carry_kind == Some("Carry Hip"));
+            }
         }
 
-        let normalized_time = current_normalized_time(&player, &driver, &presentation.0);
-        let transition = driver
-            .runtime
-            .evaluate_transitions(controller, normalized_time)
-            .ok();
-        if matches!(
-            transition,
-            Some(stream_town_domain::AnimationTransitionOutcome::Exited)
-        ) {
-            let fallback_state = driver.fallback_state.clone();
-            let _ = driver.runtime.enter_state(controller, fallback_state);
-        }
-        if let Some(stream_town_domain::AnimationTransitionOutcome::Entered(state)) = &transition {
-            info!(
-                actor = ?driver.actor_root,
-                state = %state,
-                "translated animation controller entered state"
-            );
-        }
+        let actor_root = driver.actor_root;
+        let mut combined = Vec::new();
+        for layer in &mut driver.layers {
+            let normalized_time = if controller.states[layer.runtime.current_state()]
+                .motions
+                .is_empty()
+            {
+                1.0
+            } else {
+                current_normalized_time(&player, layer, &presentation.0)
+            };
+            let transition = layer
+                .runtime
+                .evaluate_transitions(controller, normalized_time)
+                .ok();
+            if matches!(
+                transition,
+                Some(stream_town_domain::AnimationTransitionOutcome::Exited)
+            ) {
+                let fallback_state = layer.fallback_state.clone();
+                let _ = layer.runtime.enter_state(controller, fallback_state);
+            }
+            if let Some(stream_town_domain::AnimationTransitionOutcome::Entered(state)) =
+                &transition
+            {
+                info!(
+                    actor = ?actor_root,
+                    layer = %layer.display_name,
+                    state = %state,
+                    "translated animation controller entered state"
+                );
+            }
 
-        let Ok(Some(selection)) = driver.runtime.motion_selection(controller) else {
-            continue;
-        };
-        let desired = animation_nodes_for_selection(&selection, &driver.nodes);
-        if desired.is_empty() {
-            continue;
-        }
-        let state_speed = driver.runtime.state_speed(controller).unwrap_or(1.0);
-        let changed = !same_animation_blend(&driver.active, &desired);
-        apply_animation_blend(&mut player, &desired, state_speed);
-        if changed {
-            info!(
-                actor = ?driver.actor_root,
-                state = %driver.runtime.current_state(),
-                primary = %selection.first.clip,
-                primary_weight = selection.first.weight,
-                secondary = selection.second.as_ref().map(|motion| motion.clip.as_str()),
-                secondary_weight = selection.second.as_ref().map(|motion| motion.weight),
-                "applied translated animation blend"
+            let Ok(Some(selection)) = layer.runtime.motion_selection(controller) else {
+                layer.active.clear();
+                continue;
+            };
+            let desired = animation_nodes_for_selection(&selection, &layer.nodes);
+            let state_speed = layer.runtime.state_speed(controller).unwrap_or(1.0);
+            let changed = !same_animation_blend(&layer.active, &desired);
+            if changed {
+                info!(
+                    actor = ?actor_root,
+                    layer = %layer.display_name,
+                    state = %layer.runtime.current_state(),
+                    primary = %selection.first.clip,
+                    primary_weight = selection.first.weight,
+                    secondary = selection.second.as_ref().map(|motion| motion.clip.as_str()),
+                    secondary_weight = selection.second.as_ref().map(|motion| motion.weight),
+                    "applied translated animation blend"
+                );
+            }
+            combined.extend(
+                desired
+                    .iter()
+                    .map(|(node, weight)| (*node, *weight, state_speed)),
             );
+            layer.active = desired;
         }
-        driver.active = desired;
+        apply_animation_blend(&mut player, &combined);
     }
 }
 
@@ -4537,13 +4661,13 @@ fn deterministic_animation_variant(actor: &StableId, action: &str, variants: u8)
 
 fn current_normalized_time(
     player: &AnimationPlayer,
-    driver: &ConvertedAnimationDriver,
+    layer: &ConvertedAnimationLayerDriver,
     presentation: &PresentationCatalog,
 ) -> f32 {
     player
         .playing_animations()
         .filter_map(|(node, animation)| {
-            let clip = driver
+            let clip = layer
                 .nodes
                 .iter()
                 .find_map(|(clip, candidate)| (candidate == node).then_some(clip))?;
@@ -4572,23 +4696,19 @@ fn animation_nodes_for_selection(
     desired
 }
 
-fn apply_animation_blend(
-    player: &mut AnimationPlayer,
-    desired: &[(AnimationNodeIndex, f32)],
-    speed: f32,
-) {
+fn apply_animation_blend(player: &mut AnimationPlayer, desired: &[(AnimationNodeIndex, f32, f32)]) {
     let playing: Vec<_> = player.playing_animations().map(|(node, _)| *node).collect();
     for node in playing {
-        if !desired.iter().any(|(desired, _)| *desired == node) {
+        if !desired.iter().any(|(desired, _, _)| *desired == node) {
             player.stop(node);
         }
     }
-    for (node, weight) in desired {
+    for (node, weight, speed) in desired {
         player
             .play(*node)
             .repeat()
             .set_weight(*weight)
-            .set_speed(speed);
+            .set_speed(*speed);
     }
 }
 
@@ -9580,6 +9700,28 @@ mod tests {
             controller.states[&locomotion_state].display_name,
             "Locomotion"
         );
+        let top = controller
+            .layers
+            .iter()
+            .find(|layer| layer.display_name == "Top")
+            .unwrap();
+        let top_state = controller.state_machines[&top.state_machine]
+            .default_state
+            .clone()
+            .unwrap();
+        let mut top_runtime = AnimationControllerRuntime::in_state(controller, top_state).unwrap();
+        top_runtime.set_boolean("CarryWood", true).unwrap();
+        let carry_transition = top_runtime.evaluate_transitions(controller, 1.0).unwrap();
+        let stream_town_domain::AnimationTransitionOutcome::Entered(carry_state) = carry_transition
+        else {
+            panic!("Top layer did not enter Carry from authored CarryWood parameter");
+        };
+        assert_eq!(controller.states[&carry_state].display_name, "Carry");
+        assert!(state_layer_owns_clip(
+            controller,
+            top_runtime.current_state(),
+            &controller.states[&carry_state].motions[0].clip,
+        ));
         assert_eq!(
             presentation
                 .clips
