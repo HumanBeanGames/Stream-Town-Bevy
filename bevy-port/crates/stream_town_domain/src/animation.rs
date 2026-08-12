@@ -235,6 +235,24 @@ impl AnimationControllerRuntime {
         Ok(self.motion_selection_for_state(state))
     }
 
+    pub fn state_speed(
+        &self,
+        controller: &AnimationControllerDef,
+    ) -> Result<f32, AnimationRuntimeError> {
+        let state = controller
+            .states
+            .get(&self.current_state)
+            .ok_or_else(|| AnimationRuntimeError::MissingState(self.current_state.clone()))?;
+        let parameter_speed = state.speed_parameter.as_ref().map_or(1.0, |parameter| {
+            self.parameters
+                .get(parameter)
+                .copied()
+                .and_then(AnimationParameterValue::blend_value)
+                .unwrap_or(1.0)
+        });
+        Ok(state.speed * parameter_speed)
+    }
+
     fn motion_selection_for_state(
         &self,
         state: &AnimationStateDef,
@@ -374,6 +392,7 @@ mod tests {
                     AnimationStateDef {
                         display_name: "Locomotion".into(),
                         speed: 1.0,
+                        speed_parameter: None,
                         blend_parameter: Some("Move Speed".into()),
                         motions: vec![
                             AnimationMotionDef {
@@ -392,6 +411,7 @@ mod tests {
                     AnimationStateDef {
                         display_name: "Action".into(),
                         speed: 1.0,
+                        speed_parameter: None,
                         blend_parameter: None,
                         motions: vec![AnimationMotionDef {
                             clip: id("clip:action"),
@@ -458,6 +478,17 @@ mod tests {
             runtime.evaluate_transitions(&controller, 0.0).unwrap(),
             AnimationTransitionOutcome::None
         );
+    }
+
+    #[test]
+    fn authored_state_speed_multiplies_float_parameter() {
+        let mut controller = controller();
+        let action = id("state:action");
+        controller.states.get_mut(&action).unwrap().speed = 1.5;
+        controller.states.get_mut(&action).unwrap().speed_parameter = Some("Move Speed".into());
+        let mut runtime = AnimationControllerRuntime::in_state(&controller, action).unwrap();
+        runtime.set_float("Move Speed", 2.0).unwrap();
+        assert!((runtime.state_speed(&controller).unwrap() - 3.0).abs() < f32::EPSILON);
     }
 
     #[test]

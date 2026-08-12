@@ -173,7 +173,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 3,
+        schema_version: 4,
         textures,
         materials,
         clips,
@@ -190,7 +190,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 3,
+        schema_version: 4,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -687,6 +687,11 @@ fn parse_controller(
                     .unwrap_or("Unnamed")
                     .to_owned(),
                 speed: scalar_f32(&document.lines, "m_Speed:").unwrap_or(1.0),
+                speed_parameter: scalar_bool(&document.lines, "m_SpeedParameterActive:")
+                    .unwrap_or(false)
+                    .then(|| scalar(&document.lines, "m_SpeedParameter:").unwrap_or_default())
+                    .filter(|parameter| !parameter.is_empty())
+                    .map(str::to_owned),
                 blend_parameter: parsed_motion.parameter,
                 motions: converted_motions,
             },
@@ -1444,6 +1449,8 @@ AnimationClip:
 AnimatorState:
   m_Name: Idle
   m_Speed: 1
+  m_SpeedParameterActive: 1
+  m_SpeedParameter: AnimationSpeed
   m_Transitions:
   - {fileID: 20}
   m_Motion: {fileID: 7400000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 2}
@@ -1469,6 +1476,11 @@ AnimatorController:
     m_DefaultFloat: 0
     m_DefaultInt: 0
     m_DefaultBool: 1
+  - m_Name: AnimationSpeed
+    m_Type: 1
+    m_DefaultFloat: 1
+    m_DefaultInt: 0
+    m_DefaultBool: 0
   m_AnimatorLayers: []
 ";
         let asset = UnityAsset {
@@ -1496,8 +1508,10 @@ AnimatorController:
         let controller = parse_controller(&asset, yaml, &assets, &mut clips).unwrap();
         assert_eq!(controller.states.len(), 1);
         assert_eq!(controller.transitions.len(), 1);
-        assert_eq!(controller.parameters.len(), 1);
+        assert_eq!(controller.parameters.len(), 2);
         assert_eq!(controller.default_states.len(), 1);
+        let state = controller.states.values().next().unwrap();
+        assert_eq!(state.speed_parameter.as_deref(), Some("AnimationSpeed"));
         assert_eq!(clips.len(), 1);
     }
 

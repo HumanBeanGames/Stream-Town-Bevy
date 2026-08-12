@@ -4457,8 +4457,9 @@ fn drive_converted_animations(
         if desired.is_empty() {
             continue;
         }
+        let state_speed = driver.runtime.state_speed(controller).unwrap_or(1.0);
         let changed = !same_animation_blend(&driver.active, &desired);
-        apply_animation_blend(&mut player, &desired);
+        apply_animation_blend(&mut player, &desired, state_speed);
         if changed {
             info!(
                 actor = ?driver.actor_root,
@@ -4571,7 +4572,11 @@ fn animation_nodes_for_selection(
     desired
 }
 
-fn apply_animation_blend(player: &mut AnimationPlayer, desired: &[(AnimationNodeIndex, f32)]) {
+fn apply_animation_blend(
+    player: &mut AnimationPlayer,
+    desired: &[(AnimationNodeIndex, f32)],
+    speed: f32,
+) {
     let playing: Vec<_> = player.playing_animations().map(|(node, _)| *node).collect();
     for node in playing {
         if !desired.iter().any(|(desired, _)| *desired == node) {
@@ -4579,7 +4584,11 @@ fn apply_animation_blend(player: &mut AnimationPlayer, desired: &[(AnimationNode
         }
     }
     for (node, weight) in desired {
-        player.play(*node).repeat().set_weight(*weight);
+        player
+            .play(*node)
+            .repeat()
+            .set_weight(*weight)
+            .set_speed(speed);
     }
 }
 
@@ -9476,6 +9485,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
+        assert_eq!(presentation.schema_version, 4);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.controllers.len(), 31);
@@ -9551,6 +9561,12 @@ mod tests {
             panic!("authored SpearAttack trigger did not enter an action state");
         };
         assert_eq!(controller.states[&action_state].display_name, "SpearAttack");
+        assert_eq!(
+            controller.states[&action_state].speed_parameter.as_deref(),
+            Some("ActionSpeed")
+        );
+        runtime.set_float("ActionSpeed", 2.0).unwrap();
+        assert!((runtime.state_speed(controller).unwrap() - 2.0).abs() < f32::EPSILON);
         assert_eq!(
             presentation
                 .clips

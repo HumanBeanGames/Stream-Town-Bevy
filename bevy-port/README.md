@@ -234,7 +234,9 @@ material variants are cached per source material and helmets suppress hair.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use
-that controller contract as well. Nested controller layers/state machines,
+that controller contract as well. Presentation schema 4 preserves the 32
+shipping states with active float speed parameters and applies their authored
+base-speed multiplier during playback. Nested controller layers/state machines,
 rare/non-gameplay action emitters,
 exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
 and custom WGSL shader parity remain presentation work.

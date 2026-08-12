@@ -63,6 +63,9 @@ mistaken for production-ready systems.
   heal goals now drive the converted Player controller's `Action`, role trigger,
   `AnimationIndex`, and remapped `ActionSpeed` parameters, while locomotion,
   carrying, death, and revival continue through the same controller runtime.
+  Presentation schema 4 also preserves the 32 shipping Animator states with an
+  active float speed parameter; Bevy multiplies each state's authored base speed
+  by that live parameter, including every Player action bound to `ActionSpeed`.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles

@@ -142,6 +142,9 @@ pub struct AnimationMotionDef {
 pub struct AnimationStateDef {
     pub display_name: String,
     pub speed: f32,
+    /// Optional Unity Animator float parameter that multiplies this state's speed.
+    #[serde(default)]
+    pub speed_parameter: Option<String>,
     /// Float parameter driving a Unity 1D blend tree, when this is a blend state.
     #[serde(default)]
     pub blend_parameter: Option<String>,
@@ -255,6 +258,12 @@ pub enum PresentationError {
         controller: StableId,
         parameter: String,
     },
+    #[error("controller {controller} has invalid animation parameter {parameter}: {reason}")]
+    InvalidAnimationParameter {
+        controller: StableId,
+        parameter: String,
+        reason: String,
+    },
     #[error("controller {controller} state {state} has invalid blend tree: {reason}")]
     InvalidBlendTree {
         controller: StableId,
@@ -350,6 +359,21 @@ impl PresentationCatalog {
                 }
             }
             for (state_id, state) in &controller.states {
+                if let Some(speed_parameter) = &state.speed_parameter {
+                    let Some(parameter) = parameters.get(speed_parameter.as_str()) else {
+                        return Err(PresentationError::MissingAnimationParameter {
+                            controller: controller_id.clone(),
+                            parameter: speed_parameter.clone(),
+                        });
+                    };
+                    if parameter.kind != AnimationParameterKind::Float {
+                        return Err(PresentationError::InvalidAnimationParameter {
+                            controller: controller_id.clone(),
+                            parameter: speed_parameter.clone(),
+                            reason: "state speed parameters must be floats".into(),
+                        });
+                    }
+                }
                 if let Some(blend_parameter) = &state.blend_parameter {
                     let Some(parameter) = parameters.get(blend_parameter.as_str()) else {
                         return Err(PresentationError::MissingAnimationParameter {

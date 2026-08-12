@@ -204,7 +204,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (3, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
+    ) != (4, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
     {

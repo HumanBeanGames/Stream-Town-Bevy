@@ -1,5 +1,5 @@
 (
-    schema_version: 3,
+    schema_version: 4,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -81017,6 +81017,7 @@
                 "animation_state:041204ef172f5204cba091bee520a621:413563437936539907": (
                     display_name: "CreditsCutscene",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81040,6 +81041,7 @@
                 "animation_state:09de90f93188f2c4fad99a99580e428b:4194647471290091990": (
                     display_name: "CharacterHeal",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81104,6 +81106,7 @@
                 "animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81115,6 +81118,7 @@
                 "animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81126,6 +81130,7 @@
                 "animation_state:11894e4d53fa75c43971148df4df241f:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -81464,6 +81469,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-4585270874795264890": (
                     display_name: "Casting",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81475,6 +81481,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-5907716185917496487": (
                     display_name: "StaffMagicAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81486,6 +81493,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-6047760710946103107": (
                     display_name: "CarryHip",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81497,12 +81505,14 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292": (
                     display_name: "New State",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [],
                 ),
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-668142833587296785": (
                     display_name: "Build",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81514,6 +81524,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-6768860081427168832": (
                     display_name: "LongSword",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81525,6 +81536,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-7115390245036259605": (
                     display_name: "Heal",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81536,6 +81548,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:-9145738538020517605": (
                     display_name: "StaffAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81547,6 +81560,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:1496302043766372189": (
                     display_name: "WoodCutting",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81558,6 +81572,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:1644469110650211957": (
                     display_name: "BowShoot",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81569,6 +81584,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2357848882567628719": (
                     display_name: "Farming",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81580,6 +81596,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2533881044001281034": (
                     display_name: "Gathering",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81591,6 +81608,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2640698774737220190": (
                     display_name: "Death",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81602,6 +81620,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:2763599478350897752": (
                     display_name: "Mining",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81613,6 +81632,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:3667806019712904990": (
                     display_name: "HammerAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81624,6 +81644,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:4348375068617833615": (
                     display_name: "StaffMagicAttack 0",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81635,6 +81656,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:5007872066999187050": (
                     display_name: "Carry",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -81646,6 +81668,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:875246227926086247": (
                     display_name: "SpearAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81657,6 +81680,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:8917572871720449332": (
                     display_name: "Fishing",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -81668,6 +81692,7 @@
                 "animation_state:16f9efb68ec66e641badc55745403ebf:9055311312826162671": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -82313,6 +82338,7 @@
                 "animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8065497220322364103": (
                     display_name: "Close",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82324,6 +82350,7 @@
                 "animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8543212823551753415": (
                     display_name: "Open",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82404,6 +82431,7 @@
                 "animation_state:2ddf69683616b2e43b31be96ca9624d5:-8065497220322364103": (
                     display_name: "Close",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82415,6 +82443,7 @@
                 "animation_state:2ddf69683616b2e43b31be96ca9624d5:-8543212823551753415": (
                     display_name: "Open",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82519,6 +82548,7 @@
                 "animation_state:42cba18b4a85cf041b661dac476027e8:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82530,6 +82560,7 @@
                 "animation_state:42cba18b4a85cf041b661dac476027e8:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -82623,6 +82654,7 @@
                 "animation_state:4e1db4df03462194ca74023e723d55c4:7166653683730185887": (
                     display_name: "CharacterIdleStretch",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82646,6 +82678,7 @@
                 "animation_state:4f58634f3df7014479d4601e94f0e37c:8105513738674487379": (
                     display_name: "CreditsPopups",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82669,6 +82702,7 @@
                 "animation_state:5ab8006551d81e64786fa4a3aadbbf91:-1734419594664231016": (
                     display_name: "New Animation",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82692,6 +82726,7 @@
                 "animation_state:5b6b82c20ccd97c4ca9bf967f726aeef:-210849313207987297": (
                     display_name: "CharacterFishing",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82772,6 +82807,7 @@
                 "animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581": (
                     display_name: "Spit",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82783,6 +82819,7 @@
                 "animation_state:635e563dc547a7a4aa4664644fcbb6b3:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82794,6 +82831,7 @@
                 "animation_state:635e563dc547a7a4aa4664644fcbb6b3:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -82937,6 +82975,7 @@
                 "animation_state:64308e5a4e1d9094bb4b263ff34af2de:-3464254767618854073": (
                     display_name: "CharacterSpearAttack",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82948,6 +82987,7 @@
                 "animation_state:64308e5a4e1d9094bb4b263ff34af2de:-8186394223475719753": (
                     display_name: "CharacterIdleBase",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -82971,6 +83011,7 @@
                 "animation_state:7865aeda1f4d8294684eb42f22f91c3a:8774670157784232723": (
                     display_name: "EndCredits",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83003,6 +83044,7 @@
                 "animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    speed_parameter: Some("MoveSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -83014,6 +83056,7 @@
                 "animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83077,6 +83120,7 @@
                 "animation_state:7b5536b35afda8d41930f35e0e51215a:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    speed_parameter: Some("MoveSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -83088,6 +83132,7 @@
                 "animation_state:7b5536b35afda8d41930f35e0e51215a:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83191,6 +83236,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83202,6 +83248,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4294006374420586872": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83213,6 +83260,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075": (
                     display_name: "Locomotion 2H",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -83228,6 +83276,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220": (
                     display_name: "Swipe 2",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83239,6 +83288,7 @@
                 "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -83597,6 +83647,7 @@
                 "animation_state:a1529f2d1d90b8b4198e099687f1bbea:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    speed_parameter: Some("MoveSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -83608,6 +83659,7 @@
                 "animation_state:a1529f2d1d90b8b4198e099687f1bbea:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83703,6 +83755,7 @@
                 "animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83714,6 +83767,7 @@
                 "animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83725,6 +83779,7 @@
                 "animation_state:ae85ac85c03097d499396334dc3290b5:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -83919,6 +83974,7 @@
                 "animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83930,6 +83986,7 @@
                 "animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -83941,6 +83998,7 @@
                 "animation_state:b5ec12047dbf1314898aaf86d5270e0f:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -84135,6 +84193,7 @@
                 "animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84146,6 +84205,7 @@
                 "animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985": (
                     display_name: "Swipe",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84157,6 +84217,7 @@
                 "animation_state:bb493a66509b9984cbd36ed521970ca8:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -84319,6 +84380,7 @@
                 "animation_state:bda358ac13f989345a8f46fd230f9826:3959566196850045473": (
                     display_name: "Walk",
                     speed: 1.0,
+                    speed_parameter: Some("MoveSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84330,6 +84392,7 @@
                 "animation_state:bda358ac13f989345a8f46fd230f9826:8402231150205222903": (
                     display_name: "Special",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84393,6 +84456,7 @@
                 "animation_state:c11f40d5660648f46b67cfaaa37761e5:-3445430672598199653": (
                     display_name: "Idle",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84404,6 +84468,7 @@
                 "animation_state:c11f40d5660648f46b67cfaaa37761e5:-4306582856393119967": (
                     display_name: "Entry",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84415,6 +84480,7 @@
                 "animation_state:c11f40d5660648f46b67cfaaa37761e5:6970830186064708492": (
                     display_name: "Exit",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84472,6 +84538,7 @@
                 "animation_state:c387476699fb49e4b995bf1d5790a6d5:-2694498729715318848": (
                     display_name: "CharacterWoodCutting",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84495,6 +84562,7 @@
                 "animation_state:c5097cfadae6b4b4dacfc1ba3665c8a2:-7083021751823584582": (
                     display_name: "CharacterFarming",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84703,6 +84771,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-4585270874795264890": (
                     display_name: "Casting",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84714,6 +84783,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-5907716185917496487": (
                     display_name: "Summon",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84725,6 +84795,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-6047760710946103107": (
                     display_name: "CarryHip",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84736,12 +84807,14 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292": (
                     display_name: "New State",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [],
                 ),
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-668142833587296785": (
                     display_name: "Build",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84753,6 +84826,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-6768860081427168832": (
                     display_name: "LongSword",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84764,6 +84838,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-7115390245036259605": (
                     display_name: "Heal",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84775,6 +84850,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:-9145738538020517605": (
                     display_name: "StaffAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84786,6 +84862,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:1496302043766372189": (
                     display_name: "WoodCutting",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84797,6 +84874,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:1644469110650211957": (
                     display_name: "BowShoot",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84808,6 +84886,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2357848882567628719": (
                     display_name: "Farming",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84819,6 +84898,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2533881044001281034": (
                     display_name: "Gathering",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84830,6 +84910,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2640698774737220190": (
                     display_name: "Death",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84841,6 +84922,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:2763599478350897752": (
                     display_name: "Mining",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84852,6 +84934,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:3667806019712904990": (
                     display_name: "HammerAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84863,6 +84946,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:4348375068617833615": (
                     display_name: "StaffMagicAttack 0",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84874,6 +84958,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:5007872066999187050": (
                     display_name: "Carry",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -84885,6 +84970,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:875246227926086247": (
                     display_name: "SpearAttack",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84896,6 +84982,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:8917572871720449332": (
                     display_name: "Fishing",
                     speed: 1.0,
+                    speed_parameter: Some("ActionSpeed"),
                     blend_parameter: None,
                     motions: [
                         (
@@ -84907,6 +84994,7 @@
                 "animation_state:c823308999b4f694e9810269c0b5efc4:9055311312826162671": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -85576,6 +85664,7 @@
                 "animation_state:cdc9168fa3a07d242a6603c0ae8907a3:-4223380067362157581": (
                     display_name: "Slam",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -85587,6 +85676,7 @@
                 "animation_state:cdc9168fa3a07d242a6603c0ae8907a3:7966513365961104217": (
                     display_name: "Locomotion",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: Some("Move Speed"),
                     motions: [
                         (
@@ -85676,6 +85766,7 @@
                 "animation_state:d2108fb768c361442a0ee7711e01a8b4:341253511410432608": (
                     display_name: "CreditsFireworks",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -85699,6 +85790,7 @@
                 "animation_state:dfb7c64074c4ebc43b5d431c09d706ce:8606254655127711802": (
                     display_name: "CharacterIdleBase",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -85722,6 +85814,7 @@
                 "animation_state:e0fd9cb408bc0c24e90571d4c2d57127:8553764519963112405": (
                     display_name: "LevelUp_Animation",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
@@ -85745,6 +85838,7 @@
                 "animation_state:f4e892f266b388948b3139dd54117736:3584496465615526396": (
                     display_name: "CharacterMining",
                     speed: 1.0,
+                    speed_parameter: None,
                     blend_parameter: None,
                     motions: [
                         (
