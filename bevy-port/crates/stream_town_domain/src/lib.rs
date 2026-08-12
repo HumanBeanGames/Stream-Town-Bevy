@@ -16,7 +16,8 @@ pub use animation::{
     AnimationRuntimeError, AnimationTransitionOutcome, WeightedAnimationMotion,
 };
 pub use command::{
-    CameraAction, CameraDirection, ChatCommand, CommandParseError, CustomizationKind,
+    BuildingAction, BuildingDirection, CameraAction, CameraDirection, ChatCommand,
+    CommandParseError, CustomizationKind,
 };
 pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{

@@ -95,6 +95,17 @@ mistaken for production-ready systems.
   Unlocked effects now reduce placement and upgrade costs, cap deposits against
   technology-expanded storage, modify health/movement/action/combat rules, and
   switch constructed GLBs to their age-two scene variants.
+  Twitch construction now uses Unity's staged placer lifecycle: `!build`
+  creates a per-player translucent validity preview without spending resources,
+  `!move` and the directional aliases adjust it in grid cells, `!rotate`
+  applies retained 90-degree turns, `!confirm`/`!accept` charges and commits an
+  exact valid site, and `!cancel` discards it. Last successful position and
+  cumulative rotation survive native saves. Rotated non-square footprints drive
+  occupancy, station centres, builder approaches, Tower origins, native restore,
+  and legacy JSON/binary building rotation import. `!level <building> <id>
+  [times]`, `!levelall <building> <level>`, and `!remove <building> <id>` use
+  Unity's one-based per-type ordering; removal clears stable station/target
+  references, ECS presentation, and navigation occupancy.
   All 422 objectives in the reachable production technology graph are typed,
   including build/build-any,
   collect, kill/kill-any, buy/buy-any, and sell/sell-any targets and amounts. A
@@ -260,9 +271,9 @@ mistaken for production-ready systems.
   role/health/progression, role/station/target selection, unstuck/ping,
   pets and cosmetics, catalogs/info/town stats, recruit inspection/dismissal/
   re-role, camera movement/reset, moderator role assignment, governance,
-  economy, save, and event commands. Unity's staged building-placer movement,
-  indexed/all-building upgrade/removal commands, remaining game-master cheats,
-  player emotes/actions, and queued-event administration remain.
+  economy, save, event, staged building-placement, indexed/all-building upgrade,
+  and indexed removal commands. Remaining game-master cheats, player emotes/
+  actions, and queued-event administration remain.
   `!buy` and `!sell` use Unity's authored rates.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.

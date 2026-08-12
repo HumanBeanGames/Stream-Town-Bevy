@@ -66,6 +66,12 @@ pub struct ActorState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archetype: Option<StableId>,
     pub position: GridPos,
+    /// Last successful Twitch building placement, matching Unity's per-player cursor origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_building_position: Option<GridPos>,
+    /// Cumulative 90-degree placer turns retained between builds.
+    #[serde(default)]
+    pub building_rotation_quarter_turns: i32,
     pub health: i32,
     pub max_health: i32,
     pub alive: bool,
@@ -111,6 +117,9 @@ pub struct BuildingState {
     pub id: StableId,
     pub archetype: StableId,
     pub position: GridPos,
+    /// Clockwise 90-degree turns. Values are normalized only for presentation and footprint use.
+    #[serde(default)]
+    pub rotation_quarter_turns: i32,
     pub level: u16,
     pub health: i32,
     pub complete: bool,
@@ -322,6 +331,8 @@ impl WorldSimulation {
                 role: StableId::new("role:villager").expect("static stable ID"),
                 archetype: None,
                 position,
+                last_building_position: None,
+                building_rotation_quarter_turns: 0,
                 health: 100,
                 max_health: 100,
                 alive: true,
@@ -360,6 +371,8 @@ impl WorldSimulation {
                 role: StableId::new("role:enemy").expect("static stable ID"),
                 archetype: Some(archetype),
                 position,
+                last_building_position: None,
+                building_rotation_quarter_turns: 0,
                 health: max_health,
                 max_health,
                 alive: true,
@@ -735,6 +748,17 @@ impl WorldSimulation {
         position: GridPos,
         cost: &BTreeMap<StableId, u32>,
     ) -> Result<(), SimulationError> {
+        self.construct_rotated(id, archetype, position, 0, cost)
+    }
+
+    pub fn construct_rotated(
+        &mut self,
+        id: StableId,
+        archetype: StableId,
+        position: GridPos,
+        rotation_quarter_turns: i32,
+        cost: &BTreeMap<StableId, u32>,
+    ) -> Result<(), SimulationError> {
         if self.buildings.contains_key(&id) {
             return Err(SimulationError::DuplicateBuilding(id));
         }
@@ -745,6 +769,7 @@ impl WorldSimulation {
                 id,
                 archetype,
                 position,
+                rotation_quarter_turns,
                 level: 1,
                 health: BUILDING_MAX_HEALTH / 10,
                 complete: false,

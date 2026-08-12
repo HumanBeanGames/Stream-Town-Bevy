@@ -102,9 +102,15 @@ save/load, F12 to capture a screenshot, and Escape to return to the menu. The
   cosmetic/pet, building/catalog, recruit administration, ruler economy,
   camera, governance, moderation, save, and event commands documented by `!help`
   with catalog/prerequisite validation and
-HUD/Twitch feedback. Building commands consume the schema-4 starting resource balances,
-choose a valid site near the actor or selected cell, update grid occupancy,
-spawn the converted building GLB, and round-trip through native saves. New
+HUD/Twitch feedback. `!build` starts a Unity-style per-player placement preview
+at the last successful position, `!move`/direction aliases and `!rotate` adjust
+the exact grid cell and retained 90-degree rotation, `!confirm`/`!accept` spends
+schema-4 resources and commits valid occupancy, and `!cancel` exits without
+spending. `!level <building> <id> [times]`, `!levelall`, and `!remove` use
+one-based per-building-type IDs. Placed rotation, occupancy, station/target
+geometry, and last player placement round-trip through native saves; the legacy
+importer retains authored building Y rotation. Confirmed structures spawn the
+converted building GLB with a primitive fallback. New
 structures start at Unity's 10% construction health; Builder agents path to a
 reachable perimeter cell and advance the 33%/66% presentation stages to
 completion. Upgrades spend the authored level cost and multiplier and respect

@@ -12,17 +12,45 @@ pub enum ChatCommand {
     Role,
     Health,
     Build(StableId),
+    MoveBuilding(Vec<BuildingAction>),
+    ConfirmBuilding,
+    CancelBuilding,
     Buildings,
     BuildingIds(StableId),
     Upgrade(StableId),
     Level(StableId),
-    Buy { amount: u32, resource: StableId },
-    Sell { amount: u32, resource: StableId },
-    Recruit { role: StableId, amount: u16 },
+    LevelBuilding {
+        building: StableId,
+        index: u16,
+        iterations: u16,
+    },
+    LevelAll {
+        building: StableId,
+        target_level: u16,
+    },
+    RemoveBuilding {
+        building: StableId,
+        index: u16,
+    },
+    Buy {
+        amount: u32,
+        resource: StableId,
+    },
+    Sell {
+        amount: u32,
+        resource: StableId,
+    },
+    Recruit {
+        role: StableId,
+        amount: u16,
+    },
     RecruitCount,
     RecruitIds,
     RecruitInfo(u16),
-    RecruitRole { recruit: u16, role: StableId },
+    RecruitRole {
+        recruit: u16,
+        role: StableId,
+    },
     DismissRecruit(u16),
     Station(Option<u16>),
     Target(Option<u16>),
@@ -30,13 +58,19 @@ pub enum ChatCommand {
     Pets,
     Pet(Option<StableId>),
     Ping,
-    Customize { kind: CustomizationKind, index: u8 },
+    Customize {
+        kind: CustomizationKind,
+        index: u8,
+    },
     Roles,
     TownStats,
     Info(StableId),
     Camera(Vec<CameraAction>),
     ResetCamera,
-    ModRole { player: StableId, role: StableId },
+    ModRole {
+        player: StableId,
+        role: StableId,
+    },
     Revive(Option<StableId>),
     Praise,
     Vote(StableId),
@@ -61,6 +95,22 @@ pub enum CameraDirection {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CameraAction {
     pub direction: CameraDirection,
+    pub amount: i32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BuildingDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+    Rotate,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BuildingAction {
+    pub direction: BuildingDirection,
+    /// Movement is measured in grid cells; rotation is measured in quarter-turns.
     pub amount: i32,
 }
 
@@ -173,6 +223,44 @@ impl FromStr for ChatCommand {
                 }
             }
             "cam" => parse_camera_actions(parts).map(Self::Camera),
+            "move" => parse_building_actions(None, parts).map(Self::MoveBuilding),
+            "up" | "down" | "left" | "right" | "rotate" => {
+                parse_building_actions(Some(command.as_str()), parts).map(Self::MoveBuilding)
+            }
+            "level" => parse_level_command(parts),
+            "levelall" => {
+                let building = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let target_level = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
+                    .and_then(parse_index)?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::LevelAll {
+                    building,
+                    target_level,
+                })
+            }
+            "remove" => {
+                let building = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                let index = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))
+                    .and_then(parse_index)?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                Ok(Self::RemoveBuilding { building, index })
+            }
             "hair" | "eyes" | "facialhair" | "body" | "haircolor" | "eyecolor" => {
                 let index = parts
                     .next()
@@ -213,6 +301,8 @@ impl FromStr for ChatCommand {
                     "resetcam" => no_argument(argument, Self::ResetCamera),
                     "save" => no_argument(argument, Self::Save),
                     "help" => no_argument(argument, Self::Help),
+                    "confirm" | "accept" => no_argument(argument, Self::ConfirmBuilding),
+                    "cancel" => no_argument(argument, Self::CancelBuilding),
                     "recruits" => no_argument(argument, Self::RecruitCount),
                     "rulervote" => no_argument(argument, Self::StartRulerVote),
                     "resign" => no_argument(argument, Self::Resign),
@@ -229,7 +319,6 @@ impl FromStr for ChatCommand {
                     "rdismiss" => with_index(&command, argument, Self::DismissRecruit),
                     "build" => with_id(&command, argument, Self::Build),
                     "upgrade" => with_id(&command, argument, Self::Upgrade),
-                    "level" => with_id(&command, argument, Self::Level),
                     "vote" => with_id(&command, argument, Self::Vote),
                     "event" => with_id(&command, argument, Self::TriggerEvent),
                     "revive" => optional_id(argument).map(Self::Revive),
@@ -327,6 +416,59 @@ fn parse_camera_actions<'a>(
     }
 }
 
+fn parse_building_actions<'a>(
+    alias: Option<&'a str>,
+    parts: impl Iterator<Item = &'a str>,
+) -> Result<Vec<BuildingAction>, CommandParseError> {
+    let mut tokens = alias.into_iter().chain(parts).peekable();
+    let mut actions = Vec::new();
+    while let Some(direction) = tokens.next() {
+        let direction = match direction.to_ascii_lowercase().as_str() {
+            "up" => BuildingDirection::Up,
+            "down" => BuildingDirection::Down,
+            "left" => BuildingDirection::Left,
+            "right" => BuildingDirection::Right,
+            "rotate" => BuildingDirection::Rotate,
+            _ => return Err(CommandParseError::InvalidDirection(direction.to_owned())),
+        };
+        let amount = tokens
+            .peek()
+            .and_then(|value| value.parse::<i32>().ok())
+            .map_or(1, |amount| {
+                let _ = tokens.next();
+                amount
+            });
+        actions.push(BuildingAction { direction, amount });
+    }
+    if actions.is_empty() {
+        Err(CommandParseError::MissingArgument("move".to_owned()))
+    } else {
+        Ok(actions)
+    }
+}
+
+fn parse_level_command<'a>(
+    mut parts: impl Iterator<Item = &'a str>,
+) -> Result<ChatCommand, CommandParseError> {
+    let Some(first) = parts.next() else {
+        return Ok(ChatCommand::Experience);
+    };
+    let Some(second) = parts.next() else {
+        return content_id(first).map(ChatCommand::Level);
+    };
+    let building = content_id(first)?;
+    let index = parse_index(second)?;
+    let iterations = parts.next().map(parse_index).transpose()?.unwrap_or(1);
+    if parts.next().is_some() {
+        return Err(CommandParseError::TooManyArguments);
+    }
+    Ok(ChatCommand::LevelBuilding {
+        building,
+        index,
+        iterations,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +489,55 @@ mod tests {
         assert_eq!(
             "!level logger".parse(),
             Ok(ChatCommand::Level(StableId::new("logger").unwrap()))
+        );
+        assert_eq!("!level".parse(), Ok(ChatCommand::Experience));
+        assert_eq!(
+            "!move up 2 left rotate -1".parse(),
+            Ok(ChatCommand::MoveBuilding(vec![
+                BuildingAction {
+                    direction: BuildingDirection::Up,
+                    amount: 2,
+                },
+                BuildingAction {
+                    direction: BuildingDirection::Left,
+                    amount: 1,
+                },
+                BuildingAction {
+                    direction: BuildingDirection::Rotate,
+                    amount: -1,
+                },
+            ]))
+        );
+        assert_eq!(
+            "!right 3".parse(),
+            Ok(ChatCommand::MoveBuilding(vec![BuildingAction {
+                direction: BuildingDirection::Right,
+                amount: 3,
+            }]))
+        );
+        assert_eq!("!accept".parse(), Ok(ChatCommand::ConfirmBuilding));
+        assert_eq!("!cancel".parse(), Ok(ChatCommand::CancelBuilding));
+        assert_eq!(
+            "!level lumbermill 2 3".parse(),
+            Ok(ChatCommand::LevelBuilding {
+                building: StableId::new("lumbermill").unwrap(),
+                index: 2,
+                iterations: 3,
+            })
+        );
+        assert_eq!(
+            "!levelall house 5".parse(),
+            Ok(ChatCommand::LevelAll {
+                building: StableId::new("house").unwrap(),
+                target_level: 5,
+            })
+        );
+        assert_eq!(
+            "!remove house 2".parse(),
+            Ok(ChatCommand::RemoveBuilding {
+                building: StableId::new("house").unwrap(),
+                index: 2,
+            })
         );
         assert_eq!(
             "!buy 25 wood".parse(),

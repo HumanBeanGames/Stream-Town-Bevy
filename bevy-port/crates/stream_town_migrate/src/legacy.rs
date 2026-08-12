@@ -49,6 +49,7 @@ struct LegacyEntity {
     kind: ActorKind,
     archetype: String,
     position: [f32; 3],
+    rotation_quarter_turns: i32,
     health: i32,
     role: Option<String>,
     level: i32,
@@ -376,6 +377,7 @@ impl<'a> BinaryParser<'a> {
                     kind: ActorKind::Resource,
                     archetype: resource_type.clone(),
                     position,
+                    rotation_quarter_turns: 0,
                     health: amount,
                     role: None,
                     level: 0,
@@ -449,6 +451,7 @@ impl<'a> BinaryParser<'a> {
             kind: ActorKind::Foliage,
             archetype,
             position,
+            rotation_quarter_turns: 0,
             health: 1,
             role: None,
             level: 0,
@@ -477,6 +480,7 @@ impl<'a> BinaryParser<'a> {
                 kind: ActorKind::EnemyCamp,
                 archetype: "enemy_camp".to_owned(),
                 position,
+                rotation_quarter_turns: 0,
                 health,
                 role: None,
                 level: 0,
@@ -497,7 +501,7 @@ impl<'a> BinaryParser<'a> {
             return Ok(());
         };
         for index in 0..count {
-            let position = self.transform()?;
+            let (position, rotation_quarter_turns) = self.transform_with_rotation()?;
             let archetype = self.string()?.unwrap_or_else(|| "unknown".to_owned());
             let health = self.i32()?;
             let guid = self.u32()?;
@@ -516,6 +520,7 @@ impl<'a> BinaryParser<'a> {
                 kind: ActorKind::Building,
                 archetype,
                 position,
+                rotation_quarter_turns,
                 health,
                 role: None,
                 level,
@@ -551,6 +556,7 @@ impl<'a> BinaryParser<'a> {
                 kind: ActorKind::Enemy,
                 archetype,
                 position,
+                rotation_quarter_turns: 0,
                 health,
                 role: Some("enemy".to_owned()),
                 level: 0,
@@ -731,6 +737,7 @@ impl<'a> BinaryParser<'a> {
                     twitch_name
                 },
                 position,
+                rotation_quarter_turns: 0,
                 health,
                 role: Some(legacy_role_name(current_role)),
                 level: role_progression
@@ -757,10 +764,16 @@ impl<'a> BinaryParser<'a> {
     }
 
     fn transform(&mut self) -> Result<[f32; 3]> {
+        self.transform_with_rotation().map(|(position, _)| position)
+    }
+
+    fn transform_with_rotation(&mut self) -> Result<([f32; 3], i32)> {
         let position = self.vec3()?;
-        let _rotation = self.vec3()?;
+        let rotation = self.vec3()?;
         let _scale = self.vec3()?;
-        Ok(position)
+        #[allow(clippy::cast_possible_truncation)]
+        let quarter_turns = (rotation[1] / 90.0).round() as i32;
+        Ok((position, quarter_turns))
     }
 
     fn vec3(&mut self) -> Result<[f32; 3]> {
@@ -1009,6 +1022,7 @@ fn json_resources(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Result
                     json_f32_default(instance, "PositionY"),
                     json_f32_default(instance, "PositionZ"),
                 ],
+                rotation_quarter_turns: 0,
                 health: json_i32_default(instance, "CurrentAmount"),
                 role: None,
                 level: 0,
@@ -1050,6 +1064,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                         kind: ActorKind::Foliage,
                         archetype: settings.clone(),
                         position: json_vec3(position)?,
+                        rotation_quarter_turns: 0,
                         health: 1,
                         role: None,
                         level: 0,
@@ -1080,6 +1095,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                     kind: ActorKind::Foliage,
                     archetype: json_string(instance, "SettingsId", "unknown"),
                     position: json_transform(instance.get("Transform").unwrap_or(&Value::Null))?,
+                    rotation_quarter_turns: 0,
                     health: 1,
                     role: None,
                     level: 0,
@@ -1112,6 +1128,7 @@ fn json_enemy_camps(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Resu
             kind: ActorKind::EnemyCamp,
             archetype: "enemy_camp".to_owned(),
             position: json_transform(camp.get("Transform").unwrap_or(&Value::Null))?,
+            rotation_quarter_turns: 0,
             health: json_i32_default(camp, "Health"),
             role: None,
             level: 0,
@@ -1142,6 +1159,9 @@ fn json_buildings(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> 
             kind: ActorKind::Building,
             archetype: json_string(building, "BuildingType", "unknown"),
             position: json_transform(building.get("BuildingTranform").unwrap_or(&Value::Null))?,
+            rotation_quarter_turns: json_rotation_quarter_turns(
+                building.get("BuildingTranform").unwrap_or(&Value::Null),
+            ),
             health: json_i32_default(building, "BuildingHealth"),
             role: None,
             level: json_i32_default(building, "Level"),
@@ -1172,6 +1192,7 @@ fn json_enemies(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             kind: ActorKind::Enemy,
             archetype: json_string(enemy, "EnemyType", "unknown"),
             position: json_transform(enemy.get("Transform").unwrap_or(&Value::Null))?,
+            rotation_quarter_turns: 0,
             health: json_i32_default(enemy, "Health"),
             role: Some("enemy".to_owned()),
             level: 0,
@@ -1252,6 +1273,7 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             kind: ActorKind::Player,
             archetype: json_string(player, "TwitchName", "viewer"),
             position: json_transform(player.get("Transform").unwrap_or(&Value::Null))?,
+            rotation_quarter_turns: 0,
             health: json_i32_default(player, "Health"),
             role,
             level,
@@ -1325,6 +1347,11 @@ fn json_town_resources(world: &Value) -> BTreeMap<String, u32> {
 
 fn json_transform(value: &Value) -> Result<[f32; 3]> {
     json_vec3(value.get("Position").unwrap_or(&Value::Null))
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn json_rotation_quarter_turns(value: &Value) -> i32 {
+    (json_f32_default(value.get("Rotation").unwrap_or(&Value::Null), "Y") / 90.0).round() as i32
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -1578,6 +1605,8 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         role,
                         archetype: Some(archetype),
                         position,
+                        last_building_position: None,
+                        building_rotation_quarter_turns: 0,
                         health: entity.health,
                         max_health: entity.health.max(1),
                         alive: entity.health > 0,
@@ -1629,6 +1658,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         id,
                         archetype,
                         position,
+                        rotation_quarter_turns: entity.rotation_quarter_turns,
                         level: u16::try_from(entity.level.max(0)).unwrap_or(u16::MAX),
                         health: entity.health,
                         complete: true,
@@ -1969,6 +1999,7 @@ mod tests {
                 kind: ActorKind::Player,
                 archetype: "viewer".to_owned(),
                 position: [f32::MAX, 0.0, f32::MAX],
+                rotation_quarter_turns: 0,
                 health: 100,
                 role: Some("villager".to_owned()),
                 level: 0,
@@ -2031,7 +2062,10 @@ mod tests {
                 "BuildingSaveData": [{
                     "GUID": 42,
                     "BuildingType": "Lumbermill",
-                    "BuildingTranform": { "Position": { "X": 1.0, "Y": 2.0, "Z": 1.0 } },
+                    "BuildingTranform": {
+                        "Position": { "X": 1.0, "Y": 2.0, "Z": 1.0 },
+                        "Rotation": { "X": 0.0, "Y": 270.0, "Z": 0.0 }
+                    },
                     "BuildingHealth": 500,
                     "Level": 1
                 }],
@@ -2122,6 +2156,10 @@ mod tests {
         );
         let station = actor.station.as_ref().unwrap();
         assert!(snapshot.simulation.buildings.contains_key(station));
+        assert_eq!(
+            snapshot.simulation.buildings[station].rotation_quarter_turns,
+            3
+        );
         assert_eq!(
             actor.active_pet.as_ref().map(StableId::as_str),
             Some("pet:duck")
