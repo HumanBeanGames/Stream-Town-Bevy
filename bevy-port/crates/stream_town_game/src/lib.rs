@@ -227,6 +227,15 @@ struct EnvironmentPresentation {
     applied: Option<(Season, Weather)>,
 }
 
+#[derive(Resource, Default)]
+struct BuildingMaterialInstances(BTreeMap<StableId, BuildingMaterialInstance>);
+
+struct BuildingMaterialInstance {
+    handle: Handle<BuildingMaterial>,
+    applied_health: i32,
+    applied_season: Season,
+}
+
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
 struct TerrainMaterialUniform {
     sand_color_a: Vec4,
@@ -655,6 +664,9 @@ struct ResolvedRendererMaterialBinding {
 #[derive(Component)]
 struct MaterialOverrideApplied;
 
+#[derive(Component)]
+struct BuildingMaterialInstanced;
+
 pub struct StreamTownGamePlugin;
 
 impl Plugin for StreamTownGamePlugin {
@@ -682,6 +694,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
             .init_resource::<EnvironmentPresentation>()
+            .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
             .init_resource::<LevelUpPresentation>()
@@ -755,6 +768,14 @@ impl Plugin for StreamTownGamePlugin {
                     load_input,
                     drive_level_up_presentation.after(move_agents),
                     update_hud,
+                )
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    instantiate_building_materials.after(apply_material_overrides),
+                    sync_building_material_instances.after(instantiate_building_materials),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -1385,6 +1406,12 @@ fn debug_weather_override() -> Option<Weather> {
         .and_then(|value| value.to_str().and_then(parse_weather))
 }
 
+fn debug_building_health() -> Option<i32> {
+    std::env::var_os("STREAM_TOWN_DEBUG_BUILDING_HEALTH")
+        .and_then(|value| value.to_str().and_then(|value| value.parse().ok()))
+        .map(|health: i32| health.clamp(0, BUILDING_MAX_HEALTH))
+}
+
 fn parse_weather(value: &str) -> Option<Weather> {
     match value.to_ascii_lowercase().as_str() {
         "clear" => Some(Weather::Clear),
@@ -1601,6 +1628,11 @@ fn generate_and_spawn_world(
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
     ensure_town_hall_state(&content.0, &config.0, &mut simulation);
+    if let Some(health) = debug_building_health()
+        && let Some(town_hall) = simulation.buildings.get_mut(&town_hall_id)
+    {
+        town_hall.health = health;
+    }
     simulation.town_resources = config.0.gameplay.starting_town_resources.clone();
     simulation.unlocked_technology.extend(
         content
@@ -5697,6 +5729,114 @@ fn resolved_renderer_material<'a>(
         .or_else(|| material_name.and_then(|name| spec.model_materials.get(name)))
         .or_else(|| exact.and_then(|binding| binding.materials.values().next()))
         .or(spec.fallback.as_ref())
+}
+
+fn instantiate_building_materials(
+    mut commands: Commands,
+    simulation: Res<SimulationRuntime>,
+    parents: Query<&ChildOf>,
+    buildings: Query<&RuntimeBuilding>,
+    mut instances: ResMut<BuildingMaterialInstances>,
+    mut materials: Option<ResMut<Assets<BuildingMaterial>>>,
+    renderers: Query<
+        (Entity, &MeshMaterial3d<BuildingMaterial>),
+        Without<BuildingMaterialInstanced>,
+    >,
+) {
+    let Some(materials) = materials.as_deref_mut() else {
+        return;
+    };
+    for (entity, source) in &renderers {
+        let mut ancestor = entity;
+        let mut building = None;
+        for _ in 0..64 {
+            if let Ok(runtime) = buildings.get(ancestor) {
+                building = Some(runtime.id.clone());
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+        let Some(building) = building else {
+            commands.entity(entity).insert(BuildingMaterialInstanced);
+            continue;
+        };
+        let handle = if let Some(instance) = instances.0.get(&building) {
+            instance.handle.clone()
+        } else {
+            let Some(mut material) = materials.get(&source.0).cloned() else {
+                continue;
+            };
+            let health = simulation
+                .0
+                .buildings
+                .get(&building)
+                .map_or(BUILDING_MAX_HEALTH, |state| state.health);
+            let season = simulation.0.season;
+            material.extension.parameters.snow_damage.x = building_snow_strength(season);
+            material.extension.parameters.snow_damage.y = building_snow_strength(season);
+            material.extension.parameters.snow_damage.z = building_damage_value(health);
+            let handle = materials.add(material);
+            instances.0.insert(
+                building,
+                BuildingMaterialInstance {
+                    handle: handle.clone(),
+                    applied_health: health,
+                    applied_season: season,
+                },
+            );
+            handle
+        };
+        commands
+            .entity(entity)
+            .insert((MeshMaterial3d(handle), BuildingMaterialInstanced));
+    }
+}
+
+fn sync_building_material_instances(
+    simulation: Res<SimulationRuntime>,
+    mut instances: ResMut<BuildingMaterialInstances>,
+    mut materials: Option<ResMut<Assets<BuildingMaterial>>>,
+) {
+    let Some(materials) = materials.as_deref_mut() else {
+        return;
+    };
+    let removed: Vec<_> = instances
+        .0
+        .iter()
+        .filter(|(id, _)| !simulation.0.buildings.contains_key(*id))
+        .map(|(id, instance)| (id.clone(), instance.handle.id()))
+        .collect();
+    for (id, handle) in removed {
+        materials.remove(handle);
+        instances.0.remove(&id);
+    }
+    for (id, instance) in &mut instances.0 {
+        let Some(building) = simulation.0.buildings.get(id) else {
+            continue;
+        };
+        if instance.applied_health == building.health
+            && instance.applied_season == simulation.0.season
+        {
+            continue;
+        }
+        let Some(mut material) = materials.get_mut(&instance.handle) else {
+            continue;
+        };
+        let snow = building_snow_strength(simulation.0.season);
+        material.extension.parameters.snow_damage.x = snow;
+        material.extension.parameters.snow_damage.y = snow;
+        material.extension.parameters.snow_damage.z = building_damage_value(building.health);
+        instance.applied_health = building.health;
+        instance.applied_season = simulation.0.season;
+    }
+}
+
+fn building_damage_value(health: i32) -> f32 {
+    f32::from(u16::try_from(health.clamp(0, BUILDING_MAX_HEALTH)).unwrap_or_default())
+        / f32::from(u16::try_from(BUILDING_MAX_HEALTH).expect("building health fits u16"))
 }
 
 fn camera_controls(
@@ -10800,6 +10940,15 @@ mod tests {
         );
         assert_eq!(weather_particle_seed(42, 7), weather_particle_seed(42, 7));
         assert_ne!(weather_particle_seed(42, 7), weather_particle_seed(42, 8));
+    }
+
+    #[test]
+    fn building_damage_value_matches_unity_health_percentage() {
+        assert!((building_damage_value(BUILDING_MAX_HEALTH) - 1.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(BUILDING_MAX_HEALTH / 2) - 0.5).abs() < f32::EPSILON);
+        assert!((building_damage_value(0) - 0.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(-100) - 0.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(BUILDING_MAX_HEALTH * 2) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

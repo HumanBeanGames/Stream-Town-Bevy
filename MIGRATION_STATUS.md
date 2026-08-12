@@ -298,7 +298,10 @@ mistaken for production-ready systems.
   the authored detail texture and transform, vertex-color ambient occlusion,
   winter snow/exclusion, metal/smoothness, emission, roof variation, and damage
   threshold. The damage mask is adapted to the replacement terrain's vertical
-  datum; healthy winter rendering is covered by a DirectX 12 smoke capture.
+  datum. A single cloned material per stable building reproduces Unity's
+  `MaterialPropertyBlock` health percentage without multiplying assets per mesh
+  primitive, follows season changes, and is released on despawn. Healthy and
+  damaged winter rendering are covered by DirectX 12 smoke captures.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -334,8 +337,8 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining reachable WGSL shader ports, per-building damage material instances,
-  VFX, UI parity, post-processing, replacement audio, and accessibility.
+- Remaining reachable WGSL shader ports, VFX, UI parity, post-processing,
+  replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
   and customization data now map into native actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
@@ -396,8 +399,7 @@ depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
 action emitters, remaining scene-depth shoreline/LOD and foliage shader work,
-particle fields, remaining custom-shader parity, per-building damage material
-instances, the
+particle fields, remaining custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

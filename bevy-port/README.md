@@ -231,11 +231,16 @@ occlusion and snow exclusion, green-channel metal/smoothness, blue-channel
 emission, alpha-channel roof variation, texture transform, and destruction
 threshold. Winter drives its snow controls; because the replacement terrain has
 a different vertical datum, damage wear uses the same authored threshold on a
-height-independent mask. Seasons and weather drive terrain/water tint, clear color, directional and
+height-independent mask. Bevy clones that custom material once per stable
+building, shares the clone across that building's primitives, drives
+`_DestructionValue` from its authoritative health percentage, and releases the
+asset when the building leaves the simulation. Seasons and weather drive terrain/water tint, clear color, directional and
 ambient lighting, distance fog, and deterministic rain/snow fields from the
 authoritative simulation. For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
 `STREAM_TOWN_DEBUG_WEATHER=snow` temporarily overrides simulated weather.
+`STREAM_TOWN_DEBUG_BUILDING_HEALTH=125` starts the Town Hall at that clamped
+health value so its per-building damage material can be captured repeatably.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -278,8 +283,8 @@ but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
 [`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). Rare/non-gameplay action
-emitters, scene-depth shoreline foam, per-building damage material instances,
-and the remaining reachable WGSL shader ports remain presentation work. Property curves
+emitters, scene-depth shoreline foam, and the remaining reachable WGSL shader
+ports remain presentation work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.

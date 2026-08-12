@@ -82,7 +82,7 @@ fn fragment(
     // Unity's effect multiplies its texture by absolute world height. The Bevy
     // terrain uses a different vertical datum, so preserve the authored 0.01–2
     // health threshold while deriving a datum-independent wear mask.
-    let damage_amount = clamp((2.0 - building_material.snow_damage.z) / 1.99, 0.0, 1.0);
+    let damage_amount = clamp(1.0 - building_material.snow_damage.z, 0.0, 1.0);
     let damage = smoothstep(0.15, 0.85, damage_sample) * damage_amount;
     let damage_color = mix(vec3<f32>(0.0944), vec3<f32>(0.0), vertex_color.r);
     authored_color = vec4<f32>(
