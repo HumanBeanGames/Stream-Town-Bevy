@@ -64,7 +64,8 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   all 11 reachable building role-slot modifiers,
   all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
-  shooter, and 422 typed objectives from the production technology graph in content schema 17,
+  shooter, the Marketplace's authored level-scaled passive gold generator, and
+  422 typed objectives from the production technology graph in content schema 18,
   and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
@@ -267,7 +268,7 @@ authoritative simulation. Generated wood, ore, and food nodes load the converted
 `Env_Tree`, `Env_Ore`, and `Env_Bush` GLB primitives selected through the
 versioned content and presentation catalogs. Deterministic grid parity selects
 Unity's two tree and ore variants, while bushes retain Unity's duplicated first
-mesh. Ore uses the shared building material. Content schema 17 converts Unity's
+mesh. Ore uses the shared building material. Content schema 18 converts Unity's
 two land and two underwater foliage-generation layers, including their noise,
 threshold, seed, LOD, scale, material, and 21 FBX variant references. Bevy
 regenerates stable land/underwater instances from the world seed, excludes
@@ -281,6 +282,11 @@ wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes.
 Missing converted assets retain the resource-cube fallback.
+
+Completed Marketplaces generate the converted 0.5 gold/second base rate. Each
+level preserves both serialized Unity `OnLevelUp` callbacks, adding 0.5
+gold/second in total. Fixed-point fractional progress is keyed by stable building
+and resource IDs and round-trips through native saves.
 
 Resource workers also mirror Unity's storage backpressure: they stop acquiring
 and gathering from nodes while the role's technology-expanded town storage is
@@ -302,7 +308,7 @@ and frames the converted Arrow GLB for a repeatable combat-VFX capture.
 `STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction/repair smoke, the
 spark-emitting construction hit, building-level arrows, and persistent
 damage fire/smoke together. Enemy `TargetSensor` masks are authoritative in
-content schema 17: ordinary enemies choose the nearest allowed actor/building,
+content schema 18: ordinary enemies choose the nearest allowed actor/building,
 while the battering ram attacks only construction and buildings. Zero-health
 buildings are removed and release their dirty navigation region.
 `STREAM_TOWN_SMOKE_FOLIAGE=1` frames the generated foliage field for a

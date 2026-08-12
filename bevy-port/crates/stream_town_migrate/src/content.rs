@@ -11,9 +11,9 @@ use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat, FoliageLayerDef,
-    FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind, ProjectileShooterDef, RoleDef,
-    RoleEquipmentDef, RoleSlotContribution, StableId, StationDef, StorageContribution, TechGroup,
-    TechNode, TechTree, WeightedEnemySpawn,
+    FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution,
+    ProjectileShooterDef, RoleDef, RoleEquipmentDef, RoleSlotContribution, StableId, StationDef,
+    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -46,6 +46,7 @@ pub struct ContentConversionReport {
     pub foliage_variants: usize,
     pub buildings: usize,
     pub building_prefabs: usize,
+    pub passive_resource_generators: usize,
     pub roles: usize,
     pub technology_nodes: usize,
     pub technology_groups: usize,
@@ -290,6 +291,7 @@ fn convert_export(
                 level_cost_multiplier_per_thousand,
                 storage: storage_contributions(prefab)?,
                 role_slots: role_slot_contributions(prefab)?,
+                passive_resources: passive_resource_contributions(prefab)?,
                 station: station_definition(prefab)?,
                 projectile_shooter: projectile_shooter_definition(prefab)?,
             },
@@ -516,6 +518,11 @@ fn convert_export(
             .sum(),
         buildings: catalog.buildings.len(),
         building_prefabs: building_archetypes.len(),
+        passive_resource_generators: catalog
+            .buildings
+            .values()
+            .map(|building| building.passive_resources.len())
+            .sum(),
         roles: catalog.roles.len(),
         technology_nodes: catalog.technology.nodes.len(),
         technology_groups: catalog.technology.groups.len(),
@@ -1303,6 +1310,65 @@ fn role_slot_contributions(asset: &UnityAsset) -> Result<Vec<RoleSlotContributio
     }
     slots.sort_by(|left, right| left.role.cmp(&right.role));
     Ok(slots)
+}
+
+fn passive_resource_contributions(asset: &UnityAsset) -> Result<Vec<PassiveResourceContribution>> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components);
+    // Unity serializes persistent UnityEvent calls on sibling components. The shipping
+    // Marketplace prefab invokes OnLevelUp twice, and both calls affect this component.
+    let repetitions = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .flat_map(|component| &component.fields)
+        .filter(|field| {
+            field.path.ends_with(".m_MethodName") && field.value.as_str() == Some("OnLevelUp")
+        })
+        .count();
+    let mut income = Vec::new();
+    for component in components
+        .filter(|component| component_type(component) == "GameResources.PassiveResourceIncrementer")
+    {
+        let field = |path: &str| {
+            component_field_value(component, path).with_context(|| {
+                format!(
+                    "{} passive resource component is missing {path}",
+                    asset.path
+                )
+            })
+        };
+        let resource = enum_name(field("_resource")?)
+            .with_context(|| format!("{} passive resource type is invalid", asset.path))?;
+        let milli = |path: &str| -> Result<u32> {
+            let value = field(path)?
+                .as_f64()
+                .with_context(|| format!("{} passive resource {path} is invalid", asset.path))?;
+            if !value.is_finite() || value < 0.0 {
+                bail!("{} passive resource {path} is invalid", asset.path);
+            }
+            let scaled = (value * 1_000.0).round();
+            if scaled > f64::from(u32::MAX) {
+                bail!("{} passive resource {path} is out of range", asset.path);
+            }
+            format!("{scaled:.0}")
+                .parse::<u32>()
+                .with_context(|| format!("{} passive resource {path} is out of range", asset.path))
+        };
+        income.push(PassiveResourceContribution {
+            resource: stable_id("resource", &slug(resource))?,
+            base_milli_per_second: milli("_amountPerSecond")?,
+            increment_milli_per_level: milli("_amountPerLevel")?,
+            level_event_repetitions: u16::try_from(repetitions)
+                .context("passive level event count is out of range")?,
+        });
+    }
+    income.sort_by(|left, right| left.resource.cmp(&right.resource));
+    Ok(income)
 }
 
 fn component_type(component: &UnityComponent) -> &str {
@@ -2667,6 +2733,27 @@ mod tests {
                         field("_incrementMultiPerLevel", Value::from(3.0)),
                     ],
                 ),
+                component(
+                    "GameResources.PassiveResourceIncrementer, Assembly-CSharp",
+                    vec![
+                        field("_resource", enum_value("Gold")),
+                        field("_amountPerSecond", Value::from(0.5)),
+                        field("_amountPerLevel", Value::from(0.25)),
+                    ],
+                ),
+                component(
+                    "Buildings.BuildingLevelHandler, Assembly-CSharp",
+                    vec![
+                        field(
+                            "_onLevelUp.m_PersistentCalls.m_Calls.Array.data[0].m_MethodName",
+                            Value::String("OnLevelUp".to_owned()),
+                        ),
+                        field(
+                            "_onLevelUp.m_PersistentCalls.m_Calls.Array.data[1].m_MethodName",
+                            Value::String("OnLevelUp".to_owned()),
+                        ),
+                    ],
+                ),
             ],
         });
         prefab.dependencies = vec![UnityReference {
@@ -2817,6 +2904,7 @@ mod tests {
         assert_eq!(report.foliage_variants, 2);
         assert_eq!(report.buildings, 1);
         assert_eq!(report.building_prefabs, 1);
+        assert_eq!(report.passive_resource_generators, 1);
         assert_eq!(report.roles, 1);
         assert_eq!(report.technology_nodes, 2);
         assert_eq!(report.technology_edges, 1);
@@ -2854,6 +2942,15 @@ mod tests {
                 base_amount: 1_000,
                 increment_amount: 2_000,
                 level_multiplier_per_thousand: 3_000,
+            }]
+        );
+        assert_eq!(
+            catalog.buildings[&town_hall].passive_resources,
+            vec![PassiveResourceContribution {
+                resource: StableId::new("resource:gold").unwrap(),
+                base_milli_per_second: 500,
+                increment_milli_per_level: 250,
+                level_event_repetitions: 2,
             }]
         );
         assert_eq!(

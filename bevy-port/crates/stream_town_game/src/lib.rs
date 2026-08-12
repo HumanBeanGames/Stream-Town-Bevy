@@ -44,6 +44,7 @@ use stream_town_domain::{
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
@@ -5344,6 +5345,7 @@ fn move_agents(
 ) {
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation.0.tick(time.delta_secs());
+    apply_passive_building_income(&config.0, &content.0, &mut simulation.0, time.delta());
     if let Some(event) = simulation.0.take_next_queued_event() {
         match event {
             TownEvent::FishGod => {
@@ -9044,6 +9046,101 @@ fn resource_storage_capacity(
                 })
         })
         .fold(base, u32::saturating_add)
+}
+
+fn apply_passive_building_income(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    delta: Duration,
+) {
+    let mut rates = BTreeMap::<(StableId, StableId), u64>::new();
+    for building in simulation
+        .buildings
+        .values()
+        .filter(|building| building.complete)
+    {
+        let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
+            continue;
+        };
+        let completed_levels = u64::from(building.level.saturating_sub(1));
+        for income in &definition.passive_resources {
+            let rate = u64::from(income.base_milli_per_second).saturating_add(
+                u64::from(income.increment_milli_per_level)
+                    .saturating_mul(completed_levels)
+                    .saturating_mul(u64::from(income.level_event_repetitions)),
+            );
+            let entry = rates
+                .entry((building.id.clone(), income.resource.clone()))
+                .or_default();
+            *entry = entry.saturating_add(rate);
+        }
+    }
+
+    let mut active = BTreeMap::<StableId, BTreeSet<StableId>>::new();
+    for (building, resource) in rates.keys() {
+        active
+            .entry(building.clone())
+            .or_default()
+            .insert(resource.clone());
+    }
+    simulation
+        .passive_resource_accumulators
+        .retain(|building, resources| {
+            let Some(active_resources) = active.get(building) else {
+                return false;
+            };
+            resources.retain(|resource, _| active_resources.contains(resource));
+            !resources.is_empty()
+        });
+
+    let delta_nanos = delta.as_nanos();
+    if delta_nanos == 0 {
+        return;
+    }
+    for ((building, resource), rate) in rates {
+        let previous = simulation
+            .passive_resource_accumulators
+            .entry(building)
+            .or_default()
+            .entry(resource.clone())
+            .or_default();
+        let accumulated =
+            u128::from(*previous).saturating_add(u128::from(rate).saturating_mul(delta_nanos));
+        // Unity uses a strict `> 1` threshold, so exactly one accumulated unit waits
+        // until the next positive update rather than being emitted immediately.
+        let generated = if accumulated > PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR {
+            accumulated / PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR
+        } else {
+            0
+        };
+        *previous = u64::try_from(
+            accumulated
+                .saturating_sub(generated.saturating_mul(PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR)),
+        )
+        .expect("passive resource remainder fits u64");
+        if generated == 0 {
+            continue;
+        }
+        let generated = u32::try_from(generated).unwrap_or(u32::MAX);
+        let capacity = resource_storage_capacity(config, content, simulation, &resource);
+        let current = simulation
+            .town_resources
+            .get(&resource)
+            .copied()
+            .unwrap_or_default();
+        simulation.town_resources.insert(
+            resource.clone(),
+            current.saturating_add(generated).min(capacity),
+        );
+        let _ = simulation.record_objective_event(
+            &content.objectives,
+            &ObjectiveEvent::ResourceGained {
+                resource,
+                amount: generated,
+            },
+        );
+    }
 }
 
 fn building_construction_cost(
@@ -13043,6 +13140,49 @@ mod tests {
             resource.position,
         );
         assert!(matches!(goal, AgentGoal::Gather(_)));
+    }
+
+    #[test]
+    fn marketplace_passive_income_is_level_scaled_and_save_stable() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let marketplace = &content.buildings[&StableId::new("building:marketplace").unwrap()];
+        let building_id = StableId::new("building:runtime_marketplace").unwrap();
+        let gold = StableId::new("resource:gold").unwrap();
+        let mut simulation = WorldSimulation::new(config.world.seed);
+        simulation.town_resources.insert(gold.clone(), 0);
+        simulation.buildings.insert(
+            building_id.clone(),
+            BuildingState {
+                id: building_id.clone(),
+                archetype: marketplace.archetype.clone(),
+                position: GridPos { x: 8, z: 8 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+
+        apply_passive_building_income(&config, &content, &mut simulation, Duration::from_secs(2));
+        assert_eq!(simulation.town_resources[&gold], 0);
+        apply_passive_building_income(&config, &content, &mut simulation, Duration::from_nanos(1));
+        assert_eq!(simulation.town_resources[&gold], 1);
+
+        let encoded = ron::to_string(&simulation).unwrap();
+        let mut restored: WorldSimulation = ron::from_str(&encoded).unwrap();
+        assert_eq!(
+            restored.passive_resource_accumulators,
+            simulation.passive_resource_accumulators
+        );
+        restored.buildings.get_mut(&building_id).unwrap().level = 2;
+        apply_passive_building_income(&config, &content, &mut restored, Duration::from_secs(1));
+        assert_eq!(restored.town_resources[&gold], 2);
+
+        restored.buildings.get_mut(&building_id).unwrap().complete = false;
+        apply_passive_building_income(&config, &content, &mut restored, Duration::from_secs(10));
+        assert_eq!(restored.town_resources[&gold], 2);
+        assert!(restored.passive_resource_accumulators.is_empty());
     }
 
     #[test]

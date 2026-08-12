@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 17;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 18;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -166,9 +166,19 @@ pub struct BuildingDef {
     #[serde(default)]
     pub role_slots: Vec<RoleSlotContribution>,
     #[serde(default)]
+    pub passive_resources: Vec<PassiveResourceContribution>,
+    #[serde(default)]
     pub station: Option<StationDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projectile_shooter: Option<ProjectileShooterDef>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PassiveResourceContribution {
+    pub resource: StableId,
+    pub base_milli_per_second: u32,
+    pub increment_milli_per_level: u32,
+    pub level_event_repetitions: u16,
 }
 
 /// A Unity `ProjectileShooter` reduced to deterministic grid-space values.
@@ -448,6 +458,8 @@ pub enum ContentError {
     },
     #[error("objective {0} has a zero required amount")]
     InvalidObjectiveAmount(StableId),
+    #[error("building {0} has invalid passive resource income")]
+    InvalidPassiveResource(StableId),
 }
 
 impl ContentCatalog {
@@ -587,6 +599,12 @@ impl ContentCatalog {
                         role: contribution.role.clone(),
                     });
                 }
+            }
+            if building.passive_resources.iter().any(|income| {
+                income.base_milli_per_second == 0
+                    || (income.increment_milli_per_level > 0 && income.level_event_repetitions == 0)
+            }) {
+                return Err(ContentError::InvalidPassiveResource(id.clone()));
             }
             if building.station.as_ref().is_some_and(|station| {
                 station.max_targets == 0

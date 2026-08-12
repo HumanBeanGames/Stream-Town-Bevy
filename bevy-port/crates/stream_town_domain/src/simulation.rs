@@ -207,6 +207,10 @@ pub struct WorldSimulation {
     pub season: Season,
     pub weather: Weather,
     pub town_resources: BTreeMap<StableId, u32>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Fractional passive-income numerators keyed by stable building and resource IDs.
+    /// Values use the runtime's milli-resource/nanosecond fixed-point denominator.
+    pub passive_resource_accumulators: BTreeMap<StableId, BTreeMap<StableId, u64>>,
     pub actors: BTreeMap<StableId, ActorState>,
     pub buildings: BTreeMap<StableId, BuildingState>,
     #[serde(default)]
@@ -307,6 +311,7 @@ impl WorldSimulation {
             season: Season::Spring,
             weather: Weather::Clear,
             town_resources: BTreeMap::new(),
+            passive_resource_accumulators: BTreeMap::new(),
             actors: BTreeMap::new(),
             buildings: BTreeMap::new(),
             next_enemy_serial: 0,

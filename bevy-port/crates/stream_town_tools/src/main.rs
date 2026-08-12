@@ -399,6 +399,19 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             ui.monospace(format!("target: {kind}"));
                         }
                     }
+                    for income in &building.passive_resources {
+                        ui.separator();
+                        ui.label(format!(
+                            "Passive: +{:.2} {} / second",
+                            f64::from(income.base_milli_per_second) / 1_000.0,
+                            income.resource
+                        ));
+                        ui.monospace(format!(
+                            "+{:.2} / level x {} authored callbacks",
+                            f64::from(income.increment_milli_per_level) / 1_000.0,
+                            income.level_event_repetitions
+                        ));
+                    }
                     if let Some(shooter) = &building.projectile_shooter {
                         ui.separator();
                         ui.label(format!(

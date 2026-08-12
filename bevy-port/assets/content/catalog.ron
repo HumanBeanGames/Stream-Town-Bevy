@@ -1,5 +1,5 @@
 (
-    schema_version: 17,
+    schema_version: 18,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -7520,6 +7520,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:bowyard": (
@@ -7549,6 +7550,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:castle": (
@@ -7578,6 +7580,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:farm": (
@@ -7607,6 +7610,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:fishinghut": (
@@ -7636,6 +7640,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7678,6 +7683,7 @@
                 ),
             ],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:forge": (
@@ -7707,6 +7713,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:fountain": (
@@ -7730,6 +7737,7 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:gate": (
@@ -7753,6 +7761,7 @@
             level_cost_multiplier_per_thousand: 4000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:house": (
@@ -7783,6 +7792,7 @@
                 ),
             ],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:lumbermill": (
@@ -7812,6 +7822,7 @@
                     increment_amount: 2,
                 ),
             ],
+            passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7847,6 +7858,14 @@
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
             role_slots: [],
+            passive_resources: [
+                (
+                    resource: "resource:gold",
+                    base_milli_per_second: 500,
+                    increment_milli_per_level: 250,
+                    level_event_repetitions: 2,
+                ),
+            ],
             station: None,
         ),
         "building:monastery": (
@@ -7876,6 +7895,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:necrotower": (
@@ -7905,6 +7925,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:orestorage": (
@@ -7935,6 +7956,7 @@
                 ),
             ],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:statue_1": (
@@ -7958,6 +7980,7 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:statue_2": (
@@ -7981,6 +8004,7 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:statue_3": (
@@ -8004,6 +8028,7 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:stonemason": (
@@ -8033,6 +8058,7 @@
                     increment_amount: 2,
                 ),
             ],
+            passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -8068,6 +8094,7 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:tower": (
@@ -8097,6 +8124,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -8140,6 +8168,7 @@
             level_cost_multiplier_per_thousand: 5000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -8178,6 +8207,7 @@
             level_cost_multiplier_per_thousand: 4000,
             storage: [],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
         "building:windmill": (
@@ -8207,6 +8237,7 @@
                     increment_amount: 2,
                 ),
             ],
+            passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -8249,6 +8280,7 @@
                     increment_amount: 1,
                 ),
             ],
+            passive_resources: [],
             station: None,
         ),
         "building:woodstorage": (
@@ -8279,6 +8311,7 @@
                 ),
             ],
             role_slots: [],
+            passive_resources: [],
             station: None,
         ),
     },

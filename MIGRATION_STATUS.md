@@ -35,7 +35,7 @@ mistaken for production-ready systems.
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town
-  economy; exhausted resource visuals are hidden. Content schema 17 converts each role's
+  economy; exhausted resource visuals are hidden. Content schema 18 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -58,7 +58,7 @@ mistaken for production-ready systems.
   shields, and helmets; toggles carry-only props from authoritative inventory;
   and drives translated `CarryWood`/`CarryHip` parameters. The content tool shows
   station masks/ranges/capacities and role equipment bindings.
-- Content schema 17 preserves every role's exact Unity `AnimationName` action
+- Content schema 18 preserves every role's exact Unity `AnimationName` action
   parameter and authored variant count. Live gather, construction, attack, and
   heal goals now drive the converted Player controller's `Action`, role trigger,
   `AnimationIndex`, and remapped `ActionSpeed` parameters, while locomotion,
@@ -111,7 +111,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 17 also promotes Unity `Placeable` and all six technology effect
+  Content schema 18 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -228,7 +228,7 @@ mistaken for production-ready systems.
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
   building storage and role-slot contributions, stations, role target masks, and equipment into
-  422 technology objectives in content schema 17, preserves the remaining typed Unity
+  422 technology objectives in content schema 18, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -328,7 +328,7 @@ mistaken for production-ready systems.
   short-lived ECS trail/impact entities. Melee damage and every projectile
   arrival emit the appropriate physical, arrow, fire, or necrotic impact, with
   a repeatable DirectX 12 smoke field covering all four styles.
-- Content schema 17 promotes every enemy prefab's serialized `TargetSensor`
+- Content schema 18 promotes every enemy prefab's serialized `TargetSensor`
   mask into typed target IDs. The live selector now chooses the nearest valid
   player or building; the battering ram's building-only mask is preserved, and
   destroyed buildings release their deterministic navigation region. Building
@@ -354,6 +354,12 @@ mistaken for production-ready systems.
   or gathering from another node. Full technology-expanded storage sends the
   actor back to its idle route while preserving carried overflow, and gathering
   resumes when capacity becomes available.
+- Content schema 18 promotes the shipping Marketplace's reachable
+  `PassiveResourceIncrementer`: 0.5 gold/second at level one and 0.25 per
+  authored level-up callback. The prefab serializes that callback twice, so the
+  deterministic runtime preserves both invocations. Income starts on completed
+  construction, clamps through town storage rules, advances resource-gained
+  objectives, and retains per-building fractional progress across native saves.
 - A full source/settings search found no per-command cooldown state in the
   shipping Unity Twitch dispatcher; its runtime data retains only last-command
   diagnostics. That unauthored subsystem is no longer listed as parity work.
@@ -387,9 +393,8 @@ mistaken for production-ready systems.
 - Chunked terrain/foliage LOD, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
   additional enemy archetype behaviors/spawners, combat buildings beyond the
-  Tower, station
-  effects derived from building level beyond current activation/range behavior,
-  and every reachable balance rule from the Unity scenes.
+  Tower, richer station behavior, and every reachable balance rule from the
+  Unity scenes.
 - Exact production outbound response wording. The authenticated IRC path now includes player
   role/health/progression, role/station/target selection, unstuck/ping,
   pets and cosmetics, catalogs/info/town stats, recruit inspection/dismissal/

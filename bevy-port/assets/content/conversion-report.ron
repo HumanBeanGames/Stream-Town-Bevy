@@ -12,6 +12,7 @@
     foliage_variants: 21,
     buildings: 26,
     building_prefabs: 26,
+    passive_resource_generators: 1,
     roles: 15,
     technology_nodes: 363,
     technology_groups: 20,

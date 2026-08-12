@@ -25,8 +25,9 @@ pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat,
     FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
-    ProjectileShooterDef, RoleDef, RoleEquipmentDef, RoleSlotContribution, StationDef,
-    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    PassiveResourceContribution, ProjectileShooterDef, RoleDef, RoleEquipmentDef,
+    RoleSlotContribution, StationDef, StorageContribution, TechGroup, TechNode, TechTree,
+    WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
