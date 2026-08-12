@@ -18,6 +18,7 @@ use bevy::{
     audio::{Pitch, Volume},
     camera::ScalingMode,
     color::LinearRgba,
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::system::SystemParam,
     gltf::{GltfMaterialName, GltfMeshName},
     math::Affine2,
@@ -27,7 +28,7 @@ use bevy::{
     render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
     render::view::screenshot::{Screenshot, save_to_disk},
     shader::ShaderRef,
-    window::{PrimaryWindow, WindowResolution},
+    window::{PresentMode, PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
@@ -42,6 +43,7 @@ use stream_town_domain::{
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
 const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.mat";
@@ -394,6 +396,7 @@ enum ResolvedMaterialHandle {
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
+    actor_lod: Handle<Mesh>,
     cloud_plane: Handle<Mesh>,
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
@@ -666,9 +669,19 @@ struct NativeAnimationSpec {
 }
 
 #[derive(Component, Clone)]
+struct NativeAnimationRequest {
+    asset_path: String,
+    animation_index: u32,
+}
+
+#[derive(Resource, Default)]
+struct NativeAnimationCache(BTreeMap<(String, u32), NativeAnimationSpec>);
+
+#[derive(Component, Clone)]
 struct ConvertedAnimationSpec {
     controller: StableId,
     state: StableId,
+    rig_scene: String,
 }
 
 #[derive(Component)]
@@ -702,6 +715,22 @@ struct ConvertedAnimationLayerDriver {
     state_offset: f32,
     event_elapsed: BTreeMap<StableId, f32>,
 }
+
+#[derive(Clone)]
+struct ConvertedAnimationLayerTemplate {
+    display_name: String,
+    fallback_state: StableId,
+    nodes: BTreeMap<StableId, AnimationNodeIndex>,
+}
+
+struct CachedConvertedAnimation {
+    graph: Handle<AnimationGraph>,
+    layers: Vec<ConvertedAnimationLayerTemplate>,
+    clip_count: usize,
+}
+
+#[derive(Resource, Default)]
+struct ConvertedAnimationCache(BTreeMap<(StableId, StableId, String), CachedConvertedAnimation>);
 
 #[derive(Clone)]
 struct ConvertedAnimationCrossfade {
@@ -766,6 +795,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
+            .init_resource::<NativeAnimationCache>()
+            .init_resource::<ConvertedAnimationCache>()
             .init_resource::<LevelUpPresentation>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
@@ -777,10 +808,15 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
             .add_systems(
                 Update,
+                upgrade_actor_placeholders.run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     poll_twitch_transport,
                     twitch_connection_input,
                     capture_screenshot,
+                    report_frame_time_gate,
                 ),
             )
             .add_systems(
@@ -822,8 +858,9 @@ impl Plugin for StreamTownGamePlugin {
                     sync_resource_nodes.after(move_agents),
                     sync_building_presentation.after(move_agents),
                     animate_agents,
+                    resolve_native_animation_requests.after(upgrade_actor_placeholders),
                     attach_native_animations,
-                    attach_converted_animations,
+                    attach_converted_animations.after(upgrade_actor_placeholders),
                     drive_native_animations,
                     drive_converted_animations.after(move_agents),
                     apply_material_overrides,
@@ -891,12 +928,19 @@ pub fn run(config: GameConfig) {
                     primary_window: Some(Window {
                         title,
                         resolution,
+                        present_mode: if std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some()
+                        {
+                            PresentMode::AutoNoVsync
+                        } else {
+                            PresentMode::AutoVsync
+                        },
                         ..default()
                     }),
                     ..default()
                 }),
         )
         .add_plugins(PhysicsPlugins::default())
+        .add_plugins(FrameTimeDiagnosticsPlugin::new(600))
         .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
@@ -1065,6 +1109,7 @@ fn setup_rendering(
         .collect();
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
+        actor_lod: meshes.add(Capsule3d::new(0.42, 1.45)),
         cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
         ground: terrain_materials.add(terrain_material(
             &presentation.0,
@@ -1646,6 +1691,20 @@ fn debug_initial_agents(configured: u16) -> u16 {
         .map_or(configured, |agents: u16| agents.clamp(1, configured))
 }
 
+fn actor_scene_budget() -> usize {
+    actor_detail_budget(
+        std::env::var("STREAM_TOWN_ACTOR_SCENE_BUDGET")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn actor_detail_budget(value: Option<&str>) -> usize {
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_ACTOR_DETAIL_BUDGET)
+}
+
 fn parse_weather(value: &str) -> Option<Weather> {
     match value.to_ascii_lowercase().as_str() {
         "clear" => Some(Weather::Clear),
@@ -1676,13 +1735,11 @@ fn generate_and_spawn_world(
     render: Res<RenderAssets>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     asset_server: Option<Res<AssetServer>>,
-    animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
-    let mut animation_graphs = animation_graphs;
     selected.0 = None;
     let mut generated = generate_world(&config.0.world);
     let centre = GridPos {
@@ -1953,13 +2010,13 @@ fn generate_and_spawn_world(
                 actor.health = actor.max_health;
             }
         }
-        let real_archetype = if spawned == 0 {
-            archetype_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
-        } else if spawned == 1 {
-            archetype_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
-        } else {
-            None
-        };
+        let real_archetype = (usize::from(spawned) < actor_scene_budget())
+            .then(|| {
+                authored_archetype
+                    .as_ref()
+                    .and_then(|id| content.0.archetypes.get(id))
+            })
+            .flatten();
         let real_scene = real_archetype
             .and_then(default_archetype_scene)
             .filter(|scene| {
@@ -1968,13 +2025,7 @@ fn generate_and_spawn_world(
         let native_animation = real_archetype
             .zip(real_scene)
             .and_then(|(archetype, scene)| {
-                native_animation_spec(
-                    archetype,
-                    scene,
-                    &presentation.0,
-                    asset_server.as_deref(),
-                    animation_graphs.as_deref_mut(),
-                )
+                native_animation_request(archetype, scene, &presentation.0)
             });
         let converted_animation = native_animation
             .is_none()
@@ -2041,7 +2092,7 @@ fn generate_and_spawn_world(
             }
         } else {
             entity.insert((
-                Mesh3d(render.cube.clone()),
+                Mesh3d(render.actor_lod.clone()),
                 MeshMaterial3d(actor_material(&render, &kind, false)),
             ));
         }
@@ -2296,30 +2347,19 @@ fn archetype_id_by_source(
     })
 }
 
-fn native_animation_spec(
+fn native_animation_request(
     archetype: &ArchetypeDef,
     scene: &ArchetypeScene,
     presentation: &PresentationCatalog,
-    asset_server: Option<&AssetServer>,
-    animation_graphs: Option<&mut Assets<AnimationGraph>>,
-) -> Option<NativeAnimationSpec> {
+) -> Option<NativeAnimationRequest> {
     let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
     let animation_index = binding.gltf_animation_index?;
     if binding.animated_scene.as_deref() != Some(scene.asset_path.as_str()) {
         return None;
     }
-    let asset_server = asset_server?;
-    let animation_graphs = animation_graphs?;
-    let (graph, node) = AnimationGraph::from_clip(
-        asset_server.load(
-            GltfAssetLabel::Animation(usize::try_from(animation_index).ok()?)
-                .from_asset(scene.asset_path.clone()),
-        ),
-    );
-    Some(NativeAnimationSpec {
-        graph: animation_graphs.add(graph),
-        idle: node,
-        moving: node,
+    Some(NativeAnimationRequest {
+        asset_path: scene.asset_path.clone(),
+        animation_index,
     })
 }
 
@@ -2329,6 +2369,7 @@ fn converted_animation_spec(
 ) -> Option<ConvertedAnimationSpec> {
     let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
     let controller = presentation.controllers.get(&binding.controller)?;
+    let rig_scene = binding.rig_scene.clone()?;
     let (state, locomotion) = controller
         .states
         .iter()
@@ -2347,6 +2388,7 @@ fn converted_animation_spec(
         ConvertedAnimationSpec {
             controller: binding.controller.clone(),
             state: state.clone(),
+            rig_scene,
         }
     })
 }
@@ -3440,6 +3482,9 @@ fn apply_combat_damage(
     target_id: &StableId,
     damage: u32,
 ) -> Result<bool, stream_town_domain::SimulationError> {
+    if std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some() {
+        return Ok(false);
+    }
     let enemy_type = simulation
         .actors
         .get(target_id)
@@ -3551,9 +3596,6 @@ fn update_enemy_encounters(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
-    presentation: Res<RuntimePresentation>,
-    asset_server: Option<Res<AssetServer>>,
-    asset_root: Res<RuntimeAssetRoot>,
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
@@ -3635,9 +3677,6 @@ fn update_enemy_encounters(
                     &config.0,
                     &world.generated,
                     &content.0,
-                    &presentation.0,
-                    asset_server.as_deref(),
-                    &asset_root.0,
                     &render,
                     &mut simulation.0,
                     archetype.clone(),
@@ -3711,9 +3750,6 @@ fn update_enemy_encounters(
                 &config.0,
                 &world.generated,
                 &content.0,
-                &presentation.0,
-                asset_server.as_deref(),
-                &asset_root.0,
                 &render,
                 &mut simulation.0,
                 archetype,
@@ -4612,6 +4648,112 @@ fn animate_agents(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn upgrade_actor_placeholders(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    world: Res<WorldRuntime>,
+    mut placeholders: Query<
+        (
+            Entity,
+            &Agent,
+            &GridLocation,
+            &mut AgentAnimation,
+            &mut Transform,
+        ),
+        With<Mesh3d>,
+    >,
+    detailed: Query<(), (With<Agent>, With<WorldAssetRoot>)>,
+) {
+    let Some(asset_server) = asset_server else {
+        return;
+    };
+    let mut remaining = actor_scene_budget().saturating_sub(detailed.iter().count());
+    for (entity, agent, location, mut animation, mut transform) in &mut placeholders {
+        if remaining == 0 {
+            break;
+        }
+        let Some(archetype) = content.0.archetypes.get(&agent.archetype) else {
+            continue;
+        };
+        let Some(scene) = default_archetype_scene(archetype)
+            .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+        else {
+            continue;
+        };
+        let native = native_animation_request(archetype, scene, &presentation.0);
+        let converted = native
+            .is_none()
+            .then(|| converted_animation_spec(archetype, &presentation.0))
+            .flatten();
+        let base_scale = Vec3::splat(config.0.world.cell_size / 2.0);
+        animation.base_scale = base_scale;
+        animation.native = native.is_some() || converted.is_some();
+        *transform = Transform::from_translation(grid_to_world_on_surface(
+            location.0,
+            &config.0,
+            &world.generated,
+        ))
+        .with_scale(base_scale);
+        let mut actor = commands.entity(entity);
+        actor
+            .remove::<Mesh3d>()
+            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .insert(WorldAssetRoot(asset_server.load(
+                GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone()),
+            )));
+        if let Some(native) = native {
+            actor.insert(native);
+        } else if let Some(converted) = converted {
+            actor.insert(converted);
+        }
+        if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
+            actor.insert(material);
+        }
+        remaining -= 1;
+    }
+}
+
+fn resolve_native_animation_requests(
+    mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
+    animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
+    mut cache: ResMut<NativeAnimationCache>,
+    requests: Query<(Entity, &NativeAnimationRequest), Without<NativeAnimationSpec>>,
+) {
+    let (Some(asset_server), Some(mut animation_graphs)) = (asset_server, animation_graphs) else {
+        return;
+    };
+    for (entity, request) in &requests {
+        let key = (request.asset_path.clone(), request.animation_index);
+        let spec = cache.0.entry(key).or_insert_with(|| {
+            let (graph, node) = AnimationGraph::from_clip(
+                asset_server.load(
+                    GltfAssetLabel::Animation(
+                        usize::try_from(request.animation_index)
+                            .expect("animation index fits the current platform"),
+                    )
+                    .from_asset(request.asset_path.clone()),
+                ),
+            );
+            NativeAnimationSpec {
+                graph: animation_graphs.add(graph),
+                idle: node,
+                moving: node,
+            }
+        });
+        commands
+            .entity(entity)
+            .insert(spec.clone())
+            .remove::<NativeAnimationRequest>();
+    }
+}
+
 fn attach_native_animations(
     mut commands: Commands,
     specs: Query<&NativeAnimationSpec>,
@@ -4647,17 +4789,27 @@ fn attach_converted_animations(
     presentation: Res<RuntimePresentation>,
     animation_clips: Option<ResMut<Assets<AnimationClip>>>,
     animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
+    mut cache: ResMut<ConvertedAnimationCache>,
     specs: Query<(Entity, &ConvertedAnimationSpec), Without<ConvertedAnimationApplied>>,
     children: Query<&Children>,
     names: Query<&Name>,
     transforms: Query<&Transform>,
+    applied: Query<(), With<ConvertedAnimationDriver>>,
 ) {
     let (Some(mut animation_clips), Some(mut animation_graphs)) =
         (animation_clips, animation_graphs)
     else {
         return;
     };
+    let animation_budget = std::env::var("STREAM_TOWN_ANIMATION_BUDGET")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_ACTOR_DETAIL_BUDGET);
+    let mut remaining = animation_budget.saturating_sub(applied.iter().count());
     for (actor_root, spec) in &specs {
+        if remaining == 0 {
+            break;
+        }
         let Some(controller) = presentation.0.controllers.get(&spec.controller) else {
             continue;
         };
@@ -4679,103 +4831,47 @@ fn attach_converted_animations(
             continue;
         };
         let targets = collect_animation_targets(animation_root, &children, &names, &transforms);
-        let mut clip_ids = BTreeSet::new();
-        let mut converted = Vec::new();
-        for motion in controller
-            .states
-            .values()
-            .flat_map(|state| state.motions.iter())
-        {
-            if !clip_ids.insert(motion.clip.clone()) {
-                continue;
-            }
-            let Some(source) = presentation.0.clips.get(&motion.clip) else {
+        let cache_key = (
+            spec.controller.clone(),
+            spec.state.clone(),
+            spec.rig_scene.clone(),
+        );
+        if !cache.0.contains_key(&cache_key) {
+            let Some(cached) = build_converted_animation(
+                controller,
+                spec,
+                &presentation.0,
+                &targets,
+                &mut animation_clips,
+                &mut animation_graphs,
+            ) else {
                 continue;
             };
-            let Some(clip) = retargeted_animation_clip(source, &targets) else {
-                continue;
-            };
-            converted.push((motion.clip.clone(), animation_clips.add(clip)));
+            cache.0.insert(cache_key.clone(), cached);
         }
-        if converted.is_empty() {
-            continue;
-        }
-        let mut graph = AnimationGraph::new();
-        let composition = graph.add_additive_blend(1.0, graph.root);
-        let layer_specs: Vec<_> = controller
+        let cached = cache
+            .0
+            .get(&cache_key)
+            .expect("converted animation cache was populated");
+        let layers = cached
             .layers
             .iter()
-            .enumerate()
-            .filter_map(|layer| {
-                let (layer_index, layer) = layer;
-                let machine = controller.state_machines.get(&layer.state_machine)?;
-                let state = machine.default_state.clone()?;
-                Some((layer_index, layer.clone(), state))
+            .filter_map(|template| {
+                AnimationControllerRuntime::in_state(controller, template.fallback_state.clone())
+                    .ok()
+                    .map(|runtime| ConvertedAnimationLayerDriver {
+                        display_name: template.display_name.clone(),
+                        fallback_state: template.fallback_state.clone(),
+                        runtime,
+                        nodes: template.nodes.clone(),
+                        active: Vec::new(),
+                        applied: Vec::new(),
+                        crossfade: None,
+                        state_offset: 0.0,
+                        event_elapsed: BTreeMap::new(),
+                    })
             })
             .collect();
-        let layer_specs = if layer_specs.is_empty() {
-            vec![(
-                0,
-                AnimationLayerDef {
-                    display_name: "Base Layer".to_owned(),
-                    state_machine: StableId::new("animation_state_machine:fallback:base")
-                        .expect("fallback animation state-machine ID is valid"),
-                    blend_mode: AnimationLayerBlendMode::Override,
-                    default_weight: 0.0,
-                    avatar_mask: None,
-                },
-                spec.state.clone(),
-            )]
-        } else {
-            layer_specs
-        };
-        let mut layers = Vec::new();
-        for (layer_index, layer, state) in layer_specs {
-            let mask = register_avatar_mask(
-                &mut graph,
-                u32::try_from(layer_index).expect("Animator layer count fits a Bevy mask"),
-                layer
-                    .avatar_mask
-                    .as_ref()
-                    .and_then(|mask| presentation.0.avatar_masks.get(mask)),
-                &targets,
-            );
-            let parent = add_animation_layer_branch(
-                &mut graph,
-                layer.blend_mode,
-                layer.effective_weight(layer_index),
-                mask,
-                composition,
-            );
-            let nodes = converted
-                .iter()
-                .filter(|(clip, _)| state_layer_owns_clip(controller, &state, clip))
-                .map(|(clip, handle)| (clip.clone(), graph.add_clip(handle.clone(), 1.0, parent)))
-                .collect();
-            let Ok(runtime) = AnimationControllerRuntime::in_state(controller, state.clone())
-            else {
-                continue;
-            };
-            layers.push(ConvertedAnimationLayerDriver {
-                display_name: layer.display_name,
-                fallback_state: state,
-                runtime,
-                nodes,
-                active: Vec::new(),
-                applied: Vec::new(),
-                crossfade: None,
-                state_offset: 0.0,
-                event_elapsed: BTreeMap::new(),
-            });
-        }
-        if layers.is_empty() {
-            continue;
-        }
-        debug_assert!(matches!(
-            graph.graph[composition].node_type,
-            AnimationNodeType::Add
-        ));
-        let graph = animation_graphs.add(graph);
         for (path, (entity, _)) in &targets {
             commands.entity(*entity).insert((
                 path.split('/').collect::<AnimationTargetId>(),
@@ -4784,7 +4880,7 @@ fn attach_converted_animations(
         }
         commands.entity(animation_root).insert((
             AnimationPlayer::default(),
-            AnimationGraphHandle(graph),
+            AnimationGraphHandle(cached.graph.clone()),
             ConvertedAnimationDriver {
                 actor_root,
                 controller: spec.controller.clone(),
@@ -4796,16 +4892,114 @@ fn attach_converted_animations(
         commands
             .entity(actor_root)
             .insert(ConvertedAnimationApplied);
+        remaining -= 1;
         info!(
             actor = ?actor_root,
             controller = %spec.controller,
             state = %spec.state,
-            clips = converted.len(),
+            clips = cached.clip_count,
             layers = controller.layers.len().max(1),
             targets = targets.len(),
             "attached translated Unity animation controller"
         );
     }
+}
+
+fn build_converted_animation(
+    controller: &stream_town_domain::AnimationControllerDef,
+    spec: &ConvertedAnimationSpec,
+    presentation: &PresentationCatalog,
+    targets: &BTreeMap<String, (Entity, Transform)>,
+    animation_clips: &mut Assets<AnimationClip>,
+    animation_graphs: &mut Assets<AnimationGraph>,
+) -> Option<CachedConvertedAnimation> {
+    let mut clip_ids = BTreeSet::new();
+    let mut converted = Vec::new();
+    for motion in controller
+        .states
+        .values()
+        .flat_map(|state| state.motions.iter())
+    {
+        if !clip_ids.insert(motion.clip.clone()) {
+            continue;
+        }
+        let source = presentation.clips.get(&motion.clip)?;
+        let clip = retargeted_animation_clip(source, targets)?;
+        converted.push((motion.clip.clone(), animation_clips.add(clip)));
+    }
+    if converted.is_empty() {
+        return None;
+    }
+    let mut graph = AnimationGraph::new();
+    let composition = graph.add_additive_blend(1.0, graph.root);
+    let layer_specs: Vec<_> = controller
+        .layers
+        .iter()
+        .enumerate()
+        .filter_map(|layer| {
+            let (layer_index, layer) = layer;
+            let machine = controller.state_machines.get(&layer.state_machine)?;
+            let state = machine.default_state.clone()?;
+            Some((layer_index, layer.clone(), state))
+        })
+        .collect();
+    let layer_specs = if layer_specs.is_empty() {
+        vec![(
+            0,
+            AnimationLayerDef {
+                display_name: "Base Layer".to_owned(),
+                state_machine: StableId::new("animation_state_machine:fallback:base")
+                    .expect("fallback animation state-machine ID is valid"),
+                blend_mode: AnimationLayerBlendMode::Override,
+                default_weight: 0.0,
+                avatar_mask: None,
+            },
+            spec.state.clone(),
+        )]
+    } else {
+        layer_specs
+    };
+    let mut layers = Vec::new();
+    for (layer_index, layer, state) in layer_specs {
+        let mask = register_avatar_mask(
+            &mut graph,
+            u32::try_from(layer_index).expect("Animator layer count fits a Bevy mask"),
+            layer
+                .avatar_mask
+                .as_ref()
+                .and_then(|mask| presentation.avatar_masks.get(mask)),
+            targets,
+        );
+        let parent = add_animation_layer_branch(
+            &mut graph,
+            layer.blend_mode,
+            layer.effective_weight(layer_index),
+            mask,
+            composition,
+        );
+        let nodes = converted
+            .iter()
+            .filter(|(clip, _)| state_layer_owns_clip(controller, &state, clip))
+            .map(|(clip, handle)| (clip.clone(), graph.add_clip(handle.clone(), 1.0, parent)))
+            .collect();
+        layers.push(ConvertedAnimationLayerTemplate {
+            display_name: layer.display_name,
+            fallback_state: state,
+            nodes,
+        });
+    }
+    if layers.is_empty() {
+        return None;
+    }
+    debug_assert!(matches!(
+        graph.graph[composition].node_type,
+        AnimationNodeType::Add
+    ));
+    Some(CachedConvertedAnimation {
+        graph: animation_graphs.add(graph),
+        layers,
+        clip_count: converted.len(),
+    })
 }
 
 fn add_animation_layer_branch(
@@ -6982,7 +7176,7 @@ fn load_input(
                 base_scale,
                 ..default()
             },
-            Mesh3d(render.cube.clone()),
+            Mesh3d(render.actor_lod.clone()),
             MeshMaterial3d(actor_material(&render, &saved.kind, false)),
             Transform::from_xyz(
                 world_position.x,
@@ -7049,6 +7243,65 @@ fn capture_screenshot(
     if std::env::var_os("STREAM_TOWN_EXIT_AFTER_SCREENSHOT").is_some() {
         *exit_delay = Some(1.0);
     }
+}
+
+fn report_frame_time_gate(
+    time: Res<Time>,
+    diagnostics: Option<ResMut<DiagnosticsStore>>,
+    mut warmed_up: Local<bool>,
+    mut reported: Local<bool>,
+) {
+    if *reported || std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_none() {
+        return;
+    }
+    let Some(mut diagnostics) = diagnostics else {
+        return;
+    };
+    let warmup = std::env::var("STREAM_TOWN_FRAME_TIME_WARMUP")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value >= 1.0)
+        .unwrap_or(10.0);
+    let sample_seconds = std::env::var("STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value >= 1.0)
+        .unwrap_or(10.0);
+    if !*warmed_up && time.elapsed_secs() >= warmup {
+        if let Some(frame_time) = diagnostics.get_mut(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
+            frame_time.clear_history();
+        }
+        *warmed_up = true;
+        return;
+    }
+    if !*warmed_up || time.elapsed_secs() < warmup + sample_seconds {
+        return;
+    }
+    let Some(frame_time) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) else {
+        return;
+    };
+    let mut values: Vec<_> = frame_time
+        .values()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    if values.is_empty() {
+        return;
+    }
+    values.sort_by(f64::total_cmp);
+    let p95_index = (values.len() * 95).div_ceil(100).saturating_sub(1);
+    let p95_ms = values[p95_index];
+    let sample_count = u32::try_from(values.len()).unwrap_or(u32::MAX);
+    let average_ms = values.iter().sum::<f64>() / f64::from(sample_count);
+    warn!(
+        samples = values.len(),
+        average_ms,
+        p95_ms,
+        budget_ms = 16.7,
+        passed = p95_ms < 16.7,
+        "steady-state frame-time gate"
+    );
+    *reported = true;
 }
 
 fn mirrored_target(world: &GeneratedWorld, position: GridPos) -> GridPos {
@@ -7558,9 +7811,6 @@ fn spawn_runtime_enemy(
     config: &GameConfig,
     world: &GeneratedWorld,
     content: &ContentCatalog,
-    presentation: &PresentationCatalog,
-    asset_server: Option<&AssetServer>,
-    asset_root: &Path,
     render: &RenderAssets,
     simulation: &mut WorldSimulation,
     archetype_id: StableId,
@@ -7597,21 +7847,12 @@ fn spawn_runtime_enemy(
         return None;
     }
     let world_position = grid_to_world_on_surface(position, config, world);
-    let real_scene = default_archetype_scene(archetype).filter(|scene| {
-        asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
-    });
-    let converted_animation =
-        real_scene.and_then(|_| converted_animation_spec(archetype, presentation));
-    let base_scale = if real_scene.is_some() {
-        Vec3::splat(config.world.cell_size / 2.0)
-    } else {
-        Vec3::new(
-            config.world.cell_size * 0.3,
-            config.world.cell_size * 0.55,
-            config.world.cell_size * 0.3,
-        )
-    };
-    let mut entity = commands.spawn((
+    let base_scale = Vec3::new(
+        config.world.cell_size * 0.3,
+        config.world.cell_size * 0.55,
+        config.world.cell_size * 0.3,
+    );
+    commands.spawn((
         WorldEntity,
         GridLocation(position),
         Agent {
@@ -7629,38 +7870,17 @@ fn spawn_runtime_enemy(
         },
         AgentAnimation {
             base_scale,
-            native: converted_animation.is_some(),
             ..default()
         },
+        Mesh3d(render.actor_lod.clone()),
+        MeshMaterial3d(render.enemy_idle.clone()),
         Transform::from_xyz(
             world_position.x,
-            if real_scene.is_some() {
-                world_position.y
-            } else {
-                world_position.y + base_scale.y * 0.5
-            },
+            world_position.y + base_scale.y * 0.5,
             world_position.z,
         )
         .with_scale(base_scale),
     ));
-    if let Some(scene) = real_scene {
-        entity.insert(WorldAssetRoot(
-            asset_server
-                .expect("asset server checked above")
-                .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
-        ));
-        if let Some(animation) = converted_animation {
-            entity.insert(animation);
-        }
-        if let Some(material) = prefab_material_spec(archetype, scene, presentation, render) {
-            entity.insert(material);
-        }
-    } else {
-        entity.insert((
-            Mesh3d(render.cube.clone()),
-            MeshMaterial3d(render.enemy_idle.clone()),
-        ));
-    }
     Some(id)
 }
 
@@ -8222,7 +8442,7 @@ fn recruit_npcs(
                 base_scale,
                 ..default()
             },
-            Mesh3d(render.cube.clone()),
+            Mesh3d(render.actor_lod.clone()),
             MeshMaterial3d(actor_material(render, &ActorKind::Player, false)),
             Transform::from_translation(world_position + Vec3::Y * base_scale.y * 0.5)
                 .with_scale(base_scale),
@@ -8436,7 +8656,7 @@ fn process_injected_commands(
                                 base_scale,
                                 ..default()
                             },
-                            Mesh3d(render.cube.clone()),
+                            Mesh3d(render.actor_lod.clone()),
                             MeshMaterial3d(actor_material(&render, &ActorKind::Player, false)),
                             Transform::from_xyz(
                                 world_position.x,
@@ -10374,6 +10594,13 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_crowd_lod_budget_matches_measured_gpu_gate() {
+        assert_eq!(actor_detail_budget(None), 16);
+        assert_eq!(actor_detail_budget(Some("24")), 24);
+        assert_eq!(actor_detail_budget(Some("invalid")), 16);
+    }
 
     #[test]
     fn workers_choose_nearest_compatible_station_and_reassign() {

@@ -279,6 +279,24 @@ the inherited material is retained only as a compatibility fallback.
 Player GLB descendants also apply persisted body, hair, facial-hair, eye,
 hair-color, and eye-color selections in Unity's serialized order. Cosmetic
 material variants are cached per source material and helmets suppress hair.
+Converted animation clips and graphs are shared by rig/controller instead of
+being rebuilt per actor. The runtime keeps 16 fully authored, animated character
+scenes and represents the rest of a large crowd with lightweight capsule LODs;
+all actors retain authoritative gameplay, movement, identity, selection, and
+save state. `STREAM_TOWN_ACTOR_SCENE_BUDGET` and
+`STREAM_TOWN_ANIMATION_BUDGET` override those diagnostic budgets. Twitch joins,
+recruits, runtime enemies, and save-restored actors automatically promote from
+the lightweight representation whenever detail capacity is available.
+
+`STREAM_TOWN_REPORT_FRAME_TIME=1` enables the explicit 300-agent GPU benchmark,
+uses an unsynchronized present mode for meaningful capacity measurements, and
+reports average and 95th-percentile frame time after a warmup. The optional
+`STREAM_TOWN_FRAME_TIME_WARMUP` and
+`STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS` values default to ten seconds each.
+The recorded Windows reference run (Ryzen 5 7600X, Radeon RX 7800 XT, 64 GB,
+DX12, 1920×1080) measured 559 post-warmup frames at 10.74 ms average and
+14.25 ms p95 with 300 simulated agents and the production 16-character detail
+budget, below the 16.7 ms gate.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use
