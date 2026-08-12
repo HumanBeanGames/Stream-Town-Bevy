@@ -3948,7 +3948,7 @@ fn complete_agent_goal(
                 let defense = effective_role_stats(content, simulation, target)
                     .map_or(0, |stats| stats.damage_reduction_percent);
                 let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
-                match apply_combat_damage(simulation, content, target_id, damage) {
+                match apply_combat_damage(config, simulation, content, target_id, damage) {
                     Ok(_) => {
                         if damage > 0 {
                             action_presentation = Some(ActionPresentation::Impact {
@@ -4121,6 +4121,7 @@ fn complete_agent_goal(
 }
 
 fn apply_combat_damage(
+    config: &GameConfig,
     simulation: &mut WorldSimulation,
     content: &ContentCatalog,
     target_id: &StableId,
@@ -4129,18 +4130,41 @@ fn apply_combat_damage(
     if std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some() {
         return Ok(false);
     }
-    let enemy_type = simulation
+    let was_alive = simulation
+        .actors
+        .get(target_id)
+        .is_some_and(|target| target.alive);
+    let enemy = simulation
         .actors
         .get(target_id)
         .filter(|target| target.role.as_str() == "role:enemy")
         .and_then(|target| actor_archetype(content, target))
         .and_then(|archetype| archetype.enemy.as_ref())
-        .map(|enemy| enemy.enemy_type.clone());
+        .cloned();
     let killed = simulation.damage_actor(target_id, damage)?;
-    if killed && let Some(enemy_type) = enemy_type {
+    if killed
+        && was_alive
+        && let Some(enemy) = enemy
+    {
         let _ = simulation.record_objective_event(
             &content.objectives,
-            &ObjectiveEvent::EnemyKilled(enemy_type),
+            &ObjectiveEvent::EnemyKilled(enemy.enemy_type),
+        );
+        let resource = enemy.kill_reward.resource;
+        let amount = enemy.kill_reward.amount;
+        let capacity = resource_storage_capacity(config, content, simulation, &resource);
+        let current = simulation
+            .town_resources
+            .get(&resource)
+            .copied()
+            .unwrap_or_default();
+        simulation.town_resources.insert(
+            resource.clone(),
+            current.saturating_add(amount).min(capacity),
+        );
+        let _ = simulation.record_objective_event(
+            &content.objectives,
+            &ObjectiveEvent::ResourceGained { resource, amount },
         );
     }
     Ok(killed)
@@ -4892,9 +4916,13 @@ fn move_combat_projectiles(
                 projectile.damage,
                 i32::try_from(defense).unwrap_or(i32::MAX),
             );
-            if let Err(error) =
-                apply_combat_damage(&mut simulation.0, &content.0, &projectile.target, damage)
-            {
+            if let Err(error) = apply_combat_damage(
+                &config.0,
+                &mut simulation.0,
+                &content.0,
+                &projectile.target,
+                damage,
+            ) {
                 warn!(target = %projectile.target, %error, "projectile impact failed");
             }
             spawn_combat_impact(
@@ -13257,6 +13285,8 @@ mod tests {
         let enemy_position = GridPos { x: 30, z: 30 };
         let player_position = GridPos { x: 38, z: 30 };
         let mut simulation = WorldSimulation::new(world.seed);
+        let gold = StableId::new("resource:gold").unwrap();
+        simulation.town_resources.insert(gold.clone(), 0);
         assert!(simulation.spawn_enemy(enemy_id.clone(), blargul_archetype, enemy_position, 5,));
         assert!(simulation.join_player(player_id.clone(), player_position));
         let (goal, target) = next_agent_goal(
@@ -13289,6 +13319,10 @@ mod tests {
         assert!(
             (action_cooldown(&content, &simulation, &enemy_id, &goal) - 3.0).abs() <= f32::EPSILON
         );
+        assert!(apply_combat_damage(&config, &mut simulation, &content, &enemy_id, 5).unwrap());
+        assert_eq!(simulation.town_resources[&gold], 50);
+        assert!(apply_combat_damage(&config, &mut simulation, &content, &enemy_id, 5).unwrap());
+        assert_eq!(simulation.town_resources[&gold], 50);
 
         let camp = content
             .archetypes

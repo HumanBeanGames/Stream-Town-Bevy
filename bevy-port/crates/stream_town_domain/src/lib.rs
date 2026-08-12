@@ -25,7 +25,7 @@ pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat,
     FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
-    PassiveResourceContribution, ProjectileShooterDef, RoleDef, RoleEquipmentDef,
+    PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
     RoleSlotContribution, StationDef, StorageContribution, TechGroup, TechNode, TechTree,
     WeightedEnemySpawn,
 };

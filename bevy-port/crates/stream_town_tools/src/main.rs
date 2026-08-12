@@ -347,6 +347,18 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                         archetype.footprint[1],
                         archetype.scenes.len()
                     ));
+                    if let Some(enemy) = &archetype.enemy {
+                        ui.label(format!(
+                            "Enemy: {} damage every {:.1}s at {:.1} cells",
+                            enemy.action_amount,
+                            f64::from(enemy.action_milliseconds) / 1_000.0,
+                            f64::from(enemy.action_range_milli_cells) / 1_000.0
+                        ));
+                        ui.monospace(format!(
+                            "player kill reward: {} {}",
+                            enemy.kill_reward.amount, enemy.kill_reward.resource
+                        ));
+                    }
                     for scene in &archetype.scenes {
                         let marker = if scene.is_default {
                             "default"

@@ -137,7 +137,7 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (18, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (19, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -156,6 +156,12 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.enemy.is_some())
         .count();
+    let enemy_resource_rewards = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy.as_ref())
+        .filter(|enemy| enemy.kill_reward.amount > 0)
+        .count();
     let enemy_spawners = content
         .archetypes
         .values()
@@ -166,7 +172,8 @@ fn validate() -> Result<()> {
         projectile_shooters,
         enemy_definitions,
         enemy_spawners,
-    ) != (42, 1, 9, 1)
+        enemy_resource_rewards,
+    ) != (42, 1, 9, 1, 9)
     {
         bail!("authored combat component counts differ from the verified Unity baseline");
     }
@@ -436,7 +443,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 1 passive resource generator, 42 health definitions, 9 enemy definitions, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 1 passive resource generator, 42 health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

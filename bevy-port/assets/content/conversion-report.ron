@@ -13,6 +13,7 @@
     buildings: 26,
     building_prefabs: 26,
     passive_resource_generators: 1,
+    enemy_resource_rewards: 9,
     roles: 15,
     technology_nodes: 363,
     technology_groups: 20,

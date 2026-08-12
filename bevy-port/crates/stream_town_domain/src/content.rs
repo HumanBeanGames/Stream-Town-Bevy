@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 18;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 19;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -99,10 +99,18 @@ pub struct EnemyDef {
     pub action_amount: u32,
     pub action_milliseconds: u32,
     pub action_range_milli_cells: u32,
+    pub kill_reward: ResourceReward,
     #[serde(default)]
     pub targets_all: bool,
     #[serde(default)]
     pub target_kinds: BTreeSet<StableId>,
+}
+
+/// A resource amount granted by an authored gameplay event.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResourceReward {
+    pub resource: StableId,
+    pub amount: u32,
 }
 
 /// One weighted enemy entry in a Unity `ChanceObjectList`.
@@ -538,6 +546,7 @@ impl ContentCatalog {
                 enemy.action_amount == 0
                     || enemy.action_milliseconds == 0
                     || enemy.action_range_milli_cells == 0
+                    || enemy.kill_reward.amount == 0
                     || (!enemy.targets_all && enemy.target_kinds.is_empty())
             }) {
                 return Err(ContentError::InvalidEnemy(id.clone()));

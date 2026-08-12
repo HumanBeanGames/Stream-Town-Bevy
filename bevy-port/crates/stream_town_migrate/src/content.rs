@@ -12,8 +12,8 @@ use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat, FoliageLayerDef,
     FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution,
-    ProjectileShooterDef, RoleDef, RoleEquipmentDef, RoleSlotContribution, StableId, StationDef,
-    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution,
+    StableId, StationDef, StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -47,6 +47,7 @@ pub struct ContentConversionReport {
     pub buildings: usize,
     pub building_prefabs: usize,
     pub passive_resource_generators: usize,
+    pub enemy_resource_rewards: usize,
     pub roles: usize,
     pub technology_nodes: usize,
     pub technology_groups: usize,
@@ -523,6 +524,11 @@ fn convert_export(
             .values()
             .map(|building| building.passive_resources.len())
             .sum(),
+        enemy_resource_rewards: catalog
+            .archetypes
+            .values()
+            .filter(|archetype| archetype.enemy.is_some())
+            .count(),
         roles: catalog.roles.len(),
         technology_nodes: catalog.technology.nodes.len(),
         technology_groups: catalog.technology.groups.len(),
@@ -774,7 +780,7 @@ fn pool_index(asset: &UnityAsset) -> Result<PoolIndex> {
 }
 
 fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<EnemyDef>> {
-    let components = asset
+    let mut components = asset
         .game_object
         .as_ref()
         .into_iter()
@@ -828,6 +834,17 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
         .and_then(Value::as_object)
         .with_context(|| format!("{} enemy target mask is invalid", asset.path))?;
     let (targets_all, target_kinds) = mask_ids(target_mask, "target")?;
+    let reward = components
+        .find(|component| component_type(component) == "GameResources.ActiveResourceIncrementer")
+        .with_context(|| format!("{} enemy has no active resource reward", asset.path))?;
+    let reward_resource = component_field_value(reward, "_resource")
+        .and_then(enum_name)
+        .with_context(|| format!("{} enemy reward resource is invalid", asset.path))?;
+    let reward_amount = component_field_value(reward, "_amount")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .with_context(|| format!("{} enemy reward amount is invalid", asset.path))?;
     Ok(Some(EnemyDef {
         enemy_type: stable_id("enemy", &slug(enemy_type))?,
         pool,
@@ -835,6 +852,10 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
         action_amount,
         action_milliseconds: positive_milli(action, "_actionRate")?,
         action_range_milli_cells: positive_milli(action, "_actionRange")?,
+        kill_reward: ResourceReward {
+            resource: stable_id("resource", &slug(reward_resource))?,
+            amount: reward_amount,
+        },
         targets_all,
         target_kinds,
     }))
@@ -2403,12 +2424,29 @@ mod tests {
                         serde_json::json!({"Index": -1, "Name": null, "RawValue": 3841}),
                     )],
                 ),
+                component(
+                    "GameResources.ActiveResourceIncrementer, Assembly-CSharp",
+                    vec![
+                        field(
+                            "_resource",
+                            serde_json::json!({"Index": 4, "Name": "Gold", "RawValue": 4}),
+                        ),
+                        field("_amount", Value::from(15)),
+                    ],
+                ),
             ],
         });
         let converted = enemy_definition(&enemy, &pools).unwrap().unwrap();
         assert_eq!(converted.enemy_type.as_str(), "enemy:goblin");
         assert_eq!(converted.additional_health_milli_per_player, 200);
         assert_eq!(converted.action_milliseconds, 1_000);
+        assert_eq!(
+            converted.kill_reward,
+            ResourceReward {
+                resource: StableId::new("resource:gold").unwrap(),
+                amount: 15,
+            }
+        );
         assert_eq!(
             converted.target_kinds,
             BTreeSet::from([

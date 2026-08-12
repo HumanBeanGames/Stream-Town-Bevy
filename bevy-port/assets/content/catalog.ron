@@ -1,5 +1,5 @@
 (
-    schema_version: 18,
+    schema_version: 19,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -1652,6 +1652,10 @@
                 action_amount: 2,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 1000,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -1933,6 +1937,10 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 150,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -2003,6 +2011,10 @@
                 action_amount: 3,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 250,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -2495,6 +2507,10 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 150,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -4083,6 +4099,10 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 300,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -4948,6 +4968,10 @@
                 action_amount: 30,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 10000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 10000,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -5808,6 +5832,10 @@
                 action_amount: 5,
                 action_milliseconds: 3000,
                 action_range_milli_cells: 10000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 50,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -6067,6 +6095,10 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 2000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 15,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
@@ -7014,6 +7046,10 @@
                 action_amount: 20,
                 action_milliseconds: 2000,
                 action_range_milli_cells: 3000,
+                kill_reward: (
+                    resource: "resource:gold",
+                    amount: 500,
+                ),
                 targets_all: false,
                 target_kinds: [
                     "target:building",
