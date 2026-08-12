@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 13;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 14;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -123,6 +123,8 @@ pub struct BuildingDef {
     #[serde(default)]
     pub storage: Vec<StorageContribution>,
     #[serde(default)]
+    pub role_slots: Vec<RoleSlotContribution>,
+    #[serde(default)]
     pub station: Option<StationDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projectile_shooter: Option<ProjectileShooterDef>,
@@ -144,6 +146,13 @@ pub struct StorageContribution {
     pub base_amount: u32,
     pub increment_amount: u32,
     pub level_multiplier_per_thousand: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RoleSlotContribution {
+    pub role: StableId,
+    pub base_amount: u16,
+    pub increment_amount: u16,
 }
 
 /// An authored Unity station reduced to deterministic, engine-independent data.
@@ -342,6 +351,8 @@ pub enum ContentError {
         building: StableId,
         resource: StableId,
     },
+    #[error("building {building} grants slots for missing role {role}")]
+    MissingBuildingRoleSlot { building: StableId, role: StableId },
     #[error("building {0} has invalid station timing, range, or target capacity")]
     InvalidStation(StableId),
     #[error("building {0} has invalid projectile shooter values")]
@@ -488,6 +499,14 @@ impl ContentCatalog {
                     building: id.clone(),
                     resource: storage.resource.clone(),
                 });
+            }
+            for contribution in &building.role_slots {
+                if !self.roles.contains_key(&contribution.role) {
+                    return Err(ContentError::MissingBuildingRoleSlot {
+                        building: id.clone(),
+                        role: contribution.role.clone(),
+                    });
+                }
             }
             if building.station.as_ref().is_some_and(|station| {
                 station.max_targets == 0

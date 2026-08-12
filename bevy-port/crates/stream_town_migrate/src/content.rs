@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, HealthDef, ObjectiveDef, ObjectiveKind,
-    ProjectileShooterDef, RoleDef, RoleEquipmentDef, StableId, StationDef, StorageContribution,
-    TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    ProjectileShooterDef, RoleDef, RoleEquipmentDef, RoleSlotContribution, StableId, StationDef,
+    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -274,6 +274,7 @@ fn convert_export(
                 level_cost,
                 level_cost_multiplier_per_thousand,
                 storage: storage_contributions(prefab)?,
+                role_slots: role_slot_contributions(prefab)?,
                 station: station_definition(prefab)?,
                 projectile_shooter: projectile_shooter_definition(prefab)?,
             },
@@ -1227,6 +1228,40 @@ fn storage_contributions(asset: &UnityAsset) -> Result<Vec<StorageContribution>>
     Ok(storage)
 }
 
+fn role_slot_contributions(asset: &UnityAsset) -> Result<Vec<RoleSlotContribution>> {
+    let mut slots = Vec::new();
+    for component in asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Buildings.RoleSlotModifier")
+    {
+        let field = |path: &str| {
+            component_field_value(component, path)
+                .with_context(|| format!("{} role-slot component is missing {path}", asset.path))
+        };
+        let role = field("_role")?
+            .as_object()
+            .and_then(|value| value.get("Name"))
+            .and_then(Value::as_str)
+            .with_context(|| format!("{} role-slot component has invalid _role", asset.path))?;
+        let amount = |path: &str| {
+            field(path)?
+                .as_i64()
+                .and_then(|value| u16::try_from(value).ok())
+                .with_context(|| format!("{} role-slot field {path} is out of range", asset.path))
+        };
+        slots.push(RoleSlotContribution {
+            role: stable_id("role", &slug(role))?,
+            base_amount: amount("_baseAmount")?,
+            increment_amount: amount("_incrementAmount")?,
+        });
+    }
+    slots.sort_by(|left, right| left.role.cmp(&right.role));
+    Ok(slots)
+}
+
 fn component_type(component: &UnityComponent) -> &str {
     component
         .unity_type
@@ -1987,6 +2022,34 @@ mod tests {
         assert_eq!(station.max_targets, 10);
         assert_eq!(station.update_milliseconds, 3_000);
         assert_eq!(station.search_range_milli_cells, 50_000);
+    }
+
+    #[test]
+    fn converts_building_role_slot_modifiers() {
+        let mut building = asset(
+            "house",
+            "Assets/Prefabs/Buildings/Building_House.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        building.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Buildings.RoleSlotModifier, Assembly-CSharp",
+                vec![
+                    field("_role", serde_json::json!({"Index": 6, "Name": "Logger"})),
+                    field("_baseAmount", Value::from(3)),
+                    field("_incrementAmount", Value::from(2)),
+                ],
+            )],
+        });
+        assert_eq!(
+            role_slot_contributions(&building).unwrap(),
+            vec![RoleSlotContribution {
+                role: stable_id("role", "logger").unwrap(),
+                base_amount: 3,
+                increment_amount: 2,
+            }]
+        );
     }
 
     #[test]

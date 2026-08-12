@@ -1,5 +1,5 @@
 (
-    schema_version: 13,
+    schema_version: 14,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -7264,6 +7264,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:soldier",
+                    base_amount: 3,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:bowyard": (
@@ -7286,6 +7293,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:ranger",
+                    base_amount: 3,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:castle": (
@@ -7308,6 +7322,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:paladin",
+                    base_amount: 1,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:farm": (
@@ -7330,6 +7351,13 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:farmer",
+                    base_amount: 1,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:fishinghut": (
@@ -7352,6 +7380,13 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:fisher",
+                    base_amount: 3,
+                    increment_amount: 1,
+                ),
+            ],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7393,6 +7428,7 @@
                     level_multiplier_per_thousand: 3000,
                 ),
             ],
+            role_slots: [],
             station: None,
         ),
         "building:forge": (
@@ -7415,6 +7451,13 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:blacksmith",
+                    base_amount: 1,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:fountain": (
@@ -7437,6 +7480,7 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:gate": (
@@ -7459,6 +7503,7 @@
             },
             level_cost_multiplier_per_thousand: 4000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:house": (
@@ -7488,6 +7533,7 @@
                     level_multiplier_per_thousand: 1000,
                 ),
             ],
+            role_slots: [],
             station: None,
         ),
         "building:lumbermill": (
@@ -7510,6 +7556,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:logger",
+                    base_amount: 3,
+                    increment_amount: 2,
+                ),
+            ],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7544,6 +7597,7 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:monastery": (
@@ -7566,6 +7620,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:priest",
+                    base_amount: 3,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:necrotower": (
@@ -7588,6 +7649,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:necromancer",
+                    base_amount: 1,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:orestorage": (
@@ -7617,6 +7685,7 @@
                     level_multiplier_per_thousand: 3000,
                 ),
             ],
+            role_slots: [],
             station: None,
         ),
         "building:statue_1": (
@@ -7639,6 +7708,7 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:statue_2": (
@@ -7661,6 +7731,7 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:statue_3": (
@@ -7683,6 +7754,7 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:stonemason": (
@@ -7705,6 +7777,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:miner",
+                    base_amount: 3,
+                    increment_amount: 2,
+                ),
+            ],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7739,6 +7818,7 @@
             },
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:tower": (
@@ -7761,6 +7841,13 @@
             },
             level_cost_multiplier_per_thousand: 2500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:defender",
+                    base_amount: 1,
+                    increment_amount: 1,
+                ),
+            ],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7803,6 +7890,7 @@
             },
             level_cost_multiplier_per_thousand: 5000,
             storage: [],
+            role_slots: [],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7840,6 +7928,7 @@
             },
             level_cost_multiplier_per_thousand: 4000,
             storage: [],
+            role_slots: [],
             station: None,
         ),
         "building:windmill": (
@@ -7862,6 +7951,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:gatherer",
+                    base_amount: 3,
+                    increment_amount: 2,
+                ),
+            ],
             station: Some((
                 accepts_all_roles: false,
                 accepted_role_kinds: [
@@ -7897,6 +7993,13 @@
             },
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
+            role_slots: [
+                (
+                    role: "role:wizard",
+                    base_amount: 1,
+                    increment_amount: 1,
+                ),
+            ],
             station: None,
         ),
         "building:woodstorage": (
@@ -7926,6 +8029,7 @@
                     level_multiplier_per_thousand: 3000,
                 ),
             ],
+            role_slots: [],
             station: None,
         ),
     },

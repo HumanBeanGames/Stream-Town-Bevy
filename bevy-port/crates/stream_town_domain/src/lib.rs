@@ -15,13 +15,16 @@ pub use animation::{
     AnimationBlendSelection, AnimationControllerRuntime, AnimationParameterValue,
     AnimationRuntimeError, AnimationTransitionOutcome, WeightedAnimationMotion,
 };
-pub use command::{ChatCommand, CommandParseError};
+pub use command::{
+    CameraAction, CameraDirection, ChatCommand, CommandParseError, CustomizationKind,
+};
 pub use config::{GameConfig, GameplayConfig, TwitchConfig, WindowConfig, WorldGenConfig};
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef, EnemySpawnerDef, HealthDef,
-    ObjectiveDef, ObjectiveKind, ProjectileShooterDef, RoleDef, RoleEquipmentDef, StationDef,
-    StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    ObjectiveDef, ObjectiveKind, ProjectileShooterDef, RoleDef, RoleEquipmentDef,
+    RoleSlotContribution, StationDef, StorageContribution, TechGroup, TechNode, TechTree,
+    WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
@@ -37,9 +40,10 @@ pub use save::{
     NativeSaveStore, SavedActor, SavedTerrainMesh, WorldSnapshot, inspect_legacy_save,
 };
 pub use simulation::{
-    ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState, FishGodState, MAX_ROLE_LEVEL,
-    ObjectiveEvent, ObjectiveProgress, RULER_VOTE_DURATION_SECONDS, RULER_VOTE_INTERVAL_SECONDS,
-    RaidState, RoleProgress, RulerVoteKind, RulerVoteState, Season, SimulationError, TechVote,
-    TownEvent, TownGoalState, Weather, WorldSimulation, required_role_experience,
+    ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState,
+    FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent, ObjectiveProgress, RULER_VOTE_DURATION_SECONDS,
+    RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress, RulerVoteKind, RulerVoteState, Season,
+    SimulationError, TechVote, TownEvent, TownGoalState, Weather, WorldSimulation,
+    required_role_experience,
 };
 pub use world::{GeneratedResource, GeneratedWorld, generate_world};

@@ -17,6 +17,7 @@ use bevy::{
     asset::{AssetPlugin, RenderAssetUsages},
     camera::ScalingMode,
     color::LinearRgba,
+    ecs::system::SystemParam,
     mesh::Indices,
     prelude::*,
     render::render_resource::PrimitiveTopology,
@@ -26,10 +27,11 @@ use bevy::{
 use stream_town_domain::{
     ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef, AnimationControllerRuntime,
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
-    BuildingDef, BuildingState, ChatCommand, ContentCatalog, EnemyCampState, GameConfig,
-    GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore,
-    ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, Season,
-    StableId, StationDef, TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
+    BuildingDef, BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
+    CustomizationKind, EnemyCampState, GameConfig, GeneratedWorld, GridPos,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, ObjectiveEvent,
+    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, Season, StableId, StationDef,
+    TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -86,6 +88,7 @@ struct PendingChatCommand {
     command: ChatCommand,
     is_broadcaster: bool,
     is_moderator: bool,
+    is_subscriber: bool,
 }
 
 #[derive(Resource, Default)]
@@ -93,6 +96,31 @@ struct InjectedCommands(VecDeque<PendingChatCommand>);
 
 #[derive(Resource, Default)]
 struct CommandFeedback(String);
+
+#[derive(Resource, Default)]
+struct CameraCommandQueue(VecDeque<CameraRequest>);
+
+#[derive(Resource, Default)]
+struct AgentCommandQueue(VecDeque<AgentCommand>);
+
+#[derive(SystemParam)]
+struct RuntimeCommandQueues<'w> {
+    injected: ResMut<'w, InjectedCommands>,
+    camera: ResMut<'w, CameraCommandQueue>,
+    agent: ResMut<'w, AgentCommandQueue>,
+}
+
+#[derive(Clone, Debug)]
+struct CameraRequest {
+    reset: bool,
+    actions: Vec<CameraAction>,
+}
+
+#[derive(Clone, Debug)]
+enum AgentCommand {
+    Teleport { actor: StableId, position: GridPos },
+    Despawn(StableId),
+}
 
 #[derive(Resource)]
 struct TwitchConnection {
@@ -253,6 +281,12 @@ struct SelectionMarker;
 struct TownCamera;
 
 #[derive(Component)]
+struct ActivePetVisual {
+    owner: StableId,
+    pet: StableId,
+}
+
+#[derive(Component)]
 struct WeatherParticle {
     kind: Weather,
     seed: u32,
@@ -358,6 +392,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SessionStats>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
+            .init_resource::<CameraCommandQueue>()
+            .init_resource::<AgentCommandQueue>()
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
             .init_resource::<EnvironmentPresentation>()
@@ -410,13 +446,21 @@ impl Plugin for StreamTownGamePlugin {
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
                     camera_controls,
+                    sync_active_pets,
                     select_grid_cell,
                     game_input,
                     save_input,
                     load_input,
                     capture_screenshot,
-                    process_injected_commands.after(game_input),
                     update_hud,
+                )
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    process_injected_commands.after(game_input),
+                    apply_agent_commands.after(process_injected_commands),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -1095,6 +1139,12 @@ fn generate_and_spawn_world(
             break;
         }
     }
+
+    let recruit_resource = StableId::new("resource:recruit").expect("static ID");
+    simulation.town_resources.insert(
+        recruit_resource,
+        u32::try_from(recruited_actor_ids(&simulation).len()).unwrap_or(u32::MAX),
+    );
 
     if let Some((camp_archetype_id, camp_archetype)) = content
         .0
@@ -1802,6 +1852,81 @@ fn next_agent_goal(
         return (AgentGoal::Wander, current);
     }
     let station = assigned_station(content, simulation, config, actor);
+    if let Some(preferred) = actor.preferred_target.as_ref() {
+        if let Some(target) = simulation
+            .actors
+            .get(preferred)
+            .filter(|target| target.alive && target.role.as_str() == "role:enemy")
+            .filter(|_| is_combat_role(&actor.role))
+            .filter(|target| {
+                station.is_none_or(|station| within_station_range(target.position, station))
+            })
+        {
+            let distance =
+                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
+            return (
+                AgentGoal::Attack(target.id.clone()),
+                if distance <= role_action_range_cells(content, simulation, actor) {
+                    current
+                } else {
+                    target.position
+                },
+            );
+        }
+        if let Some(target) = simulation
+            .actors
+            .get(preferred)
+            .filter(|target| {
+                target.alive
+                    && target.role.as_str() != "role:enemy"
+                    && target.health < target.max_health
+            })
+            .filter(|_| is_healer_role(&actor.role))
+            .filter(|target| {
+                station.is_none_or(|station| within_station_range(target.position, station))
+            })
+        {
+            let distance =
+                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
+            return (
+                AgentGoal::Heal(target.id.clone()),
+                if distance <= role_action_range_cells(content, simulation, actor) {
+                    current
+                } else {
+                    target.position
+                },
+            );
+        }
+        if let Some(resource) = world
+            .resources
+            .iter()
+            .find(|resource| resource.id == *preferred && resource.amount > 0)
+            .filter(|resource| {
+                resource_for_role(content, &actor.role).as_ref() == Some(&resource.kind)
+            })
+            .filter(|resource| {
+                station.is_none_or(|station| within_station_range(resource.position, station))
+            })
+        {
+            return (AgentGoal::Gather(resource.id.clone()), resource.position);
+        }
+        if let Some(building) = simulation
+            .buildings
+            .get(preferred)
+            .filter(|building| {
+                actor.role.as_str() == "role:builder"
+                    && (!building.complete || building.health < BUILDING_MAX_HEALTH)
+            })
+            .filter(|building| {
+                station.is_none_or(|station| within_station_range(building.position, station))
+            })
+            && let Some(definition) = building_def_for_archetype(content, &building.archetype)
+            && let Some(approach) =
+                building_approach(world, building.position, definition.footprint, current)
+        {
+            return (AgentGoal::Construct(building.id.clone()), approach);
+        }
+    }
     if is_healer_role(&actor.role) {
         let mut candidates: Vec<_> = simulation
             .actors
@@ -1897,7 +2022,7 @@ fn next_agent_goal(
         let mut candidates: Vec<_> = simulation
             .buildings
             .values()
-            .filter(|building| !building.complete)
+            .filter(|building| !building.complete || building.health < BUILDING_MAX_HEALTH)
             .filter(|building| {
                 station.is_none_or(|station| within_station_range(building.position, station))
             })
@@ -2007,6 +2132,15 @@ fn complete_agent_goal(
     let mut projectile_spawn = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
+            let gathering_pet = simulation.actors.get(actor_id).and_then(|actor| {
+                actor.id.as_str().starts_with("twitch:").then_some(())?;
+                match actor.role.as_str() {
+                    "role:gatherer" => StableId::new("pet:giraffe").ok(),
+                    "role:fisher" => StableId::new("pet:duck").ok(),
+                    "role:logger" => StableId::new("pet:butterfly").ok(),
+                    _ => None,
+                }
+            });
             let resource = world
                 .resources
                 .iter_mut()
@@ -2019,6 +2153,14 @@ fn complete_agent_goal(
                 resource.amount = resource.amount.saturating_add(amount);
                 false
             } else {
+                if amount > 0
+                    && let Some(pet) = gathering_pet
+                    && simulation
+                        .try_unlock_gathering_pet(actor_id, pet.clone())
+                        .unwrap_or(false)
+                {
+                    info!(actor = %actor_id, %pet, "unlocked gathering pet");
+                }
                 amount > 0
             }
         }
@@ -2127,7 +2269,14 @@ fn complete_agent_goal(
                 .buildings
                 .get(building_id)
                 .map(|building| building.archetype.clone());
-            match simulation.work_on_building(building_id, action_amount) {
+            let result = if was_incomplete {
+                simulation.work_on_building(building_id, action_amount)
+            } else {
+                simulation
+                    .repair_building(building_id, action_amount)
+                    .map(|restored| restored > 0)
+            };
+            match result {
                 Ok(complete) => {
                     if was_incomplete
                         && complete
@@ -2142,7 +2291,7 @@ fn complete_agent_goal(
                             &ObjectiveEvent::BuildingBuilt(building),
                         );
                     }
-                    was_incomplete && action_amount > 0
+                    action_amount > 0 && (was_incomplete || complete)
                 }
                 Err(error) => {
                     warn!(actor = %actor_id, building = %building_id, %error, "construction action failed");
@@ -3507,8 +3656,13 @@ fn tag_equipment_nodes(
     }
 }
 
-fn equipment_node_visible(equipment: &RoleEquipmentDef, name: &str, carrying: bool) -> bool {
-    equipment.body_nodes[0] == name
+fn equipment_node_visible(
+    equipment: &RoleEquipmentDef,
+    body_type: u8,
+    name: &str,
+    carrying: bool,
+) -> bool {
+    equipment.body_nodes[usize::from(body_type).min(equipment.body_nodes.len() - 1)] == name
         || equipment.right_hand_node.as_deref() == Some(name)
         || equipment.helmet_node.as_deref() == Some(name)
         || (equipment.left_hand_node.as_deref() == Some(name)
@@ -3534,8 +3688,14 @@ fn sync_equipment_nodes(
             .get(&actor.role)
             .and_then(|role| role.equipment.as_ref());
         let carrying = actor.inventory.values().any(|amount| *amount > 0);
-        let visible = equipment
-            .is_some_and(|equipment| equipment_node_visible(equipment, &node.name, carrying));
+        let visible = equipment.is_some_and(|equipment| {
+            equipment_node_visible(
+                equipment,
+                actor.customization.body_type,
+                &node.name,
+                carrying,
+            )
+        });
         *visibility = if visible {
             Visibility::Inherited
         } else {
@@ -3948,6 +4108,7 @@ fn apply_material_overrides(
 fn camera_controls(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut requests: ResMut<CameraCommandQueue>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<TownCamera>>,
 ) {
     let Ok((mut transform, mut projection)) = cameras.single_mut() else {
@@ -3980,6 +4141,186 @@ fn camera_controls(
     };
     if let Projection::Orthographic(orthographic) = &mut *projection {
         orthographic.scale = (orthographic.scale * zoom_factor).clamp(0.35, 4.0);
+    }
+    if let Some(request) = requests.0.pop_front() {
+        if request.reset {
+            *transform = default_town_camera_transform();
+            if let Projection::Orthographic(orthographic) = &mut *projection {
+                orthographic.scale = 1.0;
+            }
+        } else {
+            for action in request.actions {
+                let amount = i16::try_from(action.amount.clamp(-100, 100)).map_or(0.0, f32::from);
+                match action.direction {
+                    CameraDirection::Up => transform.translation.z += amount * 12.0,
+                    CameraDirection::Down => transform.translation.z -= amount * 12.0,
+                    CameraDirection::Left => transform.translation.x -= amount * 12.0,
+                    CameraDirection::Right => transform.translation.x += amount * 12.0,
+                    CameraDirection::In | CameraDirection::Out => {
+                        if let Projection::Orthographic(orthographic) = &mut *projection {
+                            let signed = if action.direction == CameraDirection::In {
+                                -amount
+                            } else {
+                                amount
+                            };
+                            orthographic.scale =
+                                (orthographic.scale * 1.12_f32.powf(signed)).clamp(0.35, 4.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn pet_scene<'a>(archetype: &'a ArchetypeDef, pet: &StableId) -> Option<&'a ArchetypeScene> {
+    let suffix = match pet.as_str() {
+        "pet:red_panda" => "Pet_RedPanda.fbx",
+        "pet:giraffe" => "Pet_TallBoi.fbx",
+        "pet:duck" => "Pet_Duck.fbx",
+        "pet:butterfly" => "Pet_Butterfly.fbx",
+        "pet:fish_god" => "Critter_Fish3.fbx",
+        _ => return None,
+    };
+    archetype
+        .scenes
+        .iter()
+        .find(|scene| scene.source_model.ends_with(suffix))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_active_pets(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    owners: Query<(&Agent, &Transform), Without<ActivePetVisual>>,
+    mut visuals: Query<(Entity, &ActivePetVisual, &mut Transform), Without<Agent>>,
+) {
+    let desired: BTreeMap<_, _> = simulation
+        .0
+        .actors
+        .values()
+        .filter_map(|actor| {
+            actor
+                .active_pet
+                .as_ref()
+                .map(|pet| (actor.id.clone(), pet.clone()))
+        })
+        .collect();
+    let owner_positions: BTreeMap<_, _> = owners
+        .iter()
+        .map(|(agent, transform)| (agent.id.clone(), transform.translation))
+        .collect();
+    let mut existing = BTreeSet::new();
+    for (entity, visual, mut transform) in &mut visuals {
+        let key = (visual.owner.clone(), visual.pet.clone());
+        existing.insert(key.clone());
+        let Some(position) = owner_positions.get(&visual.owner) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if desired.get(&visual.owner) == Some(&visual.pet) {
+            let offset = Vec3::new(
+                config.0.world.cell_size * 0.55,
+                0.0,
+                config.0.world.cell_size * 0.4,
+            );
+            transform.translation = *position + offset;
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+    let Some(server) = asset_server.as_deref() else {
+        return;
+    };
+    let Some(archetype) = content
+        .0
+        .archetypes
+        .values()
+        .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
+    else {
+        return;
+    };
+    for (owner, pet) in desired {
+        if existing.contains(&(owner.clone(), pet.clone())) {
+            continue;
+        }
+        let Some(owner_position) = owner_positions.get(&owner) else {
+            continue;
+        };
+        let Some(scene) = pet_scene(archetype, &pet)
+            .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+        else {
+            continue;
+        };
+        let offset = Vec3::new(
+            config.0.world.cell_size * 0.55,
+            0.0,
+            config.0.world.cell_size * 0.4,
+        );
+        commands.spawn((
+            WorldEntity,
+            ActivePetVisual { owner, pet },
+            WorldAssetRoot(
+                server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+            ),
+            Transform::from_translation(*owner_position + offset)
+                .with_scale(Vec3::splat(config.0.world.cell_size * 0.28)),
+        ));
+    }
+}
+
+fn default_town_camera_transform() -> Transform {
+    Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
+}
+
+fn apply_agent_commands(
+    mut commands: Commands,
+    mut queue: ResMut<AgentCommandQueue>,
+    config: Res<RuntimeConfig>,
+    world: Res<WorldRuntime>,
+    mut agents: Query<(
+        Entity,
+        &mut Agent,
+        &mut GridLocation,
+        &AgentAnimation,
+        &mut Transform,
+    )>,
+) {
+    while let Some(command) = queue.0.pop_front() {
+        match command {
+            AgentCommand::Teleport { actor, position } => {
+                if let Some((_, mut agent, mut location, animation, mut transform)) = agents
+                    .iter_mut()
+                    .find(|(_, agent, _, _, _)| agent.id == actor)
+                {
+                    let mut world_position =
+                        grid_to_world_on_surface(position, &config.0, &world.generated);
+                    if !animation.native {
+                        world_position.y += animation.base_scale.y * 0.5;
+                    }
+                    location.0 = position;
+                    agent.spawn = position;
+                    agent.origin = position;
+                    agent.path.clear();
+                    agent.path_index = 0;
+                    agent.target = position;
+                    agent.goal = AgentGoal::Wander;
+                    transform.translation = world_position;
+                }
+            }
+            AgentCommand::Despawn(actor) => {
+                if let Some((entity, _, _, _, _)) = agents
+                    .iter_mut()
+                    .find(|(_, agent, _, _, _)| agent.id == actor)
+                {
+                    commands.entity(entity).despawn();
+                }
+            }
+        }
     }
 }
 
@@ -4046,6 +4387,7 @@ fn game_input(
             command: "!join".parse().expect("static chat command"),
             is_broadcaster: true,
             is_moderator: true,
+            is_subscriber: true,
         });
     }
     if !*injected_debug_commands {
@@ -4060,6 +4402,7 @@ fn game_input(
                         command,
                         is_broadcaster: true,
                         is_moderator: true,
+                        is_subscriber: true,
                     }),
                     Err(error) => warn!(command, %error, "ignored invalid debug command"),
                 }
@@ -4167,6 +4510,7 @@ fn handle_twitch_event(
                     command: ChatCommand::Praise,
                     is_broadcaster: message.is_broadcaster,
                     is_moderator: message.is_moderator,
+                    is_subscriber: message.is_subscriber,
                 });
                 return;
             }
@@ -4178,6 +4522,7 @@ fn handle_twitch_event(
                     command,
                     is_broadcaster: message.is_broadcaster,
                     is_moderator: message.is_moderator,
+                    is_subscriber: message.is_subscriber,
                 }),
                 Err(parse_error) => {
                     debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
@@ -5175,6 +5520,273 @@ fn resolve_ruler_vote_option(
         .map(|actor| actor.id.clone())
 }
 
+fn recruited_actor_ids(simulation: &WorldSimulation) -> Vec<StableId> {
+    simulation
+        .actors
+        .keys()
+        .filter(|id| {
+            id.as_str().starts_with("npc:recruit_") || id.as_str().starts_with("npc:starting_")
+        })
+        .cloned()
+        .collect()
+}
+
+fn recruit_id(simulation: &WorldSimulation, index: u16) -> Option<StableId> {
+    recruited_actor_ids(simulation)
+        .get(usize::from(index.saturating_sub(1)))
+        .cloned()
+}
+
+fn role_capacity(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    role: &StableId,
+) -> Option<u32> {
+    let definition = content.roles.get(role)?;
+    if !definition.has_user_limit {
+        return None;
+    }
+    Some(
+        simulation
+            .buildings
+            .values()
+            .filter(|state| state.complete)
+            .filter_map(|state| {
+                building_def_for_archetype(content, &state.archetype)
+                    .map(|definition| (definition, state.level))
+            })
+            .flat_map(|(building, level)| {
+                building
+                    .role_slots
+                    .iter()
+                    .filter(move |slots| slots.role == *role)
+                    .map(move |slots| {
+                        u32::from(slots.base_amount).saturating_add(
+                            u32::from(slots.increment_amount)
+                                .saturating_mul(u32::from(level.saturating_sub(1))),
+                        )
+                    })
+            })
+            .fold(u32::from(definition.base_max_users), u32::saturating_add),
+    )
+}
+
+fn role_is_available(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    role: &StableId,
+    excluding: Option<&StableId>,
+) -> bool {
+    role_capacity(content, simulation, role).is_none_or(|capacity| {
+        let used = simulation
+            .actors
+            .values()
+            .filter(|actor| actor.role == *role && excluding != Some(&actor.id))
+            .count();
+        used < usize::try_from(capacity).unwrap_or(usize::MAX)
+    })
+}
+
+fn resolve_player_id(simulation: &WorldSimulation, requested: &StableId) -> Option<StableId> {
+    if simulation.actors.contains_key(requested) {
+        return Some(requested.clone());
+    }
+    let prefixed = prefixed_id(requested, "twitch:");
+    if let Some(actor) = prefixed.filter(|actor| simulation.actors.contains_key(actor)) {
+        return Some(actor);
+    }
+    let normalized = requested.as_str().replace('_', " ");
+    simulation
+        .actors
+        .values()
+        .find(|actor| {
+            actor
+                .login_name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case(requested.as_str()))
+                || actor
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| name.replace('_', " ").eq_ignore_ascii_case(&normalized))
+        })
+        .map(|actor| actor.id.clone())
+}
+
+fn item_info(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    requested: &StableId,
+) -> Result<String, String> {
+    if let Some(role_id) = prefixed_id(requested, "role:")
+        && let Some(role) = content.roles.get(&role_id)
+    {
+        let capacity = role_capacity(content, simulation, &role_id)
+            .map_or_else(|| "unlimited".to_owned(), |value| value.to_string());
+        let assigned = simulation
+            .actors
+            .values()
+            .filter(|actor| actor.role == role_id)
+            .count();
+        return Ok(format!(
+            "{}: action {}, health {}, carry {}, slots {assigned}/{capacity}",
+            role.display_name, role.base_action_amount, role.base_health, role.base_carry_capacity
+        ));
+    }
+    if let Some(building_id) = prefixed_id(requested, "building:")
+        && let Some(building) = content.buildings.get(&building_id)
+    {
+        let count = simulation
+            .buildings
+            .values()
+            .filter(|state| state.archetype == building.archetype)
+            .count();
+        let cost = building
+            .cost
+            .iter()
+            .map(|(resource, amount)| format!("{resource}={amount}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(format!(
+            "{}: count {count}, footprint {}x{}, cost {cost}",
+            building.display_name, building.footprint[0], building.footprint[1]
+        ));
+    }
+    if let Some(technology_id) = resolve_technology_id(content, requested) {
+        let technology = &content.technology.nodes[&technology_id];
+        let status = if simulation.unlocked_technology.contains(&technology_id) {
+            "unlocked"
+        } else if technology.unavailable {
+            "unavailable"
+        } else {
+            "locked"
+        };
+        return Ok(format!(
+            "{} ({status}): {}",
+            technology.display_name, technology.description
+        ));
+    }
+    if let Some(resource_id) = prefixed_id(requested, "resource:")
+        && let Some(amount) = simulation.town_resources.get(&resource_id)
+    {
+        return Ok(format!("{resource_id}: town amount {amount}"));
+    }
+    if let Some(player_id) = resolve_player_id(simulation, requested) {
+        let actor = &simulation.actors[&player_id];
+        return Ok(format!(
+            "{player_id}: {}, health {}/{}, at {},{}",
+            actor.role, actor.health, actor.max_health, actor.position.x, actor.position.z
+        ));
+    }
+    Err(format!("unknown item {requested}"))
+}
+
+fn compatible_station_ids(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    config: &GameConfig,
+    actor: &ActorState,
+) -> Vec<StableId> {
+    let Some(role) = content.roles.get(&actor.role) else {
+        return Vec::new();
+    };
+    let town_hall = StableId::new("building:townhall").expect("static ID");
+    let mut stations: Vec<_> = std::iter::once(town_hall)
+        .chain(simulation.buildings.keys().cloned())
+        .filter(|id| {
+            station_candidate(content, simulation, config, id).is_some_and(|station| {
+                station_matches_role(station.definition, role)
+                    && station_supports_role_targets(station.definition, role)
+            })
+        })
+        .collect();
+    stations.sort();
+    stations
+}
+
+fn compatible_target_ids(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    actor: &ActorState,
+) -> Vec<StableId> {
+    let Some(role) = content.roles.get(&actor.role) else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+    let accepts =
+        |kind: &str| role.targets_all || role.target_kinds.iter().any(|id| id.as_str() == kind);
+    if accepts("target:tree") {
+        targets.extend(
+            world
+                .resources
+                .iter()
+                .filter(|resource| resource.amount > 0 && resource.kind.as_str() == "resource:wood")
+                .map(|resource| resource.id.clone()),
+        );
+    }
+    if accepts("target:ore") {
+        targets.extend(
+            world
+                .resources
+                .iter()
+                .filter(|resource| resource.amount > 0 && resource.kind.as_str() == "resource:ore")
+                .map(|resource| resource.id.clone()),
+        );
+    }
+    if ["target:bush", "target:farm", "target:fish"]
+        .iter()
+        .any(|kind| accepts(kind))
+    {
+        targets.extend(
+            world
+                .resources
+                .iter()
+                .filter(|resource| resource.amount > 0 && resource.kind.as_str() == "resource:food")
+                .map(|resource| resource.id.clone()),
+        );
+    }
+    if accepts("target:enemy") {
+        targets.extend(
+            simulation
+                .actors
+                .values()
+                .filter(|target| target.alive && target.role.as_str() == "role:enemy")
+                .map(|target| target.id.clone()),
+        );
+    }
+    if accepts("target:injured_player") {
+        targets.extend(
+            simulation
+                .actors
+                .values()
+                .filter(|target| {
+                    target.id != actor.id
+                        && target.alive
+                        && target.role.as_str() != "role:enemy"
+                        && target.health < target.max_health
+                })
+                .map(|target| target.id.clone()),
+        );
+    }
+    if accepts("target:construction") || accepts("target:damaged_building") {
+        targets.extend(
+            simulation
+                .buildings
+                .values()
+                .filter(|building| {
+                    (!building.complete && accepts("target:construction"))
+                        || (building.complete
+                            && building.health < BUILDING_MAX_HEALTH
+                            && accepts("target:damaged_building"))
+                })
+                .map(|building| building.id.clone()),
+        );
+    }
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
 #[allow(clippy::too_many_arguments)]
 fn recruit_npcs(
     commands: &mut Commands,
@@ -5198,21 +5810,20 @@ fn recruit_npcs(
     if amount == 0 {
         return Err("the town has no recruit capacity".to_owned());
     }
-    let role_definition = content
-        .roles
-        .get(role)
-        .ok_or_else(|| format!("unknown role {role}"))?;
+    if !content.roles.contains_key(role) {
+        return Err(format!("unknown role {role}"));
+    }
     let current_in_role = simulation
         .actors
         .values()
         .filter(|actor| actor.role == *role)
         .count();
-    let role_capacity = if role_definition.has_user_limit {
-        usize::from(role_definition.base_max_users).saturating_sub(current_in_role)
-    } else {
-        usize::MAX
-    };
-    let amount = amount.min(u32::try_from(role_capacity).unwrap_or(u32::MAX));
+    let available_role_slots = role_capacity(content, simulation, role).map_or(usize::MAX, |max| {
+        usize::try_from(max)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(current_in_role)
+    });
+    let amount = amount.min(u32::try_from(available_role_slots).unwrap_or(u32::MAX));
     if amount == 0 {
         return Err(format!("the {role} role is full"));
     }
@@ -5310,7 +5921,7 @@ fn send_command_feedback(connection: &TwitchConnection, display_name: &str, mess
 #[allow(clippy::too_many_arguments)]
 fn process_injected_commands(
     mut ecs: Commands,
-    mut queue: ResMut<InjectedCommands>,
+    mut queues: RuntimeCommandQueues,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
@@ -5326,12 +5937,17 @@ fn process_injected_commands(
     mut simulation: ResMut<SimulationRuntime>,
     agents: Query<(&Agent, &GridLocation)>,
 ) {
-    while let Some(pending) = queue.0.pop_front() {
+    while let Some(pending) = queues.injected.0.pop_front() {
         let actor_id = pending.actor_id.clone();
         let command = pending.command.clone();
         if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
             actor.display_name = Some(pending.display_name.clone());
             actor.login_name = Some(pending.login_name.clone());
+            if pending.is_subscriber {
+                let red_panda = StableId::new("pet:red_panda").expect("static pet ID");
+                actor.unlocked_pets.insert(red_panda.clone());
+                actor.active_pet.get_or_insert(red_panda);
+            }
         }
         let result = (|| -> Result<String, String> {
             match &command {
@@ -5367,6 +5983,12 @@ fn process_injected_commands(
                             actor.archetype = Some(player_archetype.clone());
                             actor.display_name = Some(pending.display_name.clone());
                             actor.login_name = Some(pending.login_name.clone());
+                            if pending.is_subscriber {
+                                let red_panda =
+                                    StableId::new("pet:red_panda").expect("static pet ID");
+                                actor.unlocked_pets.insert(red_panda.clone());
+                                actor.active_pet.get_or_insert(red_panda);
+                            }
                         }
                         let base_scale = Vec3::new(
                             config.0.world.cell_size * 0.3,
@@ -5416,11 +6038,60 @@ fn process_injected_commands(
                     if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&actor_id) {
                         return Err("the Ruler role is assigned by election".to_owned());
                     }
+                    if !role_is_available(&content.0, &simulation.0, &role, Some(&actor_id)) {
+                        return Err(format!("the {role} role is full"));
+                    }
                     simulation
                         .0
                         .assign_role(&actor_id, role.clone())
                         .map(|()| format!("role changed to {role}"))
                         .map_err(|error| error.to_string())
+                })
+            }
+            ChatCommand::Role => simulation
+                .0
+                .actors
+                .get(&actor_id)
+                .ok_or_else(|| "join before checking your role".to_owned())
+                .map(|actor| {
+                    let progress = actor.role_progression.get(&actor.role).copied().unwrap_or_default();
+                    format!("you are a level {} {}", progress.level, actor.role)
+                }),
+            ChatCommand::Health => simulation
+                .0
+                .actors
+                .get(&actor_id)
+                .ok_or_else(|| "join before checking health".to_owned())
+                .map(|actor| format!("health: {}/{}", actor.health, actor.max_health)),
+            ChatCommand::Buildings => {
+                let names = content
+                    .0
+                    .buildings
+                    .iter()
+                    .filter(|(id, building)| {
+                        building.placeable && building_is_unlocked(&content.0, &simulation.0, id)
+                    })
+                    .map(|(_, building)| building.display_name.as_str())
+                    .collect::<Vec<_>>();
+                Ok(format!("unlocked buildings: {}", names.join(", ")))
+            }
+            ChatCommand::BuildingIds(requested) => {
+                let building_id = prefixed_id(requested, "building:")
+                    .filter(|id| content.0.buildings.contains_key(id))
+                    .ok_or_else(|| format!("unknown building {requested}"))?;
+                let definition = &content.0.buildings[&building_id];
+                let ids = simulation
+                    .0
+                    .buildings
+                    .values()
+                    .filter(|building| building.archetype == definition.archetype)
+                    .enumerate()
+                    .map(|(index, building)| format!("{}={}", index + 1, building.id))
+                    .collect::<Vec<_>>();
+                Ok(if ids.is_empty() {
+                    format!("no {} buildings", definition.display_name)
+                } else {
+                    format!("{} IDs: {}", definition.display_name, ids.join(", "))
                 })
             }
             ChatCommand::Build(requested) => {
@@ -5521,6 +6192,27 @@ fn process_injected_commands(
                         .map(|level| format!("upgraded {} to level {level}", definition.display_name))
                         .map_err(|error| error.to_string())
                 })
+            }
+            ChatCommand::Level(requested) => {
+                let role = prefixed_id(requested, "role:")
+                    .filter(|role| content.0.roles.contains_key(role))
+                    .ok_or_else(|| format!("unknown role {requested}"))?;
+                let actor = simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before checking role progression".to_owned())?;
+                let progress = actor
+                    .role_progression
+                    .get(&role)
+                    .copied()
+                    .ok_or_else(|| format!("you have no progression for {role}"))?;
+                Ok(format!(
+                    "{role} level {}, experience {}/{}",
+                    progress.level,
+                    progress.experience,
+                    stream_town_domain::required_role_experience(progress.level)
+                ))
             }
             ChatCommand::Sell { amount, resource } => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
@@ -5662,13 +6354,66 @@ fn process_injected_commands(
             }
             ChatCommand::RecruitCount => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
-                let recruits = simulation
-                    .0
-                    .actors
-                    .keys()
-                    .filter(|id| id.as_str().starts_with("npc:recruit_"))
-                    .count();
+                let recruits = recruited_actor_ids(&simulation.0).len();
                 Ok(format!("the town has {recruits} recruited NPCs"))
+            }
+            ChatCommand::RecruitIds => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                let recruits = recruited_actor_ids(&simulation.0)
+                    .iter()
+                    .enumerate()
+                    .map(|(index, id)| format!("{}={id}", index + 1))
+                    .collect::<Vec<_>>();
+                Ok(if recruits.is_empty() {
+                    "the town has no recruited NPCs".to_owned()
+                } else {
+                    format!("recruit IDs: {}", recruits.join(", "))
+                })
+            }
+            ChatCommand::RecruitInfo(index) => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                let id = recruit_id(&simulation.0, *index)
+                    .ok_or_else(|| format!("unknown recruit ID {index}"))?;
+                let recruit = &simulation.0.actors[&id];
+                let progress = recruit
+                    .role_progression
+                    .get(&recruit.role)
+                    .copied()
+                    .unwrap_or_default();
+                Ok(format!(
+                    "recruit {index}: {id}, {}, health {}/{}, level {}, experience {}",
+                    recruit.role, recruit.health, recruit.max_health, progress.level, progress.experience
+                ))
+            }
+            ChatCommand::RecruitRole { recruit, role } => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                let id = recruit_id(&simulation.0, *recruit)
+                    .ok_or_else(|| format!("unknown recruit ID {recruit}"))?;
+                let role = prefixed_id(role, "role:")
+                    .filter(|role| content.0.roles.contains_key(role))
+                    .ok_or_else(|| format!("unknown role {role}"))?;
+                if role.as_str() == "role:ruler" {
+                    return Err("Ruler cannot be assigned to a recruit".to_owned());
+                }
+                if !role_is_available(&content.0, &simulation.0, &role, Some(&id)) {
+                    return Err(format!("the {role} role is full"));
+                }
+                simulation
+                    .0
+                    .assign_role(&id, role.clone())
+                    .map_err(|error| error.to_string())?;
+                Ok(format!("recruit {recruit} changed to {role}"))
+            }
+            ChatCommand::DismissRecruit(index) => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                let id = recruit_id(&simulation.0, *index)
+                    .ok_or_else(|| format!("unknown recruit ID {index}"))?;
+                simulation.0.actors.remove(&id);
+                let resource = StableId::new("resource:recruit").expect("static ID");
+                let current = simulation.0.town_resources.get(&resource).copied().unwrap_or_default();
+                simulation.0.town_resources.insert(resource, current.saturating_sub(1));
+                queues.agent.0.push_back(AgentCommand::Despawn(id));
+                Ok(format!("dismissed recruit {index}"))
             }
             ChatCommand::StartRulerVote => {
                 require_staff(&pending)?;
@@ -5688,6 +6433,233 @@ fn process_injected_commands(
                 .resign_ruler(&actor_id)
                 .map(|()| "you resigned; a new ruler vote started".to_owned())
                 .map_err(|error| error.to_string()),
+            ChatCommand::Station(index) => {
+                let actor = simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before selecting a station".to_owned())?;
+                let stations = compatible_station_ids(&content.0, &simulation.0, &config.0, actor);
+                if let Some(index) = index {
+                    let station = stations
+                        .get(usize::from(index.saturating_sub(1)))
+                        .cloned()
+                        .ok_or_else(|| format!("unknown station ID {index}"))?;
+                    simulation.0.actors.get_mut(&actor_id).expect("validated actor").station =
+                        Some(station.clone());
+                    Ok(format!("station changed to {station}"))
+                } else {
+                    Ok(if stations.is_empty() {
+                        "no compatible stations are available".to_owned()
+                    } else {
+                        format!(
+                            "station IDs: {}",
+                            stations
+                                .iter()
+                                .enumerate()
+                                .map(|(index, id)| format!("{}={id}", index + 1))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                }
+            }
+            ChatCommand::Target(index) => {
+                let actor = simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before selecting a target".to_owned())?;
+                let targets = compatible_target_ids(
+                    &content.0,
+                    &simulation.0,
+                    &world.generated,
+                    actor,
+                );
+                if let Some(index) = index {
+                    let target = targets
+                        .get(usize::from(index.saturating_sub(1)))
+                        .cloned()
+                        .ok_or_else(|| format!("unknown target ID {index}"))?;
+                    simulation
+                        .0
+                        .actors
+                        .get_mut(&actor_id)
+                        .expect("validated actor")
+                        .preferred_target = Some(target.clone());
+                    Ok(format!("target changed to {target}"))
+                } else {
+                    Ok(if targets.is_empty() {
+                        "no compatible targets are available".to_owned()
+                    } else {
+                        format!(
+                            "target IDs: {}",
+                            targets
+                                .iter()
+                                .enumerate()
+                                .map(|(index, id)| format!("{}={id}", index + 1))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                }
+            }
+            ChatCommand::Unstuck => {
+                let spawn = nearest_walkable(&world.generated, town_hall_grid_position(&config.0))
+                    .ok_or_else(|| "the Town Hall has no walkable spawn cell".to_owned())?;
+                let actor = simulation
+                    .0
+                    .actors
+                    .get_mut(&actor_id)
+                    .ok_or_else(|| "join before using !stuck".to_owned())?;
+                actor.position = spawn;
+                actor.preferred_target = None;
+                queues.agent.0.push_back(AgentCommand::Teleport {
+                    actor: actor_id.clone(),
+                    position: spawn,
+                });
+                Ok("returned to the Town Hall".to_owned())
+            }
+            ChatCommand::Ping => {
+                let position = simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .map(|actor| actor.position)
+                    .ok_or_else(|| "join before using !ping".to_owned())?;
+                Ok(format!("you are at grid {},{}", position.x, position.z))
+            }
+            ChatCommand::Customize { kind, index } => {
+                let actor = simulation
+                    .0
+                    .actors
+                    .get_mut(&actor_id)
+                    .ok_or_else(|| "join before customizing your character".to_owned())?;
+                let adjusted = index.saturating_sub(1);
+                let (name, maximum, field) = match kind {
+                    CustomizationKind::Hair => ("hair", 7, &mut actor.customization.hair),
+                    CustomizationKind::Eyes => ("eyes", 10, &mut actor.customization.eyes),
+                    CustomizationKind::FacialHair => {
+                        ("facial hair", 2, &mut actor.customization.facial_hair)
+                    }
+                    CustomizationKind::Body => ("body", 3, &mut actor.customization.body_type),
+                    CustomizationKind::HairColor => {
+                        ("hair color", 6, &mut actor.customization.hair_color)
+                    }
+                    CustomizationKind::EyeColor => {
+                        ("eye color", 5, &mut actor.customization.eye_color)
+                    }
+                };
+                if *index > maximum {
+                    return Err(format!("{name} index must be between 1 and {maximum}"));
+                }
+                *field = adjusted;
+                Ok(format!("{name} changed to {index}"))
+            }
+            ChatCommand::Pets | ChatCommand::Pet(None) => {
+                let actor = simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before checking pets".to_owned())?;
+                Ok(if actor.unlocked_pets.is_empty() {
+                    "you have no unlocked pets".to_owned()
+                } else {
+                    format!(
+                        "pets: {}; active: {}",
+                        actor
+                            .unlocked_pets
+                            .iter()
+                            .map(StableId::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        actor.active_pet.as_ref().map_or("none", StableId::as_str)
+                    )
+                })
+            }
+            ChatCommand::Pet(Some(requested)) => {
+                let requested = prefixed_id(requested, "pet:")
+                    .ok_or_else(|| format!("invalid pet {requested}"))?;
+                let actor = simulation
+                    .0
+                    .actors
+                    .get_mut(&actor_id)
+                    .ok_or_else(|| "join before selecting a pet".to_owned())?;
+                if requested.as_str() == "pet:none" {
+                    actor.active_pet = None;
+                    Ok("pet deactivated".to_owned())
+                } else if actor.unlocked_pets.contains(&requested) {
+                    actor.active_pet = Some(requested.clone());
+                    Ok(format!("active pet changed to {requested}"))
+                } else {
+                    Err(format!("{requested} is not unlocked"))
+                }
+            }
+            ChatCommand::Camera(actions) => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                queues.camera.0.push_back(CameraRequest {
+                    reset: false,
+                    actions: actions.clone(),
+                });
+                Ok("camera request queued".to_owned())
+            }
+            ChatCommand::ResetCamera => {
+                require_ruler_or_staff(&simulation.0, &pending)?;
+                queues.camera.0.push_back(CameraRequest {
+                    reset: true,
+                    actions: Vec::new(),
+                });
+                Ok("camera reset queued".to_owned())
+            }
+            ChatCommand::ModRole { player, role } => {
+                require_staff(&pending)?;
+                let player = resolve_player_id(&simulation.0, player)
+                    .ok_or_else(|| format!("unknown player {player}"))?;
+                let role = prefixed_id(role, "role:")
+                    .filter(|role| content.0.roles.contains_key(role))
+                    .ok_or_else(|| format!("unknown role {role}"))?;
+                if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&player) {
+                    return Err("the Ruler role is assigned by election".to_owned());
+                }
+                if !role_is_available(&content.0, &simulation.0, &role, Some(&player)) {
+                    return Err(format!("the {role} role is full"));
+                }
+                simulation.0.assign_role(&player, role.clone()).map_err(|error| error.to_string())?;
+                Ok(format!("changed {player} to {role}"))
+            }
+            ChatCommand::Roles => {
+                let roles = content
+                    .0
+                    .roles
+                    .iter()
+                    .filter(|(id, _)| id.as_str() != "role:ruler")
+                    .filter(|(id, _)| role_is_available(&content.0, &simulation.0, id, None))
+                    .map(|(_, role)| role.display_name.as_str())
+                    .collect::<Vec<_>>();
+                Ok(format!("available roles: {}", roles.join(", ")))
+            }
+            ChatCommand::TownStats => Ok(format!(
+                "town: {} players, {} recruits, {} buildings, day {}, {:?}/{:?}, resources {}",
+                simulation
+                    .0
+                    .actors
+                    .values()
+                    .filter(|actor| actor.id.as_str().starts_with("twitch:"))
+                    .count(),
+                recruited_actor_ids(&simulation.0).len(),
+                simulation.0.buildings.len(),
+                simulation.0.day,
+                simulation.0.season,
+                simulation.0.weather,
+                simulation
+                    .0
+                    .town_resources
+                    .iter()
+                    .map(|(resource, amount)| format!("{resource}={amount}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            ChatCommand::Info(requested) => item_info(&content.0, &simulation.0, requested),
             ChatCommand::TriggerEvent(event) => {
                 require_staff(&pending)?;
                 town_event_from_id(event)
@@ -5846,7 +6818,7 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role <role>, !experience, !build <building>, !upgrade <building>, !buy/!sell <amount> <resource> (Ruler), !recruit <role> [amount] (Ruler), !recruits, !resign, !revive [player], !praise, !vote <candidate|yes|no|technology>, !rulervote (staff), !event <event> (staff), !save, !help"
+                "commands: !join, !role [role], !roles, !health, !experience, !station [id], !target [id], !stuck, !ping, !pets/!pet [pet], !hair/!eyes/!facialhair/!body/!haircolor/!eyecolor <id>, !build/!buildings/!bid, !upgrade, !info, !townstats, !buy/!sell (Ruler), !recruit/!recruits/!rid/!rinfo/!rrole/!rdismiss (Ruler), !cam/!resetcam (Ruler), !modrole/!rulervote/!event (staff), !resign, !revive, !praise, !vote, !save, !help"
                     .to_owned(),
             ),
             }
@@ -6320,15 +7292,28 @@ mod tests {
             .equipment
             .as_ref()
             .unwrap();
-        assert!(equipment_node_visible(logger, "Body_Logger_Slim", false));
-        assert!(equipment_node_visible(logger, "RHand_LoggerToolAxe", false));
+        assert!(equipment_node_visible(logger, 0, "Body_Logger_Slim", false));
+        assert!(equipment_node_visible(
+            logger,
+            2,
+            "Body_Logger_Feminine",
+            false
+        ));
+        assert!(equipment_node_visible(
+            logger,
+            0,
+            "RHand_LoggerToolAxe",
+            false
+        ));
         assert!(!equipment_node_visible(
             logger,
+            0,
             "LHand_LoggerCarryWood",
             false
         ));
         assert!(equipment_node_visible(
             logger,
+            0,
             "LHand_LoggerCarryWood",
             true
         ));
@@ -6339,11 +7324,22 @@ mod tests {
             .unwrap();
         assert!(equipment_node_visible(
             defender,
+            0,
             "LHand_DefenderToolShield",
             false
         ));
-        assert!(equipment_node_visible(defender, "Helmet_Defender", false));
-        assert!(!equipment_node_visible(defender, "Body_Logger_Slim", false));
+        assert!(equipment_node_visible(
+            defender,
+            0,
+            "Helmet_Defender",
+            false
+        ));
+        assert!(!equipment_node_visible(
+            defender,
+            0,
+            "Body_Logger_Slim",
+            false
+        ));
     }
 
     #[test]
@@ -7100,6 +8096,7 @@ mod tests {
                 message: message.to_owned(),
                 is_broadcaster,
                 is_moderator: false,
+                is_subscriber: false,
                 custom_reward_id: None,
             })
         };
@@ -7139,6 +8136,7 @@ mod tests {
                 message: "Praise!".to_owned(),
                 is_broadcaster: false,
                 is_moderator: false,
+                is_subscriber: false,
                 custom_reward_id: Some(FISH_GOD_REWARD_ID.to_owned()),
             }),
             &mut connection,
@@ -7168,6 +8166,7 @@ mod tests {
             command: ChatCommand::RecruitCount,
             is_broadcaster: false,
             is_moderator: false,
+            is_subscriber: false,
         };
         assert!(require_ruler_or_staff(&simulation, &ordinary).is_err());
         let ruler_command = PendingChatCommand {
@@ -7177,6 +8176,7 @@ mod tests {
             command: ChatCommand::RecruitCount,
             is_broadcaster: false,
             is_moderator: false,
+            is_subscriber: false,
         };
         assert!(require_ruler_or_staff(&simulation, &ruler_command).is_ok());
         assert_eq!(
@@ -7245,6 +8245,7 @@ mod tests {
                 command: "!join".parse().unwrap(),
                 is_broadcaster: true,
                 is_moderator: true,
+                is_subscriber: true,
             });
         app.update();
         let joined_count = app
@@ -7259,6 +8260,14 @@ mod tests {
                 .0
                 .actors
                 .contains_key(&StableId::new("twitch:debug_viewer").unwrap())
+        );
+        assert_eq!(
+            app.world().resource::<SimulationRuntime>().0.actors
+                [&StableId::new("twitch:debug_viewer").unwrap()]
+                .active_pet
+                .as_ref()
+                .map(StableId::as_str),
+            Some("pet:red_panda")
         );
 
         let eligible_technology = {
@@ -7302,10 +8311,24 @@ mod tests {
             ChatCommand::SelectRole(StableId::new("builder").unwrap()),
             ChatCommand::Experience,
             ChatCommand::Build(available_building.0.clone()),
+            ChatCommand::DismissRecruit(5),
+            ChatCommand::DismissRecruit(4),
             ChatCommand::Recruit {
                 role: StableId::new("miner").unwrap(),
                 amount: 2,
             },
+            ChatCommand::Role,
+            ChatCommand::Health,
+            ChatCommand::Target(None),
+            ChatCommand::Station(None),
+            ChatCommand::Customize {
+                kind: CustomizationKind::Body,
+                index: 3,
+            },
+            ChatCommand::Camera(vec![CameraAction {
+                direction: CameraDirection::In,
+                amount: 1,
+            }]),
             ChatCommand::Vote(eligible_technology.clone()),
             ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),
             ChatCommand::Save,
@@ -7322,6 +8345,7 @@ mod tests {
                     command,
                     is_broadcaster: true,
                     is_moderator: true,
+                    is_subscriber: true,
                 });
         }
         app.update();
@@ -7337,7 +8361,9 @@ mod tests {
                     .count(),
                 2
             );
-            assert_eq!(town_resource_amount(simulation, "resource:recruit"), 2);
+            assert_eq!(recruited_actor_ids(simulation).len(), 5);
+            assert_eq!(town_resource_amount(simulation, "resource:recruit"), 5);
+            assert_eq!(simulation.actors[&actor_id].customization.body_type, 2);
             assert_eq!(simulation.buildings.len(), 1);
             let placed_building = simulation.buildings.values().next().unwrap().clone();
             assert!(!placed_building.complete);
@@ -7399,6 +8425,7 @@ mod tests {
                 command: ChatCommand::Revive(None),
                 is_broadcaster: true,
                 is_moderator: true,
+                is_subscriber: true,
             });
         app.update();
         let simulation = &app.world().resource::<SimulationRuntime>().0;

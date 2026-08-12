@@ -9,12 +9,34 @@ use crate::StableId;
 pub enum ChatCommand {
     Join,
     SelectRole(StableId),
+    Role,
+    Health,
     Build(StableId),
+    Buildings,
+    BuildingIds(StableId),
     Upgrade(StableId),
+    Level(StableId),
     Buy { amount: u32, resource: StableId },
     Sell { amount: u32, resource: StableId },
     Recruit { role: StableId, amount: u16 },
     RecruitCount,
+    RecruitIds,
+    RecruitInfo(u16),
+    RecruitRole { recruit: u16, role: StableId },
+    DismissRecruit(u16),
+    Station(Option<u16>),
+    Target(Option<u16>),
+    Unstuck,
+    Pets,
+    Pet(Option<StableId>),
+    Ping,
+    Customize { kind: CustomizationKind, index: u8 },
+    Roles,
+    TownStats,
+    Info(StableId),
+    Camera(Vec<CameraAction>),
+    ResetCamera,
+    ModRole { player: StableId, role: StableId },
     Revive(Option<StableId>),
     Praise,
     Vote(StableId),
@@ -24,6 +46,32 @@ pub enum ChatCommand {
     Experience,
     Save,
     Help,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CameraDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+    In,
+    Out,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CameraAction {
+    pub direction: CameraDirection,
+    pub amount: i32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum CustomizationKind {
+    Hair,
+    Eyes,
+    FacialHair,
+    Body,
+    HairColor,
+    EyeColor,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -40,6 +88,10 @@ pub enum CommandParseError {
     InvalidId(String),
     #[error("trade amount must be a positive integer")]
     InvalidAmount,
+    #[error("invalid numeric identifier")]
+    InvalidIndex,
+    #[error("invalid camera direction {0}")]
+    InvalidDirection(String),
 }
 
 impl FromStr for ChatCommand {
@@ -96,6 +148,53 @@ impl FromStr for ChatCommand {
                 }
                 Ok(Self::Recruit { role, amount })
             }
+            "rrole" | "modrole" => {
+                let first = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?;
+                let role = content_id(
+                    parts
+                        .next()
+                        .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?,
+                )?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                if command == "rrole" {
+                    Ok(Self::RecruitRole {
+                        recruit: parse_index(first)?,
+                        role,
+                    })
+                } else {
+                    Ok(Self::ModRole {
+                        player: content_id(first)?,
+                        role,
+                    })
+                }
+            }
+            "cam" => parse_camera_actions(parts).map(Self::Camera),
+            "hair" | "eyes" | "facialhair" | "body" | "haircolor" | "eyecolor" => {
+                let index = parts
+                    .next()
+                    .ok_or_else(|| CommandParseError::MissingArgument(command.clone()))?
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|index| *index > 0)
+                    .ok_or(CommandParseError::InvalidIndex)?;
+                if parts.next().is_some() {
+                    return Err(CommandParseError::TooManyArguments);
+                }
+                let kind = match command.as_str() {
+                    "hair" => CustomizationKind::Hair,
+                    "eyes" => CustomizationKind::Eyes,
+                    "facialhair" => CustomizationKind::FacialHair,
+                    "body" => CustomizationKind::Body,
+                    "haircolor" => CustomizationKind::HairColor,
+                    "eyecolor" => CustomizationKind::EyeColor,
+                    _ => unreachable!(),
+                };
+                Ok(Self::Customize { kind, index })
+            }
             _ => {
                 let argument = parts.next();
                 if parts.next().is_some() {
@@ -104,14 +203,33 @@ impl FromStr for ChatCommand {
                 match command.as_str() {
                     "join" => no_argument(argument, Self::Join),
                     "experience" | "exp" => no_argument(argument, Self::Experience),
+                    "health" => no_argument(argument, Self::Health),
+                    "roles" => no_argument(argument, Self::Roles),
+                    "townstats" => no_argument(argument, Self::TownStats),
+                    "buildings" => no_argument(argument, Self::Buildings),
+                    "rid" => no_argument(argument, Self::RecruitIds),
+                    "stuck" => no_argument(argument, Self::Unstuck),
+                    "ping" => no_argument(argument, Self::Ping),
+                    "resetcam" => no_argument(argument, Self::ResetCamera),
                     "save" => no_argument(argument, Self::Save),
                     "help" => no_argument(argument, Self::Help),
                     "recruits" => no_argument(argument, Self::RecruitCount),
                     "rulervote" => no_argument(argument, Self::StartRulerVote),
                     "resign" => no_argument(argument, Self::Resign),
-                    "role" => with_id(&command, argument, Self::SelectRole),
+                    "role" => {
+                        optional_id(argument).map(|role| role.map_or(Self::Role, Self::SelectRole))
+                    }
+                    "station" => optional_index(argument).map(Self::Station),
+                    "target" => optional_index(argument).map(Self::Target),
+                    "pet" => optional_id(argument).map(Self::Pet),
+                    "pets" => no_argument(argument, Self::Pets),
+                    "info" => with_id(&command, argument, Self::Info),
+                    "bid" => with_id(&command, argument, Self::BuildingIds),
+                    "rinfo" => with_index(&command, argument, Self::RecruitInfo),
+                    "rdismiss" => with_index(&command, argument, Self::DismissRecruit),
                     "build" => with_id(&command, argument, Self::Build),
-                    "upgrade" | "level" => with_id(&command, argument, Self::Upgrade),
+                    "upgrade" => with_id(&command, argument, Self::Upgrade),
+                    "level" => with_id(&command, argument, Self::Level),
                     "vote" => with_id(&command, argument, Self::Vote),
                     "event" => with_id(&command, argument, Self::TriggerEvent),
                     "revive" => optional_id(argument).map(Self::Revive),
@@ -156,6 +274,59 @@ fn optional_id(argument: Option<&str>) -> Result<Option<StableId>, CommandParseE
     argument.map(content_id).transpose()
 }
 
+fn parse_index(value: &str) -> Result<u16, CommandParseError> {
+    value
+        .parse::<u16>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(CommandParseError::InvalidIndex)
+}
+
+fn optional_index(argument: Option<&str>) -> Result<Option<u16>, CommandParseError> {
+    argument.map(parse_index).transpose()
+}
+
+fn with_index(
+    command: &str,
+    argument: Option<&str>,
+    constructor: impl FnOnce(u16) -> ChatCommand,
+) -> Result<ChatCommand, CommandParseError> {
+    let argument =
+        argument.ok_or_else(|| CommandParseError::MissingArgument(command.to_owned()))?;
+    parse_index(argument).map(constructor)
+}
+
+fn parse_camera_actions<'a>(
+    parts: impl Iterator<Item = &'a str>,
+) -> Result<Vec<CameraAction>, CommandParseError> {
+    let mut parts = parts.peekable();
+    let mut actions = Vec::new();
+    while let Some(direction) = parts.next() {
+        let direction = match direction.to_ascii_lowercase().as_str() {
+            "up" => CameraDirection::Up,
+            "down" => CameraDirection::Down,
+            "left" => CameraDirection::Left,
+            "right" => CameraDirection::Right,
+            "in" => CameraDirection::In,
+            "out" => CameraDirection::Out,
+            _ => return Err(CommandParseError::InvalidDirection(direction.to_owned())),
+        };
+        let amount = parts
+            .peek()
+            .and_then(|value| value.parse::<i32>().ok())
+            .map_or(1, |amount| {
+                let _ = parts.next();
+                amount
+            });
+        actions.push(CameraAction { direction, amount });
+    }
+    if actions.is_empty() {
+        Err(CommandParseError::MissingArgument("cam".to_owned()))
+    } else {
+        Ok(actions)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +343,10 @@ mod tests {
         assert_eq!(
             "!upgrade house".parse(),
             Ok(ChatCommand::Upgrade(StableId::new("house").unwrap()))
+        );
+        assert_eq!(
+            "!level logger".parse(),
+            Ok(ChatCommand::Level(StableId::new("logger").unwrap()))
         );
         assert_eq!(
             "!buy 25 wood".parse(),
@@ -197,6 +372,38 @@ mod tests {
             })
         );
         assert_eq!("!recruits".parse(), Ok(ChatCommand::RecruitCount));
+        assert_eq!("!role".parse(), Ok(ChatCommand::Role));
+        assert_eq!("!station 2".parse(), Ok(ChatCommand::Station(Some(2))));
+        assert_eq!("!target".parse(), Ok(ChatCommand::Target(None)));
+        assert_eq!("!pet".parse(), Ok(ChatCommand::Pet(None)));
+        assert_eq!("!pets".parse(), Ok(ChatCommand::Pets));
+        assert_eq!(
+            "!rrole 3 ranger".parse(),
+            Ok(ChatCommand::RecruitRole {
+                recruit: 3,
+                role: StableId::new("ranger").unwrap(),
+            })
+        );
+        assert_eq!(
+            "!cam up 2 in 3".parse(),
+            Ok(ChatCommand::Camera(vec![
+                CameraAction {
+                    direction: CameraDirection::Up,
+                    amount: 2
+                },
+                CameraAction {
+                    direction: CameraDirection::In,
+                    amount: 3
+                },
+            ]))
+        );
+        assert_eq!(
+            "!body 3".parse(),
+            Ok(ChatCommand::Customize {
+                kind: CustomizationKind::Body,
+                index: 3,
+            })
+        );
         assert_eq!("!rulervote".parse(), Ok(ChatCommand::StartRulerVote));
         assert_eq!("!resign".parse(), Ok(ChatCommand::Resign));
         assert_eq!(

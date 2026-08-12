@@ -79,6 +79,31 @@ pub struct ActorState {
     pub role_progression: BTreeMap<StableId, RoleProgress>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub unlocked_pets: BTreeSet<StableId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_pet: Option<StableId>,
+    /// Explicit target selected through `!target`; automatic acquisition is the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_target: Option<StableId>,
+    /// Unity customization indices are one-based at the command boundary and zero-based here.
+    #[serde(default, skip_serializing_if = "ActorCustomization::is_default")]
+    pub customization: ActorCustomization,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActorCustomization {
+    pub eyes: u8,
+    pub hair: u8,
+    pub facial_hair: u8,
+    pub hair_color: u8,
+    pub eye_color: u8,
+    pub body_type: u8,
+}
+
+impl ActorCustomization {
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -190,6 +215,8 @@ pub struct WorldSimulation {
     pub fish_god: Option<FishGodState>,
     #[serde(default)]
     pub fish_god_attempts: u64,
+    #[serde(default)]
+    pub gathering_pet_attempts: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_ruler: Option<StableId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,6 +300,7 @@ impl WorldSimulation {
             active_raid: None,
             fish_god: None,
             fish_god_attempts: 0,
+            gathering_pet_attempts: 0,
             current_ruler: None,
             ruler_previous_role: None,
             ruler_vote: None,
@@ -305,6 +333,9 @@ impl WorldSimulation {
                     RoleProgress::default(),
                 )]),
                 unlocked_pets: BTreeSet::new(),
+                active_pet: None,
+                preferred_target: None,
+                customization: ActorCustomization::default(),
             },
         );
         true
@@ -337,6 +368,9 @@ impl WorldSimulation {
                 station: None,
                 role_progression: BTreeMap::new(),
                 unlocked_pets: BTreeSet::new(),
+                active_pet: None,
+                preferred_target: None,
+                customization: ActorCustomization::default(),
             },
         );
         true
@@ -597,6 +631,7 @@ impl WorldSimulation {
         let actor_state = self.actor_mut(actor)?;
         actor_state.role = role.clone();
         actor_state.station = None;
+        actor_state.preferred_target = None;
         actor_state.role_progression.entry(role).or_default();
         Ok(())
     }
@@ -646,6 +681,23 @@ impl WorldSimulation {
         let current = actor_state.inventory.entry(resource).or_default();
         *current = current.saturating_add(amount);
         Ok(())
+    }
+
+    pub fn try_unlock_gathering_pet(
+        &mut self,
+        actor: &StableId,
+        pet: StableId,
+    ) -> Result<bool, SimulationError> {
+        self.gathering_pet_attempts = self.gathering_pet_attempts.saturating_add(1);
+        let unlocked = deterministic_fish_god_value(
+            self.world_seed ^ 0x7065_745f_6472_6f70,
+            self.gathering_pet_attempts,
+        )
+        .is_multiple_of(5_000);
+        if !unlocked {
+            return Ok(false);
+        }
+        Ok(self.actor_mut(actor)?.unlocked_pets.insert(pet))
     }
 
     pub fn deposit_all(&mut self, actor: &StableId) -> Result<u32, SimulationError> {
@@ -720,6 +772,27 @@ impl WorldSimulation {
             .clamp(0, BUILDING_MAX_HEALTH);
         state.complete = state.health >= BUILDING_MAX_HEALTH;
         Ok(state.complete)
+    }
+
+    pub fn repair_building(
+        &mut self,
+        building: &StableId,
+        amount: u32,
+    ) -> Result<u32, SimulationError> {
+        let state = self
+            .buildings
+            .get_mut(building)
+            .ok_or_else(|| SimulationError::MissingBuilding(building.clone()))?;
+        if !state.complete {
+            return Err(SimulationError::BuildingIncomplete(building.clone()));
+        }
+        let before = state.health;
+        let amount = i32::try_from(amount).unwrap_or(i32::MAX);
+        state.health = state
+            .health
+            .saturating_add(amount)
+            .clamp(0, BUILDING_MAX_HEALTH);
+        Ok(u32::try_from(state.health.saturating_sub(before)).unwrap_or_default())
     }
 
     pub fn upgrade_building(
@@ -1494,6 +1567,30 @@ mod tests {
         let attempts = attempts_until_answered(42);
         assert_eq!(attempts_until_answered(42), attempts);
         assert!(attempts > 0);
+    }
+
+    #[test]
+    fn gathering_pet_unlock_roll_is_replay_deterministic_and_persistent() {
+        let player = id("twitch:gatherer");
+        let pet = id("pet:giraffe");
+        let seed = (0..10_000)
+            .find(|seed| {
+                deterministic_fish_god_value(*seed ^ 0x7065_745f_6472_6f70, 1).is_multiple_of(5_000)
+            })
+            .expect("at least one seed unlocks the first gathering pet roll");
+        let mut simulation = WorldSimulation::new(seed);
+        assert!(simulation.join_player(player.clone(), GridPos { x: 1, z: 1 }));
+        assert!(
+            simulation
+                .try_unlock_gathering_pet(&player, pet.clone())
+                .unwrap()
+        );
+        assert!(simulation.actors[&player].unlocked_pets.contains(&pet));
+        assert_eq!(simulation.gathering_pet_attempts, 1);
+
+        let encoded = ron::ser::to_string(&simulation).unwrap();
+        let restored: WorldSimulation = ron::from_str(&encoded).unwrap();
+        assert_eq!(restored, simulation);
     }
 
     #[test]

@@ -309,6 +309,7 @@ pub struct TwitchChatEnvelope {
     pub message: String,
     pub is_broadcaster: bool,
     pub is_moderator: bool,
+    pub is_subscriber: bool,
     pub custom_reward_id: Option<String>,
 }
 
@@ -501,6 +502,10 @@ fn envelope_from_privmsg(
             .iter()
             .any(|badge| badge.name == "broadcaster"),
         is_moderator: message.badges.iter().any(|badge| badge.name == "moderator"),
+        is_subscriber: message
+            .badges
+            .iter()
+            .any(|badge| matches!(badge.name.as_str(), "subscriber" | "founder")),
         custom_reward_id,
     })
 }
@@ -553,5 +558,6 @@ mod tests {
         );
         assert_eq!(envelope.actor_id.as_str(), "twitch:42");
         assert_eq!(envelope.message, "Praise!");
+        assert!(!envelope.is_subscriber);
     }
 }

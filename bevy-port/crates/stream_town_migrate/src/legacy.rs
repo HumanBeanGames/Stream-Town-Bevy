@@ -12,10 +12,10 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
-    ActorKind, ActorState, BuildingState, ContentCatalog, EnemyCampState, GameConfig, GridPos,
-    LegacyMigrationMetadata, MAX_ROLE_LEVEL, NativeSaveStore, ObjectiveDef, ObjectiveKind,
-    ObjectiveProgress, RULER_VOTE_INTERVAL_SECONDS, RoleProgress, SavedActor, SavedTerrainMesh,
-    StableId, TownGoalState, WorldSimulation, WorldSnapshot, generate_world,
+    ActorCustomization, ActorKind, ActorState, BuildingState, ContentCatalog, EnemyCampState,
+    GameConfig, GridPos, LegacyMigrationMetadata, MAX_ROLE_LEVEL, NativeSaveStore, ObjectiveDef,
+    ObjectiveKind, ObjectiveProgress, RULER_VOTE_INTERVAL_SECONDS, RoleProgress, SavedActor,
+    SavedTerrainMesh, StableId, TownGoalState, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAGIC: &[u8; 4] = b"STSV";
@@ -55,6 +55,10 @@ struct LegacyEntity {
     inventory: BTreeMap<String, u32>,
     role_progression: BTreeMap<String, RoleProgress>,
     station_reference: Option<LegacyReference>,
+    target_reference: Option<LegacyReference>,
+    active_pet: Option<String>,
+    unlocked_pets: BTreeSet<String>,
+    customization: ActorCustomization,
 }
 
 #[derive(Clone, Debug)]
@@ -378,6 +382,10 @@ impl<'a> BinaryParser<'a> {
                     inventory: BTreeMap::new(),
                     role_progression: BTreeMap::new(),
                     station_reference: None,
+                    target_reference: None,
+                    active_pet: None,
+                    unlocked_pets: BTreeSet::new(),
+                    customization: ActorCustomization::default(),
                 });
             }
         }
@@ -447,6 +455,10 @@ impl<'a> BinaryParser<'a> {
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
             station_reference: None,
+            target_reference: None,
+            active_pet: None,
+            unlocked_pets: BTreeSet::new(),
+            customization: ActorCustomization::default(),
         });
     }
 
@@ -471,6 +483,10 @@ impl<'a> BinaryParser<'a> {
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
                 station_reference: None,
+                target_reference: None,
+                active_pet: None,
+                unlocked_pets: BTreeSet::new(),
+                customization: ActorCustomization::default(),
             });
         }
         Ok(())
@@ -506,6 +522,10 @@ impl<'a> BinaryParser<'a> {
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
                 station_reference: None,
+                target_reference: None,
+                active_pet: None,
+                unlocked_pets: BTreeSet::new(),
+                customization: ActorCustomization::default(),
             });
         }
         Ok(())
@@ -520,8 +540,8 @@ impl<'a> BinaryParser<'a> {
             let archetype = self.string()?.unwrap_or_else(|| "unknown".to_owned());
             let health = self.i32()?;
             let guid = self.u32()?;
-            let _target_guid = self.u32()?;
-            let _target_pool = self.string()?;
+            let target_guid = self.u32()?;
+            let target_pool = self.string()?.unwrap_or_default();
             let _camp_guid = self.u32()?;
             let _camp_pool = self.string()?;
             self.entities.push(LegacyEntity {
@@ -537,6 +557,13 @@ impl<'a> BinaryParser<'a> {
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
                 station_reference: None,
+                target_reference: (target_guid != 0).then_some(LegacyReference {
+                    guid: target_guid,
+                    pool: target_pool,
+                }),
+                active_pet: None,
+                unlocked_pets: BTreeSet::new(),
+                customization: ActorCustomization::default(),
             });
         }
         Ok(())
@@ -632,13 +659,19 @@ impl<'a> BinaryParser<'a> {
                 let _is_user_player = self.boolean()?;
             }
             let guid = self.u32()?;
-            let _target_guid = self.u32()?;
-            let _target_pool = self.string()?;
+            let target_guid = self.u32()?;
+            let target_pool = self.string()?.unwrap_or_default();
             let station_guid = self.u32()?;
             let station_pool = self.string()?.unwrap_or_default();
-            let _pet_active = self.boolean()?;
-            let _current_pet = self.i32()?;
-            let _pets = self.list(MAX_SMALL_COLLECTION, Self::i32)?;
+            let pet_active = self.boolean()?;
+            let current_pet = legacy_pet_name(self.i32()?);
+            let unlocked_pets = self
+                .list(MAX_SMALL_COLLECTION, Self::i32)?
+                .unwrap_or_default()
+                .into_iter()
+                .map(legacy_pet_name)
+                .filter(|pet| pet != "none")
+                .collect();
             let position = self.transform()?;
             let current_role = self.i32()?;
             let _previous_role = self.i32()?;
@@ -667,9 +700,19 @@ impl<'a> BinaryParser<'a> {
                     inventory.insert(resource, amount);
                 }
             }
-            for _ in 0..7 {
-                let _ = self.i32()?;
-            }
+            let customization = ActorCustomization {
+                eyes: legacy_customization_index(self.i32()?),
+                hair: legacy_customization_index(self.i32()?),
+                facial_hair: legacy_customization_index(self.i32()?),
+                ..ActorCustomization::default()
+            };
+            let _skin = self.i32()?;
+            let customization = ActorCustomization {
+                hair_color: legacy_customization_index(self.i32()?),
+                eye_color: legacy_customization_index(self.i32()?),
+                body_type: legacy_customization_index(self.i32()?),
+                ..customization
+            };
             let health = self.i32()?;
             let _regen_requires_food = self.boolean()?;
             let identity = if twitch_id.is_empty() {
@@ -699,6 +742,15 @@ impl<'a> BinaryParser<'a> {
                     guid: station_guid,
                     pool: station_pool,
                 }),
+                target_reference: (target_guid != 0).then_some(LegacyReference {
+                    guid: target_guid,
+                    pool: target_pool,
+                }),
+                active_pet: pet_active
+                    .then_some(current_pet)
+                    .filter(|pet| pet != "none"),
+                unlocked_pets,
+                customization,
             });
         }
         Ok(())
@@ -963,6 +1015,10 @@ fn json_resources(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Result
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
                 station_reference: None,
+                target_reference: None,
+                active_pet: None,
+                unlocked_pets: BTreeSet::new(),
+                customization: ActorCustomization::default(),
             });
         }
     }
@@ -1000,6 +1056,10 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                         inventory: BTreeMap::new(),
                         role_progression: BTreeMap::new(),
                         station_reference: None,
+                        target_reference: None,
+                        active_pet: None,
+                        unlocked_pets: BTreeSet::new(),
+                        customization: ActorCustomization::default(),
                     });
                 }
             }
@@ -1026,6 +1086,10 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                     inventory: BTreeMap::new(),
                     role_progression: BTreeMap::new(),
                     station_reference: None,
+                    target_reference: None,
+                    active_pet: None,
+                    unlocked_pets: BTreeSet::new(),
+                    customization: ActorCustomization::default(),
                 });
             }
         }
@@ -1054,6 +1118,10 @@ fn json_enemy_camps(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Resu
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
             station_reference: None,
+            target_reference: None,
+            active_pet: None,
+            unlocked_pets: BTreeSet::new(),
+            customization: ActorCustomization::default(),
         });
     }
     Ok(())
@@ -1080,6 +1148,10 @@ fn json_buildings(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> 
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
             station_reference: None,
+            target_reference: None,
+            active_pet: None,
+            unlocked_pets: BTreeSet::new(),
+            customization: ActorCustomization::default(),
         });
     }
     Ok(())
@@ -1106,6 +1178,16 @@ fn json_enemies(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
             station_reference: None,
+            target_reference: {
+                let guid = json_u32_default(enemy, "TargetGUID");
+                (guid != 0).then(|| LegacyReference {
+                    guid,
+                    pool: json_string(enemy, "TargetPoolType", "Player"),
+                })
+            },
+            active_pet: None,
+            unlocked_pets: BTreeSet::new(),
+            customization: ActorCustomization::default(),
         });
     }
     Ok(())
@@ -1182,6 +1264,34 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
                     pool: json_string(player, "StationPoolType", "Building"),
                 })
             },
+            target_reference: {
+                let guid = json_u32_default(player, "TargetGUID");
+                (guid != 0).then(|| LegacyReference {
+                    guid,
+                    pool: json_string(player, "TargetPoolType", "Target"),
+                })
+            },
+            active_pet: player
+                .get("PetActive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                .then(|| {
+                    player
+                        .get("CurrentPet")
+                        .map_or_else(|| "none".to_owned(), json_pet_name)
+                })
+                .filter(|pet| pet != "none"),
+            unlocked_pets: player
+                .get("UnlockedPets")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(json_pet_name)
+                .filter(|pet| pet != "none")
+                .collect(),
+            customization: player
+                .get("Customization")
+                .map_or_else(ActorCustomization::default, json_customization),
         });
     }
     Ok(())
@@ -1310,6 +1420,58 @@ fn legacy_role_name(value: i32) -> String {
         .map_or_else(|| format!("legacy_{value}"), |role| (*role).to_owned())
 }
 
+fn legacy_pet_name(value: i32) -> String {
+    const PETS: [&str; 6] = [
+        "none",
+        "red_panda",
+        "fish_god",
+        "giraffe",
+        "duck",
+        "butterfly",
+    ];
+    usize::try_from(value)
+        .ok()
+        .and_then(|index| PETS.get(index))
+        .map_or_else(|| format!("legacy_{value}"), |pet| (*pet).to_owned())
+}
+
+fn json_pet_name(value: &Value) -> String {
+    value.as_str().map_or_else(
+        || legacy_pet_name(i32::try_from(value.as_i64().unwrap_or_default()).unwrap_or_default()),
+        slug,
+    )
+}
+
+fn legacy_customization_index(value: i32) -> u8 {
+    u8::try_from(value.max(0)).unwrap_or(u8::MAX)
+}
+
+fn json_customization(value: &Value) -> ActorCustomization {
+    ActorCustomization {
+        eyes: legacy_customization_index(json_i32_default(value, "ChosenEyeIndex")),
+        hair: legacy_customization_index(json_i32_default(value, "ChosenHairIndex")),
+        facial_hair: legacy_customization_index(json_i32_default(value, "ChosenFacialHairIndex")),
+        hair_color: legacy_customization_index(json_i32_default(value, "ChosenHairColourIndex")),
+        eye_color: legacy_customization_index(json_i32_default(value, "ChosenEyeColourIndex")),
+        body_type: legacy_customization_index(json_i32_default(value, "ChosenBodyTypeIndex")),
+    }
+}
+
+fn slug(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            if character.is_ascii_uppercase() && !output.is_empty() && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(character.to_ascii_lowercase());
+        } else if !output.is_empty() && !output.ends_with('_') {
+            output.push('_');
+        }
+    }
+    output.trim_matches('_').to_owned()
+}
+
 fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnapshot, u32)> {
     let content: ContentCatalog = ron::from_str(include_str!(
         "../../../assets/content/catalog.ron"
@@ -1433,8 +1595,30 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                                     .expect("sanitized legacy station reference is valid")
                                 })
                         }),
+                        preferred_target: entity.target_reference.as_ref().map(|reference| {
+                            building_ids
+                                .get(&reference.guid)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    content_id(
+                                        "legacy_target",
+                                        &format!("{}_{}", reference.pool, reference.guid),
+                                    )
+                                    .expect("sanitized legacy target reference is valid")
+                                })
+                        }),
                         role_progression,
-                        unlocked_pets: BTreeSet::new(),
+                        unlocked_pets: entity
+                            .unlocked_pets
+                            .into_iter()
+                            .map(|pet| content_id("pet", &pet))
+                            .collect::<Result<BTreeSet<_>>>()?,
+                        active_pet: entity
+                            .active_pet
+                            .as_deref()
+                            .map(|pet| content_id("pet", pet))
+                            .transpose()?,
+                        customization: entity.customization,
                     },
                 );
             }
@@ -1791,6 +1975,10 @@ mod tests {
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
                 station_reference: None,
+                target_reference: None,
+                active_pet: None,
+                unlocked_pets: BTreeSet::new(),
+                customization: ActorCustomization::default(),
             }],
             world_age_seconds: 12.0,
             town_resources: BTreeMap::new(),
@@ -1877,6 +2065,19 @@ mod tests {
                     "CurrentRole": "Builder",
                     "StationGUID": 42,
                     "StationPoolType": "Building",
+                    "TargetGUID": 43,
+                    "TargetPoolType": "Resource",
+                    "PetActive": true,
+                    "CurrentPet": "Duck",
+                    "UnlockedPets": ["Duck", "Butterfly"],
+                    "Customization": {
+                        "ChosenEyeIndex": 4,
+                        "ChosenHairIndex": 3,
+                        "ChosenFacialHairIndex": 2,
+                        "ChosenHairColourIndex": 5,
+                        "ChosenEyeColourIndex": 1,
+                        "ChosenBodyTypeIndex": 2
+                    },
                     "Roles": [{ "Role": "Builder", "Level": 7, "Experience": 123 }],
                     "Inventory": { "Entries": [] },
                     "Health": 80
@@ -1921,6 +2122,27 @@ mod tests {
         );
         let station = actor.station.as_ref().unwrap();
         assert!(snapshot.simulation.buildings.contains_key(station));
+        assert_eq!(
+            actor.active_pet.as_ref().map(StableId::as_str),
+            Some("pet:duck")
+        );
+        assert!(
+            actor
+                .unlocked_pets
+                .contains(&StableId::new("pet:butterfly").unwrap())
+        );
+        assert_eq!(actor.customization.eyes, 4);
+        assert_eq!(actor.customization.hair, 3);
+        assert_eq!(actor.customization.facial_hair, 2);
+        assert_eq!(actor.customization.hair_color, 5);
+        assert_eq!(actor.customization.eye_color, 1);
+        assert_eq!(actor.customization.body_type, 2);
+        assert!(
+            actor
+                .preferred_target
+                .as_ref()
+                .is_some_and(|id| id.as_str().starts_with("legacy_target:"))
+        );
         assert_eq!(snapshot.simulation.active_goals.len(), 1);
         assert_eq!(snapshot.simulation.active_goals[0].objectives[0].amount, 4);
         assert_eq!(
