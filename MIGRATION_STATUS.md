@@ -292,6 +292,13 @@ mistaken for production-ready systems.
   noise textures and restores Unity's winter ice toggle while preserving live
   season/weather tint. Exact scene-depth shoreline foam remains a later render
   pass rather than being represented as completed.
+- Exact prefab/model renderer bindings can replace a glTF primitive's standard
+  material with a typed custom extension. The 688 reachable references to the
+  shared `Building_Material` now use a WGSL port of `Building.shader`, including
+  the authored detail texture and transform, vertex-color ambient occlusion,
+  winter snow/exclusion, metal/smoothness, emission, roof variation, and damage
+  threshold. The damage mask is adapted to the replacement terrain's vertical
+  datum; healthy winter rendering is covered by a DirectX 12 smoke capture.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -327,8 +334,8 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining non-terrain/water WGSL shader ports, custom-shader material parity, VFX, UI
-  parity, post-processing, replacement audio, and accessibility.
+- Remaining reachable WGSL shader ports, per-building damage material instances,
+  VFX, UI parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
   and customization data now map into native actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
@@ -389,7 +396,8 @@ depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
 action emitters, remaining scene-depth shoreline/LOD and foliage shader work,
-particle fields, non-terrain/water custom-shader parity, the
+particle fields, remaining custom-shader parity, per-building damage material
+instances, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

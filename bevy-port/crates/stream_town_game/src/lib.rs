@@ -47,6 +47,8 @@ const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
 const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.mat";
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
+const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
+const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -286,6 +288,39 @@ impl MaterialExtension for WaterMaterialExtension {
 
 type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct BuildingMaterialUniform {
+    detail_color: Vec4,
+    emissive_color: Vec4,
+    ambient_occlusion: Vec4,
+    surface_controls: Vec4,
+    snow_damage: Vec4,
+    main_scale_offset: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct BuildingMaterialExtension {
+    #[uniform(100)]
+    parameters: BuildingMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    main_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for BuildingMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        BUILDING_SHADER_ASSET_PATH.into()
+    }
+}
+
+type BuildingMaterial = ExtendedMaterial<StandardMaterial, BuildingMaterialExtension>;
+
+#[derive(Clone)]
+enum ResolvedMaterialHandle {
+    Standard(Handle<StandardMaterial>),
+    Building(Handle<BuildingMaterial>),
+}
+
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
@@ -306,7 +341,8 @@ struct RenderAssets {
     rain: Handle<StandardMaterial>,
     snow: Handle<StandardMaterial>,
     projectile: Handle<StandardMaterial>,
-    presentation_materials: BTreeMap<StableId, Handle<StandardMaterial>>,
+    authored_building: Handle<BuildingMaterial>,
+    presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
 #[derive(Component)]
@@ -605,15 +641,15 @@ struct PendingRoleActionAudio {
 
 #[derive(Component, Clone)]
 struct MaterialOverrideSpec {
-    fallback: Option<Handle<StandardMaterial>>,
-    model_materials: BTreeMap<String, Handle<StandardMaterial>>,
+    fallback: Option<ResolvedMaterialHandle>,
+    model_materials: BTreeMap<String, ResolvedMaterialHandle>,
     renderer_materials: Vec<ResolvedRendererMaterialBinding>,
 }
 
 #[derive(Clone)]
 struct ResolvedRendererMaterialBinding {
     target_path: String,
-    materials: BTreeMap<String, Handle<StandardMaterial>>,
+    materials: BTreeMap<String, ResolvedMaterialHandle>,
 }
 
 #[derive(Component)]
@@ -773,6 +809,7 @@ pub fn run(config: GameConfig) {
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
+        .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -841,13 +878,21 @@ fn setup_rendering(
     materials: Option<ResMut<Assets<StandardMaterial>>>,
     terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     water_materials: Option<ResMut<Assets<WaterMaterial>>>,
+    building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
 ) {
     let (
         Some(mut meshes),
         Some(mut materials),
         Some(mut terrain_materials),
         Some(mut water_materials),
-    ) = (meshes, materials, terrain_materials, water_materials)
+        Some(mut building_materials),
+    ) = (
+        meshes,
+        materials,
+        terrain_materials,
+        water_materials,
+        building_materials,
+    )
     else {
         commands.insert_resource(RenderAssets::default());
         return;
@@ -892,19 +937,23 @@ fn setup_rendering(
         },
         Transform::from_xyz(250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+    let authored_building =
+        building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let presentation_materials = presentation
         .0
         .materials
         .iter()
         .map(|(id, material)| {
-            (
-                id.clone(),
-                materials.add(standard_material(
+            let resolved = if material.source_path == BUILDING_MATERIAL_PATH {
+                ResolvedMaterialHandle::Building(authored_building.clone())
+            } else {
+                ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
                     &presentation.0,
                     asset_server.as_deref(),
-                )),
-            )
+                )))
+            };
+            (id.clone(), resolved)
         })
         .collect();
     commands.insert_resource(RenderAssets {
@@ -966,6 +1015,7 @@ fn setup_rendering(
             unlit: true,
             ..default()
         }),
+        authored_building,
         presentation_materials,
     });
 }
@@ -1173,6 +1223,84 @@ fn water_material(
             },
             main_texture: texture("_MainTexture"),
             noise_texture: texture("_NoiseTexture"),
+        },
+    }
+}
+
+fn building_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> BuildingMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == BUILDING_MATERIAL_PATH);
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let texture = authored.and_then(|material| {
+        asset_server.and_then(|asset_server| {
+            material
+                .textures
+                .get("_MainTexture")
+                .and_then(|id| presentation.textures.get(id))
+                .map(|texture| asset_server.load(texture.asset_path.clone()))
+        })
+    });
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_MainTexture"))
+        .copied()
+        .unwrap_or_default();
+    let roughness_metallic = vector("_RoughnessMetalicValues", [1.0, 0.5, 0.0, 0.0]);
+    BuildingMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+        extension: BuildingMaterialExtension {
+            parameters: BuildingMaterialUniform {
+                detail_color: Vec4::from_array(vector(
+                    "_DetailColor",
+                    [0.521_568_7, 0.521_568_7, 0.521_568_7, 1.0],
+                )),
+                emissive_color: Vec4::from_array(vector(
+                    "_EmissiveColour",
+                    [0.521_568_7, 0.521_568_7, 0.521_568_7, 1.0],
+                )),
+                ambient_occlusion: Vec4::from_array(vector(
+                    "_AmbientOcclusion",
+                    [0.2, 0.5, 0.0, 0.0],
+                )),
+                surface_controls: Vec4::new(
+                    scalar("_DetailStrength", 0.0),
+                    scalar("_GlassEmission", 2.5),
+                    scalar("_EmissionStrength", 2.5),
+                    roughness_metallic[0],
+                ),
+                snow_damage: Vec4::new(
+                    scalar("_SnowPower", 0.0),
+                    scalar("_SnowNoiseLevels", 0.0),
+                    scalar("_DestructionValue", 2.0),
+                    roughness_metallic[1],
+                ),
+                main_scale_offset: Vec4::new(
+                    transform.scale[0],
+                    transform.scale[1],
+                    transform.offset[0],
+                    transform.offset[1],
+                ),
+            },
+            main_texture: texture,
         },
     }
 }
@@ -3806,6 +3934,7 @@ fn update_environment_presentation(
     mut clear_color: Option<ResMut<ClearColor>>,
     mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     mut water_materials: Option<ResMut<Assets<WaterMaterial>>>,
+    mut building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     particles: Query<Entity, With<WeatherParticle>>,
@@ -3843,6 +3972,13 @@ fn update_environment_presentation(
             palette.water_color[3],
         );
         water.extension.parameters.scale_foam_ice.w = water_ice_strength(environment.0);
+    }
+    if let Some(building_materials) = building_materials.as_deref_mut()
+        && let Some(mut building) = building_materials.get_mut(&render.authored_building)
+    {
+        let snow = building_snow_strength(environment.0);
+        building.extension.parameters.snow_damage.x = snow;
+        building.extension.parameters.snow_damage.y = snow;
     }
     for (mut fog, mut ambient) in &mut cameras {
         fog.color = Color::srgba(
@@ -4017,6 +4153,10 @@ fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
 }
 
 fn water_ice_strength(season: Season) -> f32 {
+    if season == Season::Winter { 1.0 } else { 0.0 }
+}
+
+fn building_snow_strength(season: Season) -> f32 {
     if season == Season::Winter { 1.0 } else { 0.0 }
 }
 
@@ -5480,7 +5620,17 @@ fn apply_material_overrides(
                     material_name.map(|name| name.0.as_str()),
                 );
                 if let Some(authored) = authored {
-                    material.0 = authored.clone();
+                    match authored {
+                        ResolvedMaterialHandle::Standard(authored) => {
+                            material.0 = authored.clone();
+                        }
+                        ResolvedMaterialHandle::Building(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                    }
                 }
                 commands.entity(entity).insert(MaterialOverrideApplied);
                 break;
@@ -5501,7 +5651,7 @@ fn resolved_renderer_material<'a>(
     hierarchy_path: &str,
     mesh_name: Option<&str>,
     material_name: Option<&str>,
-) -> Option<&'a Handle<StandardMaterial>> {
+) -> Option<&'a ResolvedMaterialHandle> {
     // Bevy puts each glTF primitive on a material-bearing child below its named
     // mesh node. Strip that primitive child before comparing the hierarchy to
     // the Unity renderer path, while retaining the mesh name as the stable
@@ -10749,20 +10899,38 @@ mod tests {
         let skin = materials.add(StandardMaterial::default());
         let wrong_same_name = materials.add(StandardMaterial::default());
         let override_material = materials.add(StandardMaterial::default());
+        let mut building_materials = Assets::<BuildingMaterial>::default();
+        let building = building_materials.add(building_material(&embedded_presentation(), None));
         let spec = MaterialOverrideSpec {
-            fallback: Some(fallback.clone()),
+            fallback: Some(ResolvedMaterialHandle::Standard(fallback.clone())),
             model_materials: BTreeMap::from([
-                ("GameMaterial".into(), game.clone()),
-                ("SkinMaterial".into(), skin.clone()),
+                (
+                    "GameMaterial".into(),
+                    ResolvedMaterialHandle::Standard(game.clone()),
+                ),
+                (
+                    "SkinMaterial".into(),
+                    ResolvedMaterialHandle::Standard(skin.clone()),
+                ),
+                (
+                    "BuildingMaterial".into(),
+                    ResolvedMaterialHandle::Building(building.clone()),
+                ),
             ]),
             renderer_materials: vec![
                 ResolvedRendererMaterialBinding {
                     target_path: "Other/Body_Blacksmith_Bulk".into(),
-                    materials: BTreeMap::from([("GameMaterial".into(), wrong_same_name)]),
+                    materials: BTreeMap::from([(
+                        "GameMaterial".into(),
+                        ResolvedMaterialHandle::Standard(wrong_same_name),
+                    )]),
                 },
                 ResolvedRendererMaterialBinding {
                     target_path: "PlayerChar_TPose/Body_Mesh/Body_Blacksmith_Bulk".into(),
-                    materials: BTreeMap::from([("GameMaterial".into(), override_material.clone())]),
+                    materials: BTreeMap::from([(
+                        "GameMaterial".into(),
+                        ResolvedMaterialHandle::Standard(override_material.clone()),
+                    )]),
                 },
             ],
         };
@@ -10774,7 +10942,10 @@ mod tests {
             Some("GameMaterial"),
         )
         .unwrap();
-        assert_eq!(exact.id(), override_material.id());
+        assert!(matches!(
+            exact,
+            ResolvedMaterialHandle::Standard(material) if material.id() == override_material.id()
+        ));
 
         let model = resolved_renderer_material(
             &spec,
@@ -10783,7 +10954,10 @@ mod tests {
             Some("SkinMaterial"),
         )
         .unwrap();
-        assert_eq!(model.id(), skin.id());
+        assert!(matches!(
+            model,
+            ResolvedMaterialHandle::Standard(material) if material.id() == skin.id()
+        ));
 
         let inherited = resolved_renderer_material(
             &spec,
@@ -10792,11 +10966,29 @@ mod tests {
             Some("GameMaterial"),
         )
         .unwrap();
-        assert_eq!(inherited.id(), game.id());
+        assert!(matches!(
+            inherited,
+            ResolvedMaterialHandle::Standard(material) if material.id() == game.id()
+        ));
+
+        let typed_building = resolved_renderer_material(
+            &spec,
+            "Scene/TownHall/TownHall.BuildingMaterial",
+            Some("TownHall"),
+            Some("BuildingMaterial"),
+        )
+        .unwrap();
+        assert!(matches!(
+            typed_building,
+            ResolvedMaterialHandle::Building(material) if material.id() == building.id()
+        ));
 
         let final_fallback =
             resolved_renderer_material(&spec, "Scene/Unrelated", None, Some("Unmapped")).unwrap();
-        assert_eq!(final_fallback.id(), fallback.id());
+        assert!(matches!(
+            final_fallback,
+            ResolvedMaterialHandle::Standard(material) if material.id() == fallback.id()
+        ));
     }
 
     #[test]
@@ -10859,6 +11051,21 @@ mod tests {
             water.extension.parameters.main_scale_offset,
             Vec4::new(1.0, 1.0, 0.0, 0.0)
         );
+        let building = building_material(&presentation, None);
+        assert!(building.extension.main_texture.is_none());
+        assert_eq!(
+            building.extension.parameters.detail_color,
+            Vec4::new(0.521_568_5, 0.521_568_5, 0.521_568_5, 1.0)
+        );
+        assert_eq!(
+            building.extension.parameters.ambient_occlusion,
+            Vec4::new(0.4, 1.74, 0.0, 0.0)
+        );
+        assert_eq!(
+            building.extension.parameters.main_scale_offset,
+            Vec4::new(1.0, 1.0, 0.0, 0.0)
+        );
+        assert!((building.extension.parameters.snow_damage.z - 1.787).abs() < f32::EPSILON);
         let water_definition = presentation
             .materials
             .values()
