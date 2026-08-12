@@ -442,7 +442,12 @@ namespace StreamTown.Migration
                 case SerializedPropertyType.ObjectReference: return AssetReference(property.objectReferenceValue);
                 case SerializedPropertyType.LayerMask: return property.intValue;
                 case SerializedPropertyType.Enum:
-                    return new { Index = property.enumValueIndex, Name = property.enumDisplayNames.ElementAtOrDefault(property.enumValueIndex) };
+                    return new
+                    {
+                        Index = property.enumValueIndex,
+                        Name = property.enumDisplayNames.ElementAtOrDefault(property.enumValueIndex),
+                        RawValue = property.longValue
+                    };
                 case SerializedPropertyType.Vector2: return Vector2Value(property.vector2Value);
                 case SerializedPropertyType.Vector3: return Vector3Value(property.vector3Value);
                 case SerializedPropertyType.Vector4: return Vector4Value(property.vector4Value);

@@ -28,8 +28,8 @@ use stream_town_domain::{
     AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, BUILDING_MAX_HEALTH,
     BuildingDef, BuildingState, ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos,
     MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, PresentationCatalog,
-    SavedActor, Season, StableId, TownEvent, Weather, WorldSimulation, WorldSnapshot,
-    generate_world,
+    RoleEquipmentDef, SavedActor, Season, StableId, StationDef, TownEvent, Weather,
+    WorldSimulation, WorldSnapshot, generate_world,
 };
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
 
@@ -237,6 +237,15 @@ struct AgentAnimation {
     native: bool,
 }
 
+#[derive(Component, Default)]
+struct AgentEquipmentPresentation;
+
+#[derive(Component)]
+struct EquipmentNode {
+    actor_root: Entity,
+    name: String,
+}
+
 #[derive(Component, Clone)]
 struct NativeAnimationSpec {
     graph: Handle<AnimationGraph>,
@@ -316,6 +325,14 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
             .add_systems(OnEnter(GameState::WorldLoading), generate_and_spawn_world)
+            .add_systems(
+                Update,
+                (
+                    tag_equipment_nodes,
+                    sync_equipment_nodes.after(tag_equipment_nodes),
+                )
+                    .run_if(in_state(GameState::InGame)),
+            )
             .add_systems(
                 Update,
                 (
@@ -1390,6 +1407,154 @@ fn town_hall_grid_position(config: &GameConfig) -> GridPos {
     }
 }
 
+#[derive(Clone, Copy)]
+struct StationCandidate<'a> {
+    id: &'a StableId,
+    position: GridPos,
+    definition: &'a StationDef,
+}
+
+fn ensure_actor_station(
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+    config: &GameConfig,
+    actor_id: &StableId,
+) {
+    let replacement = simulation.actors.get(actor_id).and_then(|actor| {
+        let valid = assigned_station(content, simulation, config, actor).is_some();
+        (!valid).then(|| best_station_id(content, simulation, config, &actor.role, actor.position))
+    });
+    if let Some(station) = replacement
+        && let Some(actor) = simulation.actors.get_mut(actor_id)
+    {
+        actor.station = station;
+    }
+}
+
+fn station_matches_role(station: &StationDef, role: &stream_town_domain::RoleDef) -> bool {
+    station.accepts_all_roles
+        || role
+            .station_kinds
+            .iter()
+            .any(|kind| station.accepted_role_kinds.contains(kind))
+}
+
+fn station_supports_role_targets(station: &StationDef, role: &stream_town_domain::RoleDef) -> bool {
+    station.targets_all
+        || role.targets_all
+        || role
+            .target_kinds
+            .iter()
+            .any(|kind| station.target_kinds.contains(kind))
+}
+
+fn station_candidate<'a>(
+    content: &'a ContentCatalog,
+    simulation: &'a WorldSimulation,
+    config: &GameConfig,
+    station_id: &'a StableId,
+) -> Option<StationCandidate<'a>> {
+    if station_id.as_str() == "building:townhall" {
+        let building = content.buildings.get(station_id)?;
+        return Some(StationCandidate {
+            id: station_id,
+            position: town_hall_grid_position(config),
+            definition: building.station.as_ref()?,
+        });
+    }
+    let state = simulation
+        .buildings
+        .get(station_id)
+        .filter(|state| state.complete)?;
+    let building = building_def_for_archetype(content, &state.archetype)?;
+    Some(StationCandidate {
+        id: station_id,
+        position: GridPos {
+            x: state.position.x.saturating_add(building.footprint[0] / 2),
+            z: state.position.z.saturating_add(building.footprint[1] / 2),
+        },
+        definition: building.station.as_ref()?,
+    })
+}
+
+fn best_station_id(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    config: &GameConfig,
+    role_id: &StableId,
+    from: GridPos,
+) -> Option<StableId> {
+    let role = content.roles.get(role_id)?;
+    if role.station_kinds.is_empty() {
+        return None;
+    }
+    let town_hall_id = StableId::new("building:townhall").expect("static building ID is valid");
+    let town_hall = content.buildings.get(&town_hall_id).and_then(|building| {
+        building
+            .station
+            .as_ref()
+            .map(|definition| StationCandidate {
+                id: &town_hall_id,
+                position: town_hall_grid_position(config),
+                definition,
+            })
+    });
+    town_hall
+        .into_iter()
+        .chain(simulation.buildings.values().filter_map(|state| {
+            if !state.complete {
+                return None;
+            }
+            let building = building_def_for_archetype(content, &state.archetype)?;
+            Some(StationCandidate {
+                id: &state.id,
+                position: GridPos {
+                    x: state.position.x.saturating_add(building.footprint[0] / 2),
+                    z: state.position.z.saturating_add(building.footprint[1] / 2),
+                },
+                definition: building.station.as_ref()?,
+            })
+        }))
+        .filter(|station| {
+            station_matches_role(station.definition, role)
+                && station_supports_role_targets(station.definition, role)
+        })
+        .min_by_key(|station| {
+            (
+                station.position.x.abs_diff(from.x) + station.position.z.abs_diff(from.z),
+                station.id.clone(),
+            )
+        })
+        .map(|station| station.id.clone())
+}
+
+fn assigned_station<'a>(
+    content: &'a ContentCatalog,
+    simulation: &'a WorldSimulation,
+    config: &GameConfig,
+    actor: &'a ActorState,
+) -> Option<StationCandidate<'a>> {
+    actor
+        .station
+        .as_ref()
+        .and_then(|id| station_candidate(content, simulation, config, id))
+        .filter(|station| {
+            content.roles.get(&actor.role).is_some_and(|role| {
+                station_matches_role(station.definition, role)
+                    && station_supports_role_targets(station.definition, role)
+            })
+        })
+}
+
+fn station_search_range_cells(station: StationCandidate<'_>) -> u16 {
+    u16::try_from(station.definition.search_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
+}
+
+fn within_station_range(position: GridPos, station: StationCandidate<'_>) -> bool {
+    position.x.abs_diff(station.position.x) + position.z.abs_diff(station.position.z)
+        <= station_search_range_cells(station)
+}
+
 fn building_def_for_archetype<'a>(
     content: &'a ContentCatalog,
     archetype: &StableId,
@@ -1454,6 +1619,7 @@ fn next_agent_goal(
     if !actor.alive {
         return (AgentGoal::Wander, current);
     }
+    let station = assigned_station(content, simulation, config, actor);
     let combat_target = if actor.role.as_str() == "role:enemy" {
         simulation
             .actors
@@ -1466,16 +1632,30 @@ fn next_agent_goal(
                 )
             })
     } else if is_combat_role(&actor.role) {
-        simulation
+        let mut candidates: Vec<_> = simulation
             .actors
             .values()
             .filter(|target| target.alive && target.role.as_str() == "role:enemy")
-            .min_by_key(|target| {
+            .filter(|target| {
+                station.is_none_or(|station| within_station_range(target.position, station))
+            })
+            .collect();
+        if let Some(station) = station {
+            candidates.sort_by_key(|target| {
                 (
-                    target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
+                    target.position.x.abs_diff(station.position.x)
+                        + target.position.z.abs_diff(station.position.z),
                     target.id.clone(),
                 )
-            })
+            });
+            candidates.truncate(usize::from(station.definition.max_targets));
+        }
+        candidates.into_iter().min_by_key(|target| {
+            (
+                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
+                target.id.clone(),
+            )
+        })
     } else {
         None
     };
@@ -1492,22 +1672,36 @@ fn next_agent_goal(
         return (AgentGoal::Attack(target.id.clone()), destination);
     }
     if actor.role.as_str() == "role:builder" {
-        let construction = simulation
+        let mut candidates: Vec<_> = simulation
             .buildings
             .values()
             .filter(|building| !building.complete)
+            .filter(|building| {
+                station.is_none_or(|station| within_station_range(building.position, station))
+            })
             .filter_map(|building| {
                 let definition = building_def_for_archetype(content, &building.archetype)?;
                 let approach =
                     building_approach(world, building.position, definition.footprint, current)?;
                 Some((
+                    station.map_or(0, |station| {
+                        building.position.x.abs_diff(station.position.x)
+                            + building.position.z.abs_diff(station.position.z)
+                    }),
                     approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
                     building.id.clone(),
                     approach,
                 ))
             })
-            .min_by_key(|(distance, id, _)| (*distance, id.clone()));
-        if let Some((_, building, approach)) = construction {
+            .collect();
+        if let Some(station) = station {
+            candidates.sort_by_key(|(station_distance, _, id, _)| (*station_distance, id.clone()));
+            candidates.truncate(usize::from(station.definition.max_targets));
+        }
+        let construction = candidates
+            .into_iter()
+            .min_by_key(|(_, distance, id, _)| (*distance, id.clone()));
+        if let Some((_, _, building, approach)) = construction {
             return (AgentGoal::Construct(building), approach);
         }
     }
@@ -1521,24 +1715,42 @@ fn next_agent_goal(
         .filter(|capacity| *capacity > 0)
         .unwrap_or(25);
     if carried >= carry_capacity {
-        let town_hall = town_hall_grid_position(config);
-        let target = nearest_walkable(world, town_hall).unwrap_or(current);
+        let destination = station.map_or_else(
+            || town_hall_grid_position(config),
+            |station| station.position,
+        );
+        let target = nearest_walkable(world, destination).unwrap_or(current);
         return (AgentGoal::Deposit, target);
     }
     let Some(resource_kind) = resource_for_role(content, &actor.role) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
     };
-    let resource = world
+    let mut resources: Vec<_> = world
         .resources
         .iter()
         .filter(|resource| resource.kind == resource_kind && resource.amount > 0)
-        .min_by_key(|resource| {
+        .filter(|resource| {
+            station.is_none_or(|station| within_station_range(resource.position, station))
+        })
+        .collect();
+    if let Some(station) = station {
+        resources.sort_by_key(|resource| {
             (
-                resource.position.x.abs_diff(current.x) + resource.position.z.abs_diff(current.z),
+                resource.position.x.abs_diff(station.position.x)
+                    + resource.position.z.abs_diff(station.position.z),
                 resource.position.z,
                 resource.position.x,
             )
         });
+        resources.truncate(usize::from(station.definition.max_targets));
+    }
+    let resource = resources.into_iter().min_by_key(|resource| {
+        (
+            resource.position.x.abs_diff(current.x) + resource.position.z.abs_diff(current.z),
+            resource.position.z,
+            resource.position.x,
+        )
+    });
     resource.map_or_else(
         || (AgentGoal::Wander, mirrored_target(world, current)),
         |resource| (AgentGoal::Gather(resource.id.clone()), resource.position),
@@ -1788,6 +2000,7 @@ fn move_agents(
             agent.target = mirrored_target(&world.generated, spawn);
             agent.action_cooldown_seconds = 0.0;
         }
+        ensure_actor_station(&content.0, &mut simulation.0, &config.0, &agent.id);
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
                 stats.paths_completed += 1;
@@ -2382,6 +2595,91 @@ fn find_named_descendant(
     None
 }
 
+fn equipment_node_names(content: &ContentCatalog) -> BTreeSet<String> {
+    content
+        .roles
+        .values()
+        .filter_map(|role| role.equipment.as_ref())
+        .flat_map(|equipment| {
+            equipment
+                .body_nodes
+                .iter()
+                .cloned()
+                .chain(equipment.left_hand_node.iter().cloned())
+                .chain(equipment.right_hand_node.iter().cloned())
+                .chain(equipment.helmet_node.iter().cloned())
+        })
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn tag_equipment_nodes(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    agents: Query<Entity, With<Agent>>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(Entity, &Name), (Without<EquipmentNode>, Without<Agent>)>,
+) {
+    let names = equipment_node_names(&content.0);
+    for (entity, name) in &nodes {
+        if !names.contains(name.as_str()) {
+            continue;
+        }
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            if agents.contains(ancestor) {
+                commands.entity(entity).insert(EquipmentNode {
+                    actor_root: ancestor,
+                    name: name.as_str().to_owned(),
+                });
+                commands.entity(ancestor).insert(AgentEquipmentPresentation);
+                break;
+            }
+        }
+    }
+}
+
+fn equipment_node_visible(equipment: &RoleEquipmentDef, name: &str, carrying: bool) -> bool {
+    equipment.body_nodes[0] == name
+        || equipment.right_hand_node.as_deref() == Some(name)
+        || equipment.helmet_node.as_deref() == Some(name)
+        || (equipment.left_hand_node.as_deref() == Some(name)
+            && (equipment.left_hand_permanent || carrying))
+}
+
+fn sync_equipment_nodes(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<&Agent, With<AgentEquipmentPresentation>>,
+    mut nodes: Query<(&EquipmentNode, &mut Visibility)>,
+) {
+    for (node, mut visibility) in &mut nodes {
+        let Ok(agent) = agents.get(node.actor_root) else {
+            continue;
+        };
+        let Some(actor) = simulation.0.actors.get(&agent.id) else {
+            continue;
+        };
+        let equipment = content
+            .0
+            .roles
+            .get(&actor.role)
+            .and_then(|role| role.equipment.as_ref());
+        let carrying = actor.inventory.values().any(|amount| *amount > 0);
+        let visible = equipment
+            .is_some_and(|equipment| equipment_node_visible(equipment, &node.name, carrying));
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
 fn collect_animation_targets(
     root: Entity,
     children: &Query<&Children>,
@@ -2606,6 +2904,7 @@ fn drive_native_animations(
 
 fn drive_converted_animations(
     config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
@@ -2634,6 +2933,21 @@ fn drive_converted_animations(
                 let _ = driver.runtime.set_trigger(trigger);
             }
             driver.last_alive = Some(alive);
+        }
+        if let Some(actor) = simulation.0.actors.get(&agent.id) {
+            let carrying = actor.inventory.values().any(|amount| *amount > 0);
+            let carry_kind = content
+                .0
+                .roles
+                .get(&actor.role)
+                .and_then(|role| role.equipment.as_ref())
+                .and_then(|equipment| equipment.carry_animation.as_deref());
+            let _ = driver
+                .runtime
+                .set_boolean("CarryWood", carrying && carry_kind == Some("Carry Wood"));
+            let _ = driver
+                .runtime
+                .set_boolean("CarryHip", carrying && carry_kind == Some("Carry Hip"));
         }
 
         let normalized_time = current_normalized_time(&player, &driver, &presentation.0);
@@ -4256,6 +4570,80 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workers_choose_nearest_compatible_station_and_reassign() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let logger = StableId::new("role:logger").unwrap();
+        let actor_id = StableId::new("npc:station_test").unwrap();
+        let station_id = StableId::new("building:runtime_station").unwrap();
+        let lumbermill = &content.buildings[&StableId::new("building:lumbermill").unwrap()];
+        let position = GridPos { x: 10, z: 10 };
+        let mut simulation = WorldSimulation::new(config.world.seed);
+        assert!(simulation.join_player(actor_id.clone(), position));
+        simulation.assign_role(&actor_id, logger).unwrap();
+        simulation.buildings.insert(
+            station_id.clone(),
+            BuildingState {
+                id: station_id.clone(),
+                archetype: lumbermill.archetype.clone(),
+                position: GridPos { x: 11, z: 10 },
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+
+        ensure_actor_station(&content, &mut simulation, &config, &actor_id);
+        assert_eq!(
+            simulation.actors[&actor_id].station,
+            Some(station_id.clone())
+        );
+
+        simulation.buildings.get_mut(&station_id).unwrap().complete = false;
+        ensure_actor_station(&content, &mut simulation, &config, &actor_id);
+        assert_eq!(
+            simulation.actors[&actor_id]
+                .station
+                .as_ref()
+                .map(StableId::as_str),
+            Some("building:townhall")
+        );
+    }
+
+    #[test]
+    fn equipment_visibility_matches_role_and_carry_state() {
+        let content = embedded_content();
+        let logger = content.roles[&StableId::new("role:logger").unwrap()]
+            .equipment
+            .as_ref()
+            .unwrap();
+        assert!(equipment_node_visible(logger, "Body_Logger_Slim", false));
+        assert!(equipment_node_visible(logger, "RHand_LoggerToolAxe", false));
+        assert!(!equipment_node_visible(
+            logger,
+            "LHand_LoggerCarryWood",
+            false
+        ));
+        assert!(equipment_node_visible(
+            logger,
+            "LHand_LoggerCarryWood",
+            true
+        ));
+
+        let defender = content.roles[&StableId::new("role:defender").unwrap()]
+            .equipment
+            .as_ref()
+            .unwrap();
+        assert!(equipment_node_visible(
+            defender,
+            "LHand_DefenderToolShield",
+            false
+        ));
+        assert!(equipment_node_visible(defender, "Helmet_Defender", false));
+        assert!(!equipment_node_visible(defender, "Body_Logger_Slim", false));
+    }
 
     #[test]
     fn role_driven_resource_loop_depletes_and_deposits() {

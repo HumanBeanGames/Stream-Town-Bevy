@@ -51,6 +51,13 @@ struct LegacyEntity {
     level: i32,
     inventory: BTreeMap<String, u32>,
     role_progression: BTreeMap<String, RoleProgress>,
+    station_reference: Option<LegacyReference>,
+}
+
+#[derive(Clone, Debug)]
+struct LegacyReference {
+    guid: u32,
+    pool: String,
 }
 
 #[derive(Debug)]
@@ -328,6 +335,7 @@ impl<'a> BinaryParser<'a> {
                     level: 0,
                     inventory: BTreeMap::new(),
                     role_progression: BTreeMap::new(),
+                    station_reference: None,
                 });
             }
         }
@@ -394,6 +402,7 @@ impl<'a> BinaryParser<'a> {
             level: 0,
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
+            station_reference: None,
         });
     }
 
@@ -415,6 +424,7 @@ impl<'a> BinaryParser<'a> {
                 level: 0,
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
+                station_reference: None,
             });
         }
         Ok(())
@@ -447,6 +457,7 @@ impl<'a> BinaryParser<'a> {
                 level,
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
+                station_reference: None,
             });
         }
         Ok(())
@@ -475,6 +486,7 @@ impl<'a> BinaryParser<'a> {
                 level: 0,
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
+                station_reference: None,
             });
         }
         Ok(())
@@ -560,8 +572,8 @@ impl<'a> BinaryParser<'a> {
             let guid = self.u32()?;
             let _target_guid = self.u32()?;
             let _target_pool = self.string()?;
-            let _station_guid = self.u32()?;
-            let _station_pool = self.string()?;
+            let station_guid = self.u32()?;
+            let station_pool = self.string()?.unwrap_or_default();
             let _pet_active = self.boolean()?;
             let _current_pet = self.i32()?;
             let _pets = self.list(MAX_SMALL_COLLECTION, Self::i32)?;
@@ -619,6 +631,10 @@ impl<'a> BinaryParser<'a> {
                     .map_or(1, |progress| i32::from(progress.level)),
                 inventory,
                 role_progression,
+                station_reference: (station_guid != 0).then_some(LegacyReference {
+                    guid: station_guid,
+                    pool: station_pool,
+                }),
             });
         }
         Ok(())
@@ -847,6 +863,7 @@ fn json_resources(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Result
                 level: 0,
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
+                station_reference: None,
             });
         }
     }
@@ -881,6 +898,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                         level: 0,
                         inventory: BTreeMap::new(),
                         role_progression: BTreeMap::new(),
+                        station_reference: None,
                     });
                 }
             }
@@ -904,6 +922,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                     level: 0,
                     inventory: BTreeMap::new(),
                     role_progression: BTreeMap::new(),
+                    station_reference: None,
                 });
             }
         }
@@ -929,6 +948,7 @@ fn json_enemy_camps(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Resu
             level: 0,
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
+            station_reference: None,
         });
     }
     Ok(())
@@ -952,6 +972,7 @@ fn json_buildings(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> 
             level: json_i32_default(building, "Level"),
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
+            station_reference: None,
         });
     }
     Ok(())
@@ -975,6 +996,7 @@ fn json_enemies(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             level: 0,
             inventory: BTreeMap::new(),
             role_progression: BTreeMap::new(),
+            station_reference: None,
         });
     }
     Ok(())
@@ -1042,6 +1064,13 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             level,
             inventory,
             role_progression,
+            station_reference: {
+                let guid = json_u32_default(player, "StationGUID");
+                (guid != 0).then(|| LegacyReference {
+                    guid,
+                    pool: json_string(player, "StationPoolType", "Building"),
+                })
+            },
         });
     }
     Ok(())
@@ -1190,6 +1219,24 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
     }
 
     let mut actors = Vec::with_capacity(decoded.entities.len());
+    let building_ids: BTreeMap<u32, StableId> = decoded
+        .entities
+        .iter()
+        .filter(|entity| matches!(entity.kind, ActorKind::Building))
+        .filter_map(|entity| {
+            let guid = entity
+                .key
+                .strip_prefix("building:")?
+                .split(':')
+                .next()?
+                .parse()
+                .ok()?;
+            Some((
+                guid,
+                StableId::new(entity_id(&entity.kind, &entity.key)).ok()?,
+            ))
+        })
+        .collect();
     let mut ids = BTreeMap::<String, u32>::new();
     let mut relocated_entities = 0_u32;
     for entity in decoded.entities {
@@ -1247,6 +1294,18 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         max_health: entity.health.max(1),
                         alive: entity.health > 0,
                         inventory,
+                        station: entity.station_reference.as_ref().map(|reference| {
+                            building_ids
+                                .get(&reference.guid)
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    content_id(
+                                        "legacy_station",
+                                        &format!("{}_{}", reference.pool, reference.guid),
+                                    )
+                                    .expect("sanitized legacy station reference is valid")
+                                })
+                        }),
                         role_progression,
                     },
                 );
@@ -1466,6 +1525,7 @@ mod tests {
                 level: 0,
                 inventory: BTreeMap::new(),
                 role_progression: BTreeMap::new(),
+                station_reference: None,
             }],
             world_age_seconds: 12.0,
             town_resources: BTreeMap::new(),
@@ -1512,7 +1572,13 @@ mod tests {
                     "Foliage": { "OnLandGroups": [], "UnderWaterGroups": [] },
                     "EnemyCamps": []
                 },
-                "BuildingSaveData": [],
+                "BuildingSaveData": [{
+                    "GUID": 42,
+                    "BuildingType": "Lumbermill",
+                    "BuildingTranform": { "Position": { "X": 1.0, "Y": 2.0, "Z": 1.0 } },
+                    "BuildingHealth": 500,
+                    "Level": 1
+                }],
                 "EnemySaveData": [],
                 "WorldSaveData": {
                     "WorldAgeInSeconds": 99.0,
@@ -1527,6 +1593,8 @@ mod tests {
                     "GUID": 9,
                     "Transform": { "Position": { "X": 0.0, "Y": 2.0, "Z": 0.0 } },
                     "CurrentRole": "Builder",
+                    "StationGUID": 42,
+                    "StationPoolType": "Building",
                     "Roles": [{ "Role": "Builder", "Level": 7, "Experience": 123 }],
                     "Inventory": { "Entries": [] },
                     "Health": 80
@@ -1536,17 +1604,27 @@ mod tests {
         let decoded = decode_legacy(fixture.to_string().as_bytes()).unwrap();
         assert_eq!(decoded.schema_version, 3);
         assert_eq!(decoded.terrain_seed, Some(77));
-        assert_eq!(decoded.entities.len(), 1);
+        assert_eq!(decoded.entities.len(), 2);
         assert!(decoded.unlocked_technology.contains("Forestry"));
         assert_eq!(
-            decoded.entities[0].role_progression["builder"],
+            decoded
+                .entities
+                .iter()
+                .find(|entity| matches!(entity.kind, ActorKind::Player))
+                .unwrap()
+                .role_progression["builder"],
             RoleProgress {
                 level: 7,
                 experience: 123,
             }
         );
         let (snapshot, _) = convert(decoded, &GameConfig::default()).unwrap();
-        let actor = snapshot.simulation.actors.values().next().unwrap();
+        let actor = snapshot
+            .simulation
+            .actors
+            .values()
+            .find(|actor| actor.id.as_str().contains("player"))
+            .unwrap();
         assert_eq!(actor.role.as_str(), "role:builder");
         assert_eq!(
             actor.role_progression[&StableId::new("role:builder").unwrap()],
@@ -1555,6 +1633,8 @@ mod tests {
                 experience: 123,
             }
         );
+        let station = actor.station.as_ref().unwrap();
+        assert!(snapshot.simulation.buildings.contains_key(station));
     }
 
     fn binary_fixture(schema: u32, trailer: i32) -> Vec<u8> {

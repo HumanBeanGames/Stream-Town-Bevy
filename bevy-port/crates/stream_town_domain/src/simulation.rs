@@ -59,6 +59,9 @@ pub struct ActorState {
     pub max_health: i32,
     pub alive: bool,
     pub inventory: BTreeMap<StableId, u32>,
+    /// Stable runtime building ID, or `building:townhall` for the initial station.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station: Option<StableId>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub role_progression: BTreeMap<StableId, RoleProgress>,
 }
@@ -159,6 +162,7 @@ impl WorldSimulation {
                 max_health: 100,
                 alive: true,
                 inventory: BTreeMap::new(),
+                station: None,
                 role_progression: BTreeMap::from([(
                     StableId::new("role:villager").expect("static stable ID"),
                     RoleProgress::default(),
@@ -171,6 +175,7 @@ impl WorldSimulation {
     pub fn assign_role(&mut self, actor: &StableId, role: StableId) -> Result<(), SimulationError> {
         let actor_state = self.actor_mut(actor)?;
         actor_state.role = role.clone();
+        actor_state.station = None;
         actor_state.role_progression.entry(role).or_default();
         Ok(())
     }

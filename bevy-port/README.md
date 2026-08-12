@@ -51,8 +51,9 @@ variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's action, XP multiplier,
-level curves, health, defense, movement, carry, resource-affinity, and all four
-reachable building storage components in content schema 8, and follows nested prefabs to
+level curves, health, defense, movement, carry, resource-affinity, station/target
+masks, all 15 equipment sets, and all four reachable building storage components
+in content schema 9, and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.

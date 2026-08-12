@@ -10,8 +10,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, RoleDef, StableId, StorageContribution, TechGroup, TechNode,
-    TechTree,
+    BuildingDef, ContentCatalog, RoleDef, RoleEquipmentDef, StableId, StationDef,
+    StorageContribution, TechGroup, TechNode, TechTree,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -21,6 +21,7 @@ const TECH_TREE: &str = "Assets/Resources/TechTree/Technologies/TechTreeV2/TechT
 const BUILDING_TYPE: &str = "ScriptablesProcessorInfrastructure.BuildingDataSettings";
 const ROLE_TYPE: &str = "ScriptablesProcessorInfrastructure.RoleDataSettings";
 const TECH_NODE_TYPE: &str = "TechTree.ScriptableObjects.Node_SO";
+const PLAYER_PREFAB: &str = "Assets/Prefabs/Player_Character.prefab";
 
 type ArchetypesById = BTreeMap<StableId, ArchetypeDef>;
 type BuildingArchetypesBySlug = BTreeMap<String, (StableId, [u16; 2])>;
@@ -174,6 +175,7 @@ fn convert_export(
 
     let placements = building_placements(required_asset(&assets_by_path, BUILDING_PLACER)?)?;
     let (archetypes, building_archetypes) = convert_archetypes(export, &placements)?;
+    let role_equipment = role_equipment(required_asset(&assets_by_path, PLAYER_PREFAB)?)?;
 
     let building_guids = referenced_guids(
         required_asset(&assets_by_path, BUILDING_CONTAINER)?,
@@ -260,6 +262,7 @@ fn convert_export(
                 level_cost,
                 level_cost_multiplier_per_thousand,
                 storage: storage_contributions(prefab)?,
+                station: station_definition(prefab)?,
             },
         );
         insert_source_record(&mut source_records, id, asset)?;
@@ -269,7 +272,8 @@ fn convert_export(
     for guid in &role_guids {
         let asset = required_guid_asset(&assets_by_guid, guid, ROLE_TYPE)?;
         let display_name = required_enum(asset, "Role")?;
-        let id = stable_id("role", &slug(&display_name))?;
+        let role_slug = slug(&display_name);
+        let id = stable_id("role", &role_slug)?;
         let base_speed = required_u32(asset, "BaseMovementSpeed")?;
         let movement_speed_multiplier_per_thousand = u16::try_from(base_speed.saturating_mul(1000))
             .with_context(|| format!("{} BaseMovementSpeed is out of range", asset.path))?;
@@ -277,6 +281,8 @@ fn convert_export(
             .filter(|resource| resource != "None")
             .map(|resource| stable_id("resource", &slug(&resource)))
             .transpose()?;
+        let (targets_all, target_kinds) = authored_mask(asset, "TargetFlags", "target")?;
+        let (_, station_kinds) = authored_mask(asset, "StationFlags", "station")?;
         let mut granted_abilities = Vec::new();
         for (field, prefix) in [
             ("RoleFlags", "role_flag"),
@@ -331,6 +337,10 @@ fn convert_export(
                 base_carry_capacity: required_u32(asset, "BaseMaxResource")?,
                 carry_capacity_per_level_milli: required_milli(asset, "MaxResourcePerLevel")?,
                 resource,
+                station_kinds,
+                targets_all,
+                target_kinds,
+                equipment: role_equipment.get(&role_slug).cloned(),
                 granted_abilities,
             },
         );
@@ -468,6 +478,205 @@ fn convert_export(
         outputs: Vec::new(),
     };
     Ok((catalog, report))
+}
+
+fn authored_mask(
+    asset: &UnityAsset,
+    path: &str,
+    prefix: &str,
+) -> Result<(bool, BTreeSet<StableId>)> {
+    let Some(value) = asset
+        .serialized_fields
+        .iter()
+        .find(|field| field.path == path)
+    else {
+        return Ok((false, BTreeSet::new()));
+    };
+    let Some(object) = value.value.as_object() else {
+        bail!("{} {path} is not an exported enum", asset.path);
+    };
+    mask_ids(object, prefix)
+}
+
+fn mask_ids(
+    object: &serde_json::Map<String, Value>,
+    prefix: &str,
+) -> Result<(bool, BTreeSet<StableId>)> {
+    if let Some(raw) = object.get("RawValue").and_then(Value::as_i64) {
+        if raw < 0 {
+            return Ok((true, BTreeSet::new()));
+        }
+        let names: &[(i64, &str)] = match prefix {
+            "station" => &[
+                (1, "food"),
+                (2, "ore"),
+                (4, "wood"),
+                (8, "fish"),
+                (16, "combat"),
+                (32, "buildings"),
+                (64, "enemy_camp"),
+                (128, "raid_station"),
+            ],
+            "target" => &[
+                (1, "player"),
+                (2, "tree"),
+                (4, "ore"),
+                (8, "bush"),
+                (16, "farm"),
+                (32, "fish"),
+                (64, "enemy"),
+                (128, "boss"),
+                (256, "building"),
+                (512, "damaged_building"),
+                (1024, "construction"),
+                (2048, "injured_player"),
+                (4096, "dead_player"),
+            ],
+            _ => bail!("unsupported authored mask prefix {prefix}"),
+        };
+        let mut remaining = raw;
+        let mut ids = BTreeSet::new();
+        for (bit, name) in names {
+            if raw & bit != 0 {
+                remaining &= !bit;
+                ids.insert(stable_id(prefix, name)?);
+            }
+        }
+        if remaining != 0 {
+            bail!("{prefix} mask contains unknown bits {remaining:#x}");
+        }
+        return Ok((false, ids));
+    }
+
+    // Schema-1 exports produced before RawValue was added can only preserve a
+    // single flag. Retain compatibility while new exports preserve combinations.
+    if object
+        .get("Index")
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+        < 0
+    {
+        return Ok((true, BTreeSet::new()));
+    }
+    let Some(name) = object.get("Name").and_then(Value::as_str) else {
+        return Ok((false, BTreeSet::new()));
+    };
+    if matches!(name, "None" | "Nothing") {
+        return Ok((false, BTreeSet::new()));
+    }
+    Ok((false, BTreeSet::from([stable_id(prefix, &slug(name))?])))
+}
+
+fn station_definition(asset: &UnityAsset) -> Result<Option<StationDef>> {
+    let Some(component) = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component) == "Buildings.Station")
+    else {
+        return Ok(None);
+    };
+    let component_mask = |path: &str, prefix: &str| -> Result<(bool, BTreeSet<StableId>)> {
+        let value = component_field_value(component, path)
+            .with_context(|| format!("{} station is missing {path}", asset.path))?;
+        let object = value
+            .as_object()
+            .with_context(|| format!("{} station {path} is not an enum", asset.path))?;
+        mask_ids(object, prefix)
+    };
+    let positive_u32 = |path: &str, scale: f64| -> Result<u32> {
+        let value = component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .with_context(|| format!("{} station {path} is invalid", asset.path))?;
+        if !value.is_finite() || value <= 0.0 {
+            bail!("{} station {path} must be positive", asset.path);
+        }
+        (value * scale)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} station {path} is out of range", asset.path))
+    };
+    let max_targets = component_field_value(component, "_maxListSize")
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .with_context(|| format!("{} station _maxListSize is invalid", asset.path))?;
+    let (accepts_all_roles, accepted_role_kinds) = component_mask("_flags", "station")?;
+    let (targets_all, target_kinds) = component_mask("_targetMask", "target")?;
+    Ok(Some(StationDef {
+        accepts_all_roles,
+        accepted_role_kinds,
+        targets_all,
+        target_kinds,
+        max_targets,
+        update_milliseconds: positive_u32("_updateRate", 1_000.0)?,
+        search_range_milli_cells: positive_u32("_targetSearchRange", 500.0)?,
+    }))
+}
+
+fn role_equipment(asset: &UnityAsset) -> Result<BTreeMap<String, RoleEquipmentDef>> {
+    let component = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component) == "Character.CharacterModelHandler")
+        .with_context(|| format!("{} has no CharacterModelHandler", asset.path))?;
+    let size = component_field_value(component, "_equipmentSets.Array.size")
+        .and_then(Value::as_u64)
+        .with_context(|| format!("{} has no equipment set array", asset.path))?;
+    let mut result = BTreeMap::new();
+    for index in 0..size {
+        let prefix = format!("_equipmentSets.Array.data[{index}]");
+        let field = |suffix: &str| {
+            component_field_value(component, &format!("{prefix}.{suffix}"))
+                .with_context(|| format!("{} {prefix}.{suffix} is missing", asset.path))
+        };
+        let name = field("RoleName")?
+            .as_str()
+            .with_context(|| format!("{} {prefix}.RoleName is invalid", asset.path))?;
+        let reference_name = |suffix: &str| -> Result<Option<String>> {
+            let value = field(suffix)?;
+            if value.is_null() {
+                return Ok(None);
+            }
+            Ok(value
+                .as_object()
+                .and_then(|object| object.get("Name"))
+                .and_then(Value::as_str)
+                .map(str::to_owned))
+        };
+        let carry_animation = field("HasCarryAnimation")?
+            .as_bool()
+            .unwrap_or_default()
+            .then(|| {
+                field("CarryAnimation")
+                    .ok()?
+                    .as_object()?
+                    .get("Name")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .flatten();
+        let equipment = RoleEquipmentDef {
+            body_nodes: [
+                reference_name("BodieSlim")?.context("slim body reference is empty")?,
+                reference_name("BodieBulk")?.context("bulk body reference is empty")?,
+                reference_name("BodieFeminine")?.context("feminine body reference is empty")?,
+            ],
+            left_hand_node: reference_name("LeftHand")?,
+            right_hand_node: reference_name("RightHand")?,
+            helmet_node: reference_name("Helmet")?,
+            carry_animation,
+            left_hand_permanent: field("LeftHandPermanent")?.as_bool().unwrap_or_default(),
+        };
+        if result.insert(slug(name), equipment).is_some() {
+            bail!("{} contains duplicate equipment for {name}", asset.path);
+        }
+    }
+    Ok(result)
 }
 
 fn building_placements(asset: &UnityAsset) -> Result<BTreeMap<String, BuildingPlacement>> {
@@ -1339,6 +1548,124 @@ mod tests {
     }
 
     #[test]
+    fn converts_station_masks_and_ranges() {
+        let mut prefab = asset(
+            "station",
+            "Assets/Prefabs/Buildings/Building_Station_Lumbermill.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        prefab.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Buildings.Station, Assembly-CSharp",
+                vec![
+                    field("_flags", serde_json::json!({"Index": 3, "Name": "Wood"})),
+                    field(
+                        "_targetMask",
+                        serde_json::json!({"Index": 2, "Name": "Tree"}),
+                    ),
+                    field("_maxListSize", Value::from(10)),
+                    field("_updateRate", Value::from(3.0)),
+                    field("_targetSearchRange", Value::from(100.0)),
+                ],
+            )],
+        });
+        let station = station_definition(&prefab).unwrap().unwrap();
+        assert_eq!(
+            station.accepted_role_kinds,
+            BTreeSet::from([stable_id("station", "wood").unwrap()])
+        );
+        assert_eq!(
+            station.target_kinds,
+            BTreeSet::from([stable_id("target", "tree").unwrap()])
+        );
+        assert_eq!(station.max_targets, 10);
+        assert_eq!(station.update_milliseconds, 3_000);
+        assert_eq!(station.search_range_milli_cells, 50_000);
+    }
+
+    #[test]
+    fn decomposes_combined_unity_flag_values() {
+        let mut role = asset("role", "role.asset", ROLE_TYPE, vec![]);
+        role.serialized_fields = vec![field(
+            "TargetFlags",
+            serde_json::json!({"Index": -1, "Name": null, "RawValue": 1536}),
+        )];
+        let (all, targets) = authored_mask(&role, "TargetFlags", "target").unwrap();
+        assert!(!all);
+        assert_eq!(
+            targets,
+            BTreeSet::from([
+                stable_id("target", "damaged_building").unwrap(),
+                stable_id("target", "construction").unwrap(),
+            ])
+        );
+        let all_flags = serde_json::json!({"Index": -1, "Name": null, "RawValue": -1});
+        let (all, targets) = mask_ids(all_flags.as_object().unwrap(), "target").unwrap();
+        assert!(all);
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn converts_role_equipment_node_bindings() {
+        let mut prefab = asset("player", PLAYER_PREFAB, "UnityEngine.GameObject", vec![]);
+        let reference = |name: &str| serde_json::json!({"LocalId": 1, "Name": name});
+        prefab.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Character.CharacterModelHandler, Assembly-CSharp",
+                vec![
+                    field("_equipmentSets.Array.size", Value::from(1)),
+                    field(
+                        "_equipmentSets.Array.data[0].RoleName",
+                        Value::String("Logger".into()),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].BodieSlim",
+                        reference("Body_Logger_Slim"),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].BodieBulk",
+                        reference("Body_Logger_Bulk"),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].BodieFeminine",
+                        reference("Body_Logger_Feminine"),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].LeftHand",
+                        reference("LHand_LoggerCarryWood"),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].RightHand",
+                        reference("RHand_LoggerToolAxe"),
+                    ),
+                    field("_equipmentSets.Array.data[0].Helmet", Value::Null),
+                    field(
+                        "_equipmentSets.Array.data[0].HasCarryAnimation",
+                        Value::Bool(true),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].CarryAnimation",
+                        serde_json::json!({"Index": 15, "Name": "Carry Wood"}),
+                    ),
+                    field(
+                        "_equipmentSets.Array.data[0].LeftHandPermanent",
+                        Value::Bool(false),
+                    ),
+                ],
+            )],
+        });
+        let equipment = role_equipment(&prefab).unwrap().remove("logger").unwrap();
+        assert_eq!(equipment.body_nodes[0], "Body_Logger_Slim");
+        assert_eq!(
+            equipment.left_hand_node.as_deref(),
+            Some("LHand_LoggerCarryWood")
+        );
+        assert_eq!(equipment.carry_animation.as_deref(), Some("Carry Wood"));
+        assert!(!equipment.left_hand_permanent);
+    }
+
+    #[test]
     fn converts_active_catalog_references_and_round_trips_ron() {
         const BUILDING_GUID: &str = "11111111111111111111111111111111";
         const ROLE_GUID: &str = "22222222222222222222222222222222";
@@ -1502,6 +1829,18 @@ mod tests {
         prefab.dependencies = vec![UnityReference {
             path: Some("Assets/Models/Buildings/Age01/Age01_TownHall.fbx".to_owned()),
         }];
+        let mut player_prefab = asset(
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            PLAYER_PREFAB,
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        player_prefab.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Character.CharacterModelHandler, Assembly-CSharp",
+                vec![field("_equipmentSets.Array.size", Value::from(0))],
+            )],
+        });
         let export = UnityExport {
             schema_version: 1,
             unity_version: "6000.5.6f1".to_owned(),
@@ -1509,6 +1848,7 @@ mod tests {
             assets: vec![
                 placer,
                 prefab,
+                player_prefab,
                 asset(
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     BUILDING_CONTAINER,
@@ -1605,8 +1945,8 @@ mod tests {
         };
 
         let (catalog, report) = convert_export(&export, "fixture-sha".to_owned()).unwrap();
-        assert_eq!(report.source_assets, 9);
-        assert_eq!(report.archetypes, 2);
+        assert_eq!(report.source_assets, 10);
+        assert_eq!(report.archetypes, 3);
         assert_eq!(report.archetype_scenes, 1);
         assert_eq!(report.buildings, 1);
         assert_eq!(report.building_prefabs, 1);

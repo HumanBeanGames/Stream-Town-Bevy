@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 8;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 9;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -76,6 +76,8 @@ pub struct BuildingDef {
     pub level_cost_multiplier_per_thousand: u32,
     #[serde(default)]
     pub storage: Vec<StorageContribution>,
+    #[serde(default)]
+    pub station: Option<StationDef>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +86,32 @@ pub struct StorageContribution {
     pub base_amount: u32,
     pub increment_amount: u32,
     pub level_multiplier_per_thousand: u32,
+}
+
+/// An authored Unity station reduced to deterministic, engine-independent data.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StationDef {
+    pub accepts_all_roles: bool,
+    #[serde(default)]
+    pub accepted_role_kinds: BTreeSet<StableId>,
+    pub targets_all: bool,
+    #[serde(default)]
+    pub target_kinds: BTreeSet<StableId>,
+    pub max_targets: u16,
+    pub update_milliseconds: u32,
+    /// Unity ranges converted through its authored two-unit building grid.
+    pub search_range_milli_cells: u32,
+}
+
+/// Renderer-node bindings from Unity's `CharacterModelHandler`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RoleEquipmentDef {
+    pub body_nodes: [String; 3],
+    pub left_hand_node: Option<String>,
+    pub right_hand_node: Option<String>,
+    pub helmet_node: Option<String>,
+    pub carry_animation: Option<String>,
+    pub left_hand_permanent: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -109,6 +137,14 @@ pub struct RoleDef {
     pub carry_capacity_per_level_milli: u32,
     #[serde(default)]
     pub resource: Option<StableId>,
+    #[serde(default)]
+    pub station_kinds: BTreeSet<StableId>,
+    #[serde(default)]
+    pub targets_all: bool,
+    #[serde(default)]
+    pub target_kinds: BTreeSet<StableId>,
+    #[serde(default)]
+    pub equipment: Option<RoleEquipmentDef>,
     pub granted_abilities: Vec<StableId>,
 }
 
@@ -216,6 +252,10 @@ pub enum ContentError {
         building: StableId,
         resource: StableId,
     },
+    #[error("building {0} has invalid station timing, range, or target capacity")]
+    InvalidStation(StableId),
+    #[error("role {role} equipment contains an empty renderer node for {slot}")]
+    EmptyEquipmentNode { role: StableId, slot: &'static str },
     #[error("archetype {0} has an empty footprint")]
     EmptyArchetypeFootprint(StableId),
     #[error("archetype {archetype} has invalid scene asset path {path}")]
@@ -296,6 +336,29 @@ impl ContentCatalog {
                     building: id.clone(),
                     resource: storage.resource.clone(),
                 });
+            }
+            if building.station.as_ref().is_some_and(|station| {
+                station.max_targets == 0
+                    || station.update_milliseconds == 0
+                    || station.search_range_milli_cells == 0
+            }) {
+                return Err(ContentError::InvalidStation(id.clone()));
+            }
+        }
+        for (id, role) in &self.roles {
+            if let Some(equipment) = &role.equipment {
+                for (slot, node) in [
+                    ("slim body", equipment.body_nodes[0].as_str()),
+                    ("bulk body", equipment.body_nodes[1].as_str()),
+                    ("feminine body", equipment.body_nodes[2].as_str()),
+                ] {
+                    if node.trim().is_empty() {
+                        return Err(ContentError::EmptyEquipmentNode {
+                            role: id.clone(),
+                            slot,
+                        });
+                    }
+                }
             }
         }
         for (technology_id, technology) in &self.technology.nodes {

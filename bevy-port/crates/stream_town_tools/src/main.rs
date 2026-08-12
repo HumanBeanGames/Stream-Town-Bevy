@@ -325,6 +325,22 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                     for (resource, amount) in &building.cost {
                         ui.label(format!("{resource}: {amount}"));
                     }
+                    if let Some(station) = &building.station {
+                        ui.separator();
+                        ui.label(format!(
+                            "Station: {} role kinds, {} target kinds, {} target slots, {:.1} cells",
+                            station.accepted_role_kinds.len(),
+                            station.target_kinds.len(),
+                            station.max_targets,
+                            station.search_range_milli_cells / 1_000
+                        ));
+                        for kind in &station.accepted_role_kinds {
+                            ui.monospace(format!("accepts: {kind}"));
+                        }
+                        for kind in &station.target_kinds {
+                            ui.monospace(format!("target: {kind}"));
+                        }
+                    }
                 });
             }
         });
@@ -337,6 +353,24 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                     ));
                     for ability in &role.granted_abilities {
                         ui.monospace(ability.to_string());
+                    }
+                    for station in &role.station_kinds {
+                        ui.monospace(format!("station: {station}"));
+                    }
+                    for target in &role.target_kinds {
+                        ui.monospace(format!("target: {target}"));
+                    }
+                    if let Some(equipment) = &role.equipment {
+                        ui.label(format!(
+                            "Equipment: body {}; right {}; left {}; helmet {}",
+                            equipment.body_nodes[0],
+                            equipment.right_hand_node.as_deref().unwrap_or("none"),
+                            equipment.left_hand_node.as_deref().unwrap_or("none"),
+                            equipment.helmet_node.as_deref().unwrap_or("none"),
+                        ));
+                        if let Some(animation) = &equipment.carry_animation {
+                            ui.label(format!("Carry animation: {animation}"));
+                        }
                     }
                 });
             }

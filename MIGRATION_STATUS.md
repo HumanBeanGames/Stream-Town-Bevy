@@ -34,8 +34,8 @@ mistaken for production-ready systems.
   Builder) is restored. Resource workers choose role-matched stable nodes,
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
-  walkable Town Hall approach, and deposit into the authoritative town economy;
-  exhausted resource visuals are hidden. Content schema 8 converts each role's
+  walkable assigned-station approach, and deposit into the authoritative town
+  economy; exhausted resource visuals are hidden. Content schema 9 converts each role's
   resource affinity, XP multiplier, level curves, action rate/range,
   health/regeneration/defense, movement speed, and carry capacity. Successful
   actions award the same modified XP as Unity, role progress persists across
@@ -44,6 +44,20 @@ mistaken for production-ready systems.
   combat range/damage, health regeneration, cooldowns, movement, and carrying
   use those leveled values plus technology percentages. `!experience`/`!exp`
   reports the current role, level, XP, and next threshold.
+- Unity's Station/StationSensor behavior is represented by stable authored data
+  and runtime assignments. The exporter preserves raw `[Flags]` bitmasks, so
+  combined masks such as Builder construction/damaged-building, Windmill
+  bush/farm, and Tower enemy/injured-player survive conversion. Completed
+  production stations compete with Town Hall by compatible role/target masks
+  and deterministic distance. Actors reassign when roles or station availability
+  change; gathering, construction, combat, and deposits honor assigned range and
+  target capacity. Assignments persist in native saves, and resolvable legacy
+  JSON/binary building GUID assignments survive one-time import.
+- All 15 `CharacterModelHandler` equipment sets are typed using exact converted
+  GLB node names. Bevy activates the selected slim role body and permanent tools,
+  shields, and helmets; toggles carry-only props from authoritative inventory;
+  and drives translated `CarryWood`/`CarryHip` parameters. The content tool shows
+  station masks/ranges/capacities and role equipment bindings.
 - Combat roles acquire living enemies while the Goblin holds its ground and
   retaliates. Both sides path into range, attack on a one-second cadence, apply
   deterministic role-specific damage, enter the controller's Death state at
@@ -56,7 +70,7 @@ mistaken for production-ready systems.
   converted model. `!upgrade` uses typed Unity `CanLevel`, level-cost,
   cost-multiplier, and technology-issued maximum-level data; health, completion,
   level, navigation occupancy, and presentation stage round-trip through saves.
-  Content schema 8 also promotes Unity `Placeable` and all six technology effect
+  Content schema 9 also promotes Unity `Placeable` and all six technology effect
   categories. The `Unlock Building` effects make the four authored starting
   technologies expose Lumbermill, Stonemason, Tower, and Windmill; later
   technology votes expose their referenced buildings, and commands reject
@@ -118,7 +132,8 @@ mistaken for production-ready systems.
   DAG. It resolves nested prefab/model dependencies, derives building footprints
   from the authored grid sizes, promotes construction/upgrade balance and
   all 413 authored technology effects, role base stats and level curves, and
-  building storage contributions into content schema 8, preserves the remaining typed Unity
+  building storage contributions, stations, role target masks, and equipment into
+  content schema 9, preserves the remaining typed Unity
   fields as provenance, validates stable IDs, referenced
   buildings/roles, prerequisites, groups, and cycles, and reloads its own RON
   output.
@@ -179,16 +194,15 @@ mistaken for production-ready systems.
   curves, nested layer/state-machine routing, transition-duration crossfades,
   layer masks, and exact Unity tangent/cubic interpolation semantics. The
   controller interpreter can execute direct state transitions, but gameplay
-  systems still need to emit every gathering/building/combat/equipment action
+  systems still need to emit every gathering/building/combat action
   parameter and nested state-machine exits currently fall back to Locomotion.
-  Per-prefab renderer activation for player role/equipment variants co-located
-  in source FBX files also remains.
+  Body-type customization beyond the deterministic slim default remains.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
-  foliage/biome rendering, production-grade actor steering, complete role/
-  station/inventory/equipment behavior beyond the live resource-worker loop,
-  projectiles/area attacks/healing beyond the live melee combat loop, building
-  station activation and derived level-up effects beyond the live construction/
-  upgrade loop, and every reachable balance rule from the Unity scenes.
+  foliage/biome rendering, production-grade actor steering, complete advanced
+  role/inventory behavior beyond the live resource-worker loop,
+  projectiles/area attacks/healing beyond the live melee combat loop, station
+  effects derived from building level beyond current activation/range behavior,
+  and every reachable balance rule from the Unity scenes.
 - Age changes for the always-present Town Hall still require its underlying
   runtime presentation path; constructed buildings already switch to age-two
   variants when technology applies the authored effect.
@@ -200,10 +214,10 @@ mistaken for production-ready systems.
 - WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes and full semantic reconstruction of
-  legacy target/station/pet/customization data. The importer currently preserves
+  legacy target/pet/customization data. The importer currently preserves
   or maps gameplay-critical world, entity, inventory, current-role progression,
-  economy, and technology fields; unsupported presentation/relationship fields are consumed and
-  validated but not represented in the native runtime yet.
+  station assignment, economy, and technology fields; unsupported presentation/
+  relationship fields are consumed and validated but not represented in the native runtime yet.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
   layout, live runtime bridging, release packaging, frame capture, and profiling
   controls.
