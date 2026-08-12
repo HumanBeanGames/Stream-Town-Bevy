@@ -193,7 +193,11 @@ space.
 Node depletion and carried inventories are part of native save/load state.
 Combat roles acquire a living target and path into authored range. Melee roles
 apply deterministic damage directly; Necromancer, Ranger, and Wizard attacks
-spawn visible homing ECS projectiles. Priests select the nearest injured player,
+spawn visible homing ECS projectiles with distinct violet, converted-arrow, and
+orange fireball presentation. Towers share the converted Arrow GLB and Unity's
+two-second tapering grey trail. Melee hits and projectile arrivals emit the
+authored 0.25-second physical burst or a typed fire/necrotic variant. Priests
+select the nearest injured player,
 heal on their authored cadence, and release full-health targets. Successful
 heals emit the Unity-authored 1.2-second target burst plus a purpose-built
 five-second green channel field using the serialized 0/0.289/1/0 size curve.
@@ -276,6 +280,8 @@ another production resource. `STREAM_TOWN_DEBUG_INITIAL_AGENTS=<n>` reduces
 diagnostic actor clutter without changing the validated production default.
 `STREAM_TOWN_SMOKE_HEALING_VFX=1` frames deterministic channel, healed-burst,
 and revival cues together for a repeatable gameplay-VFX capture.
+`STREAM_TOWN_SMOKE_COMBAT_VFX=1` retriggers the four typed impact/trail styles
+and frames the converted Arrow GLB for a repeatable combat-VFX capture.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger

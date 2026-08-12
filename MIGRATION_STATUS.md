@@ -318,6 +318,14 @@ mistaken for production-ready systems.
   respawns, paid `!revive`, and game-master revival emit the larger gold-accented
   variant. All three use short-lived shared meshes/materials rather than a
   prewarmed pool, and a deterministic DirectX 12 smoke scene covers them.
+- Combat presentation now preserves role identity instead of rendering every
+  ranged attack as the same cube. Rangers and Towers use the converted
+  `Arrow.glb`, Wizards use the serialized orange `VFX_Fireball` size/trail
+  values, and Necromancers use the violet channel palette. Unity's two-second,
+  0.1-width Tower trail and 0.25-second `VFX_HitCharacter` burst drive shared
+  short-lived ECS trail/impact entities. Melee damage and every projectile
+  arrival emit the appropriate physical, arrow, fire, or necrotic impact, with
+  a repeatable DirectX 12 smoke field covering all four styles.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,

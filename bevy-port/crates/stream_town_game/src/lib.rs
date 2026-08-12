@@ -58,6 +58,11 @@ const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
+const CHARACTER_HIT_SECONDS: f32 = 0.25;
+const TOWER_TRAIL_SECONDS: f32 = 2.0;
+const TOWER_TRAIL_WIDTH: f32 = 0.1;
+const FIREBALL_SIZE: f32 = 0.4;
+const FIREBALL_TRAIL_SIZE: f32 = 0.3;
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -414,6 +419,7 @@ struct RenderAssets {
     actor_lod: Handle<Mesh>,
     cloud_plane: Handle<Mesh>,
     healing_ring: Handle<Mesh>,
+    projectile_arrow_scene: Option<Handle<bevy::world_serialization::WorldAsset>>,
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
     wood: Handle<StandardMaterial>,
@@ -431,6 +437,9 @@ struct RenderAssets {
     rain: Handle<StandardMaterial>,
     snow: Handle<StandardMaterial>,
     projectile: Handle<StandardMaterial>,
+    projectile_arrow: Handle<StandardMaterial>,
+    projectile_necrotic: Handle<StandardMaterial>,
+    impact_physical: Handle<StandardMaterial>,
     healing_green: Handle<StandardMaterial>,
     healing_gold: Handle<StandardMaterial>,
     authored_building: Handle<BuildingMaterial>,
@@ -564,6 +573,8 @@ struct CombatProjectile {
     target: StableId,
     damage: u32,
     speed_cells_per_second: f32,
+    visual: CombatVisualKind,
+    trail_cooldown_seconds: f32,
 }
 
 #[derive(Clone)]
@@ -578,12 +589,44 @@ struct ProjectileSpawn {
     target: StableId,
     damage: u32,
     speed_cells_per_second: f32,
+    visual: CombatVisualKind,
 }
 
 #[derive(Clone)]
 enum ActionPresentation {
     Projectile(ProjectileSpawn),
-    Healing { source: GridPos, target: GridPos },
+    Impact {
+        target: GridPos,
+        visual: CombatVisualKind,
+    },
+    Healing {
+        source: GridPos,
+        target: GridPos,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CombatVisualKind {
+    Physical,
+    Arrow,
+    Fireball,
+    Necrotic,
+}
+
+#[derive(Component)]
+struct CombatTrailSegment {
+    elapsed_seconds: f32,
+    duration_seconds: f32,
+    base_scale: Vec3,
+}
+
+#[derive(Component)]
+struct CombatImpactParticle {
+    elapsed_seconds: f32,
+    duration_seconds: f32,
+    origin: Vec3,
+    velocity: Vec3,
+    base_scale: Vec3,
 }
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
@@ -908,6 +951,8 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     update_tower_shooters.after(move_agents),
                     move_combat_projectiles.after(update_tower_shooters),
+                    animate_combat_effects.after(move_combat_projectiles),
+                    repeat_combat_smoke.after(animate_combat_effects),
                     update_enemy_encounters.after(move_combat_projectiles),
                     sync_fish_god_presentation.after(update_enemy_encounters),
                     animate_falling_fish.after(sync_fish_god_presentation),
@@ -1112,6 +1157,7 @@ fn setup_rendering(
     let animation_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
     let resource_closeup = std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some();
     let healing_closeup = std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some();
+    let combat_closeup = std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1125,6 +1171,8 @@ fn setup_rendering(
                     24.0
                 } else if healing_closeup {
                     42.0
+                } else if combat_closeup {
+                    48.0
                 } else {
                     520.0
                 },
@@ -1184,6 +1232,11 @@ fn setup_rendering(
         actor_lod: meshes.add(Capsule3d::new(0.42, 1.45)),
         cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
         healing_ring: meshes.add(healing_ring_mesh(48)),
+        projectile_arrow_scene: asset_server.as_deref().map(|asset_server| {
+            asset_server.load(
+                GltfAssetLabel::Scene(0).from_asset("migrated/models/Models/Combat/Arrow.glb"),
+            )
+        }),
         ground: terrain_materials.add(terrain_material(
             &presentation.0,
             &config.0,
@@ -1238,6 +1291,26 @@ fn setup_rendering(
         projectile: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.58, 0.12),
             emissive: LinearRgba::new(3.5, 1.1, 0.08, 1.0),
+            unlit: true,
+            ..default()
+        }),
+        projectile_arrow: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.25, 0.25, 0.25, 0.62),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        projectile_necrotic: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.48, 0.08, 1.0, 0.84),
+            emissive: LinearRgba::new(1.2, 0.03, 4.2, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        impact_physical: materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 1.0, 1.0, 0.66),
+            emissive: LinearRgba::new(1.2, 1.2, 1.2, 1.0),
+            alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
         }),
@@ -1863,6 +1936,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 28.0, focus.y + 32.0, focus.z + 28.0)
                 .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_xyz(focus.x + 34.0, focus.y + 38.0, focus.z + 34.0)
+                .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 1)
                 .map_or(Vec3::ZERO, |position| {
@@ -2290,6 +2367,11 @@ fn generate_and_spawn_world(
             HealingEffectKind::Revive,
             config.0.world.cell_size,
         );
+    }
+    if std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some() {
+        let focus = grid_to_world_on_surface(centre, &config.0, &generated)
+            + Vec3::Y * config.0.world.cell_size * 0.35;
+        spawn_combat_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
     }
     commands.insert_resource(WorldRuntime {
         generated,
@@ -2835,6 +2917,15 @@ fn is_ranged_role(role: &StableId) -> bool {
         role.as_str(),
         "role:necromancer" | "role:ranger" | "role:wizard"
     )
+}
+
+fn actor_combat_visual(role: &StableId) -> CombatVisualKind {
+    match role.as_str() {
+        "role:wizard" => CombatVisualKind::Fireball,
+        "role:necromancer" => CombatVisualKind::Necrotic,
+        "role:ranger" => CombatVisualKind::Arrow,
+        _ => CombatVisualKind::Physical,
+    }
 }
 
 fn actor_archetype<'a>(
@@ -3486,6 +3577,8 @@ fn complete_agent_goal(
         AgentGoal::Attack(target_id) => {
             let attacker = simulation.actors.get(actor_id)?;
             let target = simulation.actors.get(target_id)?;
+            let visual = actor_combat_visual(&attacker.role);
+            let target_position = target.position;
             if !attacker.alive
                 || !target.alive
                 || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
@@ -3500,6 +3593,7 @@ fn complete_agent_goal(
                     target: target_id.clone(),
                     damage,
                     speed_cells_per_second: 12.0,
+                    visual,
                 }));
                 damage > 0
             } else {
@@ -3507,7 +3601,17 @@ fn complete_agent_goal(
                     .map_or(0, |stats| stats.damage_reduction_percent);
                 let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
                 match apply_combat_damage(simulation, content, target_id, damage) {
-                    Ok(_) => damage > 0,
+                    Ok(_) => {
+                        if damage > 0 {
+                            action_presentation = Some(ActionPresentation::Impact {
+                                target: target_position,
+                                visual,
+                            });
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     Err(error) => {
                         warn!(actor = %actor_id, target = %target_id, %error, "combat action failed");
                         false
@@ -3643,19 +3747,245 @@ fn spawn_combat_projectile(
     projectile: ProjectileSpawn,
 ) {
     let scale = config.world.cell_size * 0.14;
-    commands.spawn((
+    let material = match projectile.visual {
+        CombatVisualKind::Necrotic => render.projectile_necrotic.clone(),
+        CombatVisualKind::Arrow => render.projectile_arrow.clone(),
+        CombatVisualKind::Physical | CombatVisualKind::Fireball => render.projectile.clone(),
+    };
+    let mut entity = commands.spawn((
         WorldEntity,
         CombatProjectile {
             source: projectile.source,
             target: projectile.target,
             damage: projectile.damage,
             speed_cells_per_second: projectile.speed_cells_per_second,
+            visual: projectile.visual,
+            trail_cooldown_seconds: 0.0,
         },
-        Mesh3d(render.cube.clone()),
-        MeshMaterial3d(render.projectile.clone()),
         Transform::from_translation(origin + Vec3::Y * config.world.cell_size * 0.35)
             .with_scale(Vec3::splat(scale)),
     ));
+    if projectile.visual == CombatVisualKind::Arrow
+        && let Some(scene) = render.projectile_arrow_scene.clone()
+    {
+        entity.insert(WorldAssetRoot(scene));
+    } else {
+        entity.insert((Mesh3d(render.cube.clone()), MeshMaterial3d(material)));
+    }
+}
+
+fn combat_material(render: &RenderAssets, visual: CombatVisualKind) -> Handle<StandardMaterial> {
+    match visual {
+        CombatVisualKind::Physical => render.impact_physical.clone(),
+        CombatVisualKind::Arrow => render.projectile_arrow.clone(),
+        CombatVisualKind::Fireball => render.projectile.clone(),
+        CombatVisualKind::Necrotic => render.projectile_necrotic.clone(),
+    }
+}
+
+fn spawn_combat_smoke_field(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    focus: Vec3,
+    cell_size: f32,
+) {
+    let spacing = cell_size * 2.4;
+    for (offset, visual) in [
+        (-1.5_f32, CombatVisualKind::Physical),
+        (-0.5, CombatVisualKind::Arrow),
+        (0.5, CombatVisualKind::Fireball),
+        (1.5, CombatVisualKind::Necrotic),
+    ] {
+        let origin = focus + Vec3::X * offset * spacing;
+        spawn_combat_impact(commands, render, origin, visual, cell_size);
+        for trail_index in 0..7_u16 {
+            spawn_combat_trail(
+                commands,
+                render,
+                origin + Vec3::Z * f32::from(trail_index) * cell_size * 0.32,
+                Vec3::Z,
+                visual,
+                cell_size,
+            );
+        }
+    }
+}
+
+fn spawn_combat_smoke_arrow(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    focus: Vec3,
+    cell_size: f32,
+) {
+    let origin = focus + Vec3::new(-cell_size * 6.0, cell_size * 0.45, -cell_size * 2.8);
+    let target = focus + Vec3::new(cell_size * 5.0, cell_size * 0.45, -cell_size * 2.8);
+    let mut transform =
+        Transform::from_translation(origin).with_scale(Vec3::splat(cell_size * 0.14));
+    transform.look_to(target - origin, Vec3::Y);
+    let mut entity = commands.spawn((
+        WorldEntity,
+        CombatProjectile {
+            source: ProjectileSource::Building(
+                StableId::new("building:townhall").expect("static stable ID"),
+            ),
+            target: StableId::new("actor:enemy_0000").expect("static stable ID"),
+            damage: 0,
+            speed_cells_per_second: 0.0,
+            visual: CombatVisualKind::Arrow,
+            trail_cooldown_seconds: f32::MAX,
+        },
+        transform,
+    ));
+    if let Some(scene) = render.projectile_arrow_scene.clone() {
+        entity.insert(WorldAssetRoot(scene));
+    } else {
+        entity.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.projectile_arrow.clone()),
+        ));
+    }
+}
+
+fn repeat_combat_smoke(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    render: Res<RenderAssets>,
+    world: Res<WorldRuntime>,
+    mut cooldown_seconds: Local<f32>,
+    mut arrow_spawned: Local<bool>,
+) {
+    if std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_none() {
+        return;
+    }
+    *cooldown_seconds -= time.delta_secs();
+    if *cooldown_seconds > 0.0 {
+        return;
+    }
+    let centre = GridPos {
+        x: config.0.world.width / 2,
+        z: config.0.world.height / 2,
+    };
+    let focus = grid_to_world_on_surface(centre, &config.0, &world.generated)
+        + Vec3::Y * config.0.world.cell_size * 0.35;
+    spawn_combat_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
+    if !*arrow_spawned {
+        spawn_combat_smoke_arrow(&mut commands, &render, focus, config.0.world.cell_size);
+        *arrow_spawned = true;
+    }
+    *cooldown_seconds = 0.72;
+}
+
+fn spawn_combat_trail(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    position: Vec3,
+    direction: Vec3,
+    visual: CombatVisualKind,
+    cell_size: f32,
+) {
+    let (duration_seconds, scale) = match visual {
+        CombatVisualKind::Arrow => (
+            TOWER_TRAIL_SECONDS,
+            Vec3::new(TOWER_TRAIL_WIDTH * 0.35, TOWER_TRAIL_WIDTH * 0.35, 0.22),
+        ),
+        CombatVisualKind::Fireball => (
+            0.6,
+            Vec3::new(FIREBALL_TRAIL_SIZE * 0.27, FIREBALL_TRAIL_SIZE * 0.27, 0.16),
+        ),
+        CombatVisualKind::Necrotic => (0.75, Vec3::new(0.07, 0.07, 0.14)),
+        CombatVisualKind::Physical => return,
+    };
+    let base_scale = scale * cell_size;
+    let mut transform = Transform::from_translation(position).with_scale(base_scale);
+    transform.look_to(direction.normalize_or_zero(), Vec3::Y);
+    commands.spawn((
+        WorldEntity,
+        CombatTrailSegment {
+            elapsed_seconds: 0.0,
+            duration_seconds,
+            base_scale,
+        },
+        Mesh3d(render.cube.clone()),
+        MeshMaterial3d(combat_material(render, visual)),
+        transform,
+    ));
+}
+
+fn spawn_combat_impact(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    origin: Vec3,
+    visual: CombatVisualKind,
+    cell_size: f32,
+) {
+    let (particle_count, duration_seconds, speed) = match visual {
+        CombatVisualKind::Physical | CombatVisualKind::Arrow => {
+            (8_u16, CHARACTER_HIT_SECONDS, 1.25)
+        }
+        CombatVisualKind::Fireball => (14, 0.55, 2.0),
+        CombatVisualKind::Necrotic => (12, 0.65, 1.5),
+    };
+    for index in 0..particle_count {
+        let phase = f32::from(index) / f32::from(particle_count);
+        let angle = phase * std::f32::consts::TAU;
+        let vertical = 0.35 + f32::from(index % 3) * 0.24;
+        let velocity = Vec3::new(angle.cos(), vertical, angle.sin()) * speed * cell_size;
+        let base_scale = Vec3::splat(
+            cell_size
+                * if visual == CombatVisualKind::Fireball {
+                    FIREBALL_SIZE * 0.275
+                } else {
+                    0.075
+                },
+        );
+        commands.spawn((
+            WorldEntity,
+            CombatImpactParticle {
+                elapsed_seconds: 0.0,
+                duration_seconds,
+                origin,
+                velocity,
+                base_scale,
+            },
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(combat_material(render, visual)),
+            Transform::from_translation(origin).with_scale(base_scale),
+        ));
+    }
+}
+
+fn animate_combat_effects(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut trails: Query<(Entity, &mut CombatTrailSegment, &mut Transform)>,
+    mut impacts: Query<
+        (Entity, &mut CombatImpactParticle, &mut Transform),
+        Without<CombatTrailSegment>,
+    >,
+) {
+    for (entity, mut trail, mut transform) in &mut trails {
+        trail.elapsed_seconds += time.delta_secs();
+        let progress = trail.elapsed_seconds / trail.duration_seconds;
+        if progress >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.scale = trail.base_scale * (1.0 - progress);
+    }
+    for (entity, mut impact, mut transform) in &mut impacts {
+        impact.elapsed_seconds += time.delta_secs();
+        let progress = impact.elapsed_seconds / impact.duration_seconds;
+        if progress >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.translation = impact.origin
+            + impact.velocity * impact.elapsed_seconds
+            + Vec3::NEG_Y * 0.5 * 9.8 * impact.elapsed_seconds.powi(2);
+        transform.rotation *= Quat::from_rotation_y(time.delta_secs() * 5.0);
+        transform.scale = impact.base_scale * (1.0 - progress).sqrt();
+    }
 }
 
 fn healing_effect_duration(kind: HealingEffectKind) -> f32 {
@@ -3804,15 +4134,16 @@ fn move_combat_projectiles(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    render: Res<RenderAssets>,
     mut simulation: ResMut<SimulationRuntime>,
     actors: Query<(&Agent, &Transform), Without<CombatProjectile>>,
-    mut projectiles: Query<(Entity, &CombatProjectile, &mut Transform), Without<Agent>>,
+    mut projectiles: Query<(Entity, &mut CombatProjectile, &mut Transform), Without<Agent>>,
 ) {
     let positions: BTreeMap<_, _> = actors
         .iter()
         .map(|(agent, transform)| (agent.id.clone(), transform.translation))
         .collect();
-    for (entity, projectile, mut transform) in &mut projectiles {
+    for (entity, mut projectile, mut transform) in &mut projectiles {
         let source_valid = match &projectile.source {
             ProjectileSource::Actor(actor) => simulation
                 .0
@@ -3856,10 +4187,29 @@ fn move_combat_projectiles(
             {
                 warn!(target = %projectile.target, %error, "projectile impact failed");
             }
+            spawn_combat_impact(
+                &mut commands,
+                &render,
+                target_position,
+                projectile.visual,
+                config.0.world.cell_size,
+            );
             commands.entity(entity).despawn();
         } else {
             transform.translation += delta.normalize_or_zero() * step;
             transform.look_to(delta.normalize_or_zero(), Vec3::Y);
+            projectile.trail_cooldown_seconds -= time.delta_secs();
+            if projectile.trail_cooldown_seconds <= 0.0 {
+                spawn_combat_trail(
+                    &mut commands,
+                    &render,
+                    transform.translation,
+                    delta,
+                    projectile.visual,
+                    config.0.world.cell_size,
+                );
+                projectile.trail_cooldown_seconds = 0.045;
+            }
         }
     }
 }
@@ -4216,6 +4566,7 @@ fn update_tower_shooters(
                 target: target.id.clone(),
                 damage: shooter.damage,
                 speed_cells_per_second: milli_units_as_f32(shooter.movement_milli_cells_per_second),
+                visual: CombatVisualKind::Arrow,
             },
         );
         tower.cooldown_seconds = milli_units_as_f32(shooter.fire_milliseconds);
@@ -4464,6 +4815,16 @@ fn move_agents(
                                     &config.0,
                                     transform.translation,
                                     projectile,
+                                );
+                            }
+                            ActionPresentation::Impact { target, visual } => {
+                                spawn_combat_impact(
+                                    &mut commands,
+                                    &render,
+                                    grid_to_world_on_surface(target, &config.0, &world.generated)
+                                        + Vec3::Y * config.0.world.cell_size * 0.35,
+                                    visual,
+                                    config.0.world.cell_size,
                                 );
                             }
                             ActionPresentation::Healing { source, target } => {
@@ -11591,18 +11952,22 @@ mod tests {
         );
         assert_eq!(goal, AgentGoal::Attack(player_id.clone()));
         assert_eq!(target, enemy_position);
-        assert!(
-            complete_agent_goal(
-                &mut simulation,
-                &mut world,
-                &config,
-                &content,
-                &enemy_id,
-                &goal,
-                enemy_position,
-            )
-            .is_none()
+        let presentation = complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &enemy_id,
+            &goal,
+            enemy_position,
         );
+        assert!(matches!(
+            presentation,
+            Some(ActionPresentation::Impact {
+                target,
+                visual: CombatVisualKind::Physical,
+            }) if target == player_position
+        ));
         assert_eq!(simulation.actors[&player_id].health, 95);
         assert!(
             (action_cooldown(&content, &simulation, &enemy_id, &goal) - 3.0).abs() <= f32::EPSILON
@@ -11735,7 +12100,33 @@ mod tests {
             panic!("ranged role must emit a projectile");
         };
         assert_eq!(projectile.target, enemy);
+        assert_eq!(projectile.visual, CombatVisualKind::Arrow);
         assert_eq!(simulation.actors[&projectile.target].health, 100);
+    }
+
+    #[test]
+    fn combat_visuals_follow_authored_role_identity_and_vfx_constants() {
+        assert_eq!(
+            actor_combat_visual(&StableId::new("role:ranger").unwrap()),
+            CombatVisualKind::Arrow
+        );
+        assert_eq!(
+            actor_combat_visual(&StableId::new("role:wizard").unwrap()),
+            CombatVisualKind::Fireball
+        );
+        assert_eq!(
+            actor_combat_visual(&StableId::new("role:necromancer").unwrap()),
+            CombatVisualKind::Necrotic
+        );
+        assert_eq!(
+            actor_combat_visual(&StableId::new("role:defender").unwrap()),
+            CombatVisualKind::Physical
+        );
+        assert!((CHARACTER_HIT_SECONDS - 0.25).abs() < f32::EPSILON);
+        assert!((TOWER_TRAIL_SECONDS - 2.0).abs() < f32::EPSILON);
+        assert!((TOWER_TRAIL_WIDTH - 0.1).abs() < f32::EPSILON);
+        assert!((FIREBALL_SIZE - 0.4).abs() < f32::EPSILON);
+        assert!((FIREBALL_TRAIL_SIZE - 0.3).abs() < f32::EPSILON);
     }
 
     #[test]
