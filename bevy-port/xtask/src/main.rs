@@ -161,6 +161,16 @@ fn validate() -> Result<()> {
         .values()
         .map(|controller| controller.transitions.len())
         .sum();
+    let presentation_state_machines: usize = presentation
+        .controllers
+        .values()
+        .map(|controller| controller.state_machines.len())
+        .sum();
+    let presentation_layers: usize = presentation
+        .controllers
+        .values()
+        .map(|controller| controller.layers.len())
+        .sum();
     let native_animation_bindings = presentation
         .prefab_bindings
         .values()
@@ -204,9 +214,10 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (4, 133, 33, 75, 31, 94, 165, 22, 18, 141, 181)
+    ) != (5, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
+        || (presentation_state_machines, presentation_layers) != (45, 33)
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }

@@ -186,14 +186,49 @@ pub struct AnimationConditionDef {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct AnimationTransitionDef {
     pub source: Option<StableId>,
     pub destination: Option<StableId>,
+    #[serde(default)]
+    pub source_state_machine: Option<StableId>,
+    #[serde(default)]
+    pub destination_state_machine: Option<StableId>,
+    #[serde(default)]
+    pub is_entry: bool,
+    #[serde(default)]
+    pub is_any_state: bool,
     pub is_exit: bool,
     pub has_exit_time: bool,
     pub exit_time: f32,
     pub duration: f32,
     pub conditions: Vec<AnimationConditionDef>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimationLayerBlendMode {
+    #[default]
+    Override,
+    Additive,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationStateMachineDef {
+    pub display_name: String,
+    pub states: Vec<StableId>,
+    pub child_state_machines: Vec<StableId>,
+    pub default_state: Option<StableId>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationLayerDef {
+    pub display_name: String,
+    pub state_machine: StableId,
+    pub blend_mode: AnimationLayerBlendMode,
+    pub default_weight: f32,
+    #[serde(default)]
+    pub avatar_mask_guid: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -204,6 +239,10 @@ pub struct AnimationControllerDef {
     pub parameters: Vec<AnimationParameterDef>,
     pub states: BTreeMap<StableId, AnimationStateDef>,
     pub transitions: Vec<AnimationTransitionDef>,
+    #[serde(default)]
+    pub state_machines: BTreeMap<StableId, AnimationStateMachineDef>,
+    #[serde(default)]
+    pub layers: Vec<AnimationLayerDef>,
     /// One default per Unity animation layer/state machine when present.
     pub default_states: Vec<StableId>,
 }
@@ -251,6 +290,19 @@ pub enum PresentationError {
     #[error("controller {controller} transition references missing state {state}")]
     MissingTransitionState {
         controller: StableId,
+        state: StableId,
+    },
+    #[error("controller {controller} references missing state machine {state_machine}")]
+    MissingStateMachine {
+        controller: StableId,
+        state_machine: StableId,
+    },
+    #[error(
+        "controller {controller} state machine {state_machine} references missing state {state}"
+    )]
+    MissingStateMachineState {
+        controller: StableId,
+        state_machine: StableId,
         state: StableId,
     },
     #[error("controller {controller} references missing animation parameter {parameter}")]
@@ -358,6 +410,37 @@ impl PresentationCatalog {
                     });
                 }
             }
+            for layer in &controller.layers {
+                if !controller.state_machines.contains_key(&layer.state_machine) {
+                    return Err(PresentationError::MissingStateMachine {
+                        controller: controller_id.clone(),
+                        state_machine: layer.state_machine.clone(),
+                    });
+                }
+            }
+            for (state_machine_id, state_machine) in &controller.state_machines {
+                for state in state_machine
+                    .states
+                    .iter()
+                    .chain(state_machine.default_state.iter())
+                {
+                    if !controller.states.contains_key(state) {
+                        return Err(PresentationError::MissingStateMachineState {
+                            controller: controller_id.clone(),
+                            state_machine: state_machine_id.clone(),
+                            state: state.clone(),
+                        });
+                    }
+                }
+                for child in &state_machine.child_state_machines {
+                    if !controller.state_machines.contains_key(child) {
+                        return Err(PresentationError::MissingStateMachine {
+                            controller: controller_id.clone(),
+                            state_machine: child.clone(),
+                        });
+                    }
+                }
+            }
             for (state_id, state) in &controller.states {
                 if let Some(speed_parameter) = &state.speed_parameter {
                     let Some(parameter) = parameters.get(speed_parameter.as_str()) else {
@@ -424,6 +507,20 @@ impl PresentationCatalog {
                         return Err(PresentationError::MissingTransitionState {
                             controller: controller_id.clone(),
                             state: state.clone(),
+                        });
+                    }
+                }
+                for state_machine in [
+                    transition.source_state_machine.as_ref(),
+                    transition.destination_state_machine.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !controller.state_machines.contains_key(state_machine) {
+                        return Err(PresentationError::MissingStateMachine {
+                            controller: controller_id.clone(),
+                            state_machine: state_machine.clone(),
                         });
                     }
                 }

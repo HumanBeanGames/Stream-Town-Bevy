@@ -1,5 +1,5 @@
 (
-    schema_version: 4,
+    schema_version: 5,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -11,7 +11,9 @@
     missing_clip_sources: 1,
     controllers: 31,
     controller_states: 94,
-    controller_transitions: 165,
+    controller_transitions: 166,
+    controller_state_machines: 45,
+    controller_layers: 33,
     inferred_parameters: 2,
     prefab_bindings: 22,
     native_animation_bindings: 18,

@@ -236,8 +236,10 @@ controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use
 that controller contract as well. Presentation schema 4 preserves the 32
 shipping states with active float speed parameters and applies their authored
-base-speed multiplier during playback. Nested controller layers/state machines,
-rare/non-gameplay action emitters,
+base-speed multiplier during playback. Presentation schema 5 also preserves all
+45 state machines and 33 layers; the runtime follows conditioned child-machine
+entries and parent defaults/exits for the active base hierarchy. Simultaneous
+additive-layer pose composition, avatar-mask application, rare/non-gameplay action emitters,
 exact Unity curve tangents, property/UI animation, exact multi-slot assignment,
 and custom WGSL shader parity remain presentation work.
 

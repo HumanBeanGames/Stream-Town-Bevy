@@ -1,5 +1,5 @@
 (
-    schema_version: 4,
+    schema_version: 5,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -81028,6 +81028,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:041204ef172f5204cba091bee520a621:-7687261977155877828": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:041204ef172f5204cba091bee520a621:413563437936539907",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:041204ef172f5204cba091bee520a621:413563437936539907"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:041204ef172f5204cba091bee520a621:-7687261977155877828",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:041204ef172f5204cba091bee520a621:413563437936539907",
             ],
@@ -81052,6 +81071,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:09de90f93188f2c4fad99a99580e428b:5527043554467163799": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:09de90f93188f2c4fad99a99580e428b:4194647471290091990",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:09de90f93188f2c4fad99a99580e428b:4194647471290091990"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:09de90f93188f2c4fad99a99580e428b:5527043554467163799",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:09de90f93188f2c4fad99a99580e428b:4194647471290091990",
             ],
@@ -81152,6 +81190,10 @@
                 (
                     source: Some("animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -81167,6 +81209,10 @@
                 (
                     source: Some("animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581"),
                     destination: Some("animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -81182,6 +81228,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81197,6 +81247,10 @@
                 (
                     source: Some("animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985"),
                     destination: Some("animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -81212,6 +81266,10 @@
                 (
                     source: Some("animation_state:11894e4d53fa75c43971148df4df241f:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -81227,6 +81285,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81242,6 +81304,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:11894e4d53fa75c43971148df4df241f:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81257,6 +81323,10 @@
                 (
                     source: Some("animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -81268,6 +81338,36 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581",
+                        "animation_state:11894e4d53fa75c43971148df4df241f:2092530181785104985",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:11894e4d53fa75c43971148df4df241f:-4223380067362157581"),
+                ),
+                "animation_state_machine:11894e4d53fa75c43971148df4df241f:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:11894e4d53fa75c43971148df4df241f:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:11894e4d53fa75c43971148df4df241f:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:11894e4d53fa75c43971148df4df241f:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:11894e4d53fa75c43971148df4df241f:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -81714,6 +81814,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-7115390245036259605"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9,
@@ -81729,6 +81833,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2763599478350897752"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81744,6 +81852,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-4585270874795264890"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81759,6 +81871,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:8917572871720449332"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9836956,
@@ -81774,6 +81890,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6768860081427168832"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81789,6 +81909,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:875246227926086247"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -81804,6 +81928,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-9145738538020517605"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9,
@@ -81819,6 +81947,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2640698774737220190"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:2854541244147443416"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9477352,
@@ -81834,6 +81966,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-668142833587296785"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.70000005,
@@ -81849,6 +81985,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-5907716185917496487"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8333334,
@@ -81864,6 +82004,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:1644469110650211957"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.85,
@@ -81879,6 +82023,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:5007872066999187050"),
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.70000005,
@@ -81894,6 +82042,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6768860081427168832"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.78571427,
@@ -81909,6 +82061,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-5907716185917496487"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81924,6 +82080,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:3667806019712904990"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81939,6 +82099,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-7115390245036259605"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81954,6 +82118,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2357848882567628719"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81969,6 +82137,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:8917572871720449332"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -81984,6 +82156,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-4585270874795264890"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8636364,
@@ -81999,6 +82175,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2640698774737220190"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:2854541244147443416"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: true,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82014,6 +82194,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-9145738538020517605"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82029,6 +82213,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:1644469110650211957"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82044,6 +82232,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2533881044001281034"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.875,
@@ -82059,6 +82251,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:875246227926086247"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82074,6 +82270,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292"),
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6047760710946103107"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -82089,6 +82289,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2357848882567628719"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8636364,
@@ -82104,6 +82308,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292"),
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:5007872066999187050"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -82119,6 +82327,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -82134,6 +82346,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-668142833587296785"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82149,6 +82365,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:9055311312826162671"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:2854541244147443416"),
+                    destination_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82164,6 +82384,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:1496302043766372189"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82179,6 +82403,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:9055311312826162671"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82194,6 +82422,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6047760710946103107"),
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.70000005,
@@ -82209,6 +82441,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -82224,6 +82460,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -82233,6 +82473,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:1496302043766372189"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82248,6 +82492,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:3667806019712904990"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.78571427,
@@ -82263,6 +82511,10 @@
                 (
                     source: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2763599478350897752"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82278,6 +82530,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8333334,
@@ -82293,6 +82549,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:16f9efb68ec66e641badc55745403ebf:2533881044001281034"),
+                    source_state_machine: Some("animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82304,6 +82564,73 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:1496302043766372189",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:1644469110650211957",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-668142833587296785",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-4585270874795264890",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:2357848882567628719",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:8917572871720449332",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:2533881044001281034",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:3667806019712904990",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-7115390245036259605",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:2763599478350897752",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:875246227926086247",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-9145738538020517605",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-5907716185917496487",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-6768860081427168832",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:16f9efb68ec66e641badc55745403ebf:1496302043766372189"),
+                ),
+                "animation_state_machine:16f9efb68ec66e641badc55745403ebf:-8477533733379317970": (
+                    display_name: "Locomotion States",
+                    states: [],
+                    child_state_machines: [],
+                    default_state: None,
+                ),
+                "animation_state_machine:16f9efb68ec66e641badc55745403ebf:2854541244147443416": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:9055311312826162671",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:2640698774737220190",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:16f9efb68ec66e641badc55745403ebf:-2092695101092318025",
+                        "animation_state_machine:16f9efb68ec66e641badc55745403ebf:-8477533733379317970",
+                    ],
+                    default_state: Some("animation_state:16f9efb68ec66e641badc55745403ebf:9055311312826162671"),
+                ),
+                "animation_state_machine:16f9efb68ec66e641badc55745403ebf:7705704512610011951": (
+                    display_name: "Top",
+                    states: [
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:5007872066999187050",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292",
+                        "animation_state:16f9efb68ec66e641badc55745403ebf:-6047760710946103107",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:16f9efb68ec66e641badc55745403ebf:-6408133237958309292"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:16f9efb68ec66e641badc55745403ebf:2854541244147443416",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: Some("f0df9b3060272084f9b101cef7521e16"),
+                ),
+                (
+                    display_name: "Top",
+                    state_machine: "animation_state_machine:16f9efb68ec66e641badc55745403ebf:7705704512610011951",
+                    blend_mode: override,
+                    default_weight: 1.0,
+                    avatar_mask_guid: Some("c1ccc3f24cafc964993678ae1c5adc38"),
                 ),
             ],
             default_states: [
@@ -82364,6 +82691,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8065497220322364103"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.98809934,
@@ -82373,6 +82704,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8065497220322364103"),
+                    source_state_machine: Some("animation_state_machine:20be80b0e10b1af40a0fc064abd6a19b:-1423160016141112929"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: true,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82388,6 +82723,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8543212823551753415"),
+                    source_state_machine: Some("animation_state_machine:20be80b0e10b1af40a0fc064abd6a19b:-1423160016141112929"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: true,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82399,6 +82738,26 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:20be80b0e10b1af40a0fc064abd6a19b:-1423160016141112929": (
+                    display_name: "Base",
+                    states: [
+                        "animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8065497220322364103",
+                        "animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8543212823551753415",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:20be80b0e10b1af40a0fc064abd6a19b:-8065497220322364103"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base",
+                    state_machine: "animation_state_machine:20be80b0e10b1af40a0fc064abd6a19b:-1423160016141112929",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -82457,6 +82816,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:2ddf69683616b2e43b31be96ca9624d5:-8065497220322364103"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.98809934,
@@ -82466,6 +82829,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:2ddf69683616b2e43b31be96ca9624d5:-8065497220322364103"),
+                    source_state_machine: Some("animation_state_machine:2ddf69683616b2e43b31be96ca9624d5:-1423160016141112929"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: true,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82481,6 +82848,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:2ddf69683616b2e43b31be96ca9624d5:-8543212823551753415"),
+                    source_state_machine: Some("animation_state_machine:2ddf69683616b2e43b31be96ca9624d5:-1423160016141112929"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: true,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -82492,6 +82863,26 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:2ddf69683616b2e43b31be96ca9624d5:-1423160016141112929": (
+                    display_name: "Base",
+                    states: [
+                        "animation_state:2ddf69683616b2e43b31be96ca9624d5:-8065497220322364103",
+                        "animation_state:2ddf69683616b2e43b31be96ca9624d5:-8543212823551753415",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:2ddf69683616b2e43b31be96ca9624d5:-8065497220322364103"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base",
+                    state_machine: "animation_state_machine:2ddf69683616b2e43b31be96ca9624d5:-1423160016141112929",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -82582,6 +82973,10 @@
                 (
                     source: Some("animation_state:42cba18b4a85cf041b661dac476027e8:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:42cba18b4a85cf041b661dac476027e8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -82597,6 +82992,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:42cba18b4a85cf041b661dac476027e8:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:42cba18b4a85cf041b661dac476027e8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82612,6 +83011,10 @@
                 (
                     source: Some("animation_state:42cba18b4a85cf041b661dac476027e8:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:42cba18b4a85cf041b661dac476027e8:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:42cba18b4a85cf041b661dac476027e8:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -82627,6 +83030,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:42cba18b4a85cf041b661dac476027e8:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:42cba18b4a85cf041b661dac476027e8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82638,6 +83045,35 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:42cba18b4a85cf041b661dac476027e8:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:42cba18b4a85cf041b661dac476027e8:-4223380067362157581",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:42cba18b4a85cf041b661dac476027e8:-4223380067362157581"),
+                ),
+                "animation_state_machine:42cba18b4a85cf041b661dac476027e8:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:42cba18b4a85cf041b661dac476027e8:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:42cba18b4a85cf041b661dac476027e8:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:42cba18b4a85cf041b661dac476027e8:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:42cba18b4a85cf041b661dac476027e8:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -82665,6 +83101,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:4e1db4df03462194ca74023e723d55c4:2986780243487258548": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:4e1db4df03462194ca74023e723d55c4:7166653683730185887",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:4e1db4df03462194ca74023e723d55c4:7166653683730185887"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:4e1db4df03462194ca74023e723d55c4:2986780243487258548",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:4e1db4df03462194ca74023e723d55c4:7166653683730185887",
             ],
@@ -82689,6 +83144,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:4f58634f3df7014479d4601e94f0e37c:-305237394543830649": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:4f58634f3df7014479d4601e94f0e37c:8105513738674487379",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:4f58634f3df7014479d4601e94f0e37c:8105513738674487379"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:4f58634f3df7014479d4601e94f0e37c:-305237394543830649",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:4f58634f3df7014479d4601e94f0e37c:8105513738674487379",
             ],
@@ -82713,6 +83187,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:5ab8006551d81e64786fa4a3aadbbf91:2969197527820423259": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:5ab8006551d81e64786fa4a3aadbbf91:-1734419594664231016",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:5ab8006551d81e64786fa4a3aadbbf91:-1734419594664231016"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:5ab8006551d81e64786fa4a3aadbbf91:2969197527820423259",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:5ab8006551d81e64786fa4a3aadbbf91:-1734419594664231016",
             ],
@@ -82737,6 +83230,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:5b6b82c20ccd97c4ca9bf967f726aeef:-4585584416186600506": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:5b6b82c20ccd97c4ca9bf967f726aeef:-210849313207987297",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:5b6b82c20ccd97c4ca9bf967f726aeef:-210849313207987297"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:5b6b82c20ccd97c4ca9bf967f726aeef:-4585584416186600506",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:5b6b82c20ccd97c4ca9bf967f726aeef:-210849313207987297",
             ],
@@ -82849,6 +83361,10 @@
                 (
                     source: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8235294,
@@ -82864,6 +83380,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:2092530181785104985"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -82879,6 +83399,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82888,6 +83412,10 @@
                 (
                     source: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:2092530181785104985"),
                     destination: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -82903,6 +83431,10 @@
                 (
                     source: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.7,
@@ -82918,6 +83450,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:2092530181785104985"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82933,6 +83469,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -82948,6 +83488,10 @@
                 (
                     source: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:2092530181785104985"),
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -82959,6 +83503,35 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:-4223380067362157581"),
+                ),
+                "animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:635e563dc547a7a4aa4664644fcbb6b3:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:635e563dc547a7a4aa4664644fcbb6b3:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:635e563dc547a7a4aa4664644fcbb6b3:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -82998,6 +83571,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:64308e5a4e1d9094bb4b263ff34af2de:60009182030230039": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:64308e5a4e1d9094bb4b263ff34af2de:-3464254767618854073",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:64308e5a4e1d9094bb4b263ff34af2de:-3464254767618854073"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:64308e5a4e1d9094bb4b263ff34af2de:60009182030230039",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:64308e5a4e1d9094bb4b263ff34af2de:-3464254767618854073",
             ],
@@ -83022,6 +83614,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:7865aeda1f4d8294684eb42f22f91c3a:-368212054573460706": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:7865aeda1f4d8294684eb42f22f91c3a:8774670157784232723",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:7865aeda1f4d8294684eb42f22f91c3a:8774670157784232723"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:7865aeda1f4d8294684eb42f22f91c3a:-368212054573460706",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:7865aeda1f4d8294684eb42f22f91c3a:8774670157784232723",
             ],
@@ -83070,6 +83681,10 @@
                 (
                     source: Some("animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:8402231150205222903"),
                     destination: Some("animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:3959566196850045473"),
+                    source_state_machine: Some("animation_state_machine:7a24ad00bb657d1439fa86e0c2eb6b12:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.9596774,
@@ -83085,6 +83700,10 @@
                 (
                     source: Some("animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:3959566196850045473"),
                     destination: Some("animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:8402231150205222903"),
+                    source_state_machine: Some("animation_state_machine:7a24ad00bb657d1439fa86e0c2eb6b12:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.6875,
@@ -83096,6 +83715,26 @@
                             threshold: 0.2,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:7a24ad00bb657d1439fa86e0c2eb6b12:-5669345202394788280": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:8402231150205222903",
+                        "animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:3959566196850045473",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:7a24ad00bb657d1439fa86e0c2eb6b12:8402231150205222903"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:7a24ad00bb657d1439fa86e0c2eb6b12:-5669345202394788280",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -83146,6 +83785,10 @@
                 (
                     source: Some("animation_state:7b5536b35afda8d41930f35e0e51215a:8402231150205222903"),
                     destination: Some("animation_state:7b5536b35afda8d41930f35e0e51215a:3959566196850045473"),
+                    source_state_machine: Some("animation_state_machine:7b5536b35afda8d41930f35e0e51215a:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.9596774,
@@ -83161,6 +83804,10 @@
                 (
                     source: Some("animation_state:7b5536b35afda8d41930f35e0e51215a:3959566196850045473"),
                     destination: Some("animation_state:7b5536b35afda8d41930f35e0e51215a:8402231150205222903"),
+                    source_state_machine: Some("animation_state_machine:7b5536b35afda8d41930f35e0e51215a:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.6875,
@@ -83172,6 +83819,26 @@
                             threshold: 0.2,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:7b5536b35afda8d41930f35e0e51215a:-5669345202394788280": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:7b5536b35afda8d41930f35e0e51215a:8402231150205222903",
+                        "animation_state:7b5536b35afda8d41930f35e0e51215a:3959566196850045473",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:7b5536b35afda8d41930f35e0e51215a:8402231150205222903"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:7b5536b35afda8d41930f35e0e51215a:-5669345202394788280",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -83306,6 +83973,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -83321,6 +83992,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4294006374420586872"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83336,6 +84011,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.78571427,
@@ -83351,6 +84030,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581"),
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8125,
@@ -83366,6 +84049,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -83381,6 +84068,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8125,
@@ -83396,6 +84087,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.875,
@@ -83411,6 +84106,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83431,6 +84130,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83446,6 +84149,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4294006374420586872"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.875,
@@ -83461,6 +84168,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220"),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.875,
@@ -83476,6 +84187,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075"),
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.78571427,
@@ -83491,6 +84206,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.875,
@@ -83506,6 +84225,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83524,8 +84247,31 @@
                     ],
                 ),
                 (
+                    source: None,
+                    destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
+                    is_exit: false,
+                    has_exit_time: true,
+                    exit_time: 0.7,
+                    duration: 0.25,
+                    conditions: [
+                        (
+                            parameter: "Action",
+                            mode: if,
+                            threshold: 0.0,
+                        ),
+                    ],
+                ),
+                (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220"),
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8125,
@@ -83541,6 +84287,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217"),
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.78571427,
@@ -83556,6 +84306,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83571,6 +84325,10 @@
                 (
                     source: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -83586,6 +84344,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83606,6 +84368,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075"),
+                    source_state_machine: Some("animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83622,6 +84388,38 @@
                             threshold: 1.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581",
+                        "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:5578039100701366220",
+                        "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4294006374420586872",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-4223380067362157581"),
+                ),
+                "animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217",
+                        "animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:-5136947326229239075",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:7d9f95c8596d30d4ba95d74b156aa9d5:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:7d9f95c8596d30d4ba95d74b156aa9d5:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -83673,6 +84471,10 @@
                 (
                     source: Some("animation_state:a1529f2d1d90b8b4198e099687f1bbea:8402231150205222903"),
                     destination: Some("animation_state:a1529f2d1d90b8b4198e099687f1bbea:3959566196850045473"),
+                    source_state_machine: Some("animation_state_machine:a1529f2d1d90b8b4198e099687f1bbea:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.9596774,
@@ -83688,6 +84490,10 @@
                 (
                     source: Some("animation_state:a1529f2d1d90b8b4198e099687f1bbea:3959566196850045473"),
                     destination: Some("animation_state:a1529f2d1d90b8b4198e099687f1bbea:8402231150205222903"),
+                    source_state_machine: Some("animation_state_machine:a1529f2d1d90b8b4198e099687f1bbea:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.6875,
@@ -83699,6 +84505,26 @@
                             threshold: 0.2,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:a1529f2d1d90b8b4198e099687f1bbea:-5669345202394788280": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:a1529f2d1d90b8b4198e099687f1bbea:8402231150205222903",
+                        "animation_state:a1529f2d1d90b8b4198e099687f1bbea:3959566196850045473",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:a1529f2d1d90b8b4198e099687f1bbea:8402231150205222903"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:a1529f2d1d90b8b4198e099687f1bbea:-5669345202394788280",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -83801,6 +84627,10 @@
                 (
                     source: Some("animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -83816,6 +84646,10 @@
                 (
                     source: Some("animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581"),
                     destination: Some("animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -83831,6 +84665,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83846,6 +84684,10 @@
                 (
                     source: Some("animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985"),
                     destination: Some("animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -83861,6 +84703,10 @@
                 (
                     source: Some("animation_state:ae85ac85c03097d499396334dc3290b5:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -83876,6 +84722,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83891,6 +84741,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:ae85ac85c03097d499396334dc3290b5:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -83906,6 +84760,10 @@
                 (
                     source: Some("animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -83917,6 +84775,36 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581",
+                        "animation_state:ae85ac85c03097d499396334dc3290b5:2092530181785104985",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:ae85ac85c03097d499396334dc3290b5:-4223380067362157581"),
+                ),
+                "animation_state_machine:ae85ac85c03097d499396334dc3290b5:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:ae85ac85c03097d499396334dc3290b5:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:ae85ac85c03097d499396334dc3290b5:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:ae85ac85c03097d499396334dc3290b5:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:ae85ac85c03097d499396334dc3290b5:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -84020,6 +84908,10 @@
                 (
                     source: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -84035,6 +84927,10 @@
                 (
                     source: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581"),
                     destination: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -84050,6 +84946,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -84065,6 +84965,10 @@
                 (
                     source: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985"),
                     destination: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -84080,6 +84984,10 @@
                 (
                     source: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -84095,6 +85003,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -84110,6 +85022,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -84125,6 +85041,10 @@
                 (
                     source: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -84136,6 +85056,36 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581",
+                        "animation_state:b5ec12047dbf1314898aaf86d5270e0f:2092530181785104985",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:-4223380067362157581"),
+                ),
+                "animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:b5ec12047dbf1314898aaf86d5270e0f:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:b5ec12047dbf1314898aaf86d5270e0f:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:b5ec12047dbf1314898aaf86d5270e0f:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -84239,6 +85189,10 @@
                 (
                     source: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -84254,6 +85208,10 @@
                 (
                     source: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581"),
                     destination: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -84269,6 +85227,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -84284,6 +85246,10 @@
                 (
                     source: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985"),
                     destination: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -84299,6 +85265,10 @@
                 (
                     source: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -84314,6 +85284,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985"),
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -84329,6 +85303,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -84344,6 +85322,10 @@
                 (
                     source: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.7692308,
@@ -84355,6 +85337,36 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581",
+                        "animation_state:bb493a66509b9984cbd36ed521970ca8:2092530181785104985",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:-4223380067362157581"),
+                ),
+                "animation_state_machine:bb493a66509b9984cbd36ed521970ca8:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:bb493a66509b9984cbd36ed521970ca8:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:bb493a66509b9984cbd36ed521970ca8:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:bb493a66509b9984cbd36ed521970ca8:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:bb493a66509b9984cbd36ed521970ca8:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -84406,6 +85418,10 @@
                 (
                     source: Some("animation_state:bda358ac13f989345a8f46fd230f9826:8402231150205222903"),
                     destination: Some("animation_state:bda358ac13f989345a8f46fd230f9826:3959566196850045473"),
+                    source_state_machine: Some("animation_state_machine:bda358ac13f989345a8f46fd230f9826:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.9596774,
@@ -84421,6 +85437,10 @@
                 (
                     source: Some("animation_state:bda358ac13f989345a8f46fd230f9826:3959566196850045473"),
                     destination: Some("animation_state:bda358ac13f989345a8f46fd230f9826:8402231150205222903"),
+                    source_state_machine: Some("animation_state_machine:bda358ac13f989345a8f46fd230f9826:-5669345202394788280"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.6875,
@@ -84432,6 +85452,26 @@
                             threshold: 0.2,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:bda358ac13f989345a8f46fd230f9826:-5669345202394788280": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:bda358ac13f989345a8f46fd230f9826:8402231150205222903",
+                        "animation_state:bda358ac13f989345a8f46fd230f9826:3959566196850045473",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:bda358ac13f989345a8f46fd230f9826:8402231150205222903"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:bda358ac13f989345a8f46fd230f9826:-5669345202394788280",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -84494,6 +85534,10 @@
                 (
                     source: Some("animation_state:c11f40d5660648f46b67cfaaa37761e5:6970830186064708492"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c11f40d5660648f46b67cfaaa37761e5:-1819700543590555875"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -84503,6 +85547,10 @@
                 (
                     source: Some("animation_state:c11f40d5660648f46b67cfaaa37761e5:-3445430672598199653"),
                     destination: Some("animation_state:c11f40d5660648f46b67cfaaa37761e5:6970830186064708492"),
+                    source_state_machine: Some("animation_state_machine:c11f40d5660648f46b67cfaaa37761e5:-1819700543590555875"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.90625,
@@ -84518,11 +85566,36 @@
                 (
                     source: Some("animation_state:c11f40d5660648f46b67cfaaa37761e5:-4306582856393119967"),
                     destination: Some("animation_state:c11f40d5660648f46b67cfaaa37761e5:-3445430672598199653"),
+                    source_state_machine: Some("animation_state_machine:c11f40d5660648f46b67cfaaa37761e5:-1819700543590555875"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.9318182,
                     duration: 0.25,
                     conditions: [],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:c11f40d5660648f46b67cfaaa37761e5:-1819700543590555875": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:c11f40d5660648f46b67cfaaa37761e5:-4306582856393119967",
+                        "animation_state:c11f40d5660648f46b67cfaaa37761e5:-3445430672598199653",
+                        "animation_state:c11f40d5660648f46b67cfaaa37761e5:6970830186064708492",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:c11f40d5660648f46b67cfaaa37761e5:-4306582856393119967"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:c11f40d5660648f46b67cfaaa37761e5:-1819700543590555875",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -84549,6 +85622,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:c387476699fb49e4b995bf1d5790a6d5:98876207423102776": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:c387476699fb49e4b995bf1d5790a6d5:-2694498729715318848",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:c387476699fb49e4b995bf1d5790a6d5:-2694498729715318848"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:c387476699fb49e4b995bf1d5790a6d5:98876207423102776",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:c387476699fb49e4b995bf1d5790a6d5:-2694498729715318848",
             ],
@@ -84573,6 +85665,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:c5097cfadae6b4b4dacfc1ba3665c8a2:671385361642201798": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:c5097cfadae6b4b4dacfc1ba3665c8a2:-7083021751823584582",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:c5097cfadae6b4b4dacfc1ba3665c8a2:-7083021751823584582"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:c5097cfadae6b4b4dacfc1ba3665c8a2:671385361642201798",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:c5097cfadae6b4b4dacfc1ba3665c8a2:-7083021751823584582",
             ],
@@ -85016,6 +86127,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-7115390245036259605"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9,
@@ -85031,6 +86146,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2763599478350897752"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85046,6 +86165,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-4585270874795264890"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85061,6 +86184,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:8917572871720449332"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9836956,
@@ -85076,6 +86203,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6768860081427168832"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85091,6 +86222,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:875246227926086247"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -85106,6 +86241,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-9145738538020517605"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9,
@@ -85121,6 +86260,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2640698774737220190"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:2854541244147443416"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.9477352,
@@ -85136,6 +86279,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-668142833587296785"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.70000005,
@@ -85151,6 +86298,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-5907716185917496487"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8333334,
@@ -85166,6 +86317,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:1644469110650211957"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.85,
@@ -85181,6 +86336,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:5007872066999187050"),
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.70000005,
@@ -85196,6 +86355,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6768860081427168832"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.78571427,
@@ -85211,6 +86374,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-5907716185917496487"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85226,6 +86393,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:3667806019712904990"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85241,6 +86412,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-7115390245036259605"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85256,6 +86431,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2357848882567628719"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85271,6 +86450,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:8917572871720449332"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85286,6 +86469,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-4585270874795264890"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8636364,
@@ -85301,6 +86488,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2640698774737220190"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:2854541244147443416"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: true,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -85316,6 +86507,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-9145738538020517605"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85331,6 +86526,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:1644469110650211957"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85346,6 +86545,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2533881044001281034"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.875,
@@ -85361,6 +86564,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:875246227926086247"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85376,6 +86583,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292"),
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6047760710946103107"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -85391,6 +86602,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2357848882567628719"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.8636364,
@@ -85406,6 +86621,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292"),
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:5007872066999187050"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -85421,6 +86640,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -85436,6 +86659,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-668142833587296785"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85451,6 +86678,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:9055311312826162671"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:2854541244147443416"),
+                    destination_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -85466,6 +86697,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:1496302043766372189"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85481,6 +86716,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:9055311312826162671"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85496,6 +86735,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6047760710946103107"),
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:7705704512610011951"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.70000005,
@@ -85511,6 +86754,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -85526,6 +86773,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.75,
@@ -85535,6 +86786,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:1496302043766372189"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -85550,6 +86805,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:3667806019712904990"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.78571427,
@@ -85565,6 +86824,10 @@
                 (
                     source: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2763599478350897752"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: false,
                     exit_time: 0.75,
@@ -85580,6 +86843,10 @@
                 (
                     source: None,
                     destination: None,
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8333334,
@@ -85595,6 +86862,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:c823308999b4f694e9810269c0b5efc4:2533881044001281034"),
+                    source_state_machine: Some("animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85606,6 +86877,73 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:1496302043766372189",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:1644469110650211957",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-668142833587296785",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-4585270874795264890",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:2357848882567628719",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:8917572871720449332",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:2533881044001281034",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:3667806019712904990",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-7115390245036259605",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:2763599478350897752",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:875246227926086247",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-9145738538020517605",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-5907716185917496487",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-6768860081427168832",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:c823308999b4f694e9810269c0b5efc4:1496302043766372189"),
+                ),
+                "animation_state_machine:c823308999b4f694e9810269c0b5efc4:-8477533733379317970": (
+                    display_name: "Locomotion States",
+                    states: [],
+                    child_state_machines: [],
+                    default_state: None,
+                ),
+                "animation_state_machine:c823308999b4f694e9810269c0b5efc4:2854541244147443416": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:9055311312826162671",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:2640698774737220190",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:c823308999b4f694e9810269c0b5efc4:-2092695101092318025",
+                        "animation_state_machine:c823308999b4f694e9810269c0b5efc4:-8477533733379317970",
+                    ],
+                    default_state: Some("animation_state:c823308999b4f694e9810269c0b5efc4:9055311312826162671"),
+                ),
+                "animation_state_machine:c823308999b4f694e9810269c0b5efc4:7705704512610011951": (
+                    display_name: "Top",
+                    states: [
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:5007872066999187050",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292",
+                        "animation_state:c823308999b4f694e9810269c0b5efc4:-6047760710946103107",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:c823308999b4f694e9810269c0b5efc4:-6408133237958309292"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:c823308999b4f694e9810269c0b5efc4:2854541244147443416",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: Some("0c5eec38a37ce304b9c0bfeab8a59f99"),
+                ),
+                (
+                    display_name: "Top",
+                    state_machine: "animation_state_machine:c823308999b4f694e9810269c0b5efc4:7705704512610011951",
+                    blend_mode: additive,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -85694,6 +87032,10 @@
                 (
                     source: Some("animation_state:cdc9168fa3a07d242a6603c0ae8907a3:-4223380067362157581"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: true,
                     has_exit_time: true,
                     exit_time: 0.8235294,
@@ -85709,6 +87051,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:cdc9168fa3a07d242a6603c0ae8907a3:-4223380067362157581"),
+                    source_state_machine: Some("animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: true,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85724,6 +87070,10 @@
                 (
                     source: Some("animation_state:cdc9168fa3a07d242a6603c0ae8907a3:7966513365961104217"),
                     destination: None,
+                    source_state_machine: Some("animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:8122092969613471540"),
+                    destination_state_machine: Some("animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:-6793829445334856409"),
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: true,
                     exit_time: 0.7,
@@ -85739,6 +87089,10 @@
                 (
                     source: None,
                     destination: Some("animation_state:cdc9168fa3a07d242a6603c0ae8907a3:7966513365961104217"),
+                    source_state_machine: Some("animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:-6793829445334856409"),
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
                     is_exit: false,
                     has_exit_time: false,
                     exit_time: 0.0,
@@ -85750,6 +87104,35 @@
                             threshold: 0.0,
                         ),
                     ],
+                ),
+            ],
+            state_machines: {
+                "animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:-6793829445334856409": (
+                    display_name: "Actions",
+                    states: [
+                        "animation_state:cdc9168fa3a07d242a6603c0ae8907a3:-4223380067362157581",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:cdc9168fa3a07d242a6603c0ae8907a3:-4223380067362157581"),
+                ),
+                "animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:8122092969613471540": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:cdc9168fa3a07d242a6603c0ae8907a3:7966513365961104217",
+                    ],
+                    child_state_machines: [
+                        "animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:-6793829445334856409",
+                    ],
+                    default_state: Some("animation_state:cdc9168fa3a07d242a6603c0ae8907a3:7966513365961104217"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:cdc9168fa3a07d242a6603c0ae8907a3:8122092969613471540",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
                 ),
             ],
             default_states: [
@@ -85777,6 +87160,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:d2108fb768c361442a0ee7711e01a8b4:1829391588032593789": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:d2108fb768c361442a0ee7711e01a8b4:341253511410432608",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:d2108fb768c361442a0ee7711e01a8b4:341253511410432608"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:d2108fb768c361442a0ee7711e01a8b4:1829391588032593789",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:d2108fb768c361442a0ee7711e01a8b4:341253511410432608",
             ],
@@ -85801,6 +87203,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:dfb7c64074c4ebc43b5d431c09d706ce:4114471007217322237": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:dfb7c64074c4ebc43b5d431c09d706ce:8606254655127711802",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:dfb7c64074c4ebc43b5d431c09d706ce:8606254655127711802"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:dfb7c64074c4ebc43b5d431c09d706ce:4114471007217322237",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:dfb7c64074c4ebc43b5d431c09d706ce:8606254655127711802",
             ],
@@ -85825,6 +87246,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:e0fd9cb408bc0c24e90571d4c2d57127:-7670315236216436272": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:e0fd9cb408bc0c24e90571d4c2d57127:8553764519963112405",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:e0fd9cb408bc0c24e90571d4c2d57127:8553764519963112405"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:e0fd9cb408bc0c24e90571d4c2d57127:-7670315236216436272",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:e0fd9cb408bc0c24e90571d4c2d57127:8553764519963112405",
             ],
@@ -85849,6 +87289,25 @@
                 ),
             },
             transitions: [],
+            state_machines: {
+                "animation_state_machine:f4e892f266b388948b3139dd54117736:-3520504988472073544": (
+                    display_name: "Base Layer",
+                    states: [
+                        "animation_state:f4e892f266b388948b3139dd54117736:3584496465615526396",
+                    ],
+                    child_state_machines: [],
+                    default_state: Some("animation_state:f4e892f266b388948b3139dd54117736:3584496465615526396"),
+                ),
+            },
+            layers: [
+                (
+                    display_name: "Base Layer",
+                    state_machine: "animation_state_machine:f4e892f266b388948b3139dd54117736:-3520504988472073544",
+                    blend_mode: override,
+                    default_weight: 0.0,
+                    avatar_mask_guid: None,
+                ),
+            ],
             default_states: [
                 "animation_state:f4e892f266b388948b3139dd54117736:3584496465615526396",
             ],

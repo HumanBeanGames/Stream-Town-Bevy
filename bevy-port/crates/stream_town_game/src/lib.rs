@@ -9485,7 +9485,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 4);
+        assert_eq!(presentation.schema_version, 5);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.controllers.len(), 31);
@@ -9526,6 +9526,10 @@ mod tests {
         );
         let spec = converted_animation_spec(player, &presentation).unwrap();
         let controller = presentation.controllers.get(&spec.controller).unwrap();
+        assert_eq!(controller.state_machines.len(), 4);
+        assert_eq!(controller.layers.len(), 2);
+        assert_eq!(controller.layers[0].display_name, "Base Layer");
+        assert_eq!(controller.layers[1].display_name, "Top");
         for (role_id, role) in &content.roles {
             let parameter = controller
                 .parameters
@@ -9567,6 +9571,15 @@ mod tests {
         );
         runtime.set_float("ActionSpeed", 2.0).unwrap();
         assert!((runtime.state_speed(controller).unwrap() - 2.0).abs() < f32::EPSILON);
+        runtime.set_boolean("Action", false).unwrap();
+        let exit = runtime.evaluate_transitions(controller, 0.0).unwrap();
+        let stream_town_domain::AnimationTransitionOutcome::Entered(locomotion_state) = exit else {
+            panic!("authored action exit did not return through the parent state machine");
+        };
+        assert_eq!(
+            controller.states[&locomotion_state].display_name,
+            "Locomotion"
+        );
         assert_eq!(
             presentation
                 .clips

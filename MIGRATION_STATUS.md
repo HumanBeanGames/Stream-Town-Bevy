@@ -66,6 +66,11 @@ mistaken for production-ready systems.
   Presentation schema 4 also preserves the 32 shipping Animator states with an
   active float speed parameter; Bevy multiplies each state's authored base speed
   by that live parameter, including every Player action bound to `ActionSpeed`.
+- Presentation schema 5 preserves all 45 state machines and 33 controller layers,
+  including layer roots, nested children, default states, blend modes, avatar-mask
+  GUIDs, Any State ownership, entry transitions, and state-machine destinations.
+  The runtime follows the active base hierarchy into conditioned child entries and
+  returns child exits through their parent default instead of a hard-coded reset.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
@@ -347,8 +352,8 @@ presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
-storage, stat, and building-age effects. It is still missing nested
-controller layers and rare/non-gameplay action emitters,
+storage, stat, and building-age effects. It is still missing simultaneous additive
+layer pose composition and avatar-mask application, rare/non-gameplay action emitters,
 production terrain/foliage shaders beyond the new environment palettes and
 particle fields, exact curve tangents and multi-slot/custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU

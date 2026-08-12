@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stream_town_domain::{
     AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
-    AnimationMotionDef, AnimationParameterDef, AnimationParameterKind, AnimationQuatKeyframe,
-    AnimationStateDef, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId,
-    TextureDef,
+    AnimationLayerBlendMode, AnimationLayerDef, AnimationMotionDef, AnimationParameterDef,
+    AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
+    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, MaterialAlphaMode,
+    MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId, TextureDef,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -30,6 +30,8 @@ pub struct PresentationConversionReport {
     pub controllers: usize,
     pub controller_states: usize,
     pub controller_transitions: usize,
+    pub controller_state_machines: usize,
+    pub controller_layers: usize,
     pub inferred_parameters: usize,
     pub prefab_bindings: usize,
     pub native_animation_bindings: usize,
@@ -173,7 +175,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 4,
+        schema_version: 5,
         textures,
         materials,
         clips,
@@ -190,7 +192,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 4,
+        schema_version: 5,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -222,6 +224,16 @@ pub fn convert(
             .controllers
             .values()
             .map(|controller| controller.transitions.len())
+            .sum(),
+        controller_state_machines: catalog
+            .controllers
+            .values()
+            .map(|controller| controller.state_machines.len())
+            .sum(),
+        controller_layers: catalog
+            .controllers
+            .values()
+            .map(|controller| controller.layers.len())
             .sum(),
         inferred_parameters: catalog
             .controllers
@@ -641,6 +653,43 @@ fn parse_controller(
             ))
         })
         .collect::<Result<_>>()?;
+    let state_machine_documents: BTreeMap<_, _> = documents
+        .iter()
+        .filter(|document| document.class_id == 1107)
+        .map(|document| (document.file_id, document))
+        .collect();
+    let state_machine_ids: BTreeMap<_, _> = state_machine_documents
+        .keys()
+        .map(|file_id| Ok((*file_id, animation_state_machine_id(&asset.guid, *file_id)?)))
+        .collect::<Result<_>>()?;
+    let state_owners: BTreeMap<_, _> = state_machine_documents
+        .iter()
+        .flat_map(|(machine, document)| {
+            parse_child_references(&document.lines, "m_ChildStates:", "m_State:")
+                .into_iter()
+                .map(move |state| (state, *machine))
+        })
+        .collect();
+    let any_state_transitions: BTreeMap<_, _> = state_machine_documents
+        .iter()
+        .flat_map(|(machine, document)| {
+            parse_reference_list(&document.lines, "m_AnyStateTransitions:")
+                .into_iter()
+                .map(move |transition| (transition, *machine))
+        })
+        .collect();
+    let entry_transition_sources: BTreeMap<_, _> = state_machine_documents
+        .iter()
+        .flat_map(|(machine, document)| {
+            parse_reference_list(&document.lines, "m_EntryTransitions:")
+                .into_iter()
+                .map(move |transition| (transition, *machine))
+        })
+        .collect();
+    let state_machine_transition_sources: BTreeMap<_, _> = state_machine_documents
+        .values()
+        .flat_map(|document| parse_state_machine_transition_sources(&document.lines))
+        .collect();
 
     let mut transition_sources = BTreeMap::new();
     let mut states = BTreeMap::new();
@@ -705,13 +754,44 @@ fn parse_controller(
             let destination_file = reference_id(&document.lines, "m_DstState:").unwrap_or(0);
             let source = transition_sources.get(&document.file_id).cloned();
             let destination = state_ids.get(&destination_file).cloned();
+            let source_machine_file = entry_transition_sources
+                .get(&document.file_id)
+                .copied()
+                .or_else(|| {
+                    state_machine_transition_sources
+                        .get(&document.file_id)
+                        .copied()
+                })
+                .or_else(|| any_state_transitions.get(&document.file_id).copied())
+                .or_else(|| {
+                    source
+                        .as_ref()
+                        .and_then(|source| {
+                            state_ids
+                                .iter()
+                                .find_map(|(file, id)| (id == source).then_some(*file))
+                        })
+                        .and_then(|state| state_owners.get(&state).copied())
+                });
+            let destination_machine_file =
+                reference_id(&document.lines, "m_DstStateMachine:").filter(|file| *file != 0);
             let is_exit = scalar_bool(&document.lines, "m_IsExit:").unwrap_or(false);
-            if source.is_none() && destination.is_none() && !is_exit {
+            if source.is_none()
+                && destination.is_none()
+                && destination_machine_file.is_none()
+                && !is_exit
+            {
                 return Ok(None);
             }
             Ok(Some(AnimationTransitionDef {
                 source,
                 destination,
+                source_state_machine: source_machine_file
+                    .and_then(|file| state_machine_ids.get(&file).cloned()),
+                destination_state_machine: destination_machine_file
+                    .and_then(|file| state_machine_ids.get(&file).cloned()),
+                is_entry: entry_transition_sources.contains_key(&document.file_id),
+                is_any_state: any_state_transitions.contains_key(&document.file_id),
                 is_exit,
                 has_exit_time: scalar_bool(&document.lines, "m_HasExitTime:").unwrap_or(false),
                 exit_time: scalar_f32(&document.lines, "m_ExitTime:").unwrap_or(0.0),
@@ -732,6 +812,40 @@ fn parse_controller(
         .collect();
     default_states.sort();
     default_states.dedup();
+    let state_machines = state_machine_documents
+        .iter()
+        .map(|(file_id, document)| {
+            let id = state_machine_ids[file_id].clone();
+            let states = parse_child_references(&document.lines, "m_ChildStates:", "m_State:")
+                .into_iter()
+                .filter_map(|state| state_ids.get(&state).cloned())
+                .collect();
+            let child_state_machines =
+                parse_child_references(&document.lines, "m_ChildStateMachines:", "m_StateMachine:")
+                    .into_iter()
+                    .filter_map(|machine| state_machine_ids.get(&machine).cloned())
+                    .collect();
+            let default_state = reference_id(&document.lines, "m_DefaultState:")
+                .and_then(|state| state_ids.get(&state).cloned());
+            (
+                id,
+                AnimationStateMachineDef {
+                    display_name: scalar(&document.lines, "m_Name:")
+                        .unwrap_or("Unnamed")
+                        .to_owned(),
+                    states,
+                    child_state_machines,
+                    default_state,
+                },
+            )
+        })
+        .collect();
+    let layers = documents
+        .iter()
+        .find(|document| document.class_id == 91)
+        .map_or_else(Vec::new, |document| {
+            parse_layers(&document.lines, &state_machine_ids)
+        });
     let mut parameters = documents
         .iter()
         .find(|document| document.class_id == 91)
@@ -744,6 +858,8 @@ fn parse_controller(
         parameters,
         states,
         transitions,
+        state_machines,
+        layers,
         default_states,
     })
 }
@@ -1198,6 +1314,95 @@ fn parse_reference_list(lines: &[String], header: &str) -> Vec<i64> {
         .collect()
 }
 
+fn parse_child_references(lines: &[String], header: &str, key: &str) -> Vec<i64> {
+    let Some(start) = lines.iter().position(|line| line.trim() == header) else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .skip(start + 1)
+        .take_while(|line| !line.starts_with("  m_") || line.trim_start().starts_with(key))
+        .filter(|line| line.trim_start().starts_with(key))
+        .filter_map(|line| inline_file_id(line))
+        .collect()
+}
+
+fn parse_state_machine_transition_sources(lines: &[String]) -> Vec<(i64, i64)> {
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.trim() == "m_StateMachineTransitions:")
+    else {
+        return Vec::new();
+    };
+    let mut source = None;
+    let mut transitions = Vec::new();
+    for line in lines
+        .iter()
+        .skip(start + 1)
+        .take_while(|line| !line.starts_with("  m_"))
+    {
+        if line.trim_start().starts_with("- first:") {
+            source = inline_file_id(line);
+        } else if line.trim_start().starts_with("- {fileID:")
+            && let Some((transition, source)) = inline_file_id(line).zip(source)
+        {
+            transitions.push((transition, source));
+        }
+    }
+    transitions
+}
+
+fn parse_layers(
+    lines: &[String],
+    state_machine_ids: &BTreeMap<i64, StableId>,
+) -> Vec<AnimationLayerDef> {
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.trim() == "m_AnimatorLayers:")
+    else {
+        return Vec::new();
+    };
+    let mut layers = Vec::new();
+    let mut index = start + 1;
+    while index < lines.len() {
+        if !lines[index]
+            .trim_start()
+            .starts_with("- serializedVersion:")
+        {
+            index += 1;
+            continue;
+        }
+        let end = lines[index + 1..]
+            .iter()
+            .position(|line| line.trim_start().starts_with("- serializedVersion:"))
+            .map_or(lines.len(), |offset| index + 1 + offset);
+        let block = &lines[index..end];
+        let Some(machine) = reference_id(block, "m_StateMachine:")
+            .and_then(|file| state_machine_ids.get(&file).cloned())
+        else {
+            index = end;
+            continue;
+        };
+        layers.push(AnimationLayerDef {
+            display_name: scalar(block, "m_Name:").unwrap_or("Unnamed").to_owned(),
+            state_machine: machine,
+            blend_mode: match scalar_i32(block, "m_BlendingMode:").unwrap_or(0) {
+                1 => AnimationLayerBlendMode::Additive,
+                _ => AnimationLayerBlendMode::Override,
+            },
+            default_weight: scalar_f32(block, "m_DefaultWeight:").unwrap_or(1.0),
+            avatar_mask_guid: block.iter().find_map(|line| {
+                line.trim_start()
+                    .starts_with("m_Mask:")
+                    .then(|| reference_guid(line).map(str::to_owned))
+                    .flatten()
+            }),
+        });
+        index = end;
+    }
+    layers
+}
+
 fn named_values(asset: &UnityAsset, prefix: &str) -> BTreeMap<String, Value> {
     let mut names = BTreeMap::<usize, String>::new();
     let mut values = BTreeMap::<usize, Value>::new();
@@ -1384,6 +1589,13 @@ fn animation_state_id(controller_guid: &str, file_id: i64) -> Result<StableId> {
     StableId::new(format!("animation_state:{controller_guid}:{file_id}")).map_err(Into::into)
 }
 
+fn animation_state_machine_id(controller_guid: &str, file_id: i64) -> Result<StableId> {
+    StableId::new(format!(
+        "animation_state_machine:{controller_guid}:{file_id}"
+    ))
+    .map_err(Into::into)
+}
+
 fn normalized_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -1467,6 +1679,14 @@ AnimatorStateTransition:
   m_HasExitTime: 1
 --- !u!1107 &30
 AnimatorStateMachine:
+  m_Name: Base Layer
+  m_ChildStates:
+  - serializedVersion: 1
+    m_State: {fileID: 10}
+  m_ChildStateMachines: []
+  m_AnyStateTransitions: []
+  m_EntryTransitions: []
+  m_StateMachineTransitions: {}
   m_DefaultState: {fileID: 10}
 --- !u!91 &40
 AnimatorController:
@@ -1481,7 +1701,13 @@ AnimatorController:
     m_DefaultFloat: 1
     m_DefaultInt: 0
     m_DefaultBool: 0
-  m_AnimatorLayers: []
+  m_AnimatorLayers:
+  - serializedVersion: 5
+    m_Name: Base Layer
+    m_StateMachine: {fileID: 30}
+    m_Mask: {fileID: 0}
+    m_BlendingMode: 0
+    m_DefaultWeight: 0
 ";
         let asset = UnityAsset {
             guid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
@@ -1510,6 +1736,20 @@ AnimatorController:
         assert_eq!(controller.transitions.len(), 1);
         assert_eq!(controller.parameters.len(), 2);
         assert_eq!(controller.default_states.len(), 1);
+        assert_eq!(controller.state_machines.len(), 1);
+        assert_eq!(controller.layers.len(), 1);
+        assert_eq!(controller.layers[0].display_name, "Base Layer");
+        assert_eq!(
+            controller.layers[0].blend_mode,
+            AnimationLayerBlendMode::Override
+        );
+        let machine = controller.state_machines.values().next().unwrap();
+        assert_eq!(machine.display_name, "Base Layer");
+        assert_eq!(machine.states.len(), 1);
+        assert_eq!(
+            machine.default_state.as_ref(),
+            controller.default_states.first()
+        );
         let state = controller.states.values().next().unwrap();
         assert_eq!(state.speed_parameter.as_deref(), Some("AnimationSpeed"));
         assert_eq!(clips.len(), 1);

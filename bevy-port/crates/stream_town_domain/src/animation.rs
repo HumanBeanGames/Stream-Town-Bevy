@@ -187,9 +187,8 @@ impl AnimationControllerRuntime {
             ));
         }
         let transition = controller.transitions.iter().find(|transition| {
-            (transition.source.is_some() || !transition.conditions.is_empty())
-                && (transition.source.is_none()
-                    || transition.source.as_ref() == Some(&self.current_state))
+            !transition.is_entry
+                && self.transition_source_is_active(controller, transition)
                 && transition.destination.as_ref() != Some(&self.current_state)
                 && (!transition.has_exit_time || normalized_time >= transition.exit_time)
                 && transition
@@ -200,25 +199,57 @@ impl AnimationControllerRuntime {
         let Some(transition) = transition else {
             return Ok(AnimationTransitionOutcome::None);
         };
-        for condition in &transition.conditions {
-            if matches!(
-                self.parameters.get(&condition.parameter),
-                Some(AnimationParameterValue::Trigger(true))
-            ) {
-                self.parameters.insert(
-                    condition.parameter.clone(),
-                    AnimationParameterValue::Trigger(false),
-                );
-            }
+        let entry_transition = transition
+            .destination_state_machine
+            .as_ref()
+            .and_then(|machine| {
+                controller.transitions.iter().find(|candidate| {
+                    candidate.is_entry
+                        && candidate.source_state_machine.as_ref() == Some(machine)
+                        && candidate
+                            .conditions
+                            .iter()
+                            .all(|condition| self.condition_satisfied(condition))
+                })
+            });
+        let destination = transition
+            .destination
+            .as_ref()
+            .or_else(|| entry_transition.and_then(|entry| entry.destination.as_ref()))
+            .or_else(|| {
+                transition
+                    .destination_state_machine
+                    .as_ref()
+                    .and_then(|machine| controller.state_machines.get(machine))
+                    .and_then(|machine| machine.default_state.as_ref())
+            })
+            .cloned();
+        self.consume_transition_triggers(&transition.conditions);
+        if let Some(entry) = entry_transition {
+            self.consume_transition_triggers(&entry.conditions);
         }
-        if let Some(destination) = &transition.destination {
-            if !controller.states.contains_key(destination) {
-                return Err(AnimationRuntimeError::MissingState(destination.clone()));
+        if let Some(destination) = destination {
+            if !controller.states.contains_key(&destination) {
+                return Err(AnimationRuntimeError::MissingState(destination));
             }
             self.current_state = destination.clone();
-            Ok(AnimationTransitionOutcome::Entered(destination.clone()))
+            Ok(AnimationTransitionOutcome::Entered(destination))
         } else if transition.is_exit {
-            Ok(AnimationTransitionOutcome::Exited)
+            let source_machine = transition
+                .source_state_machine
+                .as_ref()
+                .or_else(|| state_machine_for_state(controller, &self.current_state));
+            let fallback = source_machine
+                .and_then(|machine| parent_state_machine(controller, machine))
+                .and_then(|parent| controller.state_machines.get(parent))
+                .and_then(|parent| parent.default_state.as_ref())
+                .cloned();
+            if let Some(fallback) = fallback {
+                self.current_state = fallback.clone();
+                Ok(AnimationTransitionOutcome::Entered(fallback))
+            } else {
+                Ok(AnimationTransitionOutcome::Exited)
+            }
         } else {
             Ok(AnimationTransitionOutcome::None)
         }
@@ -326,6 +357,42 @@ impl AnimationControllerRuntime {
         Ok(())
     }
 
+    fn transition_source_is_active(
+        &self,
+        controller: &AnimationControllerDef,
+        transition: &crate::AnimationTransitionDef,
+    ) -> bool {
+        if transition.source.as_ref() == Some(&self.current_state) {
+            return true;
+        }
+        if transition.source.is_some() {
+            return false;
+        }
+        let Some(source_machine) = &transition.source_state_machine else {
+            return !transition.conditions.is_empty();
+        };
+        let Some(active_machine) = state_machine_for_state(controller, &self.current_state) else {
+            return false;
+        };
+        transition.is_any_state
+            && state_machine_contains_machine(controller, source_machine, active_machine)
+            || source_machine == active_machine
+    }
+
+    fn consume_transition_triggers(&mut self, conditions: &[AnimationConditionDef]) {
+        for condition in conditions {
+            if matches!(
+                self.parameters.get(&condition.parameter),
+                Some(AnimationParameterValue::Trigger(true))
+            ) {
+                self.parameters.insert(
+                    condition.parameter.clone(),
+                    AnimationParameterValue::Trigger(false),
+                );
+            }
+        }
+    }
+
     fn condition_satisfied(&self, condition: &AnimationConditionDef) -> bool {
         let Some(value) = self.parameters.get(&condition.parameter).copied() else {
             return false;
@@ -343,6 +410,51 @@ impl AnimationControllerRuntime {
             }
         }
     }
+}
+
+fn state_machine_for_state<'a>(
+    controller: &'a AnimationControllerDef,
+    state: &StableId,
+) -> Option<&'a StableId> {
+    controller
+        .state_machines
+        .iter()
+        .find_map(|(id, machine)| machine.states.contains(state).then_some(id))
+}
+
+fn parent_state_machine<'a>(
+    controller: &'a AnimationControllerDef,
+    child: &StableId,
+) -> Option<&'a StableId> {
+    controller
+        .state_machines
+        .iter()
+        .find_map(|(id, machine)| machine.child_state_machines.contains(child).then_some(id))
+}
+
+fn state_machine_contains_machine(
+    controller: &AnimationControllerDef,
+    ancestor: &StableId,
+    descendant: &StableId,
+) -> bool {
+    if ancestor == descendant {
+        return true;
+    }
+    let mut pending = vec![ancestor];
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(machine) = pending.pop() {
+        if !visited.insert(machine) {
+            continue;
+        }
+        let Some(definition) = controller.state_machines.get(machine) else {
+            continue;
+        };
+        if definition.child_state_machines.contains(descendant) {
+            return true;
+        }
+        pending.extend(&definition.child_state_machines);
+    }
+    false
 }
 
 fn single_motion(clip: StableId) -> AnimationBlendSelection {
@@ -423,6 +535,10 @@ mod tests {
             transitions: vec![AnimationTransitionDef {
                 source: None,
                 destination: Some(action),
+                source_state_machine: None,
+                destination_state_machine: None,
+                is_entry: false,
+                is_any_state: true,
                 is_exit: false,
                 has_exit_time: false,
                 exit_time: 0.0,
@@ -433,6 +549,8 @@ mod tests {
                     threshold: 0.0,
                 }],
             }],
+            state_machines: BTreeMap::new(),
+            layers: Vec::new(),
             default_states: vec![idle],
         }
     }
@@ -457,6 +575,10 @@ mod tests {
             AnimationTransitionDef {
                 source: Some(id("state:idle")),
                 destination: Some(id("state:idle")),
+                source_state_machine: None,
+                destination_state_machine: None,
+                is_entry: false,
+                is_any_state: false,
                 is_exit: false,
                 has_exit_time: false,
                 exit_time: 0.0,
@@ -499,6 +621,10 @@ mod tests {
             AnimationTransitionDef {
                 source: None,
                 destination: Some(id("state:action")),
+                source_state_machine: None,
+                destination_state_machine: None,
+                is_entry: false,
+                is_any_state: false,
                 is_exit: false,
                 has_exit_time: false,
                 exit_time: 0.0,
