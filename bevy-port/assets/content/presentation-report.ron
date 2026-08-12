@@ -1,5 +1,5 @@
 (
-    schema_version: 8,
+    schema_version: 9,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,

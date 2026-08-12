@@ -79,7 +79,7 @@ mistaken for production-ready systems.
   targets become Bevy animation mask groups. Character's Top `Carry`/`CarryHip`
   state machine follows live inventory parameters but, matching its source
   controller, its authored zero weight gives it no pose influence.
-- Presentation schema 8 retains 110 Unity float-property curves with 261 keys
+- Presentation schema 9 retains 110 Unity float-property curves with 261 keys
   across 18 clips and all ten authored `PlayRoleActionAudio` events. The runtime
   samples constant and unweighted Hermite segments; the Credits state uses the
   converted seven-panel visibility timeline, two fireworks cues, and end fade,
@@ -234,11 +234,14 @@ mistaken for production-ready systems.
   states, 166 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
   files into 1,196 stable transform tracks with rig-relative reference poses.
-  Presentation schema 8 additionally retains all 110 component/UI property
+  Presentation schema 9 additionally retains all 110 component/UI property
   curves (261 keys) across 18 clips—including the four transform-free clips—and
   all ten authored animation events. The runtime dispatches each converted
   `PlayRoleActionAudio` event exactly once per crossed clip cycle and plays a
   deterministic 85 ms procedural cue with documented no-sample provenance.
+  All 166 transitions preserve their fixed/normalized duration mode and
+  destination offset; runtime crossfades preserve the source/destination
+  blend-tree weights and layer masking.
   Eleven authored 1D blend states retain their driving parameters and
   thresholds, and transition conditions use typed Unity modes. The stale `Slam`
   and `Swipe` conditions are retained as two inferred Boolean parameters rather
@@ -289,8 +292,7 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Weighted Unity tangent semantics, transition-duration crossfades, and the
-  remaining rare/non-gameplay action
+- Weighted Unity tangent semantics and the remaining rare/non-gameplay action
   emitters. Direct and nested layer/state-machine routing, conditioned entries,
   parent exits, masks, and property curves are converted and live.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,

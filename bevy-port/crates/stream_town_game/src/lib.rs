@@ -29,13 +29,13 @@ use bevy::{
 use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
     AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
-    AnimationTransformTrack, ArchetypeDef, ArchetypeKind, ArchetypeScene, AvatarMaskDef,
-    BUILDING_MAX_HEALTH, BuildingAction, BuildingDef, BuildingDirection, BuildingState,
-    CameraAction, CameraDirection, ChatCommand, ContentCatalog, CustomizationKind, EnemyCampState,
-    GameConfig, GeneratedWorld, GridPos, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
-    NativeSaveStore, ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind,
-    SavedActor, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation, WorldSnapshot,
-    generate_world,
+    AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
+    ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
+    BuildingDirection, BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
+    CustomizationKind, EnemyCampState, GameConfig, GeneratedWorld, GridPos,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore, ObjectiveEvent,
+    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, Season, StableId, StationDef,
+    TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -515,7 +515,17 @@ struct ConvertedAnimationLayerDriver {
     runtime: AnimationControllerRuntime,
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
     active: Vec<(AnimationNodeIndex, f32)>,
+    applied: Vec<(AnimationNodeIndex, f32, f32)>,
+    crossfade: Option<ConvertedAnimationCrossfade>,
+    state_offset: f32,
     event_elapsed: BTreeMap<StableId, f32>,
+}
+
+#[derive(Clone)]
+struct ConvertedAnimationCrossfade {
+    source: Vec<(AnimationNodeIndex, f32, f32)>,
+    elapsed: f32,
+    duration: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -3954,6 +3964,9 @@ fn attach_converted_animations(
                 runtime,
                 nodes,
                 active: Vec::new(),
+                applied: Vec::new(),
+                crossfade: None,
+                state_offset: 0.0,
                 event_elapsed: BTreeMap::new(),
             });
         }
@@ -4636,6 +4649,7 @@ fn drive_native_animations(
 
 fn drive_converted_animations(
     mut commands: Commands,
+    time: Res<Time>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
@@ -4722,7 +4736,18 @@ fn drive_converted_animations(
 
         let actor_root = driver.actor_root;
         let mut combined = Vec::new();
+        let mut restarts = Vec::new();
         for layer in &mut driver.layers {
+            let source_selection = layer.runtime.motion_selection(controller).ok().flatten();
+            let source_speed = layer
+                .runtime
+                .state_speed(controller)
+                .unwrap_or(1.0)
+                .abs()
+                .max(f32::EPSILON);
+            let source_duration = source_selection.as_ref().map_or(0.0, |selection| {
+                animation_selection_duration(selection, &presentation.0) / source_speed
+            });
             let normalized_time = if controller.states[layer.runtime.current_state()]
                 .motions
                 .is_empty()
@@ -4735,6 +4760,7 @@ fn drive_converted_animations(
                 .runtime
                 .evaluate_transitions(controller, normalized_time)
                 .ok();
+            let transition_playback = layer.runtime.take_transition_playback();
             if matches!(
                 transition,
                 Some(stream_town_domain::AnimationTransitionOutcome::Exited)
@@ -4752,13 +4778,35 @@ fn drive_converted_animations(
                     "translated animation controller entered state"
                 );
             }
+            if let Some(playback) = transition_playback {
+                begin_animation_crossfade(layer, playback, source_duration);
+            }
 
             let Ok(Some(selection)) = layer.runtime.motion_selection(controller) else {
                 layer.active.clear();
+                layer.applied.clear();
+                layer.crossfade = None;
                 layer.event_elapsed.clear();
                 continue;
             };
             let desired = animation_nodes_for_selection(&selection, &layer.nodes);
+            if transition_playback.is_some() {
+                for (node, _) in &desired {
+                    let offset_seconds =
+                        layer
+                            .nodes
+                            .iter()
+                            .find_map(|(clip, candidate)| {
+                                (candidate == node).then(|| {
+                                    presentation.0.clips.get(clip).map_or(0.0, |clip| {
+                                        clip.duration_seconds * layer.state_offset
+                                    })
+                                })
+                            })
+                            .unwrap_or(0.0);
+                    restarts.push((*node, offset_seconds));
+                }
+            }
             collect_animation_audio_events(
                 &player,
                 layer,
@@ -4781,14 +4829,17 @@ fn drive_converted_animations(
                     "applied translated animation blend"
                 );
             }
-            combined.extend(
-                desired
-                    .iter()
-                    .map(|(node, weight)| (*node, *weight, state_speed)),
-            );
+            let destination: Vec<_> = desired
+                .iter()
+                .map(|(node, weight)| (*node, *weight, state_speed))
+                .collect();
+            let applied =
+                advance_animation_crossfade(&mut layer.crossfade, &destination, time.delta_secs());
+            combined.extend(applied.iter().copied());
             layer.active = desired;
+            layer.applied = applied;
         }
-        apply_animation_blend(&mut player, &combined);
+        apply_animation_blend(&mut player, &combined, &restarts);
     }
     if let Some(pitches) = procedural_pitches.as_mut() {
         for cue in audio_cues {
@@ -4831,7 +4882,8 @@ fn collect_animation_audio_events(
             layer.event_elapsed.remove(&motion.clip);
             continue;
         };
-        let current = active.elapsed();
+        let current =
+            active.elapsed() + clip_event_offset_seconds(layer, &motion.clip, presentation);
         let previous = layer.event_elapsed.insert(motion.clip.clone(), current);
         let Some(clip) = presentation.clips.get(&motion.clip) else {
             continue;
@@ -4854,6 +4906,17 @@ fn collect_animation_audio_events(
     layer
         .event_elapsed
         .retain(|clip, _| selected.contains(clip));
+}
+
+fn clip_event_offset_seconds(
+    layer: &ConvertedAnimationLayerDriver,
+    clip: &StableId,
+    presentation: &PresentationCatalog,
+) -> f32 {
+    presentation
+        .clips
+        .get(clip)
+        .map_or(0.0, |clip| clip.duration_seconds * layer.state_offset)
 }
 
 fn animation_event_occurrences(
@@ -4984,7 +5047,7 @@ fn current_normalized_time(
                 .iter()
                 .find_map(|(clip, candidate)| (candidate == node).then_some(clip))?;
             let duration = presentation.clips.get(clip)?.duration_seconds;
-            (duration > f32::EPSILON).then_some(animation.elapsed() / duration)
+            (duration > f32::EPSILON).then_some(animation.elapsed() / duration + layer.state_offset)
         })
         .fold(0.0, f32::max)
 }
@@ -5008,7 +5071,97 @@ fn animation_nodes_for_selection(
     desired
 }
 
-fn apply_animation_blend(player: &mut AnimationPlayer, desired: &[(AnimationNodeIndex, f32, f32)]) {
+fn begin_animation_crossfade(
+    layer: &mut ConvertedAnimationLayerDriver,
+    playback: AnimationTransitionPlayback,
+    source_duration: f32,
+) {
+    let duration = if playback.fixed_duration {
+        playback.duration
+    } else {
+        playback.duration * source_duration
+    };
+    layer.state_offset = playback.destination_offset;
+    layer.crossfade = (duration > f32::EPSILON && !layer.applied.is_empty()).then(|| {
+        ConvertedAnimationCrossfade {
+            source: layer.applied.clone(),
+            elapsed: 0.0,
+            duration,
+        }
+    });
+}
+
+fn animation_selection_duration(
+    selection: &AnimationBlendSelection,
+    presentation: &PresentationCatalog,
+) -> f32 {
+    let (weighted_duration, total_weight) = std::iter::once(&selection.first)
+        .chain(selection.second.as_ref())
+        .filter_map(|motion| {
+            presentation
+                .clips
+                .get(&motion.clip)
+                .map(|clip| (clip.duration_seconds * motion.weight, motion.weight))
+        })
+        .fold((0.0, 0.0), |(duration, weight), motion| {
+            (duration + motion.0, weight + motion.1)
+        });
+    if total_weight > f32::EPSILON {
+        weighted_duration / total_weight
+    } else {
+        0.0
+    }
+}
+
+fn advance_animation_crossfade(
+    crossfade: &mut Option<ConvertedAnimationCrossfade>,
+    destination: &[(AnimationNodeIndex, f32, f32)],
+    delta_seconds: f32,
+) -> Vec<(AnimationNodeIndex, f32, f32)> {
+    let Some(active) = crossfade.as_mut() else {
+        return destination.to_vec();
+    };
+    active.elapsed = (active.elapsed + delta_seconds.max(0.0)).min(active.duration);
+    let progress = (active.elapsed / active.duration).clamp(0.0, 1.0);
+    let mut output = Vec::with_capacity(active.source.len() + destination.len());
+    for &(node, weight, speed) in &active.source {
+        merge_animation_weight(&mut output, node, weight * (1.0 - progress), speed);
+    }
+    for &(node, weight, speed) in destination {
+        merge_animation_weight(&mut output, node, weight * progress, speed);
+    }
+    if active.elapsed >= active.duration {
+        *crossfade = None;
+    }
+    output
+}
+
+fn merge_animation_weight(
+    output: &mut Vec<(AnimationNodeIndex, f32, f32)>,
+    node: AnimationNodeIndex,
+    weight: f32,
+    speed: f32,
+) {
+    if weight <= f32::EPSILON {
+        return;
+    }
+    if let Some((_, existing_weight, existing_speed)) = output
+        .iter_mut()
+        .find(|(candidate, _, _)| *candidate == node)
+    {
+        let total = *existing_weight + weight;
+        *existing_speed = (*existing_speed * *existing_weight + speed * weight) / total;
+        *existing_weight = total;
+    } else {
+        output.push((node, weight, speed));
+    }
+}
+
+fn apply_animation_blend(
+    player: &mut AnimationPlayer,
+    desired: &[(AnimationNodeIndex, f32, f32)],
+    restarts: &[(AnimationNodeIndex, f32)],
+) {
     let playing: Vec<_> = player.playing_animations().map(|(node, _)| *node).collect();
     for node in playing {
         if !desired.iter().any(|(desired, _, _)| *desired == node) {
@@ -5016,11 +5169,13 @@ fn apply_animation_blend(player: &mut AnimationPlayer, desired: &[(AnimationNode
         }
     }
     for (node, weight, speed) in desired {
-        player
-            .play(*node)
-            .repeat()
-            .set_weight(*weight)
-            .set_speed(*speed);
+        let animation =
+            if let Some((_, offset)) = restarts.iter().find(|(restart, _)| restart == node) {
+                player.start(*node).set_seek_time(*offset)
+            } else {
+                player.play(*node)
+            };
+        animation.repeat().set_weight(*weight).set_speed(*speed);
     }
 }
 
@@ -9535,6 +9690,68 @@ mod tests {
     }
 
     #[test]
+    fn converted_state_crossfade_preserves_weights_and_finishes_at_destination() {
+        let source = AnimationNodeIndex::new(1);
+        let destination = AnimationNodeIndex::new(2);
+        let mut crossfade = Some(ConvertedAnimationCrossfade {
+            source: vec![(source, 1.0, 1.0)],
+            elapsed: 0.0,
+            duration: 0.25,
+        });
+        let desired = vec![(destination, 1.0, 2.0)];
+        let half = advance_animation_crossfade(&mut crossfade, &desired, 0.125);
+        assert_eq!(half.len(), 2);
+        assert!((half[0].1 - 0.5).abs() < f32::EPSILON);
+        assert!((half[1].1 - 0.5).abs() < f32::EPSILON);
+        let finished = advance_animation_crossfade(&mut crossfade, &desired, 0.125);
+        assert_eq!(finished, desired);
+        assert!(crossfade.is_none());
+    }
+
+    #[test]
+    fn converted_crossfade_uses_fixed_or_normalized_authored_duration() {
+        let source = AnimationNodeIndex::new(1);
+        let presentation = embedded_presentation();
+        let controller = presentation.controllers.values().next().unwrap();
+        let mut layer = ConvertedAnimationLayerDriver {
+            display_name: "Base".into(),
+            fallback_state: StableId::new("state:fallback").unwrap(),
+            runtime: AnimationControllerRuntime::in_state(
+                controller,
+                controller.default_states[0].clone(),
+            )
+            .unwrap(),
+            nodes: BTreeMap::new(),
+            active: Vec::new(),
+            applied: vec![(source, 1.0, 1.0)],
+            crossfade: None,
+            state_offset: 0.0,
+            event_elapsed: BTreeMap::new(),
+        };
+        begin_animation_crossfade(
+            &mut layer,
+            AnimationTransitionPlayback {
+                duration: 0.25,
+                fixed_duration: false,
+                destination_offset: 0.2,
+            },
+            2.0,
+        );
+        assert!((layer.crossfade.as_ref().unwrap().duration - 0.5).abs() < f32::EPSILON);
+        assert!((layer.state_offset - 0.2).abs() < f32::EPSILON);
+        begin_animation_crossfade(
+            &mut layer,
+            AnimationTransitionPlayback {
+                duration: 0.25,
+                fixed_duration: true,
+                destination_offset: 0.0,
+            },
+            2.0,
+        );
+        assert!((layer.crossfade.as_ref().unwrap().duration - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn cosmetic_nodes_preserve_unity_order_and_visibility_rules() {
         for (index, name) in EYE_NODES.iter().enumerate() {
             assert_eq!(
@@ -10327,7 +10544,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 8);
+        assert_eq!(presentation.schema_version, 9);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.controllers.len(), 31);

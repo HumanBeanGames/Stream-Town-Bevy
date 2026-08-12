@@ -196,7 +196,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 8,
+        schema_version: 9,
         textures,
         materials,
         clips,
@@ -216,7 +216,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 8,
+        schema_version: 9,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -1184,6 +1184,8 @@ fn parse_controller(
                 has_exit_time: scalar_bool(&document.lines, "m_HasExitTime:").unwrap_or(false),
                 exit_time: scalar_f32(&document.lines, "m_ExitTime:").unwrap_or(0.0),
                 duration: scalar_f32(&document.lines, "m_TransitionDuration:").unwrap_or(0.0),
+                fixed_duration: scalar_bool(&document.lines, "m_HasFixedDuration:").unwrap_or(true),
+                offset: scalar_f32(&document.lines, "m_TransitionOffset:").unwrap_or(0.0),
                 conditions: parse_conditions(&document.lines)?,
             }))
         })
@@ -2334,8 +2336,10 @@ AnimatorStateTransition:
   m_DstState: {fileID: 10}
   m_IsExit: 0
   m_TransitionDuration: 0.2
+  m_TransitionOffset: 0.125
   m_ExitTime: 0.8
   m_HasExitTime: 1
+  m_HasFixedDuration: 0
 --- !u!1107 &30
 AnimatorStateMachine:
   m_Name: Base Layer
@@ -2393,6 +2397,9 @@ AnimatorController:
         let controller = parse_controller(&asset, yaml, &assets, &mut clips).unwrap();
         assert_eq!(controller.states.len(), 1);
         assert_eq!(controller.transitions.len(), 1);
+        assert!((controller.transitions[0].duration - 0.2).abs() < f32::EPSILON);
+        assert!(!controller.transitions[0].fixed_duration);
+        assert!((controller.transitions[0].offset - 0.125).abs() < f32::EPSILON);
         assert_eq!(controller.parameters.len(), 2);
         assert_eq!(controller.default_states.len(), 1);
         assert_eq!(controller.state_machines.len(), 1);

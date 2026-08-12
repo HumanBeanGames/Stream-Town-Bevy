@@ -198,6 +198,18 @@ fn validate() -> Result<()> {
         .flat_map(|controller| &controller.parameters)
         .filter(|parameter| parameter.inferred)
         .count();
+    let fixed_transitions = presentation
+        .controllers
+        .values()
+        .flat_map(|controller| &controller.transitions)
+        .filter(|transition| transition.fixed_duration)
+        .count();
+    let offset_transitions = presentation
+        .controllers
+        .values()
+        .flat_map(|controller| &controller.transitions)
+        .filter(|transition| transition.offset > f32::EPSILON)
+        .count();
     if (
         presentation.schema_version,
         presentation.textures.len(),
@@ -214,9 +226,10 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (8, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
+    ) != (9, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
+        || (fixed_transitions, offset_transitions) != (166, 2)
         || (presentation_state_machines, presentation_layers) != (45, 33)
         || presentation.avatar_masks.len() != 3
         || presentation

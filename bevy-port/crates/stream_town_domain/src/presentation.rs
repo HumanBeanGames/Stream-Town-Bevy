@@ -320,7 +320,17 @@ pub struct AnimationTransitionDef {
     pub has_exit_time: bool,
     pub exit_time: f32,
     pub duration: f32,
+    /// Whether `duration` is seconds (`true`) or normalized source-state time.
+    #[serde(default = "default_transition_fixed_duration")]
+    pub fixed_duration: bool,
+    /// Normalized start offset in the destination state.
+    #[serde(default)]
+    pub offset: f32,
     pub conditions: Vec<AnimationConditionDef>,
+}
+
+const fn default_transition_fixed_duration() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -441,6 +451,11 @@ pub enum PresentationError {
     MissingTransitionState {
         controller: StableId,
         state: StableId,
+    },
+    #[error("controller {controller} has invalid transition timing: {reason}")]
+    InvalidTransitionTiming {
+        controller: StableId,
+        reason: String,
     },
     #[error("controller {controller} references missing state machine {state_machine}")]
     MissingStateMachine {
@@ -760,6 +775,17 @@ impl PresentationCatalog {
                 }
             }
             for transition in &controller.transitions {
+                if !transition.duration.is_finite()
+                    || transition.duration < 0.0
+                    || !transition.offset.is_finite()
+                    || transition.offset < 0.0
+                {
+                    return Err(PresentationError::InvalidTransitionTiming {
+                        controller: controller_id.clone(),
+                        reason: "duration and destination offset must be finite and non-negative"
+                            .into(),
+                    });
+                }
                 for condition in &transition.conditions {
                     if !parameters.contains_key(condition.parameter.as_str()) {
                         return Err(PresentationError::MissingAnimationParameter {

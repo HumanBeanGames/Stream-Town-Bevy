@@ -1,5 +1,5 @@
 (
-    schema_version: 8,
+    schema_version: 9,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -84956,6 +84956,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -84975,6 +84977,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -84994,6 +84998,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -85013,6 +85019,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -85032,6 +85040,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85051,6 +85061,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -85070,6 +85082,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85089,6 +85103,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85580,6 +85596,8 @@
                     has_exit_time: false,
                     exit_time: 0.9,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85599,6 +85617,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Mining",
@@ -85618,6 +85638,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Casting",
@@ -85637,6 +85659,8 @@
                     has_exit_time: false,
                     exit_time: 0.9836956,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85656,6 +85680,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "LongSword",
@@ -85675,6 +85701,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85694,6 +85722,8 @@
                     has_exit_time: false,
                     exit_time: 0.9,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85713,6 +85743,8 @@
                     has_exit_time: false,
                     exit_time: 0.9477352,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Revive",
@@ -85732,6 +85764,8 @@
                     has_exit_time: false,
                     exit_time: 0.70000005,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85751,6 +85785,8 @@
                     has_exit_time: false,
                     exit_time: 0.8333334,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85770,6 +85806,8 @@
                     has_exit_time: false,
                     exit_time: 0.85,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85789,6 +85827,8 @@
                     has_exit_time: true,
                     exit_time: 0.70000005,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryWood",
@@ -85808,6 +85848,8 @@
                     has_exit_time: false,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85827,6 +85869,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "StaffMagicAttack",
@@ -85846,6 +85890,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "HammerAttack",
@@ -85865,6 +85911,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Heal",
@@ -85884,6 +85932,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Farming",
@@ -85903,6 +85953,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Fishing",
@@ -85922,6 +85974,8 @@
                     has_exit_time: false,
                     exit_time: 0.8636364,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -85941,6 +85995,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Death",
@@ -85960,6 +86016,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "StaffAttack",
@@ -85979,6 +86037,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "BowShoot",
@@ -85998,6 +86058,8 @@
                     has_exit_time: false,
                     exit_time: 0.875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86017,6 +86079,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "SpearAttack",
@@ -86036,6 +86100,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryHip",
@@ -86055,6 +86121,8 @@
                     has_exit_time: false,
                     exit_time: 0.8636364,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86074,6 +86142,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryWood",
@@ -86093,6 +86163,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86112,6 +86184,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Build",
@@ -86131,6 +86205,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86150,6 +86226,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "WoodCutting",
@@ -86169,6 +86247,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86188,6 +86268,8 @@
                     has_exit_time: true,
                     exit_time: 0.70000005,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryHip",
@@ -86207,6 +86289,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86226,6 +86310,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [],
                 ),
                 (
@@ -86239,6 +86325,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86258,6 +86346,8 @@
                     has_exit_time: false,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86277,6 +86367,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86296,6 +86388,8 @@
                     has_exit_time: true,
                     exit_time: 0.8333334,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86315,6 +86409,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Gathering",
@@ -86457,6 +86553,8 @@
                     has_exit_time: true,
                     exit_time: 0.98809934,
                     duration: 0.012892365,
+                    fixed_duration: true,
+                    offset: 0.21886885,
                     conditions: [],
                 ),
                 (
@@ -86470,6 +86568,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Close",
@@ -86489,6 +86589,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Open",
@@ -86582,6 +86684,8 @@
                     has_exit_time: true,
                     exit_time: 0.98809934,
                     duration: 0.012892365,
+                    fixed_duration: true,
+                    offset: 0.21886885,
                     conditions: [],
                 ),
                 (
@@ -86595,6 +86699,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Close",
@@ -86614,6 +86720,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Open",
@@ -86739,6 +86847,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86758,6 +86868,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "GenericAction",
@@ -86777,6 +86889,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -86796,6 +86910,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87127,6 +87243,8 @@
                     has_exit_time: false,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87146,6 +87264,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Swipe",
@@ -87165,6 +87285,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [],
                 ),
                 (
@@ -87178,6 +87300,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Slam",
@@ -87197,6 +87321,8 @@
                     has_exit_time: false,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87216,6 +87342,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Swipe",
@@ -87235,6 +87363,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87254,6 +87384,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87447,6 +87579,8 @@
                     has_exit_time: false,
                     exit_time: 0.9596774,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -87466,6 +87600,8 @@
                     has_exit_time: false,
                     exit_time: 0.6875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -87551,6 +87687,8 @@
                     has_exit_time: false,
                     exit_time: 0.9596774,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -87570,6 +87708,8 @@
                     has_exit_time: false,
                     exit_time: 0.6875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -87739,6 +87879,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87758,6 +87900,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "HammerAttack",
@@ -87777,6 +87921,8 @@
                     has_exit_time: true,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87796,6 +87942,8 @@
                     has_exit_time: true,
                     exit_time: 0.8125,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -87815,6 +87963,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87834,6 +87984,8 @@
                     has_exit_time: true,
                     exit_time: 0.8125,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87853,6 +88005,8 @@
                     has_exit_time: true,
                     exit_time: 0.875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -87872,6 +88026,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -87896,6 +88052,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
@@ -87915,6 +88073,8 @@
                     has_exit_time: true,
                     exit_time: 0.875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87934,6 +88094,8 @@
                     has_exit_time: true,
                     exit_time: 0.875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -87953,6 +88115,8 @@
                     has_exit_time: true,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
@@ -87972,6 +88136,8 @@
                     has_exit_time: true,
                     exit_time: 0.875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -87991,6 +88157,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88015,6 +88183,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88034,6 +88204,8 @@
                     has_exit_time: true,
                     exit_time: 0.8125,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88053,6 +88225,8 @@
                     has_exit_time: true,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
@@ -88072,6 +88246,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "RunAnimationIndex",
@@ -88091,6 +88267,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88110,6 +88288,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88134,6 +88314,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88237,6 +88419,8 @@
                     has_exit_time: false,
                     exit_time: 0.9596774,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -88256,6 +88440,8 @@
                     has_exit_time: false,
                     exit_time: 0.6875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -88393,6 +88579,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88412,6 +88600,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88431,6 +88621,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88450,6 +88642,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88469,6 +88663,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88488,6 +88684,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88507,6 +88705,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88526,6 +88726,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88674,6 +88876,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88693,6 +88897,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88712,6 +88918,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88731,6 +88939,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88750,6 +88960,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88769,6 +88981,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88788,6 +89002,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88807,6 +89023,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88955,6 +89173,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -88974,6 +89194,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -88993,6 +89215,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -89012,6 +89236,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -89031,6 +89257,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -89050,6 +89278,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "AnimationIndex",
@@ -89069,6 +89299,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -89088,6 +89320,8 @@
                     has_exit_time: true,
                     exit_time: 0.7692308,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -89184,6 +89418,8 @@
                     has_exit_time: false,
                     exit_time: 0.9596774,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -89203,6 +89439,8 @@
                     has_exit_time: false,
                     exit_time: 0.6875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "MoveSpeed",
@@ -89300,6 +89538,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [],
                 ),
                 (
@@ -89313,6 +89553,8 @@
                     has_exit_time: true,
                     exit_time: 0.90625,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Exit",
@@ -89332,6 +89574,8 @@
                     has_exit_time: true,
                     exit_time: 0.9318182,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [],
                 ),
             ],
@@ -89893,6 +90137,8 @@
                     has_exit_time: false,
                     exit_time: 0.9,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -89912,6 +90158,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Mining",
@@ -89931,6 +90179,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Casting",
@@ -89950,6 +90200,8 @@
                     has_exit_time: false,
                     exit_time: 0.9836956,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -89969,6 +90221,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "LongSword",
@@ -89988,6 +90242,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90007,6 +90263,8 @@
                     has_exit_time: false,
                     exit_time: 0.9,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90026,6 +90284,8 @@
                     has_exit_time: false,
                     exit_time: 0.9477352,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Revive",
@@ -90045,6 +90305,8 @@
                     has_exit_time: false,
                     exit_time: 0.70000005,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90064,6 +90326,8 @@
                     has_exit_time: false,
                     exit_time: 0.8333334,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90083,6 +90347,8 @@
                     has_exit_time: false,
                     exit_time: 0.85,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90102,6 +90368,8 @@
                     has_exit_time: true,
                     exit_time: 0.70000005,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryWood",
@@ -90121,6 +90389,8 @@
                     has_exit_time: false,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90140,6 +90410,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "StaffMagicAttack",
@@ -90159,6 +90431,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "HammerAttack",
@@ -90178,6 +90452,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Heal",
@@ -90197,6 +90473,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Farming",
@@ -90216,6 +90494,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Fishing",
@@ -90235,6 +90515,8 @@
                     has_exit_time: false,
                     exit_time: 0.8636364,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90254,6 +90536,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Death",
@@ -90273,6 +90557,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "StaffAttack",
@@ -90292,6 +90578,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "BowShoot",
@@ -90311,6 +90599,8 @@
                     has_exit_time: false,
                     exit_time: 0.875,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90330,6 +90620,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "SpearAttack",
@@ -90349,6 +90641,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryHip",
@@ -90368,6 +90662,8 @@
                     has_exit_time: false,
                     exit_time: 0.8636364,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90387,6 +90683,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryWood",
@@ -90406,6 +90704,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90425,6 +90725,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Build",
@@ -90444,6 +90746,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90463,6 +90767,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "WoodCutting",
@@ -90482,6 +90788,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90501,6 +90809,8 @@
                     has_exit_time: true,
                     exit_time: 0.70000005,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "CarryHip",
@@ -90520,6 +90830,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90539,6 +90851,8 @@
                     has_exit_time: true,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [],
                 ),
                 (
@@ -90552,6 +90866,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90571,6 +90887,8 @@
                     has_exit_time: false,
                     exit_time: 0.78571427,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90590,6 +90908,8 @@
                     has_exit_time: false,
                     exit_time: 0.75,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90609,6 +90929,8 @@
                     has_exit_time: true,
                     exit_time: 0.8333334,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90628,6 +90950,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Gathering",
@@ -90798,6 +91122,8 @@
                     has_exit_time: true,
                     exit_time: 0.8235294,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90817,6 +91143,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "GenericAction",
@@ -90836,6 +91164,8 @@
                     has_exit_time: true,
                     exit_time: 0.7,
                     duration: 0.25,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",
@@ -90855,6 +91185,8 @@
                     has_exit_time: false,
                     exit_time: 0.0,
                     duration: 0.0,
+                    fixed_duration: true,
+                    offset: 0.0,
                     conditions: [
                         (
                             parameter: "Action",

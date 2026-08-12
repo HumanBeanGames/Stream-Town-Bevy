@@ -65,9 +65,10 @@ The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 8 also
+`.anim` files into 1,196 stable transform tracks. Presentation schema 9 also
 retains 110 component/UI property curves with 261 keys across 18 clips, including
-the four transform-free clips, plus all ten authored animation events. It retains
+the four transform-free clips, plus all ten authored animation events, and
+fixed/normalized duration plus destination offset for all 166 transitions. It retains
 11 authored 1D blend states and
 typed transition conditions; the stale `Slam` and `Swipe` conditions become
 provenance-marked inferred parameters. Renderer inheritance resolves to 141
@@ -253,7 +254,9 @@ base-speed multiplier during playback. Presentation schema 6 also preserves all
 45 state machines and 33 layers; the runtime follows conditioned child-machine
 entries and parent defaults/exits. Independent layer runtimes share live parameters
 and route their clips through Bevy override/additive graph nodes with Unity-correct
-effective weights. The three AvatarMask assets retain 477 stable transform weights
+effective weights. State changes crossfade those graph outputs with the authored
+timing and destination offset, retaining locomotion blend-tree proportions. The
+three AvatarMask assets retain 477 stable transform weights
 (118 exclusions), and excluded bones are assigned to Bevy animation mask groups.
 Unity fixes layer zero to weight one; higher layers use their serialized default,
 so the shipping Character Top layer continues to evaluate its carry state machine

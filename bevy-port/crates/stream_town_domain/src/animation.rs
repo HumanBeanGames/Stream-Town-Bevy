@@ -74,10 +74,18 @@ pub enum AnimationTransitionOutcome {
     Exited,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimationTransitionPlayback {
+    pub duration: f32,
+    pub fixed_duration: bool,
+    pub destination_offset: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct AnimationControllerRuntime {
     current_state: StableId,
     parameters: BTreeMap<String, AnimationParameterValue>,
+    last_transition: Option<AnimationTransitionPlayback>,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -136,6 +144,7 @@ impl AnimationControllerRuntime {
         Ok(Self {
             current_state,
             parameters,
+            last_transition: None,
         })
     }
 
@@ -173,7 +182,12 @@ impl AnimationControllerRuntime {
             return Err(AnimationRuntimeError::MissingState(state));
         }
         self.current_state = state;
+        self.last_transition = None;
         Ok(())
+    }
+
+    pub fn take_transition_playback(&mut self) -> Option<AnimationTransitionPlayback> {
+        self.last_transition.take()
     }
 
     pub fn evaluate_transitions(
@@ -181,6 +195,7 @@ impl AnimationControllerRuntime {
         controller: &AnimationControllerDef,
         normalized_time: f32,
     ) -> Result<AnimationTransitionOutcome, AnimationRuntimeError> {
+        self.last_transition = None;
         if !controller.states.contains_key(&self.current_state) {
             return Err(AnimationRuntimeError::MissingState(
                 self.current_state.clone(),
@@ -233,6 +248,11 @@ impl AnimationControllerRuntime {
                 return Err(AnimationRuntimeError::MissingState(destination));
             }
             self.current_state = destination.clone();
+            self.last_transition = Some(AnimationTransitionPlayback {
+                duration: transition.duration,
+                fixed_duration: transition.fixed_duration,
+                destination_offset: transition.offset,
+            });
             Ok(AnimationTransitionOutcome::Entered(destination))
         } else if transition.is_exit {
             let source_machine = transition
@@ -246,8 +266,18 @@ impl AnimationControllerRuntime {
                 .cloned();
             if let Some(fallback) = fallback {
                 self.current_state = fallback.clone();
+                self.last_transition = Some(AnimationTransitionPlayback {
+                    duration: transition.duration,
+                    fixed_duration: transition.fixed_duration,
+                    destination_offset: transition.offset,
+                });
                 Ok(AnimationTransitionOutcome::Entered(fallback))
             } else {
+                self.last_transition = Some(AnimationTransitionPlayback {
+                    duration: transition.duration,
+                    fixed_duration: transition.fixed_duration,
+                    destination_offset: transition.offset,
+                });
                 Ok(AnimationTransitionOutcome::Exited)
             }
         } else {
@@ -543,6 +573,8 @@ mod tests {
                 has_exit_time: false,
                 exit_time: 0.0,
                 duration: 0.1,
+                fixed_duration: true,
+                offset: 0.0,
                 conditions: vec![AnimationConditionDef {
                     parameter: "Action".into(),
                     mode: AnimationConditionMode::If,
@@ -583,6 +615,8 @@ mod tests {
                 has_exit_time: false,
                 exit_time: 0.0,
                 duration: 0.0,
+                fixed_duration: true,
+                offset: 0.0,
                 conditions: vec![AnimationConditionDef {
                     parameter: "Action".into(),
                     mode: AnimationConditionMode::IfNot,
@@ -595,6 +629,14 @@ mod tests {
         assert_eq!(
             runtime.evaluate_transitions(&controller, 0.0).unwrap(),
             AnimationTransitionOutcome::Entered(id("state:action"))
+        );
+        assert_eq!(
+            runtime.take_transition_playback(),
+            Some(AnimationTransitionPlayback {
+                duration: 0.1,
+                fixed_duration: true,
+                destination_offset: 0.0,
+            })
         );
         assert_eq!(
             runtime.evaluate_transitions(&controller, 0.0).unwrap(),
@@ -629,6 +671,8 @@ mod tests {
                 has_exit_time: false,
                 exit_time: 0.0,
                 duration: 0.0,
+                fixed_duration: true,
+                offset: 0.0,
                 conditions: Vec::new(),
             },
         );

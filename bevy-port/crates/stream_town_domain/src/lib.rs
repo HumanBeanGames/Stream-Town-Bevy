@@ -13,7 +13,8 @@ pub mod world;
 
 pub use animation::{
     AnimationBlendSelection, AnimationControllerRuntime, AnimationParameterValue,
-    AnimationRuntimeError, AnimationTransitionOutcome, WeightedAnimationMotion,
+    AnimationRuntimeError, AnimationTransitionOutcome, AnimationTransitionPlayback,
+    WeightedAnimationMotion,
 };
 pub use command::{
     BuildingAction, BuildingDirection, CameraAction, CameraDirection, ChatCommand,
