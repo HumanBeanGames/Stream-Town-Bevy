@@ -839,9 +839,10 @@ impl WorldSimulation {
         id: StableId,
         archetype: StableId,
         position: GridPos,
+        max_health: u32,
         cost: &BTreeMap<StableId, u32>,
     ) -> Result<(), SimulationError> {
-        self.construct_rotated(id, archetype, position, 0, cost)
+        self.construct_rotated(id, archetype, position, 0, max_health, cost)
     }
 
     pub fn construct_rotated(
@@ -850,6 +851,7 @@ impl WorldSimulation {
         archetype: StableId,
         position: GridPos,
         rotation_quarter_turns: i32,
+        max_health: u32,
         cost: &BTreeMap<StableId, u32>,
     ) -> Result<(), SimulationError> {
         if self.buildings.contains_key(&id) {
@@ -864,7 +866,7 @@ impl WorldSimulation {
                 position,
                 rotation_quarter_turns,
                 level: 1,
-                health: BUILDING_MAX_HEALTH / 10,
+                health: i32::try_from(max_health.div_ceil(10)).unwrap_or(i32::MAX),
                 complete: false,
             },
         );
@@ -875,6 +877,7 @@ impl WorldSimulation {
         &mut self,
         building: &StableId,
         amount: u32,
+        max_health: u32,
     ) -> Result<bool, SimulationError> {
         let state = self
             .buildings
@@ -884,11 +887,9 @@ impl WorldSimulation {
             return Ok(true);
         }
         let amount = i32::try_from(amount).unwrap_or(i32::MAX);
-        state.health = state
-            .health
-            .saturating_add(amount)
-            .clamp(0, BUILDING_MAX_HEALTH);
-        state.complete = state.health >= BUILDING_MAX_HEALTH;
+        let max_health = i32::try_from(max_health).unwrap_or(i32::MAX);
+        state.health = state.health.saturating_add(amount).clamp(0, max_health);
+        state.complete = state.health >= max_health;
         Ok(state.complete)
     }
 
@@ -896,6 +897,7 @@ impl WorldSimulation {
         &mut self,
         building: &StableId,
         amount: u32,
+        max_health: u32,
     ) -> Result<u32, SimulationError> {
         let state = self
             .buildings
@@ -906,10 +908,8 @@ impl WorldSimulation {
         }
         let before = state.health;
         let amount = i32::try_from(amount).unwrap_or(i32::MAX);
-        state.health = state
-            .health
-            .saturating_add(amount)
-            .clamp(0, BUILDING_MAX_HEALTH);
+        let max_health = i32::try_from(max_health).unwrap_or(i32::MAX);
+        state.health = state.health.saturating_add(amount).clamp(0, max_health);
         Ok(u32::try_from(state.health.saturating_sub(before)).unwrap_or_default())
     }
 
@@ -931,6 +931,8 @@ impl WorldSimulation {
         &mut self,
         building: &StableId,
         max_level: u16,
+        upgraded_max_health: u32,
+        health_gain_per_level: u32,
         cost: &BTreeMap<StableId, u32>,
     ) -> Result<u16, SimulationError> {
         let state = self
@@ -952,7 +954,10 @@ impl WorldSimulation {
             .get_mut(building)
             .expect("building was validated before spending resources");
         state.level = state.level.saturating_add(1).min(max_level);
-        state.health = BUILDING_MAX_HEALTH;
+        state.health = state
+            .health
+            .saturating_add(i32::try_from(health_gain_per_level).unwrap_or(i32::MAX))
+            .min(i32::try_from(upgraded_max_health).unwrap_or(i32::MAX));
         Ok(state.level)
     }
 
@@ -1589,14 +1594,21 @@ mod tests {
             simulation.damage_building(&building, 25),
             Ok(BUILDING_MAX_HEALTH - 25)
         );
-        assert_eq!(simulation.repair_building(&building, 10), Ok(10));
+        assert_eq!(
+            simulation.repair_building(&building, 10, u32::try_from(BUILDING_MAX_HEALTH).unwrap()),
+            Ok(10)
+        );
         assert_eq!(
             simulation.buildings[&building].health,
             BUILDING_MAX_HEALTH - 15
         );
         assert_eq!(simulation.damage_building(&building, u32::MAX), Ok(0));
         assert_eq!(
-            simulation.repair_building(&building, u32::MAX),
+            simulation.repair_building(
+                &building,
+                u32::MAX,
+                u32::try_from(BUILDING_MAX_HEALTH).unwrap()
+            ),
             Ok(u32::try_from(BUILDING_MAX_HEALTH).unwrap())
         );
         assert_eq!(simulation.buildings[&building].health, BUILDING_MAX_HEALTH);
@@ -1655,6 +1667,7 @@ mod tests {
                 id("building:house_1"),
                 id("building:house"),
                 GridPos { x: 12, z: 10 },
+                u32::try_from(BUILDING_MAX_HEALTH).unwrap(),
                 &BTreeMap::from([(id("resource:wood"), 100), (id("resource:ore"), 25)]),
             )
             .unwrap();

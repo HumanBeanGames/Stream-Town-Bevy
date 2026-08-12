@@ -1949,10 +1949,10 @@ fn debug_weather_override() -> Option<Weather> {
         .and_then(|value| value.to_str().and_then(parse_weather))
 }
 
-fn debug_building_health() -> Option<i32> {
+fn debug_building_health(max_health: i32) -> Option<i32> {
     std::env::var_os("STREAM_TOWN_DEBUG_BUILDING_HEALTH")
         .and_then(|value| value.to_str().and_then(|value| value.parse().ok()))
-        .map(|health: i32| health.clamp(0, BUILDING_MAX_HEALTH))
+        .map(|health: i32| health.clamp(0, max_health))
 }
 
 fn debug_initial_agents(configured: u16) -> u16 {
@@ -2249,15 +2249,17 @@ fn generate_and_spawn_world(
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
     ensure_town_hall_state(&content.0, &config.0, &mut simulation);
-    if let Some(health) = debug_building_health()
-        && let Some(town_hall) = simulation.buildings.get_mut(&town_hall_id)
+    if let Some(health) = debug_building_health(building_max_health(
+        &content.0,
+        &simulation.buildings[&town_hall_id],
+    )) && let Some(town_hall) = simulation.buildings.get_mut(&town_hall_id)
     {
         town_hall.health = health;
     }
     if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some()
         && let Some(town_hall) = simulation.buildings.get_mut(&town_hall_id)
     {
-        town_hall.health = BUILDING_MAX_HEALTH / 3;
+        town_hall.health = building_max_health(&content.0, town_hall) / 3;
     }
     simulation.town_resources = config.0.gameplay.starting_town_resources.clone();
     simulation.unlocked_technology.extend(
@@ -3297,7 +3299,8 @@ fn ensure_town_hall_state(
             position: town_hall_placement_position(config, definition.footprint),
             rotation_quarter_turns: 0,
             level: 1,
-            health: BUILDING_MAX_HEALTH,
+            health: i32::try_from(building_base_max_health(content, definition))
+                .unwrap_or(i32::MAX),
             complete: true,
         },
     );
@@ -3466,6 +3469,45 @@ fn building_def_for_archetype<'a>(
         .find(|building| building.archetype == *archetype)
 }
 
+fn building_max_health(content: &ContentCatalog, building: &BuildingState) -> i32 {
+    content
+        .archetypes
+        .get(&building.archetype)
+        .and_then(|archetype| archetype.health.as_ref())
+        .map_or(BUILDING_MAX_HEALTH, |health| {
+            let completed_levels = u32::from(building.level.saturating_sub(1));
+            i32::try_from(
+                health.max_health.saturating_add(
+                    health
+                        .health_gain_per_level
+                        .saturating_mul(completed_levels),
+                ),
+            )
+            .unwrap_or(i32::MAX)
+        })
+}
+
+fn building_base_max_health(content: &ContentCatalog, definition: &BuildingDef) -> u32 {
+    content
+        .archetypes
+        .get(&definition.archetype)
+        .and_then(|archetype| archetype.health.as_ref())
+        .map_or(
+            u32::try_from(BUILDING_MAX_HEALTH).expect("fallback fits"),
+            |health| health.max_health,
+        )
+}
+
+fn normalize_building_health(content: &ContentCatalog, simulation: &mut WorldSimulation) {
+    for building in simulation.buildings.values_mut() {
+        let max_health = building_max_health(content, building);
+        building.health = building.health.clamp(0, max_health);
+        if !building.complete && building.health >= max_health {
+            building.complete = true;
+        }
+    }
+}
+
 fn building_visual_grid(content: &ContentCatalog, building: &BuildingState) -> GridPos {
     let footprint = building_def_for_archetype(content, &building.archetype)
         .map_or([1, 1], |definition| {
@@ -3595,7 +3637,8 @@ fn next_agent_goal(
             .get(preferred)
             .filter(|building| {
                 actor.role.as_str() == "role:builder"
-                    && (!building.complete || building.health < BUILDING_MAX_HEALTH)
+                    && (!building.complete
+                        || building.health < building_max_health(content, building))
             })
             .filter(|building| {
                 station.is_none_or(|station| within_station_range(building.position, station))
@@ -3776,7 +3819,9 @@ fn next_agent_goal(
         let mut candidates: Vec<_> = simulation
             .buildings
             .values()
-            .filter(|building| !building.complete || building.health < BUILDING_MAX_HEALTH)
+            .filter(|building| {
+                !building.complete || building.health < building_max_health(content, building)
+            })
             .filter(|building| {
                 station.is_none_or(|station| within_station_range(building.position, station))
             })
@@ -4110,11 +4155,18 @@ fn complete_agent_goal(
                 .buildings
                 .get(building_id)
                 .map(|building| building.archetype.clone());
+            let max_health = simulation
+                .buildings
+                .get(building_id)
+                .map_or(BUILDING_MAX_HEALTH, |building| {
+                    building_max_health(content, building)
+                });
+            let max_health = u32::try_from(max_health).unwrap_or(u32::MAX);
             let result = if was_incomplete {
-                simulation.work_on_building(building_id, action_amount)
+                simulation.work_on_building(building_id, action_amount, max_health)
             } else {
                 simulation
-                    .repair_building(building_id, action_amount)
+                    .repair_building(building_id, action_amount, max_health)
                     .map(|restored| restored > 0)
             };
             match result {
@@ -4586,11 +4638,11 @@ fn spawn_building_level_up_effect(
     }
 }
 
-fn building_damage_intensity(health: i32, complete: bool) -> f32 {
+fn building_damage_intensity(health: i32, max_health: i32, complete: bool) -> f32 {
     if !complete || health <= 0 {
         return 0.0;
     }
-    let health_ratio = building_damage_value(health);
+    let health_ratio = building_damage_value(health, max_health);
     ((0.65 - health_ratio) / 0.65).clamp(0.0, 1.0)
 }
 
@@ -4598,6 +4650,7 @@ fn emit_damaged_building_effects(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     render: Res<RenderAssets>,
     mut buildings: Query<(
@@ -4610,7 +4663,11 @@ fn emit_damaged_building_effects(
         let Some(building) = simulation.0.buildings.get(&runtime.id) else {
             continue;
         };
-        let intensity = building_damage_intensity(building.health, building.complete);
+        let intensity = building_damage_intensity(
+            building.health,
+            building_max_health(&content.0, building),
+            building.complete,
+        );
         if intensity <= f32::EPSILON {
             emitter.cooldown_seconds = 0.0;
             continue;
@@ -5793,13 +5850,13 @@ fn sync_resource_nodes(
     }
 }
 
-fn building_construction_stage(health: i32, complete: bool) -> u8 {
-    if complete || health >= BUILDING_MAX_HEALTH {
+fn building_construction_stage(health: i32, max_health: i32, complete: bool) -> u8 {
+    if complete || health >= max_health {
         3
-    } else if health > BUILDING_MAX_HEALTH * 66 / 100 {
+    } else if health > max_health * 66 / 100 {
         2
     } else {
-        u8::from(health > BUILDING_MAX_HEALTH * 33 / 100)
+        u8::from(health > max_health * 33 / 100)
     }
 }
 
@@ -5849,7 +5906,11 @@ fn sync_building_presentation(
             .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
         });
         let desired_scene_path = desired_scene.map(|scene| scene.asset_path.as_str());
-        let construction_stage = building_construction_stage(state.health, state.complete);
+        let construction_stage = building_construction_stage(
+            state.health,
+            building_max_health(&content.0, state),
+            state.complete,
+        );
         if presentation.applied_stage == construction_stage
             && presentation.applied_level == state.level
             && presentation.applied_age == age
@@ -6092,7 +6153,11 @@ fn building_node_visibility(
             active_model.is_some_and(|active| std::ptr::eq(active, model))
                 && model_node_visible(
                     model,
-                    building_construction_stage(state.health, state.complete),
+                    building_construction_stage(
+                        state.health,
+                        building_max_health(content, state),
+                        state.complete,
+                    ),
                     name,
                 ),
         );
@@ -8152,6 +8217,7 @@ fn resolved_renderer_material<'a>(
 fn instantiate_building_materials(
     mut commands: Commands,
     simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
     parents: Query<&ChildOf>,
     buildings: Query<&RuntimeBuilding>,
     mut instances: ResMut<BuildingMaterialInstances>,
@@ -8195,7 +8261,14 @@ fn instantiate_building_materials(
             let season = simulation.0.season;
             material.extension.parameters.snow_damage.x = building_snow_strength(season);
             material.extension.parameters.snow_damage.y = building_snow_strength(season);
-            material.extension.parameters.snow_damage.z = building_damage_value(health);
+            let max_health = simulation
+                .0
+                .buildings
+                .get(&building)
+                .map_or(BUILDING_MAX_HEALTH, |state| {
+                    building_max_health(&content.0, state)
+                });
+            material.extension.parameters.snow_damage.z = building_damage_value(health, max_health);
             let handle = materials.add(material);
             instances.0.insert(
                 building,
@@ -8215,6 +8288,7 @@ fn instantiate_building_materials(
 
 fn sync_building_material_instances(
     simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
     mut instances: ResMut<BuildingMaterialInstances>,
     mut materials: Option<ResMut<Assets<BuildingMaterial>>>,
 ) {
@@ -8246,15 +8320,20 @@ fn sync_building_material_instances(
         let snow = building_snow_strength(simulation.0.season);
         material.extension.parameters.snow_damage.x = snow;
         material.extension.parameters.snow_damage.y = snow;
-        material.extension.parameters.snow_damage.z = building_damage_value(building.health);
+        material.extension.parameters.snow_damage.z =
+            building_damage_value(building.health, building_max_health(&content.0, building));
         instance.applied_health = building.health;
         instance.applied_season = simulation.0.season;
     }
 }
 
-fn building_damage_value(health: i32) -> f32 {
-    f32::from(u16::try_from(health.clamp(0, BUILDING_MAX_HEALTH)).unwrap_or_default())
-        / f32::from(u16::try_from(BUILDING_MAX_HEALTH).expect("building health fits u16"))
+fn building_damage_value(health: i32, max_health: i32) -> f32 {
+    if max_health <= 0 {
+        return 0.0;
+    }
+    let bounded_max = u16::try_from(max_health).unwrap_or(u16::MAX).max(1);
+    let bounded_health = u16::try_from(health.clamp(0, i32::from(bounded_max))).unwrap_or_default();
+    f32::from(bounded_health) / f32::from(bounded_max)
 }
 
 fn camera_controls(
@@ -8900,6 +8979,7 @@ fn load_input(
         None
     };
     ensure_town_hall_state(&content.0, &config.0, &mut snapshot.simulation);
+    normalize_building_health(&content.0, &mut snapshot.simulation);
     for (entity, building) in &runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
         ecs.entity(entity).despawn();
@@ -10367,7 +10447,7 @@ fn compatible_target_ids(
                 .filter(|building| {
                     (!building.complete && accepts("target:construction"))
                         || (building.complete
-                            && building.health < BUILDING_MAX_HEALTH
+                            && building.health < building_max_health(content, building)
                             && accepts("target:damaged_building"))
                 })
                 .map(|building| building.id.clone()),
@@ -10599,8 +10679,20 @@ fn upgrade_building_instance(
         BTreeMap::new()
     };
     let max_level = maximum_building_level(content, simulation, building_id);
+    let health_gain_per_level = content.archetypes[&definition.archetype]
+        .health
+        .as_ref()
+        .map_or(0, |health| health.health_gain_per_level);
     simulation
-        .upgrade_building(runtime_id, max_level, &cost)
+        .upgrade_building(
+            runtime_id,
+            max_level,
+            u32::try_from(building_max_health(content, state))
+                .unwrap_or(u32::MAX)
+                .saturating_add(health_gain_per_level),
+            health_gain_per_level,
+            &cost,
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -10909,6 +11001,7 @@ fn process_injected_commands(
                         building.archetype.clone(),
                         placement.position,
                         placement.rotation_quarter_turns,
+                        building_base_max_health(&content.0, building),
                         &cost,
                     )
                     .map_err(|error| error.to_string())?;
@@ -13115,7 +13208,8 @@ mod tests {
             town_hall_placement_position(&config, definition.footprint)
         );
         assert_eq!(town_hall.level, 1);
-        assert_eq!(town_hall.health, BUILDING_MAX_HEALTH);
+        assert_eq!(town_hall.health, building_max_health(&content, town_hall));
+        assert_eq!(town_hall.health, 250);
         assert!(town_hall.complete);
         assert_eq!(constructed_building_count(&simulation), 0);
         assert_eq!(building_age(&content, &simulation, &town_hall_id), 1);
@@ -14000,6 +14094,7 @@ mod tests {
                 runtime_id.clone(),
                 definition.archetype.clone(),
                 position,
+                building_base_max_health(&content, definition),
                 &definition.cost,
             )
             .unwrap();
@@ -14007,6 +14102,7 @@ mod tests {
         assert_eq!(
             building_construction_stage(
                 simulation.buildings[&runtime_id].health,
+                building_max_health(&content, &simulation.buildings[&runtime_id]),
                 simulation.buildings[&runtime_id].complete,
             ),
             0
@@ -14044,11 +14140,12 @@ mod tests {
         assert!(simulation.buildings[&runtime_id].complete);
         assert_eq!(
             simulation.buildings[&runtime_id].health,
-            BUILDING_MAX_HEALTH
+            building_max_health(&content, &simulation.buildings[&runtime_id])
         );
         assert_eq!(
             building_construction_stage(
                 simulation.buildings[&runtime_id].health,
+                building_max_health(&content, &simulation.buildings[&runtime_id]),
                 simulation.buildings[&runtime_id].complete,
             ),
             3
@@ -14070,11 +14167,32 @@ mod tests {
         assert_eq!(max_level, authored_cap);
         let upgrade_cost =
             building_upgrade_cost(&content, &simulation, &building_id, definition, 1);
+        let health_gain_per_level = content.archetypes[&definition.archetype]
+            .health
+            .as_ref()
+            .unwrap()
+            .health_gain_per_level;
+        simulation.damage_building(&runtime_id, 7).unwrap();
         assert_eq!(
             simulation
-                .upgrade_building(&runtime_id, max_level, &upgrade_cost)
+                .upgrade_building(
+                    &runtime_id,
+                    max_level,
+                    u32::try_from(building_max_health(
+                        &content,
+                        &simulation.buildings[&runtime_id],
+                    ))
+                    .unwrap()
+                    .saturating_add(health_gain_per_level),
+                    health_gain_per_level,
+                    &upgrade_cost,
+                )
                 .unwrap(),
             2
+        );
+        assert_eq!(
+            simulation.buildings[&runtime_id].health,
+            building_max_health(&content, &simulation.buildings[&runtime_id]) - 7
         );
     }
 
@@ -14118,19 +14236,20 @@ mod tests {
             Some(true)
         );
         assert_eq!(visible(&simulation, &age_one.full_model, 1), Some(false));
-        simulation.buildings.get_mut(&runtime_id).unwrap().health = BUILDING_MAX_HEALTH / 2;
+        let max_health = building_max_health(&content, &simulation.buildings[&runtime_id]);
+        simulation.buildings.get_mut(&runtime_id).unwrap().health = max_health / 2;
         assert_eq!(
             visible(&simulation, &age_one.construction_stages[1], 1),
             Some(true)
         );
-        simulation.buildings.get_mut(&runtime_id).unwrap().health = BUILDING_MAX_HEALTH * 4 / 5;
+        simulation.buildings.get_mut(&runtime_id).unwrap().health = max_health * 4 / 5;
         assert_eq!(
             visible(&simulation, &age_one.construction_stages[2], 1),
             Some(true)
         );
 
         let state = simulation.buildings.get_mut(&runtime_id).unwrap();
-        state.health = BUILDING_MAX_HEALTH;
+        state.health = max_health;
         state.complete = true;
         assert_eq!(visible(&simulation, &age_one.full_model, 1), Some(true));
         assert_eq!(
@@ -14503,11 +14622,11 @@ mod tests {
 
     #[test]
     fn building_damage_value_matches_unity_health_percentage() {
-        assert!((building_damage_value(BUILDING_MAX_HEALTH) - 1.0).abs() < f32::EPSILON);
-        assert!((building_damage_value(BUILDING_MAX_HEALTH / 2) - 0.5).abs() < f32::EPSILON);
-        assert!((building_damage_value(0) - 0.0).abs() < f32::EPSILON);
-        assert!((building_damage_value(-100) - 0.0).abs() < f32::EPSILON);
-        assert!((building_damage_value(BUILDING_MAX_HEALTH * 2) - 1.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(25, 25) - 1.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(150, 300) - 0.5).abs() < f32::EPSILON);
+        assert!((building_damage_value(0, 25) - 0.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(-100, 25) - 0.0).abs() < f32::EPSILON);
+        assert!((building_damage_value(600, 300) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -14523,10 +14642,10 @@ mod tests {
         assert!((BUILDING_DAMAGED_RADIUS - 1.403_639_8).abs() < f32::EPSILON);
         assert_eq!(BUILDING_DAMAGED_FIRE_AMOUNT, 128);
         assert_eq!(BUILDING_DAMAGED_SMOKE_AMOUNT, 200);
-        assert!(building_damage_intensity(BUILDING_MAX_HEALTH, true).abs() < f32::EPSILON);
-        assert!(building_damage_intensity(BUILDING_MAX_HEALTH / 2, false).abs() < f32::EPSILON);
-        assert!(building_damage_intensity(BUILDING_MAX_HEALTH / 2, true) > 0.0);
-        assert!(building_damage_intensity(0, true).abs() < f32::EPSILON);
+        assert!(building_damage_intensity(25, 25, true).abs() < f32::EPSILON);
+        assert!(building_damage_intensity(150, 300, false).abs() < f32::EPSILON);
+        assert!(building_damage_intensity(150, 300, true) > 0.0);
+        assert!(building_damage_intensity(0, 25, true).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -15692,7 +15811,14 @@ mod tests {
                 .unwrap()
                 .clone();
             assert!(!placed_building.complete);
-            assert_eq!(placed_building.health, BUILDING_MAX_HEALTH / 10);
+            let base_max_health = building_base_max_health(
+                &app.world().resource::<RuntimeContent>().0,
+                &available_building.1,
+            );
+            assert_eq!(
+                placed_building.health,
+                i32::try_from(base_max_health.div_ceil(10)).unwrap()
+            );
             assert_eq!(placed_building.rotation_quarter_turns, 4);
             for resource in [
                 "resource:food",
@@ -15799,10 +15925,15 @@ mod tests {
                 .keys()
                 .cloned()
                 .collect::<Vec<_>>();
+            let max_health = {
+                let content = &app.world().resource::<RuntimeContent>().0;
+                let simulation = &app.world().resource::<SimulationRuntime>().0;
+                building_max_health(content, &simulation.buildings[&saved_building_id])
+            };
             let mut simulation = app.world_mut().resource_mut::<SimulationRuntime>();
             let building = simulation.0.buildings.get_mut(&saved_building_id).unwrap();
             building.complete = true;
-            building.health = BUILDING_MAX_HEALTH;
+            building.health = max_health;
             simulation.0.unlocked_technology.extend(technology_ids);
             for amount in simulation.0.town_resources.values_mut() {
                 *amount = 1_000_000;

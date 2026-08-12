@@ -744,6 +744,10 @@ fn health_definition(asset: &UnityAsset) -> Result<Option<HealthDef>> {
                 asset.path
             )
         })?;
+    let health_gain_per_level = component_field_value(component, "_healthGainOnLevel")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .with_context(|| format!("{} health gain per level is invalid", asset.path))?;
     let revive_milliseconds = asset
         .game_object
         .as_ref()
@@ -766,6 +770,7 @@ fn health_definition(asset: &UnityAsset) -> Result<Option<HealthDef>> {
         .transpose()?;
     Ok(Some(HealthDef {
         max_health,
+        health_gain_per_level,
         regeneration_milli_per_second,
         regeneration_requires_food,
         revive_milliseconds,
@@ -2479,6 +2484,7 @@ mod tests {
                     "Units.HealthHandler, Assembly-CSharp",
                     vec![
                         field("_maxHealth", Value::from(100)),
+                        field("_healthGainOnLevel", Value::from(25)),
                         field("_healthRegen", Value::from(1.25)),
                         field("_regenRequiresFood", Value::Bool(true)),
                     ],
@@ -2493,6 +2499,7 @@ mod tests {
             health_definition(&player).unwrap(),
             Some(HealthDef {
                 max_health: 100,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 1_250,
                 regeneration_requires_food: true,
                 revive_milliseconds: Some(60_000),

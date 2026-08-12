@@ -347,6 +347,14 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                         archetype.footprint[1],
                         archetype.scenes.len()
                     ));
+                    if let Some(health) = &archetype.health {
+                        ui.label(format!(
+                            "Health: {} base; +{} per level; {} milli/s regeneration",
+                            health.max_health,
+                            health.health_gain_per_level,
+                            health.regeneration_milli_per_second
+                        ));
+                    }
                     if let Some(enemy) = &archetype.enemy {
                         ui.label(format!(
                             "Enemy: {} damage every {:.1}s at {:.1} cells",

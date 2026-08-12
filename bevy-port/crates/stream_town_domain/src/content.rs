@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 20;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 21;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -84,6 +84,7 @@ pub struct ArchetypeDef {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HealthDef {
     pub max_health: u32,
+    pub health_gain_per_level: u32,
     pub regeneration_milli_per_second: i64,
     pub regeneration_requires_food: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

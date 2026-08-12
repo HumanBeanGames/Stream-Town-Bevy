@@ -149,7 +149,7 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (20, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (21, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -158,6 +158,16 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.health.is_some())
         .count();
+    let building_health = content
+        .buildings
+        .values()
+        .filter_map(|building| content.archetypes[&building.archetype].health.as_ref())
+        .collect::<Vec<_>>();
+    let building_base_health: u32 = building_health.iter().map(|health| health.max_health).sum();
+    let building_level_health: u32 = building_health
+        .iter()
+        .map(|health| health.health_gain_per_level)
+        .sum();
     let projectile_shooters = content
         .buildings
         .values()
@@ -179,15 +189,23 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.enemy_spawner.is_some())
         .count();
-    if (
-        health_definitions,
-        projectile_shooters,
-        enemy_definitions,
-        enemy_spawners,
-        enemy_resource_rewards,
-    ) != (42, 1, 9, 1, 9)
+    if building_health.len() != 26
+        || building_base_health != 4_275
+        || building_level_health != 905
+        || (
+            health_definitions,
+            projectile_shooters,
+            enemy_definitions,
+            enemy_spawners,
+            enemy_resource_rewards,
+        ) != (42, 1, 9, 1, 9)
     {
-        bail!("authored combat component counts differ from the verified Unity baseline");
+        bail!(
+            "authored combat component counts differ from the verified Unity baseline: building health {} definitions, {} base total, {} per-level total; {health_definitions} total health, {projectile_shooters} projectile shooters, {enemy_definitions} enemies, {enemy_spawners} spawners, {enemy_resource_rewards} rewards",
+            building_health.len(),
+            building_base_health,
+            building_level_health
+        );
     }
     for (archetype_id, archetype) in &content.archetypes {
         for scene in &archetype.scenes {
@@ -455,7 +473,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 42 health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

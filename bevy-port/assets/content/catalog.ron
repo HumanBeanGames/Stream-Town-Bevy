@@ -1,5 +1,5 @@
 (
-    schema_version: 20,
+    schema_version: 21,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -49,6 +49,7 @@
             ],
             health: Some((
                 max_health: 150,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -98,6 +99,7 @@
             ],
             health: Some((
                 max_health: 150,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -148,6 +150,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 100,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -198,6 +201,7 @@
             ],
             health: Some((
                 max_health: 20,
+                health_gain_per_level: 5,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -251,6 +255,7 @@
             ],
             health: Some((
                 max_health: 100,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -308,6 +313,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -360,6 +366,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -408,6 +415,7 @@
             ],
             health: Some((
                 max_health: 500,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -466,6 +474,7 @@
             ],
             health: Some((
                 max_health: 20,
+                health_gain_per_level: 30,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -524,6 +533,7 @@
             ],
             health: Some((
                 max_health: 50,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -581,6 +591,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -631,6 +642,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 20,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -681,6 +693,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -731,6 +744,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -788,6 +802,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -836,6 +851,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -884,6 +900,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -932,6 +949,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -991,6 +1009,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1028,6 +1047,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1088,6 +1108,7 @@
             ],
             health: Some((
                 max_health: 150,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1145,6 +1166,7 @@
             ],
             health: Some((
                 max_health: 250,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1237,6 +1259,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 50,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1295,6 +1318,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1345,6 +1369,7 @@
             ],
             health: Some((
                 max_health: 300,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1402,6 +1427,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1642,6 +1668,7 @@
             ],
             health: Some((
                 max_health: 50,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -1927,6 +1954,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -2001,6 +2029,7 @@
             ],
             health: Some((
                 max_health: 25,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -2409,6 +2438,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -2497,6 +2527,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -3701,6 +3732,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -4089,6 +4121,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -4226,6 +4259,7 @@
             ],
             health: Some((
                 max_health: 1000,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -4569,6 +4603,7 @@
             ],
             health: Some((
                 max_health: 1000,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -4958,6 +4993,7 @@
             ],
             health: Some((
                 max_health: 1000,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -5192,6 +5228,7 @@
             ],
             health: Some((
                 max_health: 100,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: true,
                 revive_milliseconds: Some(60000),
@@ -5822,6 +5859,7 @@
             ],
             health: Some((
                 max_health: 5,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -6085,6 +6123,7 @@
             ],
             health: Some((
                 max_health: 15,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -6326,6 +6365,7 @@
             ],
             health: Some((
                 max_health: 1000,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -6696,6 +6736,7 @@
             ],
             health: Some((
                 max_health: 10,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
@@ -7036,6 +7077,7 @@
             ],
             health: Some((
                 max_health: 50,
+                health_gain_per_level: 25,
                 regeneration_milli_per_second: 0,
                 regeneration_requires_food: false,
             )),
