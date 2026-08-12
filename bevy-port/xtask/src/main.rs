@@ -214,7 +214,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (7, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
+    ) != (8, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
         || (presentation_state_machines, presentation_layers) != (45, 33)
@@ -251,6 +251,37 @@ fn validate() -> Result<()> {
             .map(|renderer| renderer.materials.len())
             .sum::<usize>()
             != 912
+        || presentation
+            .clips
+            .values()
+            .filter(|clip| !clip.property_curves.is_empty())
+            .count()
+            != 18
+        || presentation
+            .clips
+            .values()
+            .map(|clip| clip.property_curves.len())
+            .sum::<usize>()
+            != 110
+        || presentation
+            .clips
+            .values()
+            .flat_map(|clip| &clip.property_curves)
+            .map(|curve| curve.keys.len())
+            .sum::<usize>()
+            != 261
+        || presentation
+            .clips
+            .values()
+            .filter(|clip| !clip.events.is_empty())
+            .count()
+            != 10
+        || presentation
+            .clips
+            .values()
+            .map(|clip| clip.events.len())
+            .sum::<usize>()
+            != 10
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }

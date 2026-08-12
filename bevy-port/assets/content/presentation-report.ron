@@ -1,5 +1,5 @@
 (
-    schema_version: 7,
+    schema_version: 8,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -11,6 +11,11 @@
     renderer_material_slots: 912,
     clips: 75,
     converted_clips: 57,
+    property_curve_clips: 18,
+    property_curves: 110,
+    property_curve_keys: 261,
+    event_clips: 10,
+    animation_events: 10,
     missing_clip_sources: 1,
     controllers: 31,
     controller_states: 94,

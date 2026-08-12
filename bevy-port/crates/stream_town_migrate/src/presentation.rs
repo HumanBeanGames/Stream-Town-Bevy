@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stream_town_domain::{
     AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
-    AnimationLayerBlendMode, AnimationLayerDef, AnimationMotionDef, AnimationParameterDef,
-    AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
-    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, AvatarMaskDef,
-    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
+    AnimationEventDef, AnimationFloatKeyframe, AnimationLayerBlendMode, AnimationLayerDef,
+    AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
+    AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
+    AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
+    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
     RendererMaterialBinding, StableId, TextureDef,
 };
 
@@ -30,6 +31,11 @@ pub struct PresentationConversionReport {
     pub renderer_material_slots: usize,
     pub clips: usize,
     pub converted_clips: usize,
+    pub property_curve_clips: usize,
+    pub property_curves: usize,
+    pub property_curve_keys: usize,
+    pub event_clips: usize,
+    pub animation_events: usize,
     pub missing_clip_sources: usize,
     pub controllers: usize,
     pub controller_states: usize,
@@ -190,7 +196,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 7,
+        schema_version: 8,
         textures,
         materials,
         clips,
@@ -210,7 +216,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 7,
+        schema_version: 8,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -239,6 +245,28 @@ pub fn convert(
             .values()
             .filter(|clip| clip.converted_asset_path.is_some() || !clip.transform_tracks.is_empty())
             .count(),
+        property_curve_clips: catalog
+            .clips
+            .values()
+            .filter(|clip| !clip.property_curves.is_empty())
+            .count(),
+        property_curves: catalog
+            .clips
+            .values()
+            .map(|clip| clip.property_curves.len())
+            .sum(),
+        property_curve_keys: catalog
+            .clips
+            .values()
+            .flat_map(|clip| &clip.property_curves)
+            .map(|curve| curve.keys.len())
+            .sum(),
+        event_clips: catalog
+            .clips
+            .values()
+            .filter(|clip| !clip.events.is_empty())
+            .count(),
+        animation_events: catalog.clips.values().map(|clip| clip.events.len()).sum(),
         missing_clip_sources: catalog
             .clips
             .values()
@@ -479,17 +507,26 @@ fn convert_clips(
             "m_AnimationClipSettings.m_StopTime",
         )
         .unwrap_or(start);
-        let transform_tracks = if Path::new(&asset.path)
+        let (transform_tracks, property_curves, events) = if Path::new(&asset.path)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("anim"))
         {
             let source = unity_root.join(&asset.path);
             let contents = fs::read_to_string(&source)
                 .with_context(|| format!("failed to read animation clip {}", source.display()))?;
-            parse_transform_tracks(&contents)
-                .with_context(|| format!("failed to parse animation clip {}", source.display()))?
+            (
+                parse_transform_tracks(&contents).with_context(|| {
+                    format!("failed to parse animation clip {}", source.display())
+                })?,
+                parse_property_curves(&contents).with_context(|| {
+                    format!("failed to parse property curves {}", source.display())
+                })?,
+                parse_animation_events(&contents).with_context(|| {
+                    format!("failed to parse animation events {}", source.display())
+                })?,
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new(), Vec::new())
         };
         clips.insert(
             clip_id(&asset.guid)?,
@@ -506,6 +543,8 @@ fn convert_clips(
                 .unwrap_or(false),
                 rig_asset_path: None,
                 transform_tracks,
+                property_curves,
+                events,
                 converted_asset_path: None,
                 gltf_animation_index: None,
             },
@@ -611,6 +650,220 @@ fn parse_transform_tracks(contents: &str) -> Result<Vec<AnimationTransformTrack>
                 || !track.euler_degrees.is_empty()
         })
         .collect())
+}
+
+fn parse_property_curves(contents: &str) -> Result<Vec<AnimationPropertyCurve>> {
+    let mut curves = Vec::new();
+    let mut active = false;
+    let mut target_path = String::new();
+    let mut attribute = String::new();
+    let mut class_id = 0;
+    let mut script_guid = None;
+    let mut keys = Vec::new();
+    let mut pending_key: Option<AnimationFloatKeyframe> = None;
+
+    let finish_key = |keys: &mut Vec<AnimationFloatKeyframe>, pending: &mut Option<_>| {
+        if let Some(key) = pending.take() {
+            keys.push(key);
+        }
+    };
+    let finish_curve = |curves: &mut Vec<AnimationPropertyCurve>,
+                        target_path: &mut String,
+                        attribute: &mut String,
+                        class_id: &mut i32,
+                        script_guid: &mut Option<String>,
+                        keys: &mut Vec<AnimationFloatKeyframe>| {
+        if !attribute.is_empty() && !keys.is_empty() {
+            curves.push(AnimationPropertyCurve {
+                target_path: std::mem::take(target_path),
+                attribute: std::mem::take(attribute),
+                class_id: *class_id,
+                script_guid: script_guid.take(),
+                keys: std::mem::take(keys),
+            });
+        }
+        target_path.clear();
+        attribute.clear();
+        *class_id = 0;
+        *script_guid = None;
+        keys.clear();
+    };
+
+    for line in contents.lines() {
+        if line == "  m_FloatCurves:" {
+            active = true;
+            continue;
+        }
+        if active && line.starts_with("  m_") {
+            finish_key(&mut keys, &mut pending_key);
+            finish_curve(
+                &mut curves,
+                &mut target_path,
+                &mut attribute,
+                &mut class_id,
+                &mut script_guid,
+                &mut keys,
+            );
+            break;
+        }
+        if !active {
+            continue;
+        }
+        if line == "  - curve:" {
+            finish_key(&mut keys, &mut pending_key);
+            finish_curve(
+                &mut curves,
+                &mut target_path,
+                &mut attribute,
+                &mut class_id,
+                &mut script_guid,
+                &mut keys,
+            );
+            continue;
+        }
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("time: ") {
+            finish_key(&mut keys, &mut pending_key);
+            pending_key = Some(AnimationFloatKeyframe {
+                time: value.parse()?,
+                value: 0.0,
+                in_slope: AnimationTangent::Finite(0.0),
+                out_slope: AnimationTangent::Finite(0.0),
+                tangent_mode: 0,
+                weighted_mode: 0,
+                in_weight: 0.0,
+                out_weight: 0.0,
+            });
+        } else if let Some(value) = trimmed.strip_prefix("value: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.value = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("inSlope: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.in_slope = parse_tangent(value)?;
+        } else if let Some(value) = trimmed.strip_prefix("outSlope: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.out_slope = parse_tangent(value)?;
+        } else if let Some(value) = trimmed.strip_prefix("tangentMode: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.tangent_mode = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("weightedMode: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.weighted_mode = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("inWeight: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.in_weight = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("outWeight: ")
+            && let Some(key) = pending_key.as_mut()
+        {
+            key.out_weight = value.parse()?;
+        } else if let Some(value) = line.strip_prefix("    attribute: ") {
+            finish_key(&mut keys, &mut pending_key);
+            attribute = unity_scalar(value);
+        } else if let Some(value) = line.strip_prefix("    path:") {
+            target_path = unity_scalar(value);
+        } else if let Some(value) = line.strip_prefix("    classID: ") {
+            class_id = value.parse()?;
+        } else if let Some(value) = line.strip_prefix("    script: ") {
+            script_guid = reference_guid(value).map(str::to_owned);
+        }
+    }
+    Ok(curves)
+}
+
+fn parse_tangent(value: &str) -> Result<AnimationTangent> {
+    match value.trim() {
+        "Infinity" | "+Infinity" => Ok(AnimationTangent::PositiveInfinity),
+        "-Infinity" => Ok(AnimationTangent::NegativeInfinity),
+        value => Ok(AnimationTangent::Finite(value.parse()?)),
+    }
+}
+
+fn parse_animation_events(contents: &str) -> Result<Vec<AnimationEventDef>> {
+    let mut events = Vec::new();
+    let mut active = false;
+    let mut pending: Option<AnimationEventDef> = None;
+    for line in contents.lines() {
+        if line == "  m_Events: []" {
+            return Ok(Vec::new());
+        }
+        if line == "  m_Events:" {
+            active = true;
+            continue;
+        }
+        if !active {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("  - time: ") {
+            if let Some(event) = pending.take() {
+                events.push(event);
+            }
+            pending = Some(AnimationEventDef {
+                time: value.parse()?,
+                function_name: String::new(),
+                string_parameter: String::new(),
+                object_reference: None,
+                float_parameter: 0.0,
+                int_parameter: 0,
+                message_options: 0,
+            });
+            continue;
+        }
+        let Some(event) = pending.as_mut() else {
+            continue;
+        };
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("functionName: ") {
+            event.function_name = unity_scalar(value);
+        } else if let Some(value) = trimmed.strip_prefix("data:") {
+            event.string_parameter = unity_scalar(value);
+        } else if let Some(value) = trimmed.strip_prefix("objectReferenceParameter: ") {
+            event.object_reference = parse_object_reference(value);
+        } else if let Some(value) = trimmed.strip_prefix("floatParameter: ") {
+            event.float_parameter = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("intParameter: ") {
+            event.int_parameter = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("messageOptions: ") {
+            event.message_options = value.parse()?;
+        }
+    }
+    if let Some(event) = pending {
+        events.push(event);
+    }
+    Ok(events)
+}
+
+fn parse_object_reference(value: &str) -> Option<AnimationObjectReference> {
+    let file_id = inline_mapping_value(value, "fileID")?.parse().ok()?;
+    (file_id != 0).then(|| AnimationObjectReference {
+        file_id,
+        guid: inline_mapping_value(value, "guid").map(str::to_owned),
+        type_id: inline_mapping_value(value, "type").and_then(|value| value.parse().ok()),
+    })
+}
+
+fn inline_mapping_value<'a>(value: &'a str, key: &str) -> Option<&'a str> {
+    value
+        .trim()
+        .strip_prefix('{')?
+        .strip_suffix('}')?
+        .split(',')
+        .filter_map(|entry| entry.trim().split_once(':'))
+        .find_map(|(entry_key, value)| (entry_key.trim() == key).then(|| value.trim()))
+}
+
+fn unity_scalar(value: &str) -> String {
+    let value = value.trim();
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
+        .to_owned()
 }
 
 fn append_vec3_keys(
@@ -852,6 +1105,8 @@ fn parse_controller(
                         looping: true,
                         rig_asset_path: None,
                         transform_tracks: Vec::new(),
+                        property_curves: Vec::new(),
+                        events: Vec::new(),
                         converted_asset_path: None,
                         gltf_animation_index: None,
                     },
@@ -1999,6 +2254,63 @@ AnimationClip:
         assert_eq!(tracks[0].rotation.len(), 2);
         assert_eq!(tracks[0].translation.len(), 2);
         assert!(tracks[0].scale.is_empty());
+    }
+
+    #[test]
+    fn parses_property_curves_and_animation_events_without_unity_types() {
+        let yaml = r"%YAML 1.1
+AnimationClip:
+  m_RotationCurves: []
+  m_FloatCurves:
+  - curve:
+      serializedVersion: 2
+      m_Curve:
+      - serializedVersion: 3
+        time: 0
+        value: 1
+        inSlope: Infinity
+        outSlope: Infinity
+        tangentMode: 103
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+      - serializedVersion: 3
+        time: 2
+        value: 0
+        inSlope: Infinity
+        outSlope: Infinity
+        tangentMode: 103
+        weightedMode: 0
+        inWeight: 0
+        outWeight: 0
+    attribute: m_IsActive
+    path: Credits/CreatedBy
+    classID: 1
+    script: {fileID: 0}
+  m_PPtrCurves: []
+  m_Events:
+  - time: 0.5
+    functionName: PlayRoleActionAudio
+    data: gather
+    objectReferenceParameter: {fileID: 0}
+    floatParameter: 1.25
+    intParameter: 3
+    messageOptions: 0
+";
+        let curves = parse_property_curves(yaml).unwrap();
+        assert_eq!(curves.len(), 1);
+        assert_eq!(curves[0].target_path, "Credits/CreatedBy");
+        assert_eq!(curves[0].attribute, "m_IsActive");
+        assert_eq!(curves[0].keys.len(), 2);
+        assert_eq!(curves[0].sample(1.0), Some(1.0));
+
+        let events = parse_animation_events(yaml).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].function_name, "PlayRoleActionAudio");
+        assert_eq!(events[0].string_parameter, "gather");
+        assert!((events[0].float_parameter - 1.25).abs() < f32::EPSILON);
+        assert_eq!(events[0].int_parameter, 3);
+        assert!(events[0].object_reference.is_none());
     }
 
     #[test]

@@ -65,8 +65,10 @@ The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks; four property/UI-only clips do
-not contain transform curves. It also retains 11 authored 1D blend states and
+`.anim` files into 1,196 stable transform tracks. Presentation schema 8 also
+retains 110 component/UI property curves with 261 keys across 18 clips, including
+the four transform-free clips, plus all ten authored animation events. It retains
+11 authored 1D blend states and
 typed transition conditions; the stale `Slam` and `Swipe` conditions become
 provenance-marked inferred parameters. Renderer inheritance resolves to 141
 prefab material bindings and 181 material dependencies. Presentation schema 7
@@ -224,6 +226,9 @@ repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
 with one wood so the independent Top additive layer enters its authored Carry
 state deterministically.
+`STREAM_TOWN_AUTOSTART_CREDITS=1` opens the Credits state directly, and
+`STREAM_TOWN_DEBUG_CREDITS_TIME=<seconds>` starts its authored timeline at a
+specific point for repeatable property-curve smoke captures.
 `STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
@@ -253,8 +258,9 @@ effective weights. The three AvatarMask assets retain 477 stable transform weigh
 Unity fixes layer zero to weight one; higher layers use their serialized default,
 so the shipping Character Top layer continues to evaluate its carry state machine
 but correctly has zero pose influence. Rare/non-gameplay action emitters, exact
-Unity curve tangents, property/UI animation, and custom WGSL shader parity remain
-presentation work.
+weighted Unity tangent semantics, animation-event audio playback, and custom WGSL
+shader parity remain presentation work. The Credits panels/fireworks/end fade and
+the live level-up toast consume the converted float-property curves directly.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

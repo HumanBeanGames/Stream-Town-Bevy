@@ -79,6 +79,11 @@ mistaken for production-ready systems.
   targets become Bevy animation mask groups. Character's Top `Carry`/`CarryHip`
   state machine follows live inventory parameters but, matching its source
   controller, its authored zero weight gives it no pose influence.
+- Presentation schema 8 retains 110 Unity float-property curves with 261 keys
+  across 18 clips and all ten authored `PlayRoleActionAudio` events. The runtime
+  samples constant and unweighted Hermite segments; the Credits state uses the
+  converted seven-panel visibility timeline, two fireworks cues, and end fade,
+  while actor level changes use the converted LevelUp position/alpha curves.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
@@ -228,9 +233,10 @@ mistaken for production-ready systems.
   shader properties, and translates all 31 Animator controllers into 94 stable
   states, 166 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
-  files into 1,196 stable transform tracks with rig-relative reference poses;
-  the remaining four clips contain property/UI animation rather than transform
-  curves. Eleven authored 1D blend states retain their driving parameters and
+  files into 1,196 stable transform tracks with rig-relative reference poses.
+  Presentation schema 8 additionally retains all 110 component/UI property
+  curves (261 keys) across 18 clips—including the four transform-free clips—and
+  all ten authored animation events. Eleven authored 1D blend states retain their driving parameters and
   thresholds, and transition conditions use typed Unity modes. The stale `Slam`
   and `Swipe` conditions are retained as two inferred Boolean parameters rather
   than silently discarded. It resolves inherited prefab/controller/model
@@ -280,12 +286,10 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- The four standalone property/UI animation clips, non-transform event/property
-  curves, nested layer/state-machine routing, transition-duration crossfades,
-  layer masks, and exact Unity tangent/cubic interpolation semantics. The
-  controller interpreter can execute direct state transitions, but gameplay
-  systems still need to emit every gathering/building/combat action
-  parameter and nested state-machine exits currently fall back to Locomotion.
+- Weighted Unity tangent semantics, animation-event audio playback,
+  transition-duration crossfades, and the remaining rare/non-gameplay action
+  emitters. Direct and nested layer/state-machine routing, conditioned entries,
+  parent exits, masks, and property curves are converted and live.
 - Production terrain material/shader parity, shoreline treatment, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
@@ -367,7 +371,7 @@ depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
 action emitters, production terrain/foliage shaders beyond the new environment palettes and
-particle fields, exact curve tangents and custom-shader parity, the
+particle fields, weighted curve tangents and custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

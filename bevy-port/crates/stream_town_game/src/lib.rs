@@ -244,6 +244,40 @@ struct RenderAssets {
 struct StateEntity;
 
 #[derive(Component)]
+struct AuthoredCreditsElement {
+    target_path: String,
+}
+
+#[derive(Component)]
+struct CreditsFade;
+
+#[derive(Resource)]
+struct CreditsTimeline {
+    elapsed_seconds: f32,
+}
+
+impl Default for CreditsTimeline {
+    fn default() -> Self {
+        Self {
+            elapsed_seconds: std::env::var("STREAM_TOWN_DEBUG_CREDITS_TIME")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value: &f32| value.is_finite() && *value >= 0.0)
+                .unwrap_or(0.0),
+        }
+    }
+}
+
+#[derive(Component)]
+struct LevelUpToast;
+
+#[derive(Resource, Default)]
+struct LevelUpPresentation {
+    actor_levels: BTreeMap<StableId, u16>,
+    elapsed_seconds: Option<f32>,
+}
+
+#[derive(Component)]
 struct WorldEntity;
 
 #[derive(Component)]
@@ -523,6 +557,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SelectedCell>()
             .init_resource::<EnvironmentPresentation>()
             .init_resource::<CosmeticMaterialCache>()
+            .init_resource::<LevelUpPresentation>()
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(
                     PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
@@ -531,13 +566,21 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(Startup, (setup_rendering, start_twitch_transport))
             .add_systems(OnEnter(GameState::Boot), finish_boot)
             .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
-            .add_systems(Update, (poll_twitch_transport, twitch_connection_input))
+            .add_systems(
+                Update,
+                (
+                    poll_twitch_transport,
+                    twitch_connection_input,
+                    capture_screenshot,
+                ),
+            )
             .add_systems(
                 Update,
                 main_menu_input.run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
             .add_systems(OnEnter(GameState::WorldLoading), generate_and_spawn_world)
+            .add_systems(OnEnter(GameState::InGame), spawn_level_up_toast)
             .add_systems(
                 Update,
                 (
@@ -583,7 +626,7 @@ impl Plugin for StreamTownGamePlugin {
                     game_input,
                     save_input,
                     load_input,
-                    capture_screenshot,
+                    drive_level_up_presentation.after(move_agents),
                     update_hud,
                 )
                     .run_if(in_state(GameState::InGame)),
@@ -600,7 +643,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(OnExit(GameState::InGame), cleanup_world)
             .add_systems(OnEnter(GameState::Credits), spawn_credits)
-            .add_systems(Update, credits_input.run_if(in_state(GameState::Credits)))
+            .add_systems(
+                Update,
+                (drive_credits_animation, credits_input)
+                    .chain()
+                    .run_if(in_state(GameState::Credits)),
+            )
             .add_systems(OnExit(GameState::Credits), cleanup_state_entities);
     }
 }
@@ -885,7 +933,9 @@ fn primary_material_texture<'a>(
 
 fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
     info!("Stream Town boot validation complete");
-    if std::env::var_os("STREAM_TOWN_AUTOSTART").is_some() {
+    if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
+        next_state.set(GameState::Credits);
+    } else if std::env::var_os("STREAM_TOWN_AUTOSTART").is_some() {
         next_state.set(GameState::WorldLoading);
     } else {
         next_state.set(GameState::MainMenu);
@@ -8673,24 +8723,268 @@ fn snapshot_world(
 }
 
 fn spawn_credits(mut commands: Commands) {
+    commands.insert_resource(CreditsTimeline::default());
     commands.spawn((
         StateEntity,
-        Text::new(
-            "STREAM TOWN\nOriginal project by Jayden Hunter and contributors\nBevy migration by Human Bean Games\n\nESC  Main Menu",
-        ),
+        Text::new("STREAM TOWN"),
         TextFont {
-            font_size: FontSize::Px(36.0),
+            font_size: FontSize::Px(54.0),
             ..default()
         },
         TextLayout::justify(Justify::Center),
         TextColor(Color::srgb(0.86, 0.95, 0.84)),
+        GlobalZIndex(10),
         Node {
             position_type: PositionType::Absolute,
-            top: percent(34.0),
-            left: percent(24.0),
+            top: percent(12.0),
+            left: percent(37.0),
             ..default()
         },
     ));
+    for (target_path, text) in [
+        ("CreatedBy_Canvas", "Created By\nHuman Bean Games"),
+        ("ProjectLead_Canvas", "Project Lead\nJayden Hunter"),
+        (
+            "3DArt_Canvas",
+            "Lead Artist\nBen Lindridge\n\n3D Artists\nAaron Hunter | Bella Kovac | William Trimble",
+        ),
+        (
+            "OtherArt_Canvas",
+            "Producer and Game Design\nAndrew Nardi | Benjamin Babicka | Jayden Hunter",
+        ),
+        (
+            "AudioAndSpecialThanks_Canvas",
+            "Composer\nLeah Crimmins\n\nAudio Design\nFrancisco Inigo Garde | Andrew Nardi\n\nSpecial Thanks\nStream Town community",
+        ),
+        (
+            "Progammer_Canvas",
+            "Lead Programmer\nJayden Hunter\n\nProgrammers\nDeclan Doller | Benjamin Babicka",
+        ),
+        (
+            "Design_Canvas",
+            "Animation, Technical Art, UI and VFX\nAaron Hunter | Lam Nguyen | Ben Lindridge | Benjamin Babicka | Andrew Nardi",
+        ),
+        ("VFX_FireWorks", "✦   ✧   ✦"),
+        ("VFX_FireWorks (1)", "✧   ✦   ✧"),
+    ] {
+        commands.spawn((
+            StateEntity,
+            AuthoredCreditsElement {
+                target_path: target_path.into(),
+            },
+            Text::new(text),
+            TextFont {
+                font_size: FontSize::Px(if target_path.starts_with("VFX_") {
+                    64.0
+                } else {
+                    32.0
+                }),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::srgb(0.86, 0.95, 0.84)),
+            GlobalZIndex(10),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                top: percent(if target_path.starts_with("VFX_") {
+                    68.0
+                } else {
+                    31.0
+                }),
+                left: percent(if target_path == "VFX_FireWorks" {
+                    18.0
+                } else if target_path == "VFX_FireWorks (1)" {
+                    67.0
+                } else {
+                    20.0
+                }),
+                width: percent(if target_path.starts_with("VFX_") {
+                    18.0
+                } else {
+                    60.0
+                }),
+                ..default()
+            },
+        ));
+    }
+    commands.spawn((
+        StateEntity,
+        Text::new("ESC  Main Menu"),
+        TextFont {
+            font_size: FontSize::Px(20.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.65, 0.72, 0.66)),
+        GlobalZIndex(10),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: percent(5.0),
+            left: percent(45.0),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        StateEntity,
+        CreditsFade,
+        GlobalZIndex(20),
+        BackgroundColor(Color::BLACK),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            ..default()
+        },
+    ));
+}
+
+fn drive_credits_animation(
+    time: Res<Time>,
+    presentation: Res<RuntimePresentation>,
+    mut timeline: ResMut<CreditsTimeline>,
+    mut elements: Query<(&AuthoredCreditsElement, &mut Visibility)>,
+    mut fades: Query<&mut BackgroundColor, With<CreditsFade>>,
+) {
+    timeline.elapsed_seconds = (timeline.elapsed_seconds + time.delta_secs()).min(65.5);
+    for (element, mut visibility) in &mut elements {
+        let clip = if element.target_path.starts_with("VFX_") {
+            "CreditsFireworks"
+        } else {
+            "CreditsPopups"
+        };
+        let active = animation_property_value(
+            &presentation.0,
+            clip,
+            &element.target_path,
+            "m_IsActive",
+            timeline.elapsed_seconds,
+        )
+        .is_some_and(|value| value >= 0.5);
+        *visibility = if active {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    let alpha = animation_property_value(
+        &presentation.0,
+        "EndCredits",
+        "Panel",
+        "m_Color.a",
+        timeline.elapsed_seconds,
+    )
+    .unwrap_or(0.0)
+    .clamp(0.0, 1.0);
+    for mut background in &mut fades {
+        background.0.set_alpha(alpha);
+    }
+}
+
+fn animation_property_value(
+    presentation: &PresentationCatalog,
+    clip_name: &str,
+    target_path: &str,
+    attribute: &str,
+    time: f32,
+) -> Option<f32> {
+    presentation
+        .clips
+        .values()
+        .find(|clip| clip.display_name == clip_name)?
+        .property_curves
+        .iter()
+        .find(|curve| curve.target_path == target_path && curve.attribute == attribute)?
+        .sample(time)
+}
+
+fn spawn_level_up_toast(mut commands: Commands, simulation: Res<SimulationRuntime>) {
+    let actor_levels = simulation
+        .0
+        .actors
+        .iter()
+        .map(|(id, actor)| (id.clone(), role_progress(actor).level))
+        .collect();
+    commands.insert_resource(LevelUpPresentation {
+        actor_levels,
+        elapsed_seconds: None,
+    });
+    commands.spawn((
+        WorldEntity,
+        LevelUpToast,
+        Text::new("LEVEL UP"),
+        TextFont {
+            font_size: FontSize::Px(32.0),
+            ..default()
+        },
+        TextLayout::justify(Justify::Center),
+        TextColor(Color::WHITE.with_alpha(0.0)),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            top: percent(18.0),
+            left: percent(44.0),
+            ..default()
+        },
+    ));
+}
+
+fn drive_level_up_presentation(
+    time: Res<Time>,
+    presentation: Res<RuntimePresentation>,
+    simulation: Res<SimulationRuntime>,
+    mut state: ResMut<LevelUpPresentation>,
+    mut toast: Query<(&mut Text, &mut TextColor, &mut Visibility, &mut Node), With<LevelUpToast>>,
+) {
+    let mut leveled_actor = None;
+    for (id, actor) in &simulation.0.actors {
+        let level = role_progress(actor).level;
+        if state
+            .actor_levels
+            .insert(id.clone(), level)
+            .is_some_and(|previous| level > previous)
+        {
+            leveled_actor = Some((id.clone(), level));
+        }
+    }
+    if leveled_actor.is_some() {
+        state.elapsed_seconds = Some(0.0);
+    }
+    let Ok((mut text, mut color, mut visibility, mut node)) = toast.single_mut() else {
+        return;
+    };
+    if let Some((actor, level)) = leveled_actor {
+        **text = format!("LEVEL UP\n{actor} | {level}");
+    }
+    let Some(elapsed) = state.elapsed_seconds.as_mut() else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+    *elapsed += time.delta_secs();
+    if *elapsed > 1.0 {
+        state.elapsed_seconds = None;
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    let y = animation_property_value(
+        &presentation.0,
+        "LevelUp_Animation",
+        "LevelUpText",
+        "m_AnchoredPosition.y",
+        *elapsed,
+    )
+    .unwrap_or(0.0);
+    let alpha = animation_property_value(
+        &presentation.0,
+        "LevelUp_Animation",
+        "LevelUpText",
+        "m_fontColor.a",
+        *elapsed,
+    )
+    .unwrap_or(1.0)
+    .clamp(0.0, 1.0);
+    node.top = percent(18.0 - y);
+    color.0.set_alpha(alpha);
+    *visibility = Visibility::Inherited;
 }
 
 fn credits_input(
@@ -9852,7 +10146,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 7);
+        assert_eq!(presentation.schema_version, 8);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.controllers.len(), 31);
@@ -9880,6 +10174,42 @@ mod tests {
                 .map(|renderer| renderer.materials.len())
                 .sum::<usize>(),
             912
+        );
+        assert_eq!(
+            presentation
+                .clips
+                .values()
+                .map(|clip| clip.property_curves.len())
+                .sum::<usize>(),
+            110
+        );
+        assert_eq!(
+            presentation
+                .clips
+                .values()
+                .map(|clip| clip.events.len())
+                .sum::<usize>(),
+            10
+        );
+        assert_eq!(
+            animation_property_value(
+                &presentation,
+                "CreditsPopups",
+                "CreatedBy_Canvas",
+                "m_IsActive",
+                8.0,
+            ),
+            Some(1.0)
+        );
+        assert_eq!(
+            animation_property_value(
+                &presentation,
+                "CreditsPopups",
+                "CreatedBy_Canvas",
+                "m_IsActive",
+                8.5,
+            ),
+            Some(0.0)
         );
         let character_materials = presentation
             .model_materials

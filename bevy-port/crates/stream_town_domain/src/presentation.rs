@@ -81,6 +81,12 @@ pub struct AnimationClipDef {
     /// Engine-neutral Unity transform curves. Property-only clips have no tracks.
     #[serde(default)]
     pub transform_tracks: Vec<AnimationTransformTrack>,
+    /// Unity component/UI float curves retained independently of skeletal tracks.
+    #[serde(default)]
+    pub property_curves: Vec<AnimationPropertyCurve>,
+    /// Authored Unity `AnimationEvents` in stable time order.
+    #[serde(default)]
+    pub events: Vec<AnimationEventDef>,
     /// Set only when this exact clip has been converted to a GLB animation.
     pub converted_asset_path: Option<String>,
     pub gltf_animation_index: Option<u32>,
@@ -117,6 +123,110 @@ pub struct AnimationVec3Keyframe {
 pub struct AnimationQuatKeyframe {
     pub time: f32,
     pub value: [f32; 4],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationPropertyCurve {
+    /// Slash-separated path relative to the Animator; empty targets the root.
+    pub target_path: String,
+    pub attribute: String,
+    pub class_id: i32,
+    #[serde(default)]
+    pub script_guid: Option<String>,
+    pub keys: Vec<AnimationFloatKeyframe>,
+}
+
+impl AnimationPropertyCurve {
+    /// Samples Unity's unweighted Hermite/constant float curve semantics.
+    #[must_use]
+    pub fn sample(&self, time: f32) -> Option<f32> {
+        let first = self.keys.first()?;
+        if time <= first.time {
+            return Some(first.value);
+        }
+        let last = self.keys.last()?;
+        if time >= last.time {
+            return Some(last.value);
+        }
+        let pair = self
+            .keys
+            .windows(2)
+            .find(|pair| time >= pair[0].time && time < pair[1].time)?;
+        let left = &pair[0];
+        let right = &pair[1];
+        if !left.out_slope.is_finite() || !right.in_slope.is_finite() {
+            return Some(left.value);
+        }
+        let duration = right.time - left.time;
+        if duration <= f32::EPSILON {
+            return Some(right.value);
+        }
+        let t = (time - left.time) / duration;
+        let t2 = t * t;
+        let t3 = t2 * t;
+        Some(
+            (2.0 * t3 - 3.0 * t2 + 1.0) * left.value
+                + (t3 - 2.0 * t2 + t) * duration * left.out_slope.finite_value()
+                + (-2.0 * t3 + 3.0 * t2) * right.value
+                + (t3 - t2) * duration * right.in_slope.finite_value(),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationFloatKeyframe {
+    pub time: f32,
+    pub value: f32,
+    pub in_slope: AnimationTangent,
+    pub out_slope: AnimationTangent,
+    pub tangent_mode: u32,
+    pub weighted_mode: u8,
+    pub in_weight: f32,
+    pub out_weight: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnimationTangent {
+    Finite(f32),
+    PositiveInfinity,
+    NegativeInfinity,
+}
+
+impl AnimationTangent {
+    #[must_use]
+    pub const fn is_finite(self) -> bool {
+        matches!(self, Self::Finite(_))
+    }
+
+    const fn finite_value(self) -> f32 {
+        match self {
+            Self::Finite(value) => value,
+            Self::PositiveInfinity | Self::NegativeInfinity => 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimationEventDef {
+    pub time: f32,
+    pub function_name: String,
+    #[serde(default)]
+    pub string_parameter: String,
+    #[serde(default)]
+    pub object_reference: Option<AnimationObjectReference>,
+    pub float_parameter: f32,
+    pub int_parameter: i32,
+    pub message_options: i32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AnimationObjectReference {
+    pub file_id: i64,
+    #[serde(default)]
+    pub guid: Option<String>,
+    #[serde(default)]
+    pub type_id: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -404,6 +514,19 @@ pub enum PresentationError {
         target_path: String,
         reason: String,
     },
+    #[error("animation clip {clip} has invalid property curve {path}/{attribute}: {reason}")]
+    InvalidPropertyCurve {
+        clip: StableId,
+        path: String,
+        attribute: String,
+        reason: String,
+    },
+    #[error("animation clip {clip} has invalid event {function_name}: {reason}")]
+    InvalidAnimationEvent {
+        clip: StableId,
+        function_name: String,
+        reason: String,
+    },
 }
 
 impl PresentationCatalog {
@@ -499,6 +622,30 @@ impl PresentationCatalog {
             }
             for track in &clip.transform_tracks {
                 validate_animation_track(id, track)?;
+            }
+            for curve in &clip.property_curves {
+                validate_property_curve(id, curve)?;
+            }
+            for event in &clip.events {
+                let reference_valid = event.object_reference.as_ref().is_none_or(|reference| {
+                    reference.file_id >= 0
+                        && reference.guid.as_ref().is_none_or(|guid| {
+                            guid.len() == 32 && guid.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                });
+                if !event.time.is_finite()
+                    || event.time < 0.0
+                    || event.function_name.trim().is_empty()
+                    || !event.float_parameter.is_finite()
+                    || !reference_valid
+                {
+                    return Err(PresentationError::InvalidAnimationEvent {
+                        clip: id.clone(),
+                        function_name: event.function_name.clone(),
+                        reason: "event time, function, parameters, and object reference must be portable"
+                            .into(),
+                    });
+                }
             }
         }
         for (controller_id, controller) in &self.controllers {
@@ -746,6 +893,56 @@ impl PresentationCatalog {
     }
 }
 
+fn validate_property_curve(
+    clip: &StableId,
+    curve: &AnimationPropertyCurve,
+) -> Result<(), PresentationError> {
+    let path_valid = !curve.target_path.contains('\\')
+        && (curve.target_path.is_empty()
+            || curve
+                .target_path
+                .split('/')
+                .all(|segment| !segment.is_empty() && !matches!(segment, "." | "..")));
+    let script_valid = curve
+        .script_guid
+        .as_ref()
+        .is_none_or(|guid| guid.len() == 32 && guid.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    let tangent_valid = |tangent: AnimationTangent| match tangent {
+        AnimationTangent::Finite(value) => value.is_finite(),
+        AnimationTangent::PositiveInfinity | AnimationTangent::NegativeInfinity => true,
+    };
+    let mut previous = None;
+    let keys_valid = !curve.keys.is_empty()
+        && curve.keys.iter().all(|key| {
+            let ordered = previous.is_none_or(|previous| key.time >= previous);
+            previous = Some(key.time);
+            ordered
+                && key.time.is_finite()
+                && key.time >= 0.0
+                && key.value.is_finite()
+                && tangent_valid(key.in_slope)
+                && tangent_valid(key.out_slope)
+                && key.in_weight.is_finite()
+                && key.out_weight.is_finite()
+                && key.in_weight >= 0.0
+                && key.out_weight >= 0.0
+        });
+    if !path_valid
+        || curve.attribute.trim().is_empty()
+        || curve.class_id <= 0
+        || !script_valid
+        || !keys_valid
+    {
+        return Err(PresentationError::InvalidPropertyCurve {
+            clip: clip.clone(),
+            path: curve.target_path.clone(),
+            attribute: curve.attribute.clone(),
+            reason: "binding metadata and ordered keyframes must be finite/portable".into(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_animation_track(
     clip: &StableId,
     track: &AnimationTransformTrack,
@@ -876,6 +1073,49 @@ mod tests {
         };
         assert!((layer.effective_weight(0) - 1.0).abs() < f32::EPSILON);
         assert!(layer.effective_weight(1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn property_curve_samples_constant_and_hermite_segments() {
+        let constant = AnimationPropertyCurve {
+            target_path: "Panel".into(),
+            attribute: "m_IsActive".into(),
+            class_id: 1,
+            script_guid: None,
+            keys: vec![
+                AnimationFloatKeyframe {
+                    time: 0.0,
+                    value: 1.0,
+                    in_slope: AnimationTangent::PositiveInfinity,
+                    out_slope: AnimationTangent::PositiveInfinity,
+                    tangent_mode: 103,
+                    weighted_mode: 0,
+                    in_weight: 0.0,
+                    out_weight: 0.0,
+                },
+                AnimationFloatKeyframe {
+                    time: 1.0,
+                    value: 0.0,
+                    in_slope: AnimationTangent::PositiveInfinity,
+                    out_slope: AnimationTangent::PositiveInfinity,
+                    tangent_mode: 103,
+                    weighted_mode: 0,
+                    in_weight: 0.0,
+                    out_weight: 0.0,
+                },
+            ],
+        };
+        assert_eq!(constant.sample(0.75), Some(1.0));
+        assert_eq!(constant.sample(1.0), Some(0.0));
+
+        let mut hermite = constant;
+        hermite.keys[0].value = 0.0;
+        hermite.keys[0].in_slope = AnimationTangent::Finite(0.0);
+        hermite.keys[0].out_slope = AnimationTangent::Finite(0.0);
+        hermite.keys[1].value = 1.0;
+        hermite.keys[1].in_slope = AnimationTangent::Finite(0.0);
+        hermite.keys[1].out_slope = AnimationTangent::Finite(0.0);
+        assert!((hermite.sample(0.5).unwrap() - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

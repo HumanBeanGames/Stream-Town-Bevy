@@ -262,6 +262,18 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         .values()
         .filter(|clip| !clip.transform_tracks.is_empty())
         .count();
+    let property_curves: usize = state
+        .presentation
+        .clips
+        .values()
+        .map(|clip| clip.property_curves.len())
+        .sum();
+    let animation_events: usize = state
+        .presentation
+        .clips
+        .values()
+        .map(|clip| clip.events.len())
+        .sum();
     let enemies = state
         .catalog
         .archetypes
@@ -296,7 +308,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform) / {} controllers",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state
@@ -307,6 +319,8 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 .sum::<usize>(),
             state.presentation.clips.len(),
             converted_clips,
+            property_curves,
+            animation_events,
             state.presentation.controllers.len()
         ));
     });
@@ -533,12 +547,29 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 ui.collapsing(format!("{}  ({id})", clip.display_name), |ui| {
                     ui.monospace(format!("Unity clip: {}", clip.source_path));
                     ui.label(format!(
-                        "{:.3}s at {:.1} Hz, {} transform tracks, looping: {}",
+                        "{:.3}s at {:.1} Hz, {} transform tracks, {} property curves, {} events, looping: {}",
                         clip.duration_seconds,
                         clip.sample_rate,
                         clip.transform_tracks.len(),
+                        clip.property_curves.len(),
+                        clip.events.len(),
                         clip.looping
                     ));
+                    for curve in &clip.property_curves {
+                        ui.monospace(format!(
+                            "{} :: {} (class {}, {} keys)",
+                            curve.target_path,
+                            curve.attribute,
+                            curve.class_id,
+                            curve.keys.len()
+                        ));
+                    }
+                    for event in &clip.events {
+                        ui.monospace(format!(
+                            "event {:.3}s: {}",
+                            event.time, event.function_name
+                        ));
+                    }
                     if let Some(rig) = &clip.rig_asset_path {
                         ui.monospace(format!("Retarget rig: {rig}"));
                     }

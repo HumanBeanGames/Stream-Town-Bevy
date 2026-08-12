@@ -31,10 +31,11 @@ pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
 pub use presentation::{
     AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
-    AnimationLayerBlendMode, AnimationLayerDef, AnimationMotionDef, AnimationParameterDef,
-    AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
-    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, AvatarMaskDef,
-    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
+    AnimationEventDef, AnimationFloatKeyframe, AnimationLayerBlendMode, AnimationLayerDef,
+    AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
+    AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
+    AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
+    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
     PresentationError, RendererMaterialBinding, TextureDef,
 };
 pub use save::{
