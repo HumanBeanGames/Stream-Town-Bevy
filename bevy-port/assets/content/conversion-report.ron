@@ -12,6 +12,8 @@
     foliage_variants: 21,
     buildings: 26,
     building_prefabs: 26,
+    building_model_handlers: 42,
+    storage_model_handlers: 6,
     passive_resource_generators: 1,
     enemy_resource_rewards: 9,
     roles: 15,

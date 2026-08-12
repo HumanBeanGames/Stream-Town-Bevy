@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 19;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 20;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -174,11 +174,35 @@ pub struct BuildingDef {
     #[serde(default)]
     pub role_slots: Vec<RoleSlotContribution>,
     #[serde(default)]
+    pub model_handlers: Vec<BuildingModelDef>,
+    #[serde(default)]
+    pub storage_models: Vec<StorageModelDef>,
+    #[serde(default)]
     pub passive_resources: Vec<PassiveResourceContribution>,
     #[serde(default)]
     pub station: Option<StationDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projectile_shooter: Option<ProjectileShooterDef>,
+}
+
+/// Named glTF nodes controlled by one reachable Unity `BuildingModelHandler`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BuildingModelDef {
+    pub age: u8,
+    pub full_model: String,
+    pub construction_stages: [String; 3],
+    pub upgrades: Vec<String>,
+    pub other_models: Vec<String>,
+}
+
+/// Named storage-fill nodes controlled by a Unity `BuildingResourceModelHandler`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StorageModelDef {
+    pub age: u8,
+    pub resource: StableId,
+    pub empty_model: String,
+    pub half_full_model: String,
+    pub full_model: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -468,6 +492,8 @@ pub enum ContentError {
     InvalidObjectiveAmount(StableId),
     #[error("building {0} has invalid passive resource income")]
     InvalidPassiveResource(StableId),
+    #[error("building {0} has invalid model-handler data")]
+    InvalidBuildingModels(StableId),
 }
 
 impl ContentCatalog {
@@ -614,6 +640,27 @@ impl ContentCatalog {
                     || (income.increment_milli_per_level > 0 && income.level_event_repetitions == 0)
             }) {
                 return Err(ContentError::InvalidPassiveResource(id.clone()));
+            }
+            if building.model_handlers.iter().any(|model| {
+                !(1..=2).contains(&model.age)
+                    || model.full_model.trim().is_empty()
+                    || model.upgrades.iter().any(|name| name.trim().is_empty())
+                    || model.other_models.iter().any(|name| name.trim().is_empty())
+                    || model
+                        .construction_stages
+                        .iter()
+                        .any(|name| name.trim().is_empty())
+            }) || building.storage_models.iter().any(|model| {
+                !(1..=2).contains(&model.age)
+                    || model.empty_model.trim().is_empty()
+                    || model.half_full_model.trim().is_empty()
+                    || model.full_model.trim().is_empty()
+                    || !building
+                        .storage
+                        .iter()
+                        .any(|storage| storage.resource == model.resource)
+            }) {
+                return Err(ContentError::InvalidBuildingModels(id.clone()));
             }
             if building.station.as_ref().is_some_and(|station| {
                 station.max_targets == 0

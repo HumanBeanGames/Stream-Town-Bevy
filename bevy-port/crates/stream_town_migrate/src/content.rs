@@ -10,10 +10,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat, FoliageLayerDef,
-    FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution,
-    ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution,
-    StableId, StationDef, StorageContribution, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat,
+    FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
+    PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
+    RoleSlotContribution, StableId, StationDef, StorageContribution, StorageModelDef, TechGroup,
+    TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -46,6 +47,8 @@ pub struct ContentConversionReport {
     pub foliage_variants: usize,
     pub buildings: usize,
     pub building_prefabs: usize,
+    pub building_model_handlers: usize,
+    pub storage_model_handlers: usize,
     pub passive_resource_generators: usize,
     pub enemy_resource_rewards: usize,
     pub roles: usize,
@@ -292,6 +295,8 @@ fn convert_export(
                 level_cost_multiplier_per_thousand,
                 storage: storage_contributions(prefab)?,
                 role_slots: role_slot_contributions(prefab)?,
+                model_handlers: building_model_definitions(prefab)?,
+                storage_models: storage_model_definitions(prefab)?,
                 passive_resources: passive_resource_contributions(prefab)?,
                 station: station_definition(prefab)?,
                 projectile_shooter: projectile_shooter_definition(prefab)?,
@@ -519,6 +524,16 @@ fn convert_export(
             .sum(),
         buildings: catalog.buildings.len(),
         building_prefabs: building_archetypes.len(),
+        building_model_handlers: catalog
+            .buildings
+            .values()
+            .map(|building| building.model_handlers.len())
+            .sum(),
+        storage_model_handlers: catalog
+            .buildings
+            .values()
+            .map(|building| building.storage_models.len())
+            .sum(),
         passive_resource_generators: catalog
             .buildings
             .values()
@@ -1390,6 +1405,140 @@ fn passive_resource_contributions(asset: &UnityAsset) -> Result<Vec<PassiveResou
     }
     income.sort_by(|left, right| left.resource.cmp(&right.resource));
     Ok(income)
+}
+
+fn component_reference_name<'a>(
+    asset: &UnityAsset,
+    component: &'a UnityComponent,
+    path: &str,
+) -> Result<&'a str> {
+    component_field_value(component, path)
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("Name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .with_context(|| {
+            format!(
+                "{} {} component is missing referenced object {path}",
+                asset.path,
+                component_type(component)
+            )
+        })
+}
+
+fn component_reference_names(
+    asset: &UnityAsset,
+    component: &UnityComponent,
+    path: &str,
+) -> Result<Vec<String>> {
+    let size = component_field_value(component, &format!("{path}.Array.size"))
+        .and_then(Value::as_u64)
+        .with_context(|| {
+            format!(
+                "{} {} component is missing {path}.Array.size",
+                asset.path,
+                component_type(component)
+            )
+        })?;
+    (0..size)
+        .map(|index| {
+            component_reference_name(asset, component, &format!("{path}.Array.data[{index}]"))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn building_node_age(asset: &UnityAsset, name: &str) -> Result<u8> {
+    if name.contains("Age01") {
+        Ok(1)
+    } else if name.contains("Age02") {
+        Ok(2)
+    } else {
+        bail!(
+            "{} model node {name:?} has no supported age marker",
+            asset.path
+        )
+    }
+}
+
+fn building_model_definitions(asset: &UnityAsset) -> Result<Vec<BuildingModelDef>> {
+    let mut models = Vec::new();
+    for component in asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Buildings.BuildingModelHandler")
+    {
+        let full_model = component_reference_name(asset, component, "FullModel")?.to_owned();
+        models.push(BuildingModelDef {
+            age: building_node_age(asset, &full_model)?,
+            full_model,
+            construction_stages: [
+                component_reference_name(asset, component, "Stage1")?.to_owned(),
+                component_reference_name(asset, component, "Stage2")?.to_owned(),
+                component_reference_name(asset, component, "Stage3")?.to_owned(),
+            ],
+            upgrades: component_reference_names(asset, component, "Upgrades")?,
+            other_models: component_reference_names(asset, component, "OtherModels")?,
+        });
+    }
+    // Unity's handler index is meaningful for tiled walls, so retain hierarchy
+    // order within each age while grouping the two age sets.
+    models.sort_by_key(|model| model.age);
+    Ok(models)
+}
+
+fn storage_model_definitions(asset: &UnityAsset) -> Result<Vec<StorageModelDef>> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .collect::<Vec<_>>();
+    let mut storage_resources = components
+        .iter()
+        .copied()
+        .filter(|component| component_type(component) == "Buildings.ResourceStorageModifier")
+        .map(|component| {
+            let resource = component_field_value(component, "_resource")
+                .and_then(enum_name)
+                .with_context(|| {
+                    format!("{} storage modifier has invalid _resource", asset.path)
+                })?;
+            stable_id("resource", &slug(resource))
+        });
+    let resource = storage_resources.next().transpose()?;
+    if storage_resources.next().is_some() {
+        bail!(
+            "{} has multiple storage resources and ambiguous model handlers",
+            asset.path
+        );
+    }
+
+    let mut models = Vec::new();
+    for component in components
+        .into_iter()
+        .filter(|component| component_type(component) == "Buildings.BuildingResourceModelHandler")
+    {
+        let resource = resource.clone().with_context(|| {
+            format!(
+                "{} has a resource model handler without a storage modifier",
+                asset.path
+            )
+        })?;
+        let empty_model = component_reference_name(asset, component, "EmptyModel")?.to_owned();
+        models.push(StorageModelDef {
+            age: building_node_age(asset, &empty_model)?,
+            resource,
+            empty_model,
+            half_full_model: component_reference_name(asset, component, "HalfFullModel")?
+                .to_owned(),
+            full_model: component_reference_name(asset, component, "FullModel")?.to_owned(),
+        });
+    }
+    models.sort_by_key(|model| model.age);
+    Ok(models)
 }
 
 fn component_type(component: &UnityComponent) -> &str {
@@ -2772,6 +2921,50 @@ mod tests {
                     ],
                 ),
                 component(
+                    "Buildings.BuildingModelHandler, Assembly-CSharp",
+                    vec![
+                        field(
+                            "FullModel",
+                            serde_json::json!({ "Name": "Age01_TownHall_Base" }),
+                        ),
+                        field(
+                            "Stage1",
+                            serde_json::json!({ "Name": "Age01_TownHall_Stage_01" }),
+                        ),
+                        field(
+                            "Stage2",
+                            serde_json::json!({ "Name": "Age01_TownHall_Stage_02" }),
+                        ),
+                        field(
+                            "Stage3",
+                            serde_json::json!({ "Name": "Age01_TownHall_Stage_03" }),
+                        ),
+                        field("Upgrades.Array.size", Value::from(1)),
+                        field(
+                            "Upgrades.Array.data[0]",
+                            serde_json::json!({ "Name": "Age01_TownHall_Upgrade_01" }),
+                        ),
+                        field("OtherModels.Array.size", Value::from(0)),
+                    ],
+                ),
+                component(
+                    "Buildings.BuildingResourceModelHandler, Assembly-CSharp",
+                    vec![
+                        field(
+                            "EmptyModel",
+                            serde_json::json!({ "Name": "Age01_TownHall_Empty" }),
+                        ),
+                        field(
+                            "HalfFullModel",
+                            serde_json::json!({ "Name": "Age01_TownHall_Half" }),
+                        ),
+                        field(
+                            "FullModel",
+                            serde_json::json!({ "Name": "Age01_TownHall_Full" }),
+                        ),
+                    ],
+                ),
+                component(
                     "GameResources.PassiveResourceIncrementer, Assembly-CSharp",
                     vec![
                         field("_resource", enum_value("Gold")),
@@ -2942,6 +3135,8 @@ mod tests {
         assert_eq!(report.foliage_variants, 2);
         assert_eq!(report.buildings, 1);
         assert_eq!(report.building_prefabs, 1);
+        assert_eq!(report.building_model_handlers, 1);
+        assert_eq!(report.storage_model_handlers, 1);
         assert_eq!(report.passive_resource_generators, 1);
         assert_eq!(report.roles, 1);
         assert_eq!(report.technology_nodes, 2);
@@ -2989,6 +3184,30 @@ mod tests {
                 base_milli_per_second: 500,
                 increment_milli_per_level: 250,
                 level_event_repetitions: 2,
+            }]
+        );
+        assert_eq!(
+            catalog.buildings[&town_hall].model_handlers,
+            vec![BuildingModelDef {
+                age: 1,
+                full_model: "Age01_TownHall_Base".to_owned(),
+                construction_stages: [
+                    "Age01_TownHall_Stage_01".to_owned(),
+                    "Age01_TownHall_Stage_02".to_owned(),
+                    "Age01_TownHall_Stage_03".to_owned(),
+                ],
+                upgrades: vec!["Age01_TownHall_Upgrade_01".to_owned()],
+                other_models: vec![],
+            }]
+        );
+        assert_eq!(
+            catalog.buildings[&town_hall].storage_models,
+            vec![StorageModelDef {
+                age: 1,
+                resource: StableId::new("resource:food").unwrap(),
+                empty_model: "Age01_TownHall_Empty".to_owned(),
+                half_full_model: "Age01_TownHall_Half".to_owned(),
+                full_model: "Age01_TownHall_Full".to_owned(),
             }]
         );
         assert_eq!(

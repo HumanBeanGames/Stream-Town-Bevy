@@ -424,6 +424,31 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             income.level_event_repetitions
                         ));
                     }
+                    if !building.model_handlers.is_empty() {
+                        ui.separator();
+                        ui.label(format!(
+                            "Models: {} construction/upgrade handlers",
+                            building.model_handlers.len()
+                        ));
+                        for model in &building.model_handlers {
+                            ui.monospace(format!(
+                                "age {}: {} + {} upgrade layers",
+                                model.age,
+                                model.full_model,
+                                model.upgrades.len()
+                            ));
+                        }
+                    }
+                    for model in &building.storage_models {
+                        ui.monospace(format!(
+                            "storage age {} ({}): {} / {} / {}",
+                            model.age,
+                            model.resource,
+                            model.empty_model,
+                            model.half_full_model,
+                            model.full_model
+                        ));
+                    }
                     if let Some(shooter) = &building.projectile_shooter {
                         ui.separator();
                         ui.label(format!(

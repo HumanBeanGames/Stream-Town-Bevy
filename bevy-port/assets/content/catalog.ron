@@ -1,5 +1,5 @@
 (
-    schema_version: 19,
+    schema_version: 20,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -7556,6 +7556,18 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Barracks_Base",
+                    construction_stages: ("Age02_Barracls_Stage_01", "Age02_Barracls_Stage_02", "Age02_Barracls_Stage_03"),
+                    upgrades: [
+                        "Age02_Barracks_Upgrade_01_Spears",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7586,6 +7598,18 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Bowyard_Base",
+                    construction_stages: ("Age02_Bowyard_Stage_01", "Age02_Bowyard_Stage_02", "Age02_Bowyard_Stage_03"),
+                    upgrades: [
+                        "Age02_Bowyard_Upgrade_01_Arrows",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7616,6 +7640,24 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Castle_Base",
+                    construction_stages: ("Age02_Castle_Stage_01", "Age02_Castle_Stage_02", "Age02_Castle_Stage_03"),
+                    upgrades: [],
+                    other_models: [
+                        "RedFlag_01",
+                        "RedFlag_03",
+                        "RedFlag_04",
+                        "RedFlag_05",
+                        "RedFlag_06",
+                        "RedFlag_07",
+                        "RedFlag_08",
+                    ],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7646,6 +7688,16 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Farm_Base",
+                    construction_stages: ("Age02_Farm_Stage01", "Age02_Farm_Stage02", "Age02_Farm_Stage03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7676,6 +7728,18 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_FishingHut_Base",
+                    construction_stages: ("Age02_FishingHut_Stage_01", "Age02_FishingHut_Stage_02", "Age02_FishingHut_Stage_03"),
+                    upgrades: [
+                        "Age02_FishingHut_Upgrade_01_Warf",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -7719,6 +7783,46 @@
                 ),
             ],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_FoodStorage_Base",
+                    construction_stages: ("Age01_FoodStorage_Stage_01", "Age01_FoodStorage_Stage_02", "Age01_FoodStorage_Stage_03"),
+                    upgrades: [
+                        "Age01_FoodStorage_Empty_Upgrade_01_ExtraLayer",
+                        "Age01_FoodStorage_Full_Upgrade_01_ExtraLayer",
+                        "Age01_FoodStorage_Half_Upgrade_01_ExtraLayer",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_FoodStorage_Base",
+                    construction_stages: ("Age02_FoodStorage_Stage_01", "Age02_FoodStorage_Stage_02", "Age02_FoodStorage_Stage_03"),
+                    upgrades: [
+                        "Age02_FoodStorage_Empty_Upgrade_01_ExtraLayer",
+                        "Age02_FoodStorage_Full_Upgrade_01_ExtraLayer",
+                        "Age02_FoodStorage_Half_Upgrade_01_ExtraLayer",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [
+                (
+                    age: 1,
+                    resource: "resource:food",
+                    empty_model: "Age01_FoodStorage_Empty",
+                    half_full_model: "Age01_FoodStorage_Half",
+                    full_model: "Age01_FoodStorage_Full",
+                ),
+                (
+                    age: 2,
+                    resource: "resource:food",
+                    empty_model: "Age02_FoodStorage_Empty",
+                    half_full_model: "Age02_FoodStorage_Half",
+                    full_model: "Age02_FoodStorage_Full",
+                ),
+            ],
             passive_resources: [],
             station: None,
         ),
@@ -7749,6 +7853,19 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Forge_Base",
+                    construction_stages: ("Age02_Forge_Stage_01", "Age02_Forge_Stage_02", "Age02_Forge_Stage_03"),
+                    upgrades: [
+                        "Age02_Forge_Upgrade_01_Forge",
+                        "Age02_Forge_Upgrade_01_Tables",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7773,6 +7890,16 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Fountain_Base",
+                    construction_stages: ("Age02_Fountain_Stage_01", "Age02_Fountain_Stage_02", "Age02_Fountain_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7797,6 +7924,25 @@
             level_cost_multiplier_per_thousand: 4000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_Gate01_Base",
+                    construction_stages: ("Age01_Gate_Stage_01", "Age01_Gate_Stage_02", "Age01_Gate_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Gate_Base",
+                    construction_stages: ("Age02_Gate_Stage_01", "Age02_Gate_Stage_02", "Age02_Gate_Stage_03"),
+                    upgrades: [
+                        "Age02_Wall_Gate_Upgrade_01_Crenulation",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7828,6 +7974,29 @@
                 ),
             ],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_House_Base",
+                    construction_stages: ("Age01_House_Stage_01", "Age01_House_Stage_02", "Age01_House_Stage_03"),
+                    upgrades: [
+                        "Age01_House_Upgrade_01_FlowerPots",
+                        "Age01_House_Upgrade_02_Lanterns",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_House_Base",
+                    construction_stages: ("Age02_House_Stage_01", "Age02_House_Stage_02", "Age02_House_Stage_03"),
+                    upgrades: [
+                        "Age02_House_Upgrade_01_FlowerPots",
+                        "Age02_House_Upgrade_02_Lanterns",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7858,6 +8027,26 @@
                     increment_amount: 2,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_LumberMill_Base",
+                    construction_stages: ("Age01_LumberMill_Stage_01", "Age01_LumberMill_Stage_02", "Age01_LumberMill_Stage_03"),
+                    upgrades: [
+                        "Age01_LumberMill_Upgrade_01_Table",
+                        "Age01_LumberMill_Upgrade_02_LogWithAxe",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_LumberMill_Base",
+                    construction_stages: ("Age02_LumberMill_Stage_01", "Age02_LumberMill_Stage_02", "Age02_LumberMill_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -7894,6 +8083,16 @@
             level_cost_multiplier_per_thousand: 1500,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Marketplace_Base",
+                    construction_stages: ("Age02_Marketplace_Stage_01", "Age02_Marketplace_Stage_02", "Age02_Marketplace_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [
                 (
                     resource: "resource:gold",
@@ -7931,6 +8130,16 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Monastery_Base",
+                    construction_stages: ("Age02_Monastery_Stage_01", "Age02_Monastery_Stage_02", "Age02_Monastery_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7961,6 +8170,18 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_NecroTower_Base",
+                    construction_stages: ("Age02_NecroTower_Stage_01", "Age02_NecroTower_Stage_02", "Age02_NecroTower_Stage_03"),
+                    upgrades: [],
+                    other_models: [
+                        "Env_Godrays_08",
+                    ],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -7992,6 +8213,45 @@
                 ),
             ],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_OreStorage_Base",
+                    construction_stages: ("Age01_OreStorage_Stage_01", "Age01_OreStorage_Stage_02", "Age01_OreStorage_Stage_03"),
+                    upgrades: [
+                        "Age01_OreStorage_Empty_Upgrade_01_ExtraLayer",
+                        "Age01_OreStorage_Full_Upgrade_01_ExtraLayer",
+                        "Age01_OreStorage_Half_Upgrade_01_ExtraLayer",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_OreStorage_Base",
+                    construction_stages: ("Age02_OreStorage_Stage_01", "Age02_OreStorage_Stage_02", "Age02_OreStorage_Stage_03"),
+                    upgrades: [
+                        "Age02_OreStorage_Empty_Upgrade_01_ExtraLayer",
+                        "Age02_OreStorage_Full_Upgrade_01_ExtraLayer",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [
+                (
+                    age: 1,
+                    resource: "resource:ore",
+                    empty_model: "Age01_OreStorage_Empty",
+                    half_full_model: "Age01_OreStorage_Half",
+                    full_model: "Age01_OreStorage_Full",
+                ),
+                (
+                    age: 2,
+                    resource: "resource:ore",
+                    empty_model: "Age02_OreStorage_Empty",
+                    half_full_model: "Age02_OreStorage_Half",
+                    full_model: "Age02_OreStorage_Full",
+                ),
+            ],
             passive_resources: [],
             station: None,
         ),
@@ -8016,6 +8276,16 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Statue_01_Base",
+                    construction_stages: ("Age02_Statue_01_Stage_01", "Age02_Statue_01_Stage_02", "Age02_Statue_01_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -8040,6 +8310,16 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Statue_02_Base",
+                    construction_stages: ("Age02_Statue_02_Stage_01", "Age02_Statue_02_Stage_02", "Age02_Statue_02_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -8064,6 +8344,16 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_Statue_03_Base",
+                    construction_stages: ("Age02_Statue_03_Stage_01", "Age02_Statue_03_Stage_02", "Age02_Statue_03_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -8094,6 +8384,30 @@
                     increment_amount: 2,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_Stonemason_Base",
+                    construction_stages: ("Age01_Stonemason_Stage_01", "Age01_Stonemason_Stage_02", "Age01_Stonemason_Stage_03"),
+                    upgrades: [
+                        "Age01_Stonemason_Upgrade_01_Ore",
+                        "Age01_Stonemason_Upgrade_02_Pickaxe",
+                        "Age01_Stonemason_Upgrade_03_Table",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Stonemason_Base",
+                    construction_stages: ("Age02_Stonemason_Stage_01", "Age02_Stonemason_Stage_02", "Age02_Stonemason_Stage_03"),
+                    upgrades: [
+                        "Age02_Stonemason_Upgrade_01_Boxes",
+                        "Age02_Stonemason_Upgrade_01_Pickaxes",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8130,6 +8444,8 @@
             level_cost_multiplier_per_thousand: 2000,
             storage: [],
             role_slots: [],
+            model_handlers: [],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -8160,6 +8476,25 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_Tower_Base",
+                    construction_stages: ("Age01_Tower_Stage_01", "Age01_Tower_Stage_02", "Age01_Tower_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Tower_Base",
+                    construction_stages: ("Age02_Tower_Stage_01", "Age02_Tower_Stage_02", "Age02_Tower_Stage_03"),
+                    upgrades: [
+                        "Age02_Tower_Upgrade_01_Crenulation",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8204,6 +8539,25 @@
             level_cost_multiplier_per_thousand: 5000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_TownHall_Base",
+                    construction_stages: ("Age01_TownHall_Stage_01", "Age01_TownHall_Stage_02", "Age01_TownHall_Stage_03"),
+                    upgrades: [
+                        "Age01_TownHall_Upgrade_01_Taller",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_TownHall_Base",
+                    construction_stages: ("Age02_TownHall_Stage_01", "Age02_TownHall_Stage_02", "Age02_TownHall_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8243,6 +8597,73 @@
             level_cost_multiplier_per_thousand: 4000,
             storage: [],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_Wall_Straight_Base",
+                    construction_stages: ("Age01_Wall_Straight_Stage_01", "Age01_Wall_Straight_Stage_02", "Age01_Wall_Straight_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 1,
+                    full_model: "Age01_Wall_Corner_Base",
+                    construction_stages: ("Age01_Wall_Corner_Stage_01", "Age01_Wall_Corner_Stage_02", "Age01_Wall_Corner_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 1,
+                    full_model: "Age01_Wall_Cross_Base",
+                    construction_stages: ("Age01_Wall_Cross_Stage_01", "Age01_Wall_Cross_Stage_02", "Age01_Wall_Cross_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 1,
+                    full_model: "Age01_Wall_TCross_Base",
+                    construction_stages: ("Age01_Wall_TCross_Stage_01", "Age01_Wall_TCross_Stage_02", "Age01_Wall_TCross_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Wall_Straight_Base",
+                    construction_stages: ("Age02_Wall_Straight_Stage_01", "Age02_Wall_Straight_Stage_02", "Age02_Wall_Straight_Stage_03"),
+                    upgrades: [
+                        "Age02_Wall_Straight_Upgrade_01_Crenulation",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Wall_Corner_Base",
+                    construction_stages: ("Age02_Wall_Corner_Stage_01", "Age02_Wall_Corner_Stage_02", "Age02_Wall_Corner_Stage_03"),
+                    upgrades: [
+                        "Age02_Wall_Corner_Upgrade_01_Crenulation",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Wall_Cross_Base",
+                    construction_stages: ("Age02_Wall_Cross_Stage_01", "Age02_Wall_Cross_Stage_02", "Age02_Wall_Cross_Stage_03"),
+                    upgrades: [
+                        "Age02_Wall_Cross_Upgrade_01_Crenulation",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Wall_TCross_Base",
+                    construction_stages: ("Age02_Wall_TCross_Stage_01", "Age02_Wall_TCross_Stage_02", "Age02_Wall_TCross_Stage_03"),
+                    upgrades: [
+                        "Age02_Wall_TCross_Upgrade_01_Crenulation",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -8273,6 +8694,26 @@
                     increment_amount: 2,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_Windmill_Base",
+                    construction_stages: ("Age01_Windmill_Stage_01", "Age01_Windmill_Stage_02", "Age01_Windmill_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_Windmill_Base",
+                    construction_stages: ("Age02_Windmill_Stage_01", "Age02_Windmill_Stage_02", "Age02_Windmill_Stage_03"),
+                    upgrades: [
+                        "Age02_Windmill_Upgrade_01_Table",
+                        "Age02_Windmill_Upgrade_02_Barrels",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8316,6 +8757,16 @@
                     increment_amount: 1,
                 ),
             ],
+            model_handlers: [
+                (
+                    age: 2,
+                    full_model: "Age02_WizardTower_Base",
+                    construction_stages: ("Age02_WizardTower_Stage_01", "Age02_WizardTower_Stage_02", "Age02_WizardTower_Stage_03"),
+                    upgrades: [],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [],
             passive_resources: [],
             station: None,
         ),
@@ -8347,6 +8798,46 @@
                 ),
             ],
             role_slots: [],
+            model_handlers: [
+                (
+                    age: 1,
+                    full_model: "Age01_WoodStorage_Base",
+                    construction_stages: ("Age01_WoodStorage_Stage_01", "Age01_WoodStorage_Stage_02", "Age01_WoodStorage_Stage_03"),
+                    upgrades: [
+                        "Age01_WoodStorage_Empty_Upgrade_01_ExtraLayer",
+                        "Age01_WoodStorage_Full_Upgrade_01_ExtraLayer",
+                        "Age01_WoodStorage_Half_Upgrade_01_ExtraLayer",
+                    ],
+                    other_models: [],
+                ),
+                (
+                    age: 2,
+                    full_model: "Age02_WoodStorage_Base",
+                    construction_stages: ("Age02_WoodStorage_Stage_01", "Age02_WoodStorage_Stage_02", "Age02_WoodStorage_Stage_03"),
+                    upgrades: [
+                        "Age02_WoodStorage_Empty_Upgrade_01_ExtraLayer",
+                        "Age02_WoodStorage_Full_Upgrade_01_ExtraLayer",
+                        "Age02_WoodStorage_Half_Upgrade_01_ExtraLayer",
+                    ],
+                    other_models: [],
+                ),
+            ],
+            storage_models: [
+                (
+                    age: 1,
+                    resource: "resource:wood",
+                    empty_model: "Age01_WoodStorage_Empty",
+                    half_full_model: "Age01_WoodStorage_Half",
+                    full_model: "Age01_WoodStorage_Full",
+                ),
+                (
+                    age: 2,
+                    resource: "resource:wood",
+                    empty_model: "Age02_WoodStorage_Empty",
+                    half_full_model: "Age02_WoodStorage_Half",
+                    full_model: "Age02_WoodStorage_Full",
+                ),
+            ],
             passive_resources: [],
             station: None,
         ),

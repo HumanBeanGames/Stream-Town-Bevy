@@ -35,12 +35,12 @@ use stream_town_domain::{
     AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
-    BuildingDirection, BuildingState, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
-    CustomizationKind, EnemyCampState, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
-    LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NativeSaveStore,
-    ObjectiveEvent, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor,
-    SavedTerrainMesh, Season, StableId, StationDef, TownEvent, Weather, WorldSimulation,
-    WorldSnapshot, generate_world_with_content,
+    BuildingDirection, BuildingModelDef, BuildingState, CameraAction, CameraDirection, ChatCommand,
+    ContentCatalog, CustomizationKind, EnemyCampState, GameConfig, GeneratedFoliage,
+    GeneratedWorld, GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode,
+    MaterialDef, NativeSaveStore, ObjectiveEvent, PresentationCatalog, RoleEquipmentDef,
+    RulerVoteKind, SavedActor, SavedTerrainMesh, Season, StableId, StationDef, StorageModelDef,
+    TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -728,6 +728,7 @@ struct BuildingPresentation {
     applied_stage: u8,
     applied_level: u16,
     applied_age: u8,
+    applied_scene: Option<String>,
 }
 
 #[derive(Component)]
@@ -784,6 +785,12 @@ struct AgentEquipmentPresentation;
 #[derive(Component)]
 struct EquipmentNode {
     actor_root: Entity,
+    name: String,
+}
+
+#[derive(Component)]
+struct BuildingModelNode {
+    building_root: Entity,
     name: String,
 }
 
@@ -999,6 +1006,9 @@ impl Plugin for StreamTownGamePlugin {
                     sync_cosmetic_materials
                         .after(tag_cosmetic_renderers)
                         .after(apply_material_overrides),
+                    tag_building_model_nodes.after(sync_building_presentation),
+                    sync_building_model_nodes.after(tag_building_model_nodes),
+                    sync_tiled_building_rotation.after(sync_building_presentation),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -2188,6 +2198,7 @@ fn generate_and_spawn_world(
                 applied_stage: u8::MAX,
                 applied_level: u16::MAX,
                 applied_age: 1,
+                applied_scene: Some(scene.asset_path.clone()),
             },
             BuildingDamageEmitter::default(),
             Transform::from_translation(hall)
@@ -2213,6 +2224,7 @@ fn generate_and_spawn_world(
                 applied_stage: u8::MAX,
                 applied_level: u16::MAX,
                 applied_age: 1,
+                applied_scene: None,
             },
             BuildingDamageEmitter::default(),
             Mesh3d(render.cube.clone()),
@@ -2752,6 +2764,45 @@ fn archetype_scene_for_age(archetype: &ArchetypeDef, age: u8) -> Option<&Archety
         .iter()
         .find(|scene| scene.age == Some(age))
         .or_else(|| default_archetype_scene(archetype))
+}
+
+fn building_scene_for_state<'a>(
+    archetype: &'a ArchetypeDef,
+    definition: &BuildingDef,
+    building_id: &StableId,
+    state: &BuildingState,
+    age: u8,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Option<&'a ArchetypeScene> {
+    if building_id.as_str() != "building:wall" {
+        return archetype_scene_for_age(archetype, age);
+    }
+    let model_index = wall_tiling(tiled_neighbor_value(content, simulation, state)).0;
+    let model = definition
+        .model_handlers
+        .iter()
+        .filter(|model| model.age == age)
+        .nth(model_index)
+        .or_else(|| {
+            definition
+                .model_handlers
+                .iter()
+                .rev()
+                .find(|model| model.age == age)
+        })?;
+    let model_stem = model.full_model.strip_suffix("_Base")?;
+    archetype
+        .scenes
+        .iter()
+        .find(|scene| {
+            scene.age == Some(age)
+                && Path::new(&scene.source_model)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| stem.eq_ignore_ascii_case(model_stem))
+        })
+        .or_else(|| archetype_scene_for_age(archetype, age))
 }
 
 fn archetype_by_source<'a>(
@@ -5708,11 +5759,13 @@ fn sync_building_presentation(
     mut commands: Commands,
     simulation: Res<SimulationRuntime>,
     content: Res<RuntimeContent>,
+    authored_presentation: Res<RuntimePresentation>,
     config: Res<RuntimeConfig>,
     render: Res<RenderAssets>,
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut buildings: Query<(
+        Entity,
         &RuntimeBuilding,
         &mut BuildingPresentation,
         &mut Transform,
@@ -5720,7 +5773,8 @@ fn sync_building_presentation(
         Option<&mut WorldAssetRoot>,
     )>,
 ) {
-    for (runtime, mut presentation, mut transform, material, world_asset) in &mut buildings {
+    for (entity, runtime, mut presentation, mut transform, material, world_asset) in &mut buildings
+    {
         let Some(state) = simulation.0.buildings.get(&runtime.id) else {
             continue;
         };
@@ -5732,10 +5786,25 @@ fn sync_building_presentation(
         let age = building.map_or(1, |(building_id, _)| {
             building_age(&content.0, &simulation.0, building_id)
         });
+        let desired_scene = building.and_then(|(building_id, definition)| {
+            let archetype = &content.0.archetypes[&definition.archetype];
+            building_scene_for_state(
+                archetype,
+                definition,
+                building_id,
+                state,
+                age,
+                &content.0,
+                &simulation.0,
+            )
+            .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+        });
+        let desired_scene_path = desired_scene.map(|scene| scene.asset_path.as_str());
         let construction_stage = building_construction_stage(state.health, state.complete);
         if presentation.applied_stage == construction_stage
             && presentation.applied_level == state.level
             && presentation.applied_age == age
+            && presentation.applied_scene.as_deref() == desired_scene_path
         {
             continue;
         }
@@ -5747,26 +5816,38 @@ fn sync_building_presentation(
                 config.0.world.cell_size,
             );
         }
-        if presentation.applied_age != age {
-            if let (Some((_, building)), Some(mut world_asset), Some(asset_server)) =
-                (building, world_asset, asset_server.as_deref())
-            {
+        let has_authored_model = world_asset.is_some();
+        if presentation.applied_scene.as_deref() != desired_scene_path {
+            if let (Some((_, building)), Some(scene), Some(mut world_asset), Some(asset_server)) = (
+                building,
+                desired_scene,
+                world_asset,
+                asset_server.as_deref(),
+            ) {
                 let archetype = &content.0.archetypes[&building.archetype];
-                if let Some(scene) = archetype_scene_for_age(archetype, age)
-                    .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+                world_asset.0 = asset_server
+                    .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone()));
+                if let Some(material) =
+                    prefab_material_spec(archetype, scene, &authored_presentation.0, &render)
                 {
-                    world_asset.0 = asset_server
-                        .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone()));
+                    commands.entity(entity).insert(material);
                 }
             }
+            presentation.applied_scene = desired_scene_path.map(str::to_owned);
+        }
+        if presentation.applied_age != age {
             presentation.applied_age = age;
         }
         let is_town_hall = runtime.id.as_str() == "building:townhall";
-        let stage_scale = match construction_stage {
-            0 => 0.35,
-            1 => 0.55,
-            2 => 0.75,
-            _ => 1.0,
+        let stage_scale = if has_authored_model {
+            1.0
+        } else {
+            match construction_stage {
+                0 => 0.35,
+                1 => 0.55,
+                2 => 0.75,
+                _ => 1.0,
+            }
         };
         let level_scale = if is_town_hall {
             1.0
@@ -5786,6 +5867,271 @@ fn sync_building_presentation(
         }
         presentation.applied_stage = construction_stage;
         presentation.applied_level = state.level;
+    }
+}
+
+fn building_model_node_names(content: &ContentCatalog) -> BTreeSet<String> {
+    content
+        .buildings
+        .values()
+        .flat_map(|building| {
+            building
+                .model_handlers
+                .iter()
+                .flat_map(|model| {
+                    std::iter::once(model.full_model.clone())
+                        .chain(model.construction_stages.iter().cloned())
+                        .chain(model.upgrades.iter().cloned())
+                        .chain(model.other_models.iter().cloned())
+                })
+                .chain(building.storage_models.iter().flat_map(|model| {
+                    [
+                        model.empty_model.clone(),
+                        model.half_full_model.clone(),
+                        model.full_model.clone(),
+                    ]
+                }))
+        })
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn tag_building_model_nodes(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    buildings: Query<Entity, With<RuntimeBuilding>>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(Entity, &Name), (Without<BuildingModelNode>, Without<RuntimeBuilding>)>,
+) {
+    let names = building_model_node_names(&content.0);
+    for (entity, name) in &nodes {
+        if !names.contains(name.as_str()) {
+            continue;
+        }
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            if buildings.contains(ancestor) {
+                commands.entity(entity).insert(BuildingModelNode {
+                    building_root: ancestor,
+                    name: name.as_str().to_owned(),
+                });
+                break;
+            }
+        }
+    }
+}
+
+fn model_contains_node(model: &BuildingModelDef, name: &str) -> bool {
+    model.full_model == name
+        || model.construction_stages.iter().any(|node| node == name)
+        || model.upgrades.iter().any(|node| node == name)
+        || model.other_models.iter().any(|node| node == name)
+}
+
+fn model_node_visible(model: &BuildingModelDef, construction_stage: u8, name: &str) -> bool {
+    if construction_stage < 3 {
+        return model.construction_stages[usize::from(construction_stage)] == name;
+    }
+    model.full_model == name
+        || model.upgrades.iter().any(|node| node == name)
+        || model.other_models.iter().any(|node| node == name)
+}
+
+fn tiled_neighbor_value(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    state: &BuildingState,
+) -> u8 {
+    simulation
+        .buildings
+        .values()
+        .filter(|other| other.id != state.id)
+        .filter(|other| {
+            content.buildings.iter().any(|(id, definition)| {
+                definition.archetype == other.archetype
+                    && matches!(id.as_str(), "building:wall" | "building:gate")
+            })
+        })
+        .fold(0_u8, |value, other| {
+            value
+                | match (
+                    i32::from(other.position.x) - i32::from(state.position.x),
+                    i32::from(other.position.z) - i32::from(state.position.z),
+                ) {
+                    (1, 0) => 2,
+                    (-1, 0) => 8,
+                    (0, 1) => 16,
+                    (0, -1) => 4,
+                    _ => 0,
+                }
+        })
+}
+
+fn wall_tiling(tile_value: u8) -> (usize, i32) {
+    match tile_value {
+        0 | 2 | 8 | 10 => (0, 1),
+        4 | 16 | 20 => (0, 0),
+        18 => (1, 0),
+        6 => (1, 1),
+        12 => (1, 2),
+        24 => (1, 3),
+        22 => (3, 0),
+        14 => (3, 1),
+        28 => (3, 2),
+        26 => (3, 3),
+        _ => (2, 0),
+    }
+}
+
+fn gate_tiling(tile_value: u8) -> i32 {
+    match tile_value {
+        0 | 2 | 6 | 8 | 10 | 14 => 1,
+        12 | 28 => 2,
+        24 | 26 => 3,
+        _ => 0,
+    }
+}
+
+fn storage_node_visible(model: &StorageModelDef, amount: u32, capacity: u32, name: &str) -> bool {
+    if amount >= capacity {
+        model.full_model == name
+    } else if u64::from(amount).saturating_mul(2) >= u64::from(capacity) {
+        model.half_full_model == name
+    } else {
+        model.empty_model == name
+    }
+}
+
+fn building_node_visibility(
+    building_id: &StableId,
+    definition: &BuildingDef,
+    state: &BuildingState,
+    age: u8,
+    name: &str,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Option<bool> {
+    let model_index = if building_id.as_str() == "building:wall" {
+        wall_tiling(tiled_neighbor_value(content, simulation, state)).0
+    } else {
+        0
+    };
+    let active_model = definition
+        .model_handlers
+        .iter()
+        .filter(|model| model.age == age)
+        .nth(model_index)
+        .or_else(|| {
+            definition
+                .model_handlers
+                .iter()
+                .rev()
+                .find(|model| model.age == age)
+        })
+        .or_else(|| definition.model_handlers.first());
+    if let Some(model) = definition
+        .model_handlers
+        .iter()
+        .find(|model| model_contains_node(model, name))
+    {
+        return Some(
+            active_model.is_some_and(|active| std::ptr::eq(active, model))
+                && model_node_visible(
+                    model,
+                    building_construction_stage(state.health, state.complete),
+                    name,
+                ),
+        );
+    }
+    if let Some(model) = definition.storage_models.iter().find(|model| {
+        model.empty_model == name || model.half_full_model == name || model.full_model == name
+    }) {
+        if !state.complete || model.age != age {
+            return Some(false);
+        }
+        let amount = simulation
+            .town_resources
+            .get(&model.resource)
+            .copied()
+            .unwrap_or_default();
+        let capacity = resource_storage_capacity(config, content, simulation, &model.resource);
+        return Some(storage_node_visible(model, amount, capacity, name));
+    }
+    None
+}
+
+fn sync_building_model_nodes(
+    content: Res<RuntimeContent>,
+    config: Res<RuntimeConfig>,
+    simulation: Res<SimulationRuntime>,
+    buildings: Query<&RuntimeBuilding>,
+    mut nodes: Query<(&BuildingModelNode, &mut Visibility)>,
+) {
+    for (node, mut visibility) in &mut nodes {
+        let Ok(runtime) = buildings.get(node.building_root) else {
+            continue;
+        };
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let Some((building_id, definition)) = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, building)| building.archetype == state.archetype)
+        else {
+            continue;
+        };
+        let age = building_age(&content.0, &simulation.0, building_id);
+        let Some(visible) = building_node_visibility(
+            building_id,
+            definition,
+            state,
+            age,
+            &node.name,
+            &config.0,
+            &content.0,
+            &simulation.0,
+        ) else {
+            continue;
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+fn sync_tiled_building_rotation(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    mut buildings: Query<(&RuntimeBuilding, &mut Transform)>,
+) {
+    for (runtime, mut transform) in &mut buildings {
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let Some((building_id, _)) = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, building)| building.archetype == state.archetype)
+        else {
+            continue;
+        };
+        let tile_value = tiled_neighbor_value(&content.0, &simulation.0, state);
+        let quarter_turns = match building_id.as_str() {
+            "building:wall" => wall_tiling(tile_value).1,
+            "building:gate" => gate_tiling(tile_value),
+            _ => continue,
+        };
+        transform.rotation = quarter_turn_rotation(quarter_turns);
     }
 }
 
@@ -9597,6 +9943,7 @@ fn spawn_runtime_building(
                 applied_stage: u8::MAX,
                 applied_level: u16::MAX,
                 applied_age: age,
+                applied_scene: Some(scene.asset_path.clone()),
             },
             BuildingDamageEmitter::default(),
             Transform::from_translation(world_position)
@@ -9621,6 +9968,7 @@ fn spawn_runtime_building(
                 applied_stage: u8::MAX,
                 applied_level: u16::MAX,
                 applied_age: age,
+                applied_scene: None,
             },
             BuildingDamageEmitter::default(),
             Mesh3d(render.cube.clone()),
@@ -13679,6 +14027,161 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn authored_building_nodes_follow_construction_age_and_storage_fill() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let building_id = StableId::new("building:foodstorage").unwrap();
+        let definition = &content.buildings[&building_id];
+        assert_eq!(definition.model_handlers.len(), 2);
+        assert_eq!(definition.storage_models.len(), 2);
+        let runtime_id = StableId::new("building:model_test").unwrap();
+        let mut simulation = WorldSimulation::new(42);
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id.clone(),
+                archetype: definition.archetype.clone(),
+                position: GridPos { x: 10, z: 10 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 0,
+                complete: false,
+            },
+        );
+        let age_one = &definition.model_handlers[0];
+        let visible = |simulation: &WorldSimulation, name: &str, age| {
+            building_node_visibility(
+                &building_id,
+                definition,
+                &simulation.buildings[&runtime_id],
+                age,
+                name,
+                &config,
+                &content,
+                simulation,
+            )
+        };
+        assert_eq!(
+            visible(&simulation, &age_one.construction_stages[0], 1),
+            Some(true)
+        );
+        assert_eq!(visible(&simulation, &age_one.full_model, 1), Some(false));
+        simulation.buildings.get_mut(&runtime_id).unwrap().health = BUILDING_MAX_HEALTH / 2;
+        assert_eq!(
+            visible(&simulation, &age_one.construction_stages[1], 1),
+            Some(true)
+        );
+        simulation.buildings.get_mut(&runtime_id).unwrap().health = BUILDING_MAX_HEALTH * 4 / 5;
+        assert_eq!(
+            visible(&simulation, &age_one.construction_stages[2], 1),
+            Some(true)
+        );
+
+        let state = simulation.buildings.get_mut(&runtime_id).unwrap();
+        state.health = BUILDING_MAX_HEALTH;
+        state.complete = true;
+        assert_eq!(visible(&simulation, &age_one.full_model, 1), Some(true));
+        assert_eq!(
+            visible(&simulation, &definition.model_handlers[1].full_model, 1),
+            Some(false)
+        );
+
+        let storage = &definition.storage_models[0];
+        let capacity = resource_storage_capacity(&config, &content, &simulation, &storage.resource);
+        assert_eq!(visible(&simulation, &storage.empty_model, 1), Some(true));
+        simulation
+            .town_resources
+            .insert(storage.resource.clone(), capacity.div_ceil(2));
+        assert_eq!(
+            visible(&simulation, &storage.half_full_model, 1),
+            Some(true)
+        );
+        simulation
+            .town_resources
+            .insert(storage.resource.clone(), capacity);
+        assert_eq!(visible(&simulation, &storage.full_model, 1), Some(true));
+    }
+
+    #[test]
+    fn wall_and_gate_tiling_match_unity_tile_value_tables() {
+        assert_eq!(wall_tiling(0), (0, 1));
+        assert_eq!(wall_tiling(20), (0, 0));
+        assert_eq!(wall_tiling(6), (1, 1));
+        assert_eq!(wall_tiling(12), (1, 2));
+        assert_eq!(wall_tiling(24), (1, 3));
+        assert_eq!(wall_tiling(22), (3, 0));
+        assert_eq!(wall_tiling(14), (3, 1));
+        assert_eq!(wall_tiling(28), (3, 2));
+        assert_eq!(wall_tiling(26), (3, 3));
+        assert_eq!(wall_tiling(30), (2, 0));
+        assert_eq!(gate_tiling(2), 1);
+        assert_eq!(gate_tiling(12), 2);
+        assert_eq!(gate_tiling(24), 3);
+        assert_eq!(gate_tiling(18), 0);
+    }
+
+    #[test]
+    fn wall_adjacency_selects_the_matching_converted_scene() {
+        let content = embedded_content();
+        let building_id = StableId::new("building:wall").unwrap();
+        let definition = &content.buildings[&building_id];
+        let archetype = &content.archetypes[&definition.archetype];
+        let wall = StableId::new("building:wall_test").unwrap();
+        let neighbor = StableId::new("building:wall_neighbor").unwrap();
+        let state = BuildingState {
+            id: wall.clone(),
+            archetype: definition.archetype.clone(),
+            position: GridPos { x: 10, z: 10 },
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: BUILDING_MAX_HEALTH,
+            complete: true,
+        };
+        let mut simulation = WorldSimulation::new(42);
+        simulation.buildings.insert(wall, state.clone());
+        let straight = building_scene_for_state(
+            archetype,
+            definition,
+            &building_id,
+            &state,
+            1,
+            &content,
+            &simulation,
+        )
+        .unwrap();
+        assert!(straight.source_model.ends_with("Age01_Wall_Straight.fbx"));
+
+        simulation.buildings.insert(
+            neighbor.clone(),
+            BuildingState {
+                id: neighbor,
+                position: GridPos { x: 11, z: 10 },
+                ..state.clone()
+            },
+        );
+        let north = StableId::new("building:wall_north").unwrap();
+        simulation.buildings.insert(
+            north.clone(),
+            BuildingState {
+                id: north,
+                position: GridPos { x: 10, z: 11 },
+                ..state.clone()
+            },
+        );
+        let corner = building_scene_for_state(
+            archetype,
+            definition,
+            &building_id,
+            &state,
+            1,
+            &content,
+            &simulation,
+        )
+        .unwrap();
+        assert!(corner.source_model.ends_with("Age01_Wall_Corner.fbx"));
     }
 
     #[test]
