@@ -79,7 +79,7 @@ mistaken for production-ready systems.
   targets become Bevy animation mask groups. Character's Top `Carry`/`CarryHip`
   state machine follows live inventory parameters but, matching its source
   controller, its authored zero weight gives it no pose influence.
-- Presentation schema 9 retains 110 Unity float-property curves with 261 keys
+- Presentation schema 10 retains 110 Unity float-property curves with 261 keys
   across 18 clips and all ten authored `PlayRoleActionAudio` events. The runtime
   samples constant, unweighted Hermite, and weighted Bezier segments (all 261
   shipping keys are currently unweighted); the Credits state uses the
@@ -231,11 +231,12 @@ mistaken for production-ready systems.
 - A versioned presentation RON converter and YAML fallback that packages all
   133 reachable PNG/TGA textures (19,291,847 bytes), preserves 33 Unity
   materials with shader source, PBR approximations, texture slots, and custom
-  shader properties, and translates all 31 Animator controllers into 94 stable
+  shader properties, including 141 authored vector/color parameters, and
+  translates all 31 Animator controllers into 94 stable
   states, 166 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
   files into 1,196 stable transform tracks with rig-relative reference poses.
-  Presentation schema 9 additionally retains all 110 component/UI property
+  Presentation schema 10 additionally retains all 110 component/UI property
   curves (261 keys) across 18 clips—including the four transform-free clips—and
   all ten authored animation events. The runtime dispatches each converted
   `PlayRoleActionAudio` event exactly once per crossed clip cycle and plays a
@@ -280,6 +281,11 @@ mistaken for production-ready systems.
   matching per-renderer prefab override. The first inherited prefab material is
   retained as a fallback for unresolved legacy assets; the Town Hall path is
   covered by the DirectX 12 GPU smoke capture.
+- A custom Bevy PBR terrain extension and WGSL fragment shader consumes the
+  converted `Env_Terrain` palette, noise texture, texture scale, blend height,
+  and tint controls. Its shoreline-height transition is anchored to Bevy's
+  configured waterline so the authored look remains meaningful on the
+  deterministic replacement terrain, and season tint stays live.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -296,7 +302,7 @@ mistaken for production-ready systems.
 - The remaining rare/non-gameplay action emitters. Direct and nested
   layer/state-machine routing, conditioned entries,
   parent exits, masks, and property curves are converted and live.
-- Production terrain material/shader parity, shoreline treatment, chunked LOD,
+- Shoreline treatment beyond the authored height blend, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
   area attacks, additional enemy archetype behaviors/spawners, combat buildings
@@ -315,7 +321,7 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- WGSL shader ports, custom-shader material parity, VFX, UI
+- Remaining non-terrain WGSL shader ports, custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
   and customization data now map into native actor state and live presentation.
@@ -376,8 +382,8 @@ persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
-action emitters, production terrain/foliage shaders beyond the new environment palettes and
-particle fields, weighted curve tangents and custom-shader parity, the
+action emitters, remaining shoreline/LOD and foliage shader work, particle
+fields, non-terrain custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

@@ -24,6 +24,7 @@ pub struct PresentationConversionReport {
     pub texture_bytes: u64,
     pub materials: usize,
     pub custom_shader_materials: usize,
+    pub material_vector_properties: usize,
     pub material_prefab_bindings: usize,
     pub material_slots: usize,
     pub model_material_bindings: usize,
@@ -196,7 +197,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 9,
+        schema_version: 10,
         textures,
         materials,
         clips,
@@ -216,15 +217,22 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 9,
+        schema_version: 10,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
         custom_shader_materials: catalog
             .materials
             .values()
-            .filter(|material| !material.custom_properties.is_empty())
+            .filter(|material| {
+                !material.custom_properties.is_empty() || !material.custom_vectors.is_empty()
+            })
             .count(),
+        material_vector_properties: catalog
+            .materials
+            .values()
+            .map(|material| material.custom_vectors.len())
+            .sum(),
         material_prefab_bindings: catalog.prefab_materials.len(),
         material_slots: catalog.prefab_materials.values().map(Vec::len).sum(),
         model_material_bindings: catalog.model_materials.values().map(BTreeMap::len).sum(),
@@ -461,6 +469,16 @@ fn convert_materials(
                 .flatten()
             })
             .collect();
+        let custom_vectors = colors
+            .into_iter()
+            .filter(|(name, _)| {
+                !matches!(
+                    name.as_str(),
+                    "_BaseColor" | "_Color" | "_albedoColor" | "_EmissionColor" | "_EmissiveColour"
+                )
+            })
+            .map(|(name, value)| (name, color_value(Some(&value), [0.0; 4])))
+            .collect();
         let shader_source = asset
             .dependencies
             .iter()
@@ -481,6 +499,7 @@ fn convert_materials(
                 alpha_mode,
                 textures,
                 custom_properties,
+                custom_vectors,
             },
         );
     }
@@ -2470,6 +2489,14 @@ AvatarMask:
                     path: "m_SavedProperties.m_Floats.Array.data[0].second".into(),
                     value: Value::from(0.5),
                 },
+                UnityField {
+                    path: "m_SavedProperties.m_Colors.Array.data[0].first".into(),
+                    value: Value::String("_TerrainTint".into()),
+                },
+                UnityField {
+                    path: "m_SavedProperties.m_Colors.Array.data[0].second".into(),
+                    value: serde_json::json!({"r": 0.1, "g": 0.2, "b": 0.3, "a": 0.4}),
+                },
             ],
             dependencies: Vec::new(),
             game_object: None,
@@ -2477,6 +2504,16 @@ AvatarMask:
         assert_eq!(
             named_values(&asset, "m_SavedProperties.m_Floats.Array.data[")["_Metallic"],
             Value::from(0.5)
+        );
+        let color = color_value(
+            named_values(&asset, "m_SavedProperties.m_Colors.Array.data[").get("_TerrainTint"),
+            [0.0; 4],
+        );
+        assert!(
+            color
+                .into_iter()
+                .zip([0.1, 0.2, 0.3, 0.4])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
     }
 

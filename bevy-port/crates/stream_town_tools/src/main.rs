@@ -480,7 +480,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                     }
                     ui.label(format!(
                         "{} custom shader properties retained for WGSL porting",
-                        material.custom_properties.len()
+                        material.custom_properties.len() + material.custom_vectors.len()
                     ));
                 });
             }

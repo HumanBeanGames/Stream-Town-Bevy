@@ -1,5 +1,5 @@
 (
-    schema_version: 9,
+    schema_version: 10,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -843,6 +843,9 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:3bbbc484a6d30da4bbf40ef71eeba9ef": (
             display_name: "Flags",
@@ -887,6 +890,11 @@
                 "__dirty": 0.0,
                 "_strength": 0.14,
             },
+            custom_vectors: {
+                "_Colour1": (1.0, 0.8352941, 0.0, 0.0),
+                "_Colour2": (1.0, 0.02352941, 0.02352941, 0.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:4f78add7763965742bc2e69033ae53cd": (
             display_name: "Env_Terrain",
@@ -925,6 +933,27 @@
                 "_UVSec": 0.0,
                 "_ZWrite": 1.0,
                 "__dirty": 0.0,
+            },
+            custom_vectors: {
+                "_AutumnColor1": (0.7058823, 0.7058823, 0.7058823, 0.0),
+                "_AutumnColor2": (0.7803922, 0.827451, 0.8784314, 0.0),
+                "_DeadLandsColour1": (0.41509423, 0.41509423, 0.41509423, 0.0),
+                "_DeadLandsColour2": (0.31513953, 0.0, 0.5188678, 0.0),
+                "_GrassGridColor1": (0.17899266, 0.26415092, 0.05357778, 0.0),
+                "_GrassGridColor2": (0.4627449, 0.6784314, 0.14509791, 0.0),
+                "_GroundColour": (0.11092589, 0.3764706, 0.03529412, 0.0),
+                "_SandGridColor1": (1.0, 0.827731, 0.08823521, 0.0),
+                "_SandGridColor2": (0.823, 0.6814887, 0.07075561, 0.0),
+                "_SpringColor0": (0.46274495, 0.6784314, 0.14509794, 0.0),
+                "_SpringColor1": (0.46274495, 0.6784314, 0.14509794, 0.0),
+                "_TextureUV": (0.5, 0.5, 0.0, 0.0),
+                "_UndergroundColour": (0.5566037, 0.52709424, 0.06563721, 0.0),
+                "_Vector0": (9.25, 1.86, 0.0, 0.0),
+                "_Vector1": (1.0, 1.0, 0.0, 0.0),
+                "_WinterColor1": (0.7058823, 0.7058823, 0.7058823, 0.0),
+                "_WinterColor2": (0.7803922, 0.827451, 0.8784314, 0.0),
+                "_color1": (0.4215381, 0.49803922, 0.1529412, 0.0),
+                "_color2": (0.4055693, 0.47058824, 0.1411765, 0.0),
             },
         ),
         "material:50b70ad2c65959045ac8ba1a1e7d4876": (
@@ -979,6 +1008,11 @@
                 "_UVSec": 0.0,
                 "_ZWrite": 0.0,
             },
+            custom_vectors: {
+                "_BaseColorAddSubDiff": (0.0, 0.0, 0.0, 0.0),
+                "_CameraFadeParams": (0.0, 0.0, 0.0, 0.0),
+                "_SoftParticleFadeParams": (0.0, 0.0, 0.0, 0.0),
+            },
         ),
         "material:53c54ca1f911efc4ab1bcad96cab9f68": (
             display_name: "Necrolands_Platforms",
@@ -1017,6 +1051,15 @@
                 "_Tint": 0.0,
                 "_UVSec": 0.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_Dimension": (0.0, 0.0, 0.0, 0.0),
+                "_SandGridColor1": (0.09433961, 0.09433961, 0.09433961, 0.0),
+                "_SandGridColor2": (0.13207549, 0.13207549, 0.13207549, 0.0),
+                "_SpecColor": (1.0, 1.0, 1.0, 1.0),
+                "_TextureUV": (1.0, 1.0, 0.0, 0.0),
+                "_color1": (0.028301895, 0.028301895, 0.028301895, 0.0),
+                "_color2": (0.23584908, 0.23584908, 0.23584908, 0.0),
             },
         ),
         "material:56cfb478fa4b9e8469bcbbf9cf077701": (
@@ -1060,6 +1103,9 @@
                 "_Sync": 3.58,
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:58d58acf6944e0443b88b524c05997ae": (
@@ -1118,6 +1164,12 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_BaseColorAddSubDiff": (1.0, 0.0, 0.0, 0.0),
+                "_CameraFadeParams": (0.0, 0.0, 0.0, 0.0),
+                "_SoftParticleFadeParams": (0.0, 0.0, 0.0, 0.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:5b3d7f8507a83fb4e8752c8644108e0e": (
             display_name: "Clouds",
@@ -1168,6 +1220,9 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:5c9e4a69c302a234fb1174a6ffcc97a6": (
             display_name: "Necrolands_Skybox",
@@ -1209,6 +1264,11 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_GroundColor": (0.36899996, 0.34899998, 0.34099993, 1.0),
+                "_SkyTint": (0.375534, 0.42844796, 0.8207547, 1.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:62aac31799139a241a84eddf143ad695": (
             display_name: "Necrolands_Fog_Material",
@@ -1249,6 +1309,11 @@
                 "_Surface": 1.0,
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 0.0,
+            },
+            custom_vectors: {
+                "_Colour": (0.38300994, 0.41031453, 0.5377358, 0.0),
+                "_Smoothstep": (-3.0, 2.0, 0.0, 0.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:631afbf4de8b7ad4eabc5e30e0b2c778": (
@@ -1297,6 +1362,9 @@
                 "_XRMotionVectorsPass": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:6b066fd6d4281f24db90c2f3c9e5ced1": (
             display_name: "Necrolands_Floors",
@@ -1335,6 +1403,15 @@
                 "_Tint": 0.0,
                 "_UVSec": 0.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_Dimension": (0.0, 0.0, 0.0, 0.0),
+                "_SandGridColor1": (0.09433961, 0.09433961, 0.09433961, 0.0),
+                "_SandGridColor2": (0.13207549, 0.13207549, 0.13207549, 0.0),
+                "_SpecColor": (1.0, 1.0, 1.0, 1.0),
+                "_TextureUV": (1.0, 1.0, 0.0, 0.0),
+                "_color1": (0.33962262, 0.33962262, 0.33962262, 0.0),
+                "_color2": (0.3679245, 0.3679245, 0.3679245, 0.0),
             },
         ),
         "material:71aab08e61f8bba40bc786744ec3bf88": (
@@ -1392,6 +1469,11 @@
                 "_max": 0.0,
                 "_min": 0.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+                "_Vector0": (0.11, 4.16, 0.0, 0.0),
+                "_Vector2": (0.0, 2.98, 0.0, 0.0),
+            },
         ),
         "material:78f03efbdaaf7f142af400aae9f977d4": (
             display_name: "Necrolands_TerrainMaterial",
@@ -1430,6 +1512,15 @@
                 "_Tint": 0.0,
                 "_UVSec": 0.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_Dimension": (0.0, 0.0, 0.0, 0.0),
+                "_SandGridColor1": (0.09433961, 0.09433961, 0.09433961, 0.0),
+                "_SandGridColor2": (0.13207549, 0.13207549, 0.13207549, 0.0),
+                "_SpecColor": (1.0, 1.0, 1.0, 1.0),
+                "_TextureUV": (1.0, 1.0, 0.0, 0.0),
+                "_color1": (0.2148672, 0.16470589, 0.2627451, 0.0),
+                "_color2": (0.14097677, 0.12764151, 0.22, 0.0),
             },
         ),
         "material:799ef8ce46a71414286fd24c033a98fe": (
@@ -1472,6 +1563,9 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:7a86fa3adc0de2846959d3a8e931cdcf": (
             display_name: "Hair",
@@ -1500,6 +1594,7 @@
                 "_ZWrite": 1.0,
                 "__dirty": 0.0,
             },
+            custom_vectors: {},
         ),
         "material:8026547c73307004abf4e862ee5a3076": (
             display_name: "Necrolands_Second_Floor",
@@ -1539,6 +1634,15 @@
                 "_UVSec": 0.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_Dimension": (0.0, 0.0, 0.0, 0.0),
+                "_SandGridColor1": (0.34117648, 0.34117648, 0.34117648, 0.0),
+                "_SandGridColor2": (0.36862746, 0.36862746, 0.36862746, 0.0),
+                "_SpecColor": (1.0, 1.0, 1.0, 1.0),
+                "_TextureUV": (1.0, 1.0, 0.0, 0.0),
+                "_color1": (0.45, 0.45, 0.45, 0.0),
+                "_color2": (0.468, 0.468, 0.468, 0.0),
+            },
         ),
         "material:8143b1ac630bfce47b9b08316774795e": (
             display_name: "Necroland_Roads",
@@ -1575,6 +1679,11 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
                 "__dirty": 0.0,
+            },
+            custom_vectors: {
+                "_Grid1": (0.16470589, 0.2018196, 0.21960784, 0.0),
+                "_Grid2": (0.20784314, 0.2432613, 0.2627451, 0.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:8e992643a4ebffc45b6fbd0fbd83d88c": (
@@ -1622,6 +1731,11 @@
                 "_textureSize": 1.0,
                 "_windStrength": 0.79,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+                "_WindDetailSmoothness": (0.0, 1.0, 0.0, 0.0),
+                "_windDirection": (1.0, 0.0, 0.0, 0.0),
+            },
         ),
         "material:b3b004e484be0764cab0a08807b64c5c": (
             display_name: "Logo",
@@ -1667,6 +1781,9 @@
                 "_textureSize": -3.11,
                 "_textureSize1": 828.4,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:b837afe89d932d14cba0f2178703e9fd": (
             display_name: "BoundsVisualizer",
@@ -1697,6 +1814,10 @@
                 "_UVSec": 0.0,
                 "_ZWrite": 0.0,
                 "__dirty": 0.0,
+            },
+            custom_vectors: {
+                "_ASEOutlineColor": (0.0, 0.0, 0.0, 0.0),
+                "_boundsVisColor": (0.0, 0.8679245, 0.13729203, 0.44705883),
             },
         ),
         "material:b9b7b96c887f044788d84474e6eb88bb": (
@@ -1748,6 +1869,9 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:bd3279f83d3a4d545bb13efe1d4fa37c": (
             display_name: "Necrolands_Spawnpoint_Material",
@@ -1788,6 +1912,9 @@
                 "_Surface": 1.0,
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 0.0,
+            },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:ca50b2213bf6edf479f6b955d4e4ce4b": (
@@ -1838,6 +1965,9 @@
                 "_TransStrength": 0.0,
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:cc8c8df70fc41b04e8de9824ab27af7d": (
@@ -1906,6 +2036,27 @@
                 "_ZWrite": 1.0,
                 "_textureSize": 20.0,
             },
+            custom_vectors: {
+                "_AutumnDetailColor": (0.6117647, 0.4470588, 0.16470572, 1.0),
+                "_AutumnGrassColour": (0.30196062, 0.28235283, 0.07058809, 1.0),
+                "_DeadLandsColour": (0.57547164, 0.57547164, 0.57547164, 1.0),
+                "_DeadLandsDetail": (1.0, 1.0, 1.0, 1.0),
+                "_DetailColor": (0.3137254, 0.5411765, 0.14117637, 1.0),
+                "_GrassColour": (0.41960773, 0.49803925, 0.15294102, 1.0),
+                "_GridColor1": (0.4164764, 0.49803922, 0.1529412, 1.0),
+                "_GridColor2": (0.41909432, 0.47058824, 0.1411765, 1.0),
+                "_GridColor_01": (0.30915126, 0.59900004, 0.114409, 1.0),
+                "_GridColor_02": (1.0, 1.0, 1.0, 1.0),
+                "_SNOW": (0.57547164, 0.57547164, 0.57547164, 1.0),
+                "_SNOWDetailColor": (1.0, 1.0, 1.0, 1.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+                "_TextureUV": (1.0, 1.0, 0.0, 0.0),
+                "_WindColor": (0.44705883, 0.53333336, 0.16470589, 0.0),
+                "_WindTextureSmoothStep": (-0.28, 0.66, 0.0, 0.0),
+                "_WindTextureSpeed": (1.01, 1.0, 0.0, 0.0),
+                "_WorldPositionStrength": (0.5, 0.5, 0.0, 0.0),
+                "_windDirection": (1.0, 0.0, 0.0, 0.0),
+            },
         ),
         "material:db77edc4e0eb5e3459aa13134857a33a": (
             display_name: "Prototype_Grass",
@@ -1948,6 +2099,9 @@
                 "_UVSec": 0.0,
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:dd240dcc7026a43fca457734268f6cc0": (
@@ -1993,6 +2147,9 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
             },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+            },
         ),
         "material:deffc5e5a2d66c946b73e71cd7e7d1a9": (
             display_name: "VFX_Godrays",
@@ -2033,6 +2190,10 @@
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
                 "_alpha": 1.0,
+            },
+            custom_vectors: {
+                "_Colour": (0.8431373, 0.99607843, 1.0, 1.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:e8002052ebfabcc41b19a6d006964cb7": (
@@ -2110,6 +2271,29 @@
                 "__dirty": 0.0,
                 "_textureSize": 5.0,
             },
+            custom_vectors: {
+                "_Color0": (0.0901121, 0.6948354, 0.764151, 0.8156863),
+                "_DeepColor": (0.20652315, 0.3471635, 0.4811321, 1.0),
+                "_DeepColour": (0.036845837, 0.5289748, 0.8679245, 0.6117647),
+                "_DepthSmoothStep": (-0.08, 2.0, 0.0, 0.0),
+                "_Direction": (1.0, 0.0, 0.0, 0.0),
+                "_EdgeFoamColor": (0.764151, 0.764151, 0.764151, 1.0),
+                "_FoamColor": (1.0, 1.0, 1.0, 1.0),
+                "_IceColor": (0.79716986, 0.9271079, 1.0, 1.0),
+                "_IceSmoothStep": (-2.0, 2.0, 0.0, 0.0),
+                "_NormalSmoothStep": (-0.25, 1.0, 0.0, 0.0),
+                "_RefractionColourSmoothStep": (-1.0, 0.79, 0.0, 0.0),
+                "_RefractionDetail": (-4.0, 1.0, 0.0, 0.0),
+                "_RefractionDirection": (0.1, 0.0, 0.0, 0.0),
+                "_ShallowColour": (0.40396938, 0.7094073, 0.9622642, 0.49803922),
+                "_SoftSelect": (0.47, 3.32, 0.0, 0.0),
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
+                "_SurfaceColor": (0.0, 0.7647059, 1.0, 1.0),
+                "_WaterSurface": (0.09011204, 0.6948354, 0.764151, 0.8862745),
+                "_WaveSmoothstep": (0.2, 0.9, 0.0, 0.0),
+                "_WindDirection": (1.0, 0.0, 0.0, 0.0),
+                "_windDirection": (1.0, 0.0, 0.0, 0.0),
+            },
         ),
         "material:e9e09858274c5f7408ea960bb7071bc3": (
             display_name: "Eyes",
@@ -2138,6 +2322,7 @@
                 "_ZWrite": 1.0,
                 "__dirty": 0.0,
             },
+            custom_vectors: {},
         ),
         "material:fa4085ce3ea4d394bb4e587376c58cbd": (
             display_name: "Default_Material",
@@ -2181,6 +2366,9 @@
                 "_Surface": 0.0,
                 "_WorkflowMode": 1.0,
                 "_ZWrite": 1.0,
+            },
+            custom_vectors: {
+                "_SpecColor": (0.19999996, 0.19999996, 0.19999996, 1.0),
             },
         ),
         "material:fbc9229ba68366a41a2b9b02f09a81ab": (
@@ -2234,6 +2422,11 @@
                 "_Surface": 1.0,
                 "_UVSec": 0.0,
                 "_ZWrite": 0.0,
+            },
+            custom_vectors: {
+                "_BaseColorAddSubDiff": (0.0, 0.0, 0.0, 0.0),
+                "_CameraFadeParams": (0.0, 0.0, 0.0, 0.0),
+                "_SoftParticleFadeParams": (0.0, 0.0, 0.0, 0.0),
             },
         ),
         "material:fdfb0b9e62e356e46ae2218394e8fabc": (
@@ -2292,6 +2485,18 @@
                 "_Width": 0.0002,
                 "_ZWrite": 1.0,
                 "__dirty": 0.0,
+            },
+            custom_vectors: {
+                "_ASEOutlineColor": (0.0, 0.0, 0.0, 0.0),
+                "_AmbientOcclusion": (0.4, 1.74, 0.0, 0.0),
+                "_BaseTint": (1.0, 1.0, 1.0, 0.0),
+                "_DetailColor": (0.5215685, 0.5215685, 0.5215685, 1.0),
+                "_HighlightTint": (1.0, 1.0, 1.0, 1.0),
+                "_OutlineTint": (0.0, 0.0, 0.0, 0.0),
+                "_RimColor": (1.0, 1.0, 1.0, 0.0),
+                "_Rotation": (0.0, 1.0, 0.0, 0.0),
+                "_RoughnessMetalicValues": (1.0, 0.5, 0.0, 0.0),
+                "_SpecColor": (1.0, 1.0, 1.0, 1.0),
             },
         ),
     },

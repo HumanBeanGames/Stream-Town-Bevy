@@ -62,10 +62,11 @@ their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
 The same command copies all 133 reachable
-textures and emits `presentation.ron`: 33 material definitions, 75 clip records,
+textures and emits `presentation.ron`: 33 material definitions with 141 retained
+Unity vector/color shader parameters, 75 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 9 also
+`.anim` files into 1,196 stable transform tracks. Presentation schema 10 also
 retains 110 component/UI property curves with 261 keys across 18 clips, including
 the four transform-free clips, plus all ten authored animation events, and
 fixed/normalized duration plus destination offset for all 166 transitions. It retains
@@ -217,7 +218,11 @@ trimesh collider used for surface picking, lighting, converted GLB scenes for
 the representative town hall and actors, and primitive fallbacks when an asset
 is unavailable. Actors, resources, buildings, movement, joins, save restores,
 and selection markers use the same centimetre height data as navigation.
-Seasons and weather drive terrain/water tint, clear color, directional and
+The generated heightfield uses a Bevy PBR material extension whose WGSL port
+reconstructs the Unity terrain shader's authored sand/grass height blend, grid
+texture, palette, and tint controls; Bevy's configured waterline adapts that
+blend to the deterministic replacement terrain generator. Seasons and weather
+drive terrain/water tint, clear color, directional and
 ambient lighting, distance fog, and deterministic rain/snow fields from the
 authoritative simulation. For repeatable rendering diagnostics,
 `STREAM_TOWN_DEBUG_DAY=21` selects a starting day and
@@ -264,7 +269,7 @@ but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
 [`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). Rare/non-gameplay action
-emitters and custom WGSL shader parity remain presentation work. Property curves
+emitters and the remaining non-terrain WGSL shader ports remain presentation work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.

@@ -21,9 +21,11 @@ use bevy::{
     ecs::system::SystemParam,
     gltf::{GltfMaterialName, GltfMeshName},
     mesh::Indices,
+    pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
-    render::render_resource::PrimitiveTopology,
+    render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
     render::view::screenshot::{Screenshot, save_to_disk},
+    shader::ShaderRef,
     window::{PrimaryWindow, WindowResolution},
 };
 use stream_town_domain::{
@@ -40,6 +42,8 @@ use stream_town_domain::{
 
 const MAX_TOWN_GOALS: usize = 2;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
+const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
+const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.mat";
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -218,10 +222,37 @@ struct EnvironmentPresentation {
     applied: Option<(Season, Weather)>,
 }
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct TerrainMaterialUniform {
+    sand_color_a: Vec4,
+    sand_color_b: Vec4,
+    grass_color_a: Vec4,
+    grass_color_b: Vec4,
+    season_tint: Vec4,
+    texture_uv_blend_tint: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct TerrainMaterialExtension {
+    #[uniform(100)]
+    parameters: TerrainMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    grid_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for TerrainMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        TERRAIN_SHADER_ASSET_PATH.into()
+    }
+}
+
+type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainMaterialExtension>;
+
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
-    ground: Handle<StandardMaterial>,
+    ground: Handle<TerrainMaterial>,
     water: Handle<StandardMaterial>,
     wood: Handle<StandardMaterial>,
     ore: Handle<StandardMaterial>,
@@ -703,6 +734,7 @@ pub fn run(config: GameConfig) {
                 }),
         )
         .add_plugins(PhysicsPlugins::default())
+        .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -764,12 +796,16 @@ fn embedded_presentation() -> PresentationCatalog {
 
 fn setup_rendering(
     mut commands: Commands,
+    config: Res<RuntimeConfig>,
     presentation: Res<RuntimePresentation>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
+    terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
 ) {
-    let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
+    let (Some(mut meshes), Some(mut materials), Some(mut terrain_materials)) =
+        (meshes, materials, terrain_materials)
+    else {
         commands.insert_resource(RenderAssets::default());
         return;
     };
@@ -830,11 +866,11 @@ fn setup_rendering(
         .collect();
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
-        ground: materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.96,
-            ..default()
-        }),
+        ground: terrain_materials.add(terrain_material(
+            &presentation.0,
+            &config.0,
+            asset_server.as_deref(),
+        )),
         water: materials.add(StandardMaterial {
             base_color: Color::srgba(0.04, 0.24, 0.42, 0.62),
             perceptual_roughness: 0.18,
@@ -929,6 +965,68 @@ fn standard_material(
         perceptual_roughness: material.perceptual_roughness,
         alpha_mode,
         ..default()
+    }
+}
+
+fn terrain_material(
+    presentation: &PresentationCatalog,
+    config: &GameConfig,
+    asset_server: Option<&AssetServer>,
+) -> TerrainMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == TERRAIN_MATERIAL_PATH);
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let texture_uv = vector("_TextureUV", [0.5, 0.5, 0.0, 0.0]);
+    let grid_texture = authored.and_then(|material| {
+        asset_server.and_then(|asset_server| {
+            material
+                .textures
+                .get("_MainTexture")
+                .and_then(|id| presentation.textures.get(id))
+                .map(|texture| asset_server.load(texture.asset_path.clone()))
+        })
+    });
+    TerrainMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: authored.map_or(0.96, |material| material.perceptual_roughness),
+            ..default()
+        },
+        extension: TerrainMaterialExtension {
+            parameters: TerrainMaterialUniform {
+                sand_color_a: Vec4::from_array(vector(
+                    "_SandGridColor1",
+                    [0.934, 0.773, 0.084, 1.0],
+                )),
+                sand_color_b: Vec4::from_array(vector(
+                    "_SandGridColor2",
+                    [0.823, 0.681, 0.071, 1.0],
+                )),
+                grass_color_a: Vec4::from_array(vector("_color1", [0.422, 0.498, 0.153, 1.0])),
+                grass_color_b: Vec4::from_array(vector("_color2", [0.406, 0.471, 0.141, 1.0])),
+                season_tint: Vec4::new(1.0, 1.0, 1.0, scalar("_Tint", 0.0)),
+                texture_uv_blend_tint: Vec4::new(
+                    texture_uv[0],
+                    texture_uv[1],
+                    f32::from(config.world.water_level_centimetres) * 0.01,
+                    scalar("_BlendHeight", 1.0).max(0.01),
+                ),
+            },
+            grid_texture,
+        },
     }
 }
 
@@ -3556,6 +3654,7 @@ fn update_environment_presentation(
     mut presentation: ResMut<EnvironmentPresentation>,
     mut clear_color: Option<ResMut<ClearColor>>,
     mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     particles: Query<Entity, With<WeatherParticle>>,
@@ -3572,22 +3671,25 @@ fn update_environment_presentation(
             palette.clear_color[2],
         );
     }
-    if let Some(materials) = materials.as_deref_mut() {
-        if let Some(mut ground) = materials.get_mut(&render.ground) {
-            ground.base_color = Color::srgb(
-                palette.terrain_tint[0],
-                palette.terrain_tint[1],
-                palette.terrain_tint[2],
-            );
-        }
-        if let Some(mut water) = materials.get_mut(&render.water) {
-            water.base_color = Color::srgba(
-                palette.water_color[0],
-                palette.water_color[1],
-                palette.water_color[2],
-                palette.water_color[3],
-            );
-        }
+    if let Some(terrain_materials) = terrain_materials.as_deref_mut()
+        && let Some(mut ground) = terrain_materials.get_mut(&render.ground)
+    {
+        ground.extension.parameters.season_tint = Vec4::new(
+            palette.terrain_tint[0],
+            palette.terrain_tint[1],
+            palette.terrain_tint[2],
+            ground.extension.parameters.season_tint.w,
+        );
+    }
+    if let Some(materials) = materials.as_deref_mut()
+        && let Some(mut water) = materials.get_mut(&render.water)
+    {
+        water.base_color = Color::srgba(
+            palette.water_color[0],
+            palette.water_color[1],
+            palette.water_color[2],
+            palette.water_color[3],
+        );
     }
     for (mut fog, mut ambient) in &mut cameras {
         fog.color = Color::srgba(
@@ -10544,9 +10646,31 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 9);
+        assert_eq!(presentation.schema_version, 10);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
+        assert_eq!(
+            presentation
+                .materials
+                .values()
+                .map(|material| material.custom_vectors.len())
+                .sum::<usize>(),
+            141
+        );
+        let terrain = terrain_material(&presentation, &GameConfig::default(), None);
+        assert!(terrain.extension.grid_texture.is_none());
+        assert!((terrain.extension.parameters.texture_uv_blend_tint.z - -1.8).abs() < f32::EPSILON);
+        assert!((terrain.extension.parameters.texture_uv_blend_tint.w - 1.0).abs() < f32::EPSILON);
+        assert!(
+            terrain
+                .extension
+                .parameters
+                .sand_color_a
+                .to_array()
+                .into_iter()
+                .zip([1.0, 0.827_731, 0.088_235_21, 0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
         assert_eq!(presentation.controllers.len(), 31);
         assert_eq!(
             presentation

@@ -65,6 +65,9 @@ pub struct MaterialDef {
     /// Unity properties that need a custom WGSL material rather than Bevy PBR.
     #[serde(default)]
     pub custom_properties: BTreeMap<String, f32>,
+    /// Unity color/vector properties retained for custom WGSL materials.
+    #[serde(default)]
+    pub custom_vectors: BTreeMap<String, [f32; 4]>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -474,6 +477,11 @@ pub enum PresentationError {
         material: StableId,
         texture: StableId,
     },
+    #[error("material {material} has an invalid custom shader parameter {property}")]
+    InvalidMaterialParameter {
+        material: StableId,
+        property: String,
+    },
     #[error("animation clip {clip} has invalid converted path {path}")]
     InvalidClipPath { clip: StableId, path: String },
     #[error("animation clip {clip} has invalid transform track {path}: {reason}")]
@@ -649,6 +657,25 @@ impl PresentationCatalog {
             }
         }
         for (id, material) in &self.materials {
+            if let Some(property) = material
+                .custom_properties
+                .iter()
+                .find_map(|(property, value)| (!value.is_finite()).then_some(property))
+                .or_else(|| {
+                    material
+                        .custom_vectors
+                        .iter()
+                        .find_map(|(property, value)| {
+                            (!value.iter().all(|component| component.is_finite()))
+                                .then_some(property)
+                        })
+                })
+            {
+                return Err(PresentationError::InvalidMaterialParameter {
+                    material: id.clone(),
+                    property: property.clone(),
+                });
+            }
             for texture in material.textures.values() {
                 if !self.textures.contains_key(texture) {
                     return Err(PresentationError::MissingTexture {
@@ -1122,6 +1149,7 @@ mod tests {
                     alpha_mode: MaterialAlphaMode::Opaque,
                     textures: BTreeMap::from([("_MainTex".into(), missing.clone())]),
                     custom_properties: BTreeMap::new(),
+                    custom_vectors: BTreeMap::new(),
                 },
             )]),
             ..PresentationCatalog::default()
@@ -1290,6 +1318,7 @@ mod tests {
             alpha_mode: MaterialAlphaMode::Opaque,
             textures: BTreeMap::new(),
             custom_properties: BTreeMap::new(),
+            custom_vectors: BTreeMap::new(),
         };
         let invalid_path = PresentationCatalog {
             schema_version: 7,
