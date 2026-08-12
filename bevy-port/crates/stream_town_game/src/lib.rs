@@ -18,6 +18,7 @@ use bevy::{
     camera::ScalingMode,
     color::LinearRgba,
     ecs::system::SystemParam,
+    gltf::{GltfMaterialName, GltfMeshName},
     mesh::Indices,
     prelude::*,
     render::render_resource::PrimitiveTopology,
@@ -479,7 +480,17 @@ struct ConvertedAnimationLayerDriver {
 }
 
 #[derive(Component, Clone)]
-struct MaterialOverrideSpec(Handle<StandardMaterial>);
+struct MaterialOverrideSpec {
+    fallback: Option<Handle<StandardMaterial>>,
+    model_materials: BTreeMap<String, Handle<StandardMaterial>>,
+    renderer_materials: Vec<ResolvedRendererMaterialBinding>,
+}
+
+#[derive(Clone)]
+struct ResolvedRendererMaterialBinding {
+    target_path: String,
+    materials: BTreeMap<String, Handle<StandardMaterial>>,
+}
 
 #[derive(Component)]
 struct MaterialOverrideApplied;
@@ -1098,9 +1109,9 @@ fn generate_and_spawn_world(
                 .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
         ));
         if let Some(material) = town_hall
-            .and_then(|archetype| prefab_material_handle(archetype, &presentation.0, &render))
+            .and_then(|archetype| prefab_material_spec(archetype, scene, &presentation.0, &render))
         {
-            hall_entity.insert(MaterialOverrideSpec(material));
+            hall_entity.insert(material);
         }
     } else {
         let footprint = town_hall.map_or([2, 2], |archetype| archetype.footprint);
@@ -1299,10 +1310,10 @@ fn generate_and_spawn_world(
             } else if let Some(converted_animation) = converted_animation {
                 entity.insert(converted_animation);
             }
-            if let Some(material) = real_archetype
-                .and_then(|archetype| prefab_material_handle(archetype, &presentation.0, &render))
-            {
-                entity.insert(MaterialOverrideSpec(material));
+            if let Some(material) = real_archetype.and_then(|archetype| {
+                prefab_material_spec(archetype, scene, &presentation.0, &render)
+            }) {
+                entity.insert(material);
             }
         } else {
             entity.insert((
@@ -1506,17 +1517,62 @@ fn converted_animation_spec(
     })
 }
 
-fn prefab_material_handle(
+fn prefab_material_spec(
     archetype: &ArchetypeDef,
+    scene: &ArchetypeScene,
     presentation: &PresentationCatalog,
     render: &RenderAssets,
-) -> Option<Handle<StandardMaterial>> {
-    presentation
+) -> Option<MaterialOverrideSpec> {
+    let fallback = presentation
         .prefab_materials
-        .get(&archetype.source_guid)?
-        .iter()
+        .get(&archetype.source_guid)
+        .into_iter()
+        .flatten()
         .find_map(|id| render.presentation_materials.get(id))
-        .cloned()
+        .cloned();
+    let model_materials: BTreeMap<_, _> = presentation
+        .model_materials
+        .get(&scene.source_model)
+        .into_iter()
+        .flat_map(|materials| materials.iter())
+        .filter_map(|(name, id)| {
+            render
+                .presentation_materials
+                .get(id)
+                .cloned()
+                .map(|material| (name.clone(), material))
+        })
+        .collect();
+    let renderer_materials: Vec<_> = presentation
+        .prefab_renderer_materials
+        .get(&archetype.source_guid)
+        .into_iter()
+        .flatten()
+        .filter_map(|binding| {
+            let materials: BTreeMap<_, _> = binding
+                .materials
+                .iter()
+                .filter_map(|(name, id)| {
+                    render
+                        .presentation_materials
+                        .get(id)
+                        .cloned()
+                        .map(|material| (name.clone(), material))
+                })
+                .collect();
+            (!materials.is_empty()).then(|| ResolvedRendererMaterialBinding {
+                target_path: binding.target_path.clone(),
+                materials,
+            })
+        })
+        .collect();
+    (fallback.is_some() || !model_materials.is_empty() || !renderer_materials.is_empty()).then_some(
+        MaterialOverrideSpec {
+            fallback,
+            model_materials,
+            renderer_materials,
+        },
+    )
 }
 
 fn converted_asset_exists(asset_root: &Path, asset_path: &str) -> bool {
@@ -2901,8 +2957,8 @@ fn sync_fish_god_presentation(
             Transform::from_translation(position)
                 .with_scale(Vec3::splat(config.0.world.cell_size / 2.0)),
         ));
-        if let Some(material) = prefab_material_handle(archetype, &presentation.0, &render) {
-            entity.insert(MaterialOverrideSpec(material));
+        if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
+            entity.insert(material);
         }
     } else {
         let scale = config.0.world.cell_size * 1.5;
@@ -4785,22 +4841,42 @@ fn same_animation_blend(
             })
 }
 
+#[allow(clippy::type_complexity)]
 fn apply_material_overrides(
     mut commands: Commands,
     specs: Query<&MaterialOverrideSpec>,
     parents: Query<&ChildOf>,
+    names: Query<&Name>,
     mut renderers: Query<
-        (Entity, &mut MeshMaterial3d<StandardMaterial>),
+        (
+            Entity,
+            &mut MeshMaterial3d<StandardMaterial>,
+            Option<&GltfMeshName>,
+            Option<&GltfMaterialName>,
+        ),
         Without<MaterialOverrideApplied>,
     >,
 ) {
-    for (entity, mut material) in &mut renderers {
+    for (entity, mut material, mesh_name, material_name) in &mut renderers {
         let mut ancestor = entity;
+        let mut path = Vec::new();
         for _ in 0..64 {
             if let Ok(spec) = specs.get(ancestor) {
-                material.0 = spec.0.clone();
+                let hierarchy_path = path.iter().rev().cloned().collect::<Vec<_>>().join("/");
+                let authored = resolved_renderer_material(
+                    spec,
+                    &hierarchy_path,
+                    mesh_name.map(|name| name.0.as_str()),
+                    material_name.map(|name| name.0.as_str()),
+                );
+                if let Some(authored) = authored {
+                    material.0 = authored.clone();
+                }
                 commands.entity(entity).insert(MaterialOverrideApplied);
                 break;
+            }
+            if let Ok(name) = names.get(ancestor) {
+                path.push(name.as_str().to_owned());
             }
             let Ok(parent) = parents.get(ancestor) else {
                 break;
@@ -4808,6 +4884,59 @@ fn apply_material_overrides(
             ancestor = parent.parent();
         }
     }
+}
+
+fn resolved_renderer_material<'a>(
+    spec: &'a MaterialOverrideSpec,
+    hierarchy_path: &str,
+    mesh_name: Option<&str>,
+    material_name: Option<&str>,
+) -> Option<&'a Handle<StandardMaterial>> {
+    // Bevy puts each glTF primitive on a material-bearing child below its named
+    // mesh node. Strip that primitive child before comparing the hierarchy to
+    // the Unity renderer path, while retaining the mesh name as the stable
+    // fallback for Blender-added scene roots.
+    let node_path = if mesh_name.is_some() {
+        hierarchy_path
+            .rsplit_once('/')
+            .map_or(hierarchy_path, |(path, _)| path)
+    } else {
+        hierarchy_path
+    };
+    let target_name = mesh_name
+        .or_else(|| node_path.rsplit('/').next())
+        .unwrap_or_default();
+    let full_path_matches = |binding: &&ResolvedRendererMaterialBinding| {
+        binding.target_path == node_path
+            || node_path.ends_with(&format!("/{}", binding.target_path))
+            || binding.target_path.ends_with(&format!("/{node_path}"))
+    };
+    let name_matches = |binding: &&ResolvedRendererMaterialBinding| {
+        binding.target_path.rsplit('/').next() == Some(target_name)
+    };
+    let exact_path = material_name
+        .and_then(|name| {
+            spec.renderer_materials
+                .iter()
+                .filter(full_path_matches)
+                .find(|binding| binding.materials.contains_key(name))
+        })
+        .or_else(|| spec.renderer_materials.iter().find(full_path_matches));
+    let exact = exact_path.or_else(|| {
+        material_name
+            .and_then(|name| {
+                spec.renderer_materials
+                    .iter()
+                    .filter(name_matches)
+                    .find(|binding| binding.materials.contains_key(name))
+            })
+            .or_else(|| spec.renderer_materials.iter().find(name_matches))
+    });
+    material_name
+        .and_then(|name| exact.and_then(|binding| binding.materials.get(name)))
+        .or_else(|| material_name.and_then(|name| spec.model_materials.get(name)))
+        .or_else(|| exact.and_then(|binding| binding.materials.values().next()))
+        .or(spec.fallback.as_ref())
 }
 
 fn camera_controls(
@@ -6079,8 +6208,8 @@ fn spawn_enemy_camp(
             Transform::from_translation(world_position)
                 .with_scale(Vec3::splat(config.world.cell_size / 2.0)),
         ));
-        if let Some(material) = prefab_material_handle(archetype, presentation, render) {
-            entity.insert(MaterialOverrideSpec(material));
+        if let Some(material) = prefab_material_spec(archetype, scene, presentation, render) {
+            entity.insert(material);
         }
     } else {
         let size = Vec3::new(
@@ -6244,8 +6373,8 @@ fn spawn_runtime_enemy(
         if let Some(animation) = converted_animation {
             entity.insert(animation);
         }
-        if let Some(material) = prefab_material_handle(archetype, presentation, render) {
-            entity.insert(MaterialOverrideSpec(material));
+        if let Some(material) = prefab_material_spec(archetype, scene, presentation, render) {
+            entity.insert(material);
         }
     } else {
         entity.insert((
@@ -6328,8 +6457,8 @@ fn spawn_runtime_building(
                 .with_rotation(rotation)
                 .with_scale(base_scale),
         ));
-        if let Some(material) = prefab_material_handle(archetype, presentation, render) {
-            entity.insert(MaterialOverrideSpec(material));
+        if let Some(material) = prefab_material_spec(archetype, scene, presentation, render) {
+            entity.insert(material);
         }
     } else {
         let size = Vec3::new(
@@ -9662,13 +9791,108 @@ mod tests {
     }
 
     #[test]
+    fn renderer_material_resolution_prefers_exact_slots_then_model_then_fallback() {
+        let mut materials = Assets::<StandardMaterial>::default();
+        let fallback = materials.add(StandardMaterial::default());
+        let game = materials.add(StandardMaterial::default());
+        let skin = materials.add(StandardMaterial::default());
+        let wrong_same_name = materials.add(StandardMaterial::default());
+        let override_material = materials.add(StandardMaterial::default());
+        let spec = MaterialOverrideSpec {
+            fallback: Some(fallback.clone()),
+            model_materials: BTreeMap::from([
+                ("GameMaterial".into(), game.clone()),
+                ("SkinMaterial".into(), skin.clone()),
+            ]),
+            renderer_materials: vec![
+                ResolvedRendererMaterialBinding {
+                    target_path: "Other/Body_Blacksmith_Bulk".into(),
+                    materials: BTreeMap::from([("GameMaterial".into(), wrong_same_name)]),
+                },
+                ResolvedRendererMaterialBinding {
+                    target_path: "PlayerChar_TPose/Body_Mesh/Body_Blacksmith_Bulk".into(),
+                    materials: BTreeMap::from([("GameMaterial".into(), override_material.clone())]),
+                },
+            ],
+        };
+
+        let exact = resolved_renderer_material(
+            &spec,
+            "Scene/PlayerChar_TPose/Body_Mesh/Body_Blacksmith_Bulk/Body_Blacksmith_Bulk.GameMaterial",
+            Some("Body_Blacksmith_Bulk"),
+            Some("GameMaterial"),
+        )
+        .unwrap();
+        assert_eq!(exact.id(), override_material.id());
+
+        let model = resolved_renderer_material(
+            &spec,
+            "Scene/PlayerChar_TPose/Body_Mesh/Body_Blacksmith_Bulk/Body_Blacksmith_Bulk.SkinMaterial",
+            Some("Body_Blacksmith_Bulk"),
+            Some("SkinMaterial"),
+        )
+        .unwrap();
+        assert_eq!(model.id(), skin.id());
+
+        let inherited = resolved_renderer_material(
+            &spec,
+            "Scene/Unrelated/Unrelated.GameMaterial",
+            Some("Unrelated"),
+            Some("GameMaterial"),
+        )
+        .unwrap();
+        assert_eq!(inherited.id(), game.id());
+
+        let final_fallback =
+            resolved_renderer_material(&spec, "Scene/Unrelated", None, Some("Unmapped")).unwrap();
+        assert_eq!(final_fallback.id(), fallback.id());
+    }
+
+    #[test]
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 6);
+        assert_eq!(presentation.schema_version, 7);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.controllers.len(), 31);
+        assert_eq!(
+            presentation
+                .model_materials
+                .values()
+                .map(BTreeMap::len)
+                .sum::<usize>(),
+            241
+        );
+        assert_eq!(
+            presentation
+                .prefab_renderer_materials
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            903
+        );
+        assert_eq!(
+            presentation
+                .prefab_renderer_materials
+                .values()
+                .flatten()
+                .map(|renderer| renderer.materials.len())
+                .sum::<usize>(),
+            912
+        );
+        let character_materials = presentation
+            .model_materials
+            .get("Assets/Models/Characters/Characters.fbx")
+            .unwrap();
+        assert_eq!(
+            character_materials["GameMaterial"].as_str(),
+            "material:fa4085ce3ea4d394bb4e587376c58cbd"
+        );
+        assert_eq!(
+            character_materials["SkinMaterial"].as_str(),
+            "material:304fcfe47809be14ab680e64084f8494"
+        );
         let archetype =
             archetype_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
         let scene = default_archetype_scene(archetype).unwrap();

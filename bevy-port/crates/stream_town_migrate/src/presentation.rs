@@ -12,8 +12,8 @@ use stream_town_domain::{
     AnimationLayerBlendMode, AnimationLayerDef, AnimationMotionDef, AnimationParameterDef,
     AnimationParameterKind, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, AvatarMaskDef,
-    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog, StableId,
-    TextureDef,
+    MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
+    RendererMaterialBinding, StableId, TextureDef,
 };
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -25,6 +25,9 @@ pub struct PresentationConversionReport {
     pub custom_shader_materials: usize,
     pub material_prefab_bindings: usize,
     pub material_slots: usize,
+    pub model_material_bindings: usize,
+    pub renderer_material_bindings: usize,
+    pub renderer_material_slots: usize,
     pub clips: usize,
     pub converted_clips: usize,
     pub missing_clip_sources: usize,
@@ -80,6 +83,8 @@ struct UnityReference {
     guid: Option<String>,
     #[serde(default)]
     path: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +175,9 @@ pub fn convert(
     let (textures, texture_bytes) = convert_textures(&export, &root, out_dir)?;
     let materials = convert_materials(&export, &assets_by_path)?;
     let prefab_materials = convert_prefab_materials(&export, &assets_by_path, &materials);
+    let model_materials = convert_model_materials(&export, &root, out_dir, &materials);
+    let prefab_renderer_materials =
+        convert_prefab_renderer_materials(&export, &assets_by_path, &materials, &model_materials);
     let mut clips = convert_clips(&export, &root)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
     let controllers = convert_controllers(&export, &root, &assets_by_guid, &mut clips)?;
@@ -182,7 +190,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 6,
+        schema_version: 7,
         textures,
         materials,
         clips,
@@ -190,6 +198,8 @@ pub fn convert(
         avatar_masks,
         prefab_bindings,
         prefab_materials,
+        model_materials,
+        prefab_renderer_materials,
     };
     catalog
         .validate()
@@ -200,7 +210,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 6,
+        schema_version: 7,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -211,6 +221,18 @@ pub fn convert(
             .count(),
         material_prefab_bindings: catalog.prefab_materials.len(),
         material_slots: catalog.prefab_materials.values().map(Vec::len).sum(),
+        model_material_bindings: catalog.model_materials.values().map(BTreeMap::len).sum(),
+        renderer_material_bindings: catalog
+            .prefab_renderer_materials
+            .values()
+            .map(Vec::len)
+            .sum(),
+        renderer_material_slots: catalog
+            .prefab_renderer_materials
+            .values()
+            .flat_map(|renderers| renderers.iter())
+            .map(|renderer| renderer.materials.len())
+            .sum(),
         clips: catalog.clips.len(),
         converted_clips: catalog
             .clips
@@ -1188,6 +1210,210 @@ fn convert_prefab_materials(
     bindings
 }
 
+fn convert_model_materials(
+    export: &UnityExport,
+    unity_root: &Path,
+    out_dir: &Path,
+    materials: &BTreeMap<StableId, MaterialDef>,
+) -> BTreeMap<String, BTreeMap<String, StableId>> {
+    let material_guids: BTreeMap<_, _> = materials
+        .iter()
+        .map(|(id, material)| (material.source_guid.as_str(), id))
+        .collect();
+    let mut bindings = BTreeMap::new();
+    for model in export.assets.iter().filter(|asset| asset.kind == "model") {
+        let meta_path = unity_root.join(format!("{}.meta", model.path));
+        let Ok(contents) = fs::read_to_string(&meta_path) else {
+            continue;
+        };
+        let names: BTreeMap<_, _> = model
+            .importer_fields
+            .iter()
+            .filter_map(|field| {
+                let index = array_index(&field.path, "m_Materials.Array.data[")?;
+                field
+                    .path
+                    .ends_with("].name")
+                    .then(|| field.value.as_str().map(|name| (index, name.to_owned())))
+                    .flatten()
+            })
+            .collect();
+        let mut mapped = parse_model_material_remaps(&contents, &material_guids);
+        let converted_names = out_dir
+            .parent()
+            .map(|assets_root| assets_root.join(glb_asset_path(&model.path)))
+            .map_or_else(BTreeSet::new, |path| glb_material_names(&path));
+        if !converted_names.is_empty() {
+            mapped.retain(|name, _| converted_names.contains(name));
+        }
+        // Models without explicit external remaps still retain their importer names;
+        // match these to the effective renderer material names where Unity resolved one.
+        for (index, name) in names {
+            if mapped.contains_key(&name) {
+                continue;
+            }
+            let material = model
+                .game_object
+                .as_ref()
+                .into_iter()
+                .flat_map(|game_object| &game_object.components)
+                .filter(|component| is_renderer_component(component))
+                .flat_map(|component| renderer_material_references(component).into_iter())
+                .nth(index)
+                .and_then(|reference| reference.guid)
+                .and_then(|guid| material_guids.get(guid.as_str()));
+            if let Some(material) = material {
+                mapped.insert(name, (*material).clone());
+            }
+        }
+        if !mapped.is_empty() {
+            bindings.insert(model.path.clone(), mapped);
+        }
+    }
+    bindings
+}
+
+fn parse_model_material_remaps(
+    contents: &str,
+    material_guids: &BTreeMap<&str, &StableId>,
+) -> BTreeMap<String, StableId> {
+    let mut mapped = BTreeMap::new();
+    let mut active_name = None;
+    for line in contents.lines() {
+        if let Some(name) = line.trim().strip_prefix("name:") {
+            active_name = Some(name.trim().to_owned());
+        } else if line.trim_start().starts_with("second:")
+            && let Some((name, guid)) = active_name.take().zip(reference_guid(line))
+            && let Some(material) = material_guids.get(guid)
+        {
+            mapped.insert(name, (*material).clone());
+        }
+    }
+    mapped
+}
+
+fn glb_material_names(path: &Path) -> BTreeSet<String> {
+    let Ok(bytes) = fs::read(path) else {
+        return BTreeSet::new();
+    };
+    let Some(length) = bytes
+        .get(12..16)
+        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+        .map(u32::from_le_bytes)
+        .and_then(|length| usize::try_from(length).ok())
+    else {
+        return BTreeSet::new();
+    };
+    let Some(document) = bytes.get(20..20_usize.saturating_add(length)) else {
+        return BTreeSet::new();
+    };
+    serde_json::from_slice::<Value>(document)
+        .ok()
+        .and_then(|document| document.get("materials").and_then(Value::as_array).cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|material| {
+            material
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn convert_prefab_renderer_materials(
+    export: &UnityExport,
+    assets_by_path: &BTreeMap<&str, &UnityAsset>,
+    materials: &BTreeMap<StableId, MaterialDef>,
+    model_materials: &BTreeMap<String, BTreeMap<String, StableId>>,
+) -> BTreeMap<String, Vec<RendererMaterialBinding>> {
+    let material_guids: BTreeMap<_, _> = materials
+        .iter()
+        .map(|(id, material)| (material.source_guid.as_str(), id))
+        .collect();
+    let mut bindings = BTreeMap::new();
+    for prefab in export.assets.iter().filter(|asset| asset.kind == "prefab") {
+        let embedded_by_material = prefab
+            .dependencies
+            .iter()
+            .filter_map(|dependency| dependency.path.as_deref())
+            .filter_map(|path| assets_by_path.get(path).copied())
+            .filter(|asset| asset.kind == "model")
+            .filter_map(|model| model_materials.get(&model.path))
+            .flat_map(|model| model.iter())
+            .fold(
+                BTreeMap::<StableId, Vec<String>>::new(),
+                |mut result, (name, id)| {
+                    result.entry(id.clone()).or_default().push(name.clone());
+                    result
+                },
+            );
+        let mut renderers = BTreeMap::<String, BTreeMap<String, StableId>>::new();
+        for component in prefab
+            .game_object
+            .as_ref()
+            .into_iter()
+            .flat_map(|game_object| &game_object.components)
+            .filter(|component| is_renderer_component(component))
+        {
+            let references = renderer_material_references(component);
+            let mut converted = BTreeMap::new();
+            for (slot, reference) in references.iter().enumerate() {
+                let Some(material) = reference
+                    .guid
+                    .as_deref()
+                    .and_then(|guid| material_guids.get(guid))
+                    .copied()
+                else {
+                    continue;
+                };
+                let embedded_name = embedded_by_material
+                    .get(material)
+                    .and_then(|names| names.get(slot).or_else(|| names.first()))
+                    .cloned()
+                    .or_else(|| reference.name.clone())
+                    .unwrap_or_else(|| format!("slot:{slot}"));
+                converted.insert(embedded_name, material.clone());
+            }
+            if !converted.is_empty() {
+                renderers
+                    .entry(component.hierarchy_path.clone())
+                    .or_default()
+                    .extend(converted);
+            }
+        }
+        if !renderers.is_empty() {
+            bindings.insert(
+                prefab.guid.clone(),
+                renderers
+                    .into_iter()
+                    .map(|(target_path, materials)| RendererMaterialBinding {
+                        target_path,
+                        materials,
+                    })
+                    .collect(),
+            );
+        }
+    }
+    bindings
+}
+
+fn is_renderer_component(component: &UnityComponent) -> bool {
+    component.type_name.as_deref().is_some_and(|name| {
+        name.starts_with("UnityEngine.MeshRenderer,")
+            || name.starts_with("UnityEngine.SkinnedMeshRenderer,")
+    })
+}
+
+fn renderer_material_references(component: &UnityComponent) -> Vec<UnityReference> {
+    component
+        .fields
+        .iter()
+        .find(|field| field.path == "sharedMaterials")
+        .and_then(|field| serde_json::from_value(field.value.clone()).ok())
+        .unwrap_or_default()
+}
+
 fn collect_prefab_dependencies(
     asset: &UnityAsset,
     assets_by_path: &BTreeMap<&str, &UnityAsset>,
@@ -1932,6 +2158,66 @@ AvatarMask:
         assert_eq!(
             named_values(&asset, "m_SavedProperties.m_Floats.Array.data[")["_Metallic"],
             Value::from(0.5)
+        );
+    }
+
+    #[test]
+    fn parses_model_external_material_remaps_by_embedded_name() {
+        let game = StableId::new("material:game").unwrap();
+        let skin = StableId::new("material:skin").unwrap();
+        let material_guids = BTreeMap::from([
+            ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &game),
+            ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &skin),
+        ]);
+        let yaml = r"externalObjects:
+  - first:
+      type: UnityEngine:Material
+      name: GameMaterial
+    second: {fileID: 2100000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 2}
+  - first:
+      type: UnityEngine:Material
+      name: SkinMaterial
+    second: {fileID: 2100000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 2}
+  - first:
+      type: UnityEngine:Material
+      name: UnreachableMaterial
+    second: {fileID: 2100000, guid: cccccccccccccccccccccccccccccccc, type: 2}
+";
+
+        let mapped = parse_model_material_remaps(yaml, &material_guids);
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped["GameMaterial"], game);
+        assert_eq!(mapped["SkinMaterial"], skin);
+    }
+
+    #[test]
+    fn renderer_material_references_preserve_unity_slot_order() {
+        let component = UnityComponent {
+            hierarchy_path: "Root/Renderer".into(),
+            type_name: Some("UnityEngine.MeshRenderer, UnityEngine.CoreModule".into()),
+            fields: vec![UnityField {
+                path: "sharedMaterials".into(),
+                value: serde_json::json!([
+                    {
+                        "Guid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "Path": "Assets/Materials/Game.mat",
+                        "Name": "GameMaterial"
+                    },
+                    {
+                        "Guid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "Path": "Assets/Materials/Skin.mat",
+                        "Name": "SkinMaterial"
+                    }
+                ]),
+            }],
+        };
+
+        let references = renderer_material_references(&component);
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].name.as_deref(), Some("GameMaterial"));
+        assert_eq!(
+            references[1].guid.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
         );
     }
 }

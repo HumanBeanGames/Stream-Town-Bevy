@@ -233,13 +233,18 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     }
     ui.separator();
     ui.label(format!(
-        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} materials, {} material-bound prefabs, {} controllers, {} source records",
+        "Active catalog: {} archetypes, {} buildings, {} roles, {} technologies, {} materials, {} renderer bindings, {} controllers, {} source records",
         state.catalog.archetypes.len(),
         state.catalog.buildings.len(),
         state.catalog.roles.len(),
         state.catalog.technology.nodes.len(),
         state.presentation.materials.len(),
-        state.presentation.prefab_materials.len(),
+        state
+            .presentation
+            .prefab_renderer_materials
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
         state.presentation.controllers.len(),
         state.catalog.source_records.len()
     ));
@@ -291,10 +296,15 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} material-bound prefabs / {} clips ({} native transform) / {} controllers",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform) / {} controllers",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
-            state.presentation.prefab_materials.len(),
+            state
+                .presentation
+                .prefab_renderer_materials
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
             state.presentation.clips.len(),
             converted_clips,
             state.presentation.controllers.len()
@@ -411,6 +421,28 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
             }
         });
         ui.collapsing("Materials and texture bindings", |ui| {
+            ui.label(format!(
+                "{} model material-name bindings; {} renderer paths / {} material slots",
+                state
+                    .presentation
+                    .model_materials
+                    .values()
+                    .map(BTreeMap::len)
+                    .sum::<usize>(),
+                state
+                    .presentation
+                    .prefab_renderer_materials
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>(),
+                state
+                    .presentation
+                    .prefab_renderer_materials
+                    .values()
+                    .flat_map(|renderers| renderers.iter())
+                    .map(|renderer| renderer.materials.len())
+                    .sum::<usize>()
+            ));
             for (id, material) in &state.presentation.materials {
                 ui.collapsing(format!("{}  ({id})", material.display_name), |ui| {
                     ui.monospace(format!("Unity material: {}", material.source_path));

@@ -23,6 +23,12 @@ pub struct PresentationCatalog {
     /// Effective material dependencies after following nested prefab/model sources.
     #[serde(default)]
     pub prefab_materials: BTreeMap<String, Vec<StableId>>,
+    /// Unity model-importer material names mapped to stable authored materials.
+    #[serde(default)]
+    pub model_materials: BTreeMap<String, BTreeMap<String, StableId>>,
+    /// Per-renderer prefab overrides, keyed by the source prefab GUID.
+    #[serde(default)]
+    pub prefab_renderer_materials: BTreeMap<String, Vec<RendererMaterialBinding>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -257,6 +263,14 @@ pub struct AvatarMaskDef {
     pub transform_weights: BTreeMap<String, f32>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RendererMaterialBinding {
+    /// Unity renderer path relative to the prefab root.
+    pub target_path: String,
+    /// Converted glTF material name to the effective Unity prefab material.
+    pub materials: BTreeMap<String, StableId>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct AnimationControllerDef {
     pub display_name: String,
@@ -377,6 +391,18 @@ pub enum PresentationError {
     MissingPrefabMaterial {
         prefab_guid: String,
         material: StableId,
+    },
+    #[error("model {model} material {embedded_name} references missing material {material}")]
+    MissingModelMaterial {
+        model: String,
+        embedded_name: String,
+        material: StableId,
+    },
+    #[error("prefab {prefab_guid} renderer {target_path} has invalid material binding: {reason}")]
+    InvalidRendererMaterialBinding {
+        prefab_guid: String,
+        target_path: String,
+        reason: String,
     },
 }
 
@@ -662,6 +688,60 @@ impl PresentationCatalog {
                 }
             }
         }
+        for (model, materials) in &self.model_materials {
+            if model.contains('\\')
+                || model.contains("..")
+                || !Path::new(model)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("fbx"))
+            {
+                return Err(PresentationError::InvalidRendererMaterialBinding {
+                    prefab_guid: "model".into(),
+                    target_path: model.clone(),
+                    reason: "model path must be a portable FBX source path".into(),
+                });
+            }
+            for (embedded_name, material) in materials {
+                if embedded_name.trim().is_empty() || !self.materials.contains_key(material) {
+                    return Err(PresentationError::MissingModelMaterial {
+                        model: model.clone(),
+                        embedded_name: embedded_name.clone(),
+                        material: material.clone(),
+                    });
+                }
+            }
+        }
+        for (prefab_guid, renderers) in &self.prefab_renderer_materials {
+            let mut paths = std::collections::BTreeSet::new();
+            for renderer in renderers {
+                let path_valid = !renderer.target_path.contains('\\')
+                    && (renderer.target_path.is_empty()
+                        || renderer
+                            .target_path
+                            .split('/')
+                            .all(|segment| !segment.is_empty() && !matches!(segment, "." | "..")));
+                if !path_valid
+                    || renderer.materials.is_empty()
+                    || !paths.insert(&renderer.target_path)
+                {
+                    return Err(PresentationError::InvalidRendererMaterialBinding {
+                        prefab_guid: prefab_guid.clone(),
+                        target_path: renderer.target_path.clone(),
+                        reason:
+                            "renderer paths must be unique/portable and bind at least one material"
+                                .into(),
+                    });
+                }
+                for (embedded_name, material) in &renderer.materials {
+                    if embedded_name.trim().is_empty() || !self.materials.contains_key(material) {
+                        return Err(PresentationError::MissingPrefabMaterial {
+                            prefab_guid: prefab_guid.clone(),
+                            material: material.clone(),
+                        });
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -841,6 +921,59 @@ mod tests {
                 controller: controller_id,
                 layer: "Base Layer".into(),
                 mask: mask_id,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_renderer_material_bindings() {
+        let material = StableId::new("material:one").unwrap();
+        let definition = MaterialDef {
+            display_name: "One".into(),
+            source_guid: "a".repeat(32),
+            source_path: "Assets/One.mat".into(),
+            shader_source: None,
+            base_color: [1.0; 4],
+            emissive: [0.0; 4],
+            metallic: 0.0,
+            perceptual_roughness: 1.0,
+            alpha_mode: MaterialAlphaMode::Opaque,
+            textures: BTreeMap::new(),
+            custom_properties: BTreeMap::new(),
+        };
+        let invalid_path = PresentationCatalog {
+            schema_version: 7,
+            materials: BTreeMap::from([(material.clone(), definition.clone())]),
+            prefab_renderer_materials: BTreeMap::from([(
+                "prefab".into(),
+                vec![RendererMaterialBinding {
+                    target_path: "Root/../Renderer".into(),
+                    materials: BTreeMap::from([("GameMaterial".into(), material.clone())]),
+                }],
+            )]),
+            ..PresentationCatalog::default()
+        };
+        assert!(matches!(
+            invalid_path.validate(),
+            Err(PresentationError::InvalidRendererMaterialBinding { .. })
+        ));
+
+        let missing = StableId::new("material:missing").unwrap();
+        let dangling = PresentationCatalog {
+            schema_version: 7,
+            materials: BTreeMap::from([(material, definition)]),
+            model_materials: BTreeMap::from([(
+                "Assets/Model.fbx".into(),
+                BTreeMap::from([("GameMaterial".into(), missing.clone())]),
+            )]),
+            ..PresentationCatalog::default()
+        };
+        assert_eq!(
+            dangling.validate(),
+            Err(PresentationError::MissingModelMaterial {
+                model: "Assets/Model.fbx".into(),
+                embedded_name: "GameMaterial".into(),
+                material: missing,
             })
         );
     }

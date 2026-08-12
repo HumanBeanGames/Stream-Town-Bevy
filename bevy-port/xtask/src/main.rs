@@ -1,4 +1,4 @@
-use std::{fs, path::Path, time::Instant};
+use std::{collections::BTreeMap, fs, path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -214,7 +214,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (6, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
+    ) != (7, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || (blend_states, inferred_parameters) != (11, 2)
         || (presentation_state_machines, presentation_layers) != (45, 33)
@@ -232,6 +232,25 @@ fn validate() -> Result<()> {
             .filter(|weight| weight.abs() < f32::EPSILON)
             .count()
             != 118
+        || presentation
+            .model_materials
+            .values()
+            .map(BTreeMap::len)
+            .sum::<usize>()
+            != 241
+        || presentation
+            .prefab_renderer_materials
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+            != 903
+        || presentation
+            .prefab_renderer_materials
+            .values()
+            .flat_map(|renderers| renderers.iter())
+            .map(|renderer| renderer.materials.len())
+            .sum::<usize>()
+            != 912
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }

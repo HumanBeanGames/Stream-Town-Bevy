@@ -69,8 +69,11 @@ prefab/controller/model bindings. The YAML fallback converts 57 standalone
 not contain transform curves. It also retains 11 authored 1D blend states and
 typed transition conditions; the stale `Slam` and `Swipe` conditions become
 provenance-marked inferred parameters. Renderer inheritance resolves to 141
-prefab material bindings and 181 material slots. The known missing Necrolands
-camera clip is an explicit validated record.
+prefab material bindings and 181 material dependencies. Presentation schema 7
+additionally resolves 241 model-importer material names plus 912 authored slots
+across 903 prefab renderers, preserving distinct materials on multi-primitive
+GLB meshes. The known missing Necrolands camera clip is an explicit validated
+record.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:
@@ -228,9 +231,11 @@ Goblin path). The Player controller builds 19 converted clips retargeted onto 23
 bones in the Player GLB rest pose. An engine-independent interpreter evaluates
 typed parameters, trigger consumption, direct transitions, exit gates, and 1D
 threshold blending; runtime movement feeds the authored velocity/5 `Move Speed`
-parameter into Idle/Walk/Run. Converted renderer descendants receive a cached
-Bevy PBR approximation of their first inherited Unity material, including
-PNG/TGA base textures, color, emission, metallic, smoothness, and alpha settings.
+parameter into Idle/Walk/Run. Converted renderer descendants receive cached Bevy
+PBR approximations of their Unity materials, including PNG/TGA base textures,
+color, emission, metallic, smoothness, and alpha settings. Bevy glTF mesh and
+material names select model-importer mappings and exact per-renderer overrides;
+the inherited material is retained only as a compatibility fallback.
 Player GLB descendants also apply persisted body, hair, facial-hair, eye,
 hair-color, and eye-color selections in Unity's serialized order. Cosmetic
 material variants are cached per source material and helmets suppress hair.
@@ -248,8 +253,8 @@ effective weights. The three AvatarMask assets retain 477 stable transform weigh
 Unity fixes layer zero to weight one; higher layers use their serialized default,
 so the shipping Character Top layer continues to evaluate its carry state machine
 but correctly has zero pose influence. Rare/non-gameplay action emitters, exact
-Unity curve tangents, property/UI animation, exact multi-slot assignment, and
-custom WGSL shader parity remain presentation work.
+Unity curve tangents, property/UI animation, and custom WGSL shader parity remain
+presentation work.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

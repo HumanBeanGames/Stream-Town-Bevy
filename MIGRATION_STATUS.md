@@ -235,7 +235,10 @@ mistaken for production-ready systems.
   and `Swipe` conditions are retained as two inferred Boolean parameters rather
   than silently discarded. It resolves inherited prefab/controller/model
   dependencies into 22 animation bindings and resolves inherited renderer
-  dependencies into 141 prefab material bindings containing 181 slots; 18
+  dependencies into 141 prefab material bindings containing 181 material
+  dependencies. Presentation schema 7 resolves 241 Unity model-importer
+  material-name remaps and 912 slots across 903 prefab renderers, including the
+  shipping two-material meshes; 18
   animation bindings have an embedded GLB animation available. The sole
   dangling Unity motion GUID in the Necrolands camera controller is retained
   and checked as an explicit missing-source baseline instead of being discarded.
@@ -260,8 +263,10 @@ mistaken for production-ready systems.
 - Bevy runtime material reconstruction for converted scenes. Unity base color,
   primary texture, emission, metallic, smoothness, and alpha settings are mapped
   into cached `StandardMaterial` assets, with PNG and TGA decoding enabled. The
-  first inherited prefab material is applied to spawned GLB renderer descendants;
-  the Town Hall path is covered by the DirectX 12 GPU smoke capture.
+  glTF material names select their exact model-importer material, then any
+  matching per-renderer prefab override. The first inherited prefab material is
+  retained as a fallback for unresolved legacy assets; the Town Hall path is
+  covered by the DirectX 12 GPU smoke capture.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -300,7 +305,7 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- WGSL shader ports, exact multi-slot/custom-shader material parity, VFX, UI
+- WGSL shader ports, custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
   and customization data now map into native actor state and live presentation.
@@ -362,7 +367,7 @@ depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
 action emitters, production terrain/foliage shaders beyond the new environment palettes and
-particle fields, exact curve tangents and multi-slot/custom-shader parity, the
+particle fields, exact curve tangents and custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
