@@ -1064,6 +1064,10 @@ impl Plugin for StreamTownGamePlugin {
                     apply_agent_commands.after(process_injected_commands),
                     apply_building_commands.after(process_injected_commands),
                     sync_building_placers.after(process_injected_commands),
+                    sync_foliage_clearance
+                        .after(apply_building_commands)
+                        .after(load_input)
+                        .after(move_agents),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -2721,6 +2725,7 @@ fn spawn_foliage_visual(
                     * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
             )
             .with_scale(scale),
+        Visibility::Inherited,
         bevy::camera::visibility::VisibilityRange::abrupt(0.0, FOLIAGE_VISIBILITY_RANGE),
         bevy::light::NotShadowCaster,
     ));
@@ -9093,6 +9098,57 @@ fn rotated_footprint(footprint: [u16; 2], rotation_quarter_turns: i32) -> [u16; 
     }
 }
 
+fn foliage_clearance_regions(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> Vec<stream_town_domain::DirtyRegion> {
+    let building_regions = simulation.buildings.values().filter_map(|building| {
+        let definition = building_def_for_archetype(content, &building.archetype)?;
+        building_region(
+            building.position,
+            rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+            world,
+        )
+    });
+    let camp_regions = simulation.enemy_camps.values().filter_map(|camp| {
+        let archetype = content.archetypes.get(&camp.archetype)?;
+        building_region(camp.position, archetype.footprint, world)
+    });
+    building_regions.chain(camp_regions).collect()
+}
+
+fn region_contains_grid_position(
+    region: stream_town_domain::DirtyRegion,
+    position: GridPos,
+) -> bool {
+    (region.min.x..=region.max.x).contains(&position.x)
+        && (region.min.z..=region.max.z).contains(&position.z)
+}
+
+/// Mirrors Unity's placement-time foliage clearing without destroying the
+/// deterministic generated instances. Deriving visibility from current
+/// structural occupancy also restores foliage when a building is removed and
+/// recomputes the correct result after loading a different save.
+fn sync_foliage_clearance(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    world: Res<WorldRuntime>,
+    mut foliage: Query<(&GridLocation, &mut Visibility), With<FoliageVisual>>,
+) {
+    let regions = foliage_clearance_regions(&content.0, &simulation.0, &world.generated);
+    for (location, mut visibility) in &mut foliage {
+        let should_be_hidden = regions
+            .iter()
+            .any(|region| region_contains_grid_position(*region, location.0));
+        if should_be_hidden && !matches!(*visibility, Visibility::Hidden) {
+            *visibility = Visibility::Hidden;
+        } else if !should_be_hidden && matches!(*visibility, Visibility::Hidden) {
+            *visibility = Visibility::Inherited;
+        }
+    }
+}
+
 fn quarter_turn_rotation(rotation_quarter_turns: i32) -> Quat {
     let normalized = i16::try_from(rotation_quarter_turns.rem_euclid(4))
         .expect("normalized quarter turn fits i16");
@@ -12270,6 +12326,131 @@ mod tests {
         assert_eq!(actor_detail_budget(None), 16);
         assert_eq!(actor_detail_budget(Some("24")), 24);
         assert_eq!(actor_detail_budget(Some("invalid")), 16);
+    }
+
+    #[test]
+    fn structural_footprints_clear_and_restore_foliage_visibility() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let generated = generate_world(&config.world);
+        let building_id = StableId::new("building:foliage_test").unwrap();
+        let house = &content.buildings[&StableId::new("building:house").unwrap()];
+        let building_position = GridPos { x: 18, z: 18 };
+        let rotation_quarter_turns = 1;
+        let building_footprint = rotated_footprint(house.footprint, rotation_quarter_turns);
+        let building_foliage = GridPos {
+            x: building_position.x + building_footprint[0] - 1,
+            z: building_position.z + building_footprint[1] - 1,
+        };
+        let (camp_archetype_id, camp_archetype) = content
+            .archetypes
+            .iter()
+            .find(|(_, archetype)| archetype.enemy_spawner.is_some())
+            .unwrap();
+        let camp_id = StableId::new("enemy_camp:foliage_test").unwrap();
+        let camp_position = GridPos { x: 42, z: 42 };
+        let camp_foliage = GridPos {
+            x: camp_position.x + camp_archetype.footprint[0] - 1,
+            z: camp_position.z + camp_archetype.footprint[1] - 1,
+        };
+        let outside_foliage = GridPos { x: 2, z: 2 };
+        let mut simulation = WorldSimulation::new(generated.seed);
+        simulation.buildings.insert(
+            building_id.clone(),
+            BuildingState {
+                id: building_id.clone(),
+                archetype: house.archetype.clone(),
+                position: building_position,
+                rotation_quarter_turns,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+        simulation.enemy_camps.insert(
+            camp_id.clone(),
+            EnemyCampState {
+                id: camp_id.clone(),
+                archetype: camp_archetype_id.clone(),
+                position: camp_position,
+                health: 100,
+                spawn_remaining_seconds: 0.0,
+                spawned_enemies: BTreeSet::new(),
+            },
+        );
+
+        let mut app = App::new();
+        app.insert_resource(RuntimeContent(content));
+        app.insert_resource(SimulationRuntime(simulation));
+        app.insert_resource(WorldRuntime {
+            generated,
+            legacy_terrain_mesh: None,
+            legacy_migration: None,
+        });
+        app.add_systems(Update, sync_foliage_clearance);
+        let building_entity = app
+            .world_mut()
+            .spawn((
+                FoliageVisual,
+                GridLocation(building_foliage),
+                Visibility::Inherited,
+            ))
+            .id();
+        let camp_entity = app
+            .world_mut()
+            .spawn((
+                FoliageVisual,
+                GridLocation(camp_foliage),
+                Visibility::Inherited,
+            ))
+            .id();
+        let outside_entity = app
+            .world_mut()
+            .spawn((
+                FoliageVisual,
+                GridLocation(outside_foliage),
+                Visibility::Inherited,
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(building_entity),
+            Some(&Visibility::Hidden)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(camp_entity),
+            Some(&Visibility::Hidden)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(outside_entity),
+            Some(&Visibility::Inherited)
+        );
+
+        {
+            let mut simulation = app.world_mut().resource_mut::<SimulationRuntime>();
+            simulation.0.buildings.remove(&building_id);
+        }
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(building_entity),
+            Some(&Visibility::Inherited)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(camp_entity),
+            Some(&Visibility::Hidden)
+        );
+
+        app.world_mut()
+            .resource_mut::<SimulationRuntime>()
+            .0
+            .enemy_camps
+            .remove(&camp_id);
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(camp_entity),
+            Some(&Visibility::Inherited)
+        );
     }
 
     #[test]

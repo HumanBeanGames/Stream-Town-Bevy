@@ -273,7 +273,9 @@ threshold, seed, LOD, scale, material, and 21 FBX variant references. Bevy
 regenerates stable land/underwater instances from the world seed, excludes
 resource cells, and renders the converted grass, flower, seaweed, and coral
 primitives with deterministic jitter, rotation, scale, and a 420-unit
-visibility budget. Resource trees use a typed
+visibility budget. Current building and enemy-camp footprints hide intersecting
+foliage, and the visibility is derived again after removal or save load so stale
+clearings cannot leak between world states. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving

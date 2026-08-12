@@ -342,6 +342,14 @@ mistaken for production-ready systems.
   deterministic and save-independent, excludes resource and cross-layer
   collisions, respects land/water habitat, applies authored scale plus stable
   transform variation, and renders the converted GLBs with distance culling.
+  Building and enemy-camp footprints clear intersecting foliage; deriving that
+  visibility from current stable simulation state restores it on removal and
+  recomputes it after native save load.
+- A source audit of `STSM_Action_PlayerAttack`, `STSM_Action_Attack`, and
+  `STSM_Helper_Attack` confirms that shipping Unity combat has one `Targetable`
+  and one `TargetHealth.TakeDamage` call per action. The migration therefore
+  preserves single-target melee/projectile attacks instead of inventing an
+  unauthored area-damage rule.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -371,8 +379,8 @@ mistaken for production-ready systems.
   parent exits, masks, and property curves are converted and live.
 - Chunked terrain/foliage LOD, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
-  area attacks, additional enemy archetype behaviors/spawners, combat buildings
-  beyond the Tower, station
+  additional enemy archetype behaviors/spawners, combat buildings beyond the
+  Tower, station
   effects derived from building level beyond current activation/range behavior,
   and every reachable balance rule from the Unity scenes.
 - Per-command cooldowns and exact production
