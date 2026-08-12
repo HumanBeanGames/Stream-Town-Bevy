@@ -286,6 +286,11 @@ mistaken for production-ready systems.
   and tint controls. Its shoreline-height transition is anchored to Bevy's
   configured waterline so the authored look remains meaningful on the
   deterministic replacement terrain, and season tint stays live.
+- A separate PBR water extension consumes `Env_Water`'s shallow/deep, foam,
+  wind, noise, alpha, and ice controls. Its WGSL port animates both authored
+  noise textures and restores Unity's winter ice toggle while preserving live
+  season/weather tint. Exact scene-depth shoreline foam remains a later render
+  pass rather than being represented as completed.
 - A focused Bevy/egui tool application with the planned eight work areas and an
   embedded ECS inspector. It loads the real catalogs, browses stable building and
   role references plus prefab archetypes, GLB variants, materials, texture slots,
@@ -302,7 +307,7 @@ mistaken for production-ready systems.
 - The remaining rare/non-gameplay action emitters. Direct and nested
   layer/state-machine routing, conditioned entries,
   parent exits, masks, and property curves are converted and live.
-- Shoreline treatment beyond the authored height blend, chunked LOD,
+- Scene-depth shoreline foam, chunked LOD,
   foliage/biome rendering, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
   area attacks, additional enemy archetype behaviors/spawners, combat buildings
@@ -321,7 +326,7 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining non-terrain WGSL shader ports, custom-shader material parity, VFX, UI
+- Remaining non-terrain/water WGSL shader ports, custom-shader material parity, VFX, UI
   parity, post-processing, replacement audio, and accessibility.
 - Rendering schema-1 retained terrain meshes. Legacy target, active/unlocked pet,
   and customization data now map into native actor state and live presentation.
@@ -382,8 +387,8 @@ persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects. It is still missing rare/non-gameplay
-action emitters, remaining shoreline/LOD and foliage shader work, particle
-fields, non-terrain custom-shader parity, the
+action emitters, remaining scene-depth shoreline/LOD and foliage shader work,
+particle fields, non-terrain/water custom-shader parity, the
 exact command cooldown/wording behavior, and the recorded reference-machine GPU
 measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

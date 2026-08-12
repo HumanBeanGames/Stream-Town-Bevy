@@ -44,6 +44,8 @@ const MAX_TOWN_GOALS: usize = 2;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
 const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.mat";
+const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
+const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -249,11 +251,42 @@ impl MaterialExtension for TerrainMaterialExtension {
 
 type TerrainMaterial = ExtendedMaterial<StandardMaterial, TerrainMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct WaterMaterialUniform {
+    surface_color: Vec4,
+    deep_color: Vec4,
+    foam_color: Vec4,
+    ice_color: Vec4,
+    wind_speed_noise_alpha: Vec4,
+    scale_foam_ice: Vec4,
+    season_tint: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct WaterMaterialExtension {
+    #[uniform(100)]
+    parameters: WaterMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    main_texture: Option<Handle<Image>>,
+    #[texture(103)]
+    #[sampler(104)]
+    noise_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for WaterMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        WATER_SHADER_ASSET_PATH.into()
+    }
+}
+
+type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterMaterialExtension>;
+
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
     ground: Handle<TerrainMaterial>,
-    water: Handle<StandardMaterial>,
+    water: Handle<WaterMaterial>,
     wood: Handle<StandardMaterial>,
     ore: Handle<StandardMaterial>,
     food: Handle<StandardMaterial>,
@@ -735,6 +768,7 @@ pub fn run(config: GameConfig) {
         )
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
+        .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -802,9 +836,14 @@ fn setup_rendering(
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
     terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
+    water_materials: Option<ResMut<Assets<WaterMaterial>>>,
 ) {
-    let (Some(mut meshes), Some(mut materials), Some(mut terrain_materials)) =
-        (meshes, materials, terrain_materials)
+    let (
+        Some(mut meshes),
+        Some(mut materials),
+        Some(mut terrain_materials),
+        Some(mut water_materials),
+    ) = (meshes, materials, terrain_materials, water_materials)
     else {
         commands.insert_resource(RenderAssets::default());
         return;
@@ -871,13 +910,7 @@ fn setup_rendering(
             &config.0,
             asset_server.as_deref(),
         )),
-        water: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.04, 0.24, 0.42, 0.62),
-            perceptual_roughness: 0.18,
-            metallic: 0.05,
-            alpha_mode: AlphaMode::Blend,
-            ..default()
-        }),
+        water: water_materials.add(water_material(&presentation.0, asset_server.as_deref())),
         wood: materials.add(Color::srgb(0.16, 0.46, 0.18)),
         ore: materials.add(Color::srgb(0.46, 0.50, 0.55)),
         food: materials.add(Color::srgb(0.74, 0.64, 0.18)),
@@ -1026,6 +1059,77 @@ fn terrain_material(
                 ),
             },
             grid_texture,
+        },
+    }
+}
+
+fn water_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> WaterMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == WATER_MATERIAL_PATH);
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let texture = |slot: &str| {
+        authored.and_then(|material| {
+            asset_server.and_then(|asset_server| {
+                material
+                    .textures
+                    .get(slot)
+                    .and_then(|id| presentation.textures.get(id))
+                    .map(|texture| asset_server.load(texture.asset_path.clone()))
+            })
+        })
+    };
+    let wind = vector("_windDirection", [1.0, 0.0, 0.0, 0.0]);
+    let surface = Vec4::from_array(vector("_SurfaceColor", [0.071, 0.867, 0.886, 1.0]));
+    WaterMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0 - scalar("_WaterSmoothness", 0.9).clamp(0.0, 1.0),
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        },
+        extension: WaterMaterialExtension {
+            parameters: WaterMaterialUniform {
+                surface_color: surface,
+                deep_color: Vec4::from_array(vector("_DeepColor", [0.063, 0.361, 0.565, 1.0])),
+                foam_color: Vec4::from_array(vector("_FoamColor", [1.0; 4])),
+                ice_color: Vec4::from_array(vector("_IceColor", [0.8, 0.93, 1.0, 1.0])),
+                wind_speed_noise_alpha: Vec4::new(
+                    wind[0],
+                    wind[1],
+                    scalar("_Speed", 0.02),
+                    scalar("_WaterNoiseMultiplyer", 0.03),
+                ),
+                scale_foam_ice: Vec4::new(
+                    scalar("_textureSize", 5.0).max(0.01),
+                    scalar("_EdgeFoamScale", 3.71),
+                    scalar("_FoamAlpha", 0.4).clamp(0.0, 1.0),
+                    scalar("_IceStrength", 0.0).clamp(0.0, 1.0),
+                ),
+                season_tint: Vec4::new(
+                    0.05 / surface.x.max(0.001),
+                    0.29 / surface.y.max(0.001),
+                    0.47 / surface.z.max(0.001),
+                    0.62,
+                ),
+            },
+            main_texture: texture("_MainTexture"),
+            noise_texture: texture("_NoiseTexture"),
         },
     }
 }
@@ -3653,8 +3757,8 @@ fn update_environment_presentation(
     render: Res<RenderAssets>,
     mut presentation: ResMut<EnvironmentPresentation>,
     mut clear_color: Option<ResMut<ClearColor>>,
-    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     mut terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
+    mut water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     particles: Query<Entity, With<WeatherParticle>>,
@@ -3681,15 +3785,17 @@ fn update_environment_presentation(
             ground.extension.parameters.season_tint.w,
         );
     }
-    if let Some(materials) = materials.as_deref_mut()
-        && let Some(mut water) = materials.get_mut(&render.water)
+    if let Some(water_materials) = water_materials.as_deref_mut()
+        && let Some(mut water) = water_materials.get_mut(&render.water)
     {
-        water.base_color = Color::srgba(
-            palette.water_color[0],
-            palette.water_color[1],
-            palette.water_color[2],
+        let surface = water.extension.parameters.surface_color;
+        water.extension.parameters.season_tint = Vec4::new(
+            palette.water_color[0] / surface.x.max(0.001),
+            palette.water_color[1] / surface.y.max(0.001),
+            palette.water_color[2] / surface.z.max(0.001),
             palette.water_color[3],
         );
+        water.extension.parameters.scale_foam_ice.w = water_ice_strength(environment.0);
     }
     for (mut fog, mut ambient) in &mut cameras {
         fog.color = Color::srgba(
@@ -3861,6 +3967,10 @@ fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
         fog_end,
         particle_count,
     }
+}
+
+fn water_ice_strength(season: Season) -> f32 {
+    if season == Season::Winter { 1.0 } else { 0.0 }
 }
 
 fn weather_particle_seed(world_seed: u64, index: u16) -> u32 {
@@ -10671,6 +10781,23 @@ mod tests {
                 .zip([1.0, 0.827_731, 0.088_235_21, 0.0])
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
+        let water = water_material(&presentation, None);
+        assert!(water.extension.main_texture.is_none());
+        assert!(water.extension.noise_texture.is_none());
+        assert!(
+            water
+                .extension
+                .parameters
+                .surface_color
+                .to_array()
+                .into_iter()
+                .zip([0.0, 0.764_705_9, 1.0, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!((water.extension.parameters.wind_speed_noise_alpha.z - 0.02).abs() < f32::EPSILON);
+        assert!((water.extension.parameters.scale_foam_ice.y - 3.71).abs() < f32::EPSILON);
+        assert!((water_ice_strength(Season::Spring) - 0.0).abs() < f32::EPSILON);
+        assert!((water_ice_strength(Season::Winter) - 1.0).abs() < f32::EPSILON);
         assert_eq!(presentation.controllers.len(), 31);
         assert_eq!(
             presentation
