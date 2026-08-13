@@ -60,6 +60,7 @@ use stream_town_domain::{
 
 const MAX_TOWN_GOALS: usize = 2;
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
+const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
@@ -1231,6 +1232,12 @@ struct ActorHealthOverlay {
 struct ActorHealthFill;
 
 #[derive(Component)]
+struct TemporaryWorldLabel {
+    target: StableId,
+    remaining_seconds: f32,
+}
+
+#[derive(Component)]
 struct BuildingHealthOverlay {
     building: StableId,
 }
@@ -1945,6 +1952,7 @@ impl Plugin for StreamTownGamePlugin {
                     sync_actor_name_overlays,
                     sync_actor_health_overlays,
                     sync_building_health_overlays,
+                    sync_temporary_world_labels,
                 )
                     .chain()
                     .after(move_agents)
@@ -18369,6 +18377,31 @@ fn recruited_actor_ids(simulation: &WorldSimulation) -> Vec<StableId> {
         .collect()
 }
 
+fn spawn_numbered_world_labels(commands: &mut Commands, targets: &[StableId]) {
+    for (index, target) in targets.iter().enumerate() {
+        commands.spawn((
+            WorldEntity,
+            TemporaryWorldLabel {
+                target: target.clone(),
+                remaining_seconds: UNITY_NUMBERED_LABEL_SECONDS,
+            },
+            Text::new((index + 1).to_string()),
+            TextFont {
+                font_size: FontSize::Px(22.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::WHITE),
+            GlobalZIndex(101),
+            Node {
+                position_type: PositionType::Absolute,
+                width: px(40),
+                ..default()
+            },
+        ));
+    }
+}
+
 fn recruit_id(simulation: &WorldSimulation, index: u16) -> Option<StableId> {
     recruited_actor_ids(simulation)
         .get(usize::from(index.saturating_sub(1)))
@@ -19520,11 +19553,13 @@ fn process_injected_commands(
             }
             ChatCommand::RecruitIds => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
-                let recruits = recruited_actor_ids(&simulation.0)
+                let recruit_ids = recruited_actor_ids(&simulation.0);
+                let recruits = recruit_ids
                     .iter()
                     .enumerate()
                     .map(|(index, id)| format!("{}={id}", index + 1))
                     .collect::<Vec<_>>();
+                spawn_numbered_world_labels(&mut ecs, &recruit_ids);
                 Ok(if recruits.is_empty() {
                     "the town has no recruited NPCs".to_owned()
                 } else {
@@ -19610,6 +19645,7 @@ fn process_injected_commands(
                         Some(station.clone());
                     Ok(format!("station changed to {station}"))
                 } else {
+                    spawn_numbered_world_labels(&mut ecs, &stations);
                     Ok(if stations.is_empty() {
                         "no compatible stations are available".to_owned()
                     } else {
@@ -19650,6 +19686,7 @@ fn process_injected_commands(
                         .preferred_target = Some(target.clone());
                     Ok(format!("target changed to {target}"))
                 } else {
+                    spawn_numbered_world_labels(&mut ecs, &targets);
                     Ok(if targets.is_empty() {
                         "no compatible targets are available".to_owned()
                     } else {
@@ -21183,6 +21220,64 @@ fn sync_actor_health_overlays(
                     BackgroundColor(Color::srgb(0.85, 0.1, 0.1)),
                 ));
             });
+    }
+}
+
+fn temporary_world_label_is_live(label: &mut TemporaryWorldLabel, delta_seconds: f32) -> bool {
+    label.remaining_seconds = (label.remaining_seconds - delta_seconds.max(0.0)).max(0.0);
+    label.remaining_seconds > 0.0
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_temporary_world_labels(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    agents: Query<(&Agent, &GlobalTransform)>,
+    buildings: Query<(&RuntimeBuilding, &GlobalTransform)>,
+    resources: Query<(&ResourceNode, &GlobalTransform)>,
+    mut labels: Query<(Entity, &mut TemporaryWorldLabel, &mut Node, &mut Visibility)>,
+) {
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
+    let mut target_positions = BTreeMap::new();
+    target_positions.extend(
+        agents
+            .iter()
+            .map(|(agent, transform)| (agent.id.clone(), transform.translation())),
+    );
+    target_positions.extend(
+        buildings
+            .iter()
+            .map(|(building, transform)| (building.id.clone(), transform.translation())),
+    );
+    target_positions.extend(
+        resources
+            .iter()
+            .map(|(resource, transform)| (resource.id.clone(), transform.translation())),
+    );
+    for (entity, mut label, mut node, mut visibility) in &mut labels {
+        if !temporary_world_label_is_live(&mut label, time.delta_secs()) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let Some(position) = target_positions.get(&label.target) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(screen) = overlay_viewport_position(
+            camera,
+            camera_transform,
+            *position + Vec3::Y * config.0.world.cell_size * 1.35,
+        ) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        node.left = px(screen.x - 20.0);
+        node.top = px(screen.y - 12.0);
+        *visibility = Visibility::Visible;
     }
 }
 
@@ -27008,6 +27103,18 @@ mod tests {
             0.2
         ));
         assert!(!overlay.was_damaged);
+    }
+
+    #[test]
+    fn numbered_world_labels_preserve_unitys_fifteen_second_lifetime() {
+        let mut label = TemporaryWorldLabel {
+            target: StableId::new("npc:starting_builder").unwrap(),
+            remaining_seconds: UNITY_NUMBERED_LABEL_SECONDS,
+        };
+        assert!(temporary_world_label_is_live(&mut label, 14.9));
+        assert!((label.remaining_seconds - 0.1).abs() < 1e-5);
+        assert!(!temporary_world_label_is_live(&mut label, 0.2));
+        assert!(label.remaining_seconds.abs() < f32::EPSILON);
     }
 
     #[test]

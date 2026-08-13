@@ -204,6 +204,8 @@ Technology administration chooses stable catalog order instead of Unity's
 process-global random state. `!resetid` reports the stable-ID state because Bevy
 does not have Unity's pooled per-type counter to repair. `!stdiscord` preserves
 the remaining registered no-character utility command.
+The numbered-list forms of `!rid`, `!station`, and `!target` also project their
+matching IDs over live world objects for Unity's authored 15-second lifetime.
 
 Ruler governance follows the shipping Unity rules: the first election is
 scheduled after 30 seconds, ballots wait indefinitely for the first vote and

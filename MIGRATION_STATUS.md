@@ -509,6 +509,11 @@ mistaken for production-ready systems.
   hide delay. Bevy now renders a camera-projected red-on-black player health bar
   after damage, keeps it visible while injured, resets its timer after healing,
   and removes it after the authored delay at full health.
+- The `!rid`, parameterless `!station`, and parameterless `!target` command
+  paths now reproduce Unity's `UnitTextDisplay` feedback by projecting matching
+  numbered labels over recruits, compatible stations, resources, buildings, or
+  actors for the authored 15 seconds. Labels are ordinary short-lived ECS UI
+  entities rather than a recreated Unity object pool.
 - Completed gates now preserve Unity's asymmetric traversal rule: player A* may
   cross their occupied cells while enemies still see the same cells as blocked.
   Gates under construction remain blocked for everyone, and the exception is

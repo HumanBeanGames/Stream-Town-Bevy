@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786642578.59329,
-    "ast_hash": "bd803b0e00f2c5359433d17e30fdaf7e",
+    "mtime": 1786643552.180478,
+    "ast_hash": "c01c16841906ccec002d2d44fc59e0be",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786642877.5893722,
-    "ast_hash": "1d42fde042b30be96074d76562f9d4f3",
+    "mtime": 1786643518.4507968,
+    "ast_hash": "2cf2d3521fd4e7160921498ee03d248c",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786642877.5883653,
-    "ast_hash": "3666b207b499847b4f6adeb767a4037c",
+    "mtime": 1786643518.4497967,
+    "ast_hash": "14128fbfdf81c7f7d48fd31ea467de6b",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
