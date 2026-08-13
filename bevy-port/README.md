@@ -430,8 +430,10 @@ short deterministic procedural cues; their no-sample provenance is documented in
 record covers the synthesized seasonal music and ambience. The reachable town
 seagull now uses its converted GLB, exact 32-second cross-town flight contract,
 three generated calls on the source's random 1–5 second cadence, and authored
-ambience rolloff. The remaining reachable WGSL shader ports and rare animation
-action emitters remain presentation work. Property curves
+ambience rolloff. `Env_Grass` now uses a dedicated WGSL material preserving its
+vertex-color wind mask, scrolling main/noise textures, authored color blending,
+and exact seasonal color/tint endpoints. The remaining reachable WGSL shader
+ports remain presentation work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.

@@ -69,6 +69,8 @@ const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
+const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
+const GRASS_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Grass.mat";
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -519,12 +521,49 @@ impl MaterialExtension for TreeMaterialExtension {
 
 type TreeMaterial = ExtendedMaterial<StandardMaterial, TreeMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct GrassMaterialUniform {
+    grid_color_1: Vec4,
+    grid_color_2: Vec4,
+    wind_color: Vec4,
+    wind_direction_smoothness: Vec4,
+    wind_controls: Vec4,
+    surface_controls: Vec4,
+    world_strength_transform: Vec4,
+    main_scale_offset: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct GrassMaterialExtension {
+    #[uniform(100)]
+    parameters: GrassMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    main_texture: Option<Handle<Image>>,
+    #[texture(103)]
+    #[sampler(104)]
+    noise_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for GrassMaterialExtension {
+    fn vertex_shader() -> ShaderRef {
+        GRASS_SHADER_ASSET_PATH.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        GRASS_SHADER_ASSET_PATH.into()
+    }
+}
+
+type GrassMaterial = ExtendedMaterial<StandardMaterial, GrassMaterialExtension>;
+
 #[derive(Clone)]
 enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
     Building(Handle<BuildingMaterial>),
     Cloud(Handle<CloudMaterial>),
     Tree(Handle<TreeMaterial>),
+    Grass(Handle<GrassMaterial>),
 }
 
 #[derive(Resource, Default)]
@@ -563,6 +602,7 @@ struct RenderAssets {
     authored_building: Handle<BuildingMaterial>,
     clouds: Handle<CloudMaterial>,
     tree: Handle<TreeMaterial>,
+    grass: Handle<GrassMaterial>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -1353,6 +1393,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
+        .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -1486,6 +1527,7 @@ fn setup_rendering(
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
+    grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
 ) {
     let (
         Some(mut meshes),
@@ -1495,6 +1537,7 @@ fn setup_rendering(
         Some(mut building_materials),
         Some(mut cloud_materials),
         Some(mut tree_materials),
+        Some(mut grass_materials),
     ) = (
         meshes,
         materials,
@@ -1503,6 +1546,7 @@ fn setup_rendering(
         building_materials,
         cloud_materials,
         tree_materials,
+        grass_materials,
     )
     else {
         commands.insert_resource(RenderAssets::default());
@@ -1577,6 +1621,7 @@ fn setup_rendering(
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
+    let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let presentation_materials = presentation
         .0
         .materials
@@ -1588,6 +1633,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Cloud(clouds.clone())
             } else if material.source_path == TREE_MATERIAL_PATH {
                 ResolvedMaterialHandle::Tree(tree.clone())
+            } else if material.source_path == GRASS_MATERIAL_PATH {
+                ResolvedMaterialHandle::Grass(grass.clone())
             } else {
                 ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
@@ -1729,6 +1776,7 @@ fn setup_rendering(
         authored_building,
         clouds,
         tree,
+        grass,
         presentation_materials,
     });
 }
@@ -2652,6 +2700,99 @@ fn tree_material(
                     scalar("_textureSize", 1.0),
                 ),
                 season_controls: tree_season_controls(Season::Spring),
+                main_scale_offset: Vec4::new(
+                    transform.scale[0],
+                    transform.scale[1],
+                    transform.offset[0],
+                    transform.offset[1],
+                ),
+            },
+            main_texture: texture("_MainTexture"),
+            noise_texture: texture("_NoiseTexture"),
+        },
+    }
+}
+
+fn grass_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> GrassMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == GRASS_MATERIAL_PATH);
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let texture = |slot: &str| {
+        authored.and_then(|material| {
+            asset_server.and_then(|asset_server| {
+                material
+                    .textures
+                    .get(slot)
+                    .and_then(|id| presentation.textures.get(id))
+                    .map(|texture| asset_server.load(texture.asset_path.clone()))
+            })
+        })
+    };
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_MainTexture"))
+        .copied()
+        .unwrap_or_default();
+    let color = |name: &str, fallback: [f32; 4]| Vec4::from_array(vector(name, fallback));
+    let direction = vector("_windDirection", [1.0, 0.0, 0.0, 0.0]);
+    let smoothness = vector("_WindTextureSmoothStep", [-0.28, 0.66, 0.0, 0.0]);
+    let world_strength = vector("_WorldPositionStrength", [0.5, 0.5, 0.0, 0.0]);
+    GrassMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            ..default()
+        },
+        extension: GrassMaterialExtension {
+            parameters: GrassMaterialUniform {
+                grid_color_1: color("_GridColor1", [0.416_476_4, 0.498_039_22, 0.152_941_2, 1.0]),
+                grid_color_2: color(
+                    "_GridColor2",
+                    [0.419_094_32, 0.470_588_24, 0.141_176_5, 1.0],
+                ),
+                wind_color: color(
+                    "_WindColor",
+                    [0.447_058_83, 0.533_333_36, 0.164_705_89, 1.0],
+                ),
+                wind_direction_smoothness: Vec4::new(
+                    direction[0],
+                    direction[1],
+                    smoothness[0],
+                    smoothness[1],
+                ),
+                wind_controls: Vec4::new(
+                    scalar("_CloudCrawlSpeed", 0.1),
+                    scalar("_WindScale", 0.0),
+                    scalar("_WindStrength", 1.1),
+                    scalar("_textureSize", 20.0),
+                ),
+                surface_controls: Vec4::new(
+                    scalar("_ColourBlend", 1.55),
+                    scalar("_Spring", 0.0),
+                    scalar("_Tint", 0.0),
+                    scalar("_VertexSmoothStepMax", 1.0),
+                ),
+                world_strength_transform: Vec4::new(
+                    world_strength[0],
+                    world_strength[1],
+                    0.001,
+                    0.001,
+                ),
                 main_scale_offset: Vec4::new(
                     transform.scale[0],
                     transform.scale[1],
@@ -3968,6 +4109,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Tree(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Grass(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
         }
         return;
     }
@@ -4062,6 +4206,9 @@ fn spawn_foliage_visual(
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Tree(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Grass(material)) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Cloud(_)) | None => {
@@ -7579,6 +7726,7 @@ fn update_environment_presentation(
     mut water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     mut building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     mut tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
+    mut grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
     mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     particles: Query<Entity, With<WeatherParticle>>,
@@ -7640,6 +7788,17 @@ fn update_environment_presentation(
         && let Some(mut tree) = tree_materials.get_mut(&render.tree)
     {
         tree.extension.parameters.season_controls = tree_season_controls(environment.0);
+    }
+    if environment_changed
+        && let Some(grass_materials) = grass_materials.as_deref_mut()
+        && let Some(mut grass) = grass_materials.get_mut(&render.grass)
+    {
+        let (grid_1, grid_2, wind, spring, tint) = grass_season_controls(environment.0);
+        grass.extension.parameters.grid_color_1 = grid_1;
+        grass.extension.parameters.grid_color_2 = grid_2;
+        grass.extension.parameters.wind_color = wind;
+        grass.extension.parameters.surface_controls.y = spring;
+        grass.extension.parameters.surface_controls.z = tint;
     }
     for (mut fog, mut ambient) in &mut cameras {
         if environment_changed {
@@ -7851,6 +8010,39 @@ fn tree_season_controls(season: Season) -> Vec4 {
         Season::Summer => Vec4::ZERO,
         Season::Autumn => Vec4::new(0.3, 0.0, 0.0, 0.0),
         Season::Winter => Vec4::new(0.0, 0.5, 0.0, 0.0),
+    }
+}
+
+fn grass_season_controls(season: Season) -> (Vec4, Vec4, Vec4, f32, f32) {
+    match season {
+        Season::Spring => (
+            Vec4::new(0.282_352_95, 0.482_352_94, 0.149_019_61, 0.0),
+            Vec4::new(0.262_745_1, 0.431_372_55, 0.129_411_77, 0.0),
+            Vec4::new(0.315_821_56, 0.518, 0.187_516, 0.0),
+            0.1,
+            0.0,
+        ),
+        Season::Summer => (
+            Vec4::new(0.416_476_4, 0.498_039_22, 0.152_941_2, 1.0),
+            Vec4::new(0.419_094_32, 0.470_588_24, 0.141_176_5, 1.0),
+            Vec4::new(0.447_058_83, 0.533_333_36, 0.164_705_89, 0.0),
+            0.0,
+            0.0,
+        ),
+        Season::Autumn => (
+            Vec4::new(0.470_588_24, 0.435_294_12, 0.156_862_75, 0.0),
+            Vec4::new(0.470_588_24, 0.415_686_28, 0.156_862_75, 0.0),
+            Vec4::new(0.496, 0.458_985_03, 0.166_567_15, 0.0),
+            0.0,
+            0.0,
+        ),
+        Season::Winter => (
+            Vec4::new(0.849_056_6, 0.849_056_6, 0.849_056_6, 0.0),
+            Vec4::new(0.772_549_03, 0.772_549_03, 0.772_549_03, 0.0),
+            Vec4::new(0.965, 0.965, 0.965, 0.0),
+            0.0,
+            0.42,
+        ),
     }
 }
 
@@ -9493,6 +9685,12 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Tree(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                        ResolvedMaterialHandle::Grass(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -16865,6 +17063,56 @@ mod tests {
             tree_season_controls(Season::Winter),
             Vec4::new(0.0, 0.5, 0.0, 0.0)
         );
+    }
+
+    #[test]
+    fn grass_seasons_match_unity_material_targets() {
+        let (spring_1, spring_2, spring_wind, spring_power, spring_tint) =
+            grass_season_controls(Season::Spring);
+        assert_eq!(
+            spring_1,
+            Vec4::new(0.282_352_95, 0.482_352_94, 0.149_019_61, 0.0)
+        );
+        assert_eq!(
+            spring_2,
+            Vec4::new(0.262_745_1, 0.431_372_55, 0.129_411_77, 0.0)
+        );
+        assert_eq!(spring_wind, Vec4::new(0.315_821_56, 0.518, 0.187_516, 0.0));
+        assert_eq!(spring_power.to_bits(), 0.1_f32.to_bits());
+        assert_eq!(spring_tint.to_bits(), 0.0_f32.to_bits());
+
+        let (winter_1, winter_2, winter_wind, winter_power, winter_tint) =
+            grass_season_controls(Season::Winter);
+        assert_eq!(
+            winter_1,
+            Vec4::new(0.849_056_6, 0.849_056_6, 0.849_056_6, 0.0)
+        );
+        assert_eq!(
+            winter_2,
+            Vec4::new(0.772_549_03, 0.772_549_03, 0.772_549_03, 0.0)
+        );
+        assert_eq!(winter_wind, Vec4::new(0.965, 0.965, 0.965, 0.0));
+        assert_eq!(winter_power.to_bits(), 0.0_f32.to_bits());
+        assert_eq!(winter_tint.to_bits(), 0.42_f32.to_bits());
+
+        assert_ne!(
+            grass_season_controls(Season::Summer),
+            grass_season_controls(Season::Autumn)
+        );
+    }
+
+    #[test]
+    fn grass_material_preserves_authored_wind_and_texture_contract() {
+        let material = grass_material(&embedded_presentation(), None);
+        let parameters = material.extension.parameters;
+        assert_eq!(parameters.wind_controls, Vec4::new(0.1, 0.0, 1.1, 20.0));
+        assert_eq!(parameters.surface_controls, Vec4::new(1.55, 0.0, 0.0, 1.0));
+        assert_eq!(
+            parameters.wind_direction_smoothness,
+            Vec4::new(1.0, 0.0, -0.28, 0.66)
+        );
+        assert!(material.extension.main_texture.is_none());
+        assert!(material.extension.noise_texture.is_none());
     }
 
     #[test]

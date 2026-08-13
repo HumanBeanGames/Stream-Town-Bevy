@@ -543,7 +543,7 @@ player settings, a complete runtime settings/menu workflow, and
 camera-projected player/building overlays. The shipping town seagull also flies
 its authored 32-second boundary route using the converted model and emits three
 generated ambience calls at the source's random cadence and rolloff. It is still
-missing rare animation action emitters, remaining chunked LOD work,
-particle fields, remaining custom-shader parity, and the recorded
+missing remaining chunked LOD work, particle fields, remaining custom-shader
+parity, and the recorded
 reference-machine GPU measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
