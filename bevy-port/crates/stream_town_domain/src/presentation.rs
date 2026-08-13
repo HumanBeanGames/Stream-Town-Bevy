@@ -29,6 +29,72 @@ pub struct PresentationCatalog {
     /// Per-renderer prefab overrides, keyed by the source prefab GUID.
     #[serde(default)]
     pub prefab_renderer_materials: BTreeMap<String, Vec<RendererMaterialBinding>>,
+    /// Reachable Unity volume profiles converted into engine-neutral settings.
+    #[serde(default)]
+    pub post_process_profiles: BTreeMap<StableId, PostProcessProfileDef>,
+    /// Global volume bindings keyed by the shipping Unity scene path.
+    #[serde(default)]
+    pub scene_post_process: BTreeMap<String, Vec<ScenePostProcessBinding>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PostProcessProfileDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub bloom: Option<PostProcessBloomDef>,
+    pub vignette: Option<PostProcessVignetteDef>,
+    pub motion_blur: Option<PostProcessMotionBlurDef>,
+    pub tonemapping: Option<PostProcessTonemapping>,
+    pub color_adjustments: Option<PostProcessColorAdjustmentsDef>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PostProcessBloomDef {
+    pub intensity: f32,
+    pub threshold: f32,
+    pub scatter: f32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PostProcessVignetteDef {
+    pub color: [f32; 4],
+    pub center: [f32; 2],
+    pub intensity: f32,
+    pub smoothness: f32,
+    pub rounded: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PostProcessMotionBlurDef {
+    pub intensity: f32,
+    pub quality: u8,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostProcessTonemapping {
+    None,
+    Neutral,
+    Aces,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PostProcessColorAdjustmentsDef {
+    pub post_exposure: f32,
+    pub color_filter: [f32; 4],
+    pub hue_shift_degrees: f32,
+    pub saturation: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ScenePostProcessBinding {
+    pub hierarchy_path: String,
+    pub profile: StableId,
+    pub weight: f32,
+    /// Unity's day/night processor drives the night volume opposite daylight.
+    #[serde(default)]
+    pub inverse_daylight: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -614,10 +680,98 @@ pub enum PresentationError {
         function_name: String,
         reason: String,
     },
+    #[error("post-process profile {profile} is invalid: {reason}")]
+    InvalidPostProcessProfile { profile: StableId, reason: String },
+    #[error("scene {scene} references missing post-process profile {profile}")]
+    MissingPostProcessProfile { scene: String, profile: StableId },
+    #[error("scene {scene} has an invalid post-process binding at {hierarchy_path}: {reason}")]
+    InvalidPostProcessBinding {
+        scene: String,
+        hierarchy_path: String,
+        reason: String,
+    },
 }
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (id, profile) in &self.post_process_profiles {
+            let source_valid = profile.source_guid.len() == 32
+                && profile
+                    .source_guid
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                && profile.source_path.starts_with("Assets/")
+                && Path::new(&profile.source_path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("asset"))
+                && !profile.source_path.contains('\\')
+                && !profile.source_path.contains("..");
+            let values_valid = profile.bloom.is_none_or(|bloom| {
+                [bloom.intensity, bloom.threshold, bloom.scatter]
+                    .into_iter()
+                    .all(f32::is_finite)
+                    && bloom.intensity >= 0.0
+                    && bloom.threshold >= 0.0
+                    && (0.0..=1.0).contains(&bloom.scatter)
+            }) && profile.vignette.is_none_or(|vignette| {
+                vignette.color.into_iter().all(f32::is_finite)
+                    && vignette.center.into_iter().all(f32::is_finite)
+                    && vignette.intensity.is_finite()
+                    && (0.0..=1.0).contains(&vignette.intensity)
+                    && vignette.smoothness.is_finite()
+                    && vignette.smoothness > 0.0
+            }) && profile.motion_blur.is_none_or(|motion_blur| {
+                motion_blur.intensity.is_finite()
+                    && (0.0..=1.0).contains(&motion_blur.intensity)
+                    && motion_blur.quality > 0
+            }) && profile.color_adjustments.is_none_or(|adjustments| {
+                adjustments.post_exposure.is_finite()
+                    && adjustments.color_filter.into_iter().all(f32::is_finite)
+                    && adjustments.hue_shift_degrees.is_finite()
+                    && adjustments.saturation.is_finite()
+            });
+            if !source_valid || !values_valid {
+                return Err(PresentationError::InvalidPostProcessProfile {
+                    profile: id.clone(),
+                    reason: "source metadata and numeric parameters must be portable and finite"
+                        .into(),
+                });
+            }
+        }
+        for (scene, bindings) in &self.scene_post_process {
+            if !scene.starts_with("Assets/")
+                || !Path::new(scene)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("unity"))
+                || scene.contains('\\')
+                || scene.contains("..")
+            {
+                return Err(PresentationError::InvalidPostProcessBinding {
+                    scene: scene.clone(),
+                    hierarchy_path: String::new(),
+                    reason: "scene path must be a portable Unity asset path".into(),
+                });
+            }
+            for binding in bindings {
+                if !self.post_process_profiles.contains_key(&binding.profile) {
+                    return Err(PresentationError::MissingPostProcessProfile {
+                        scene: scene.clone(),
+                        profile: binding.profile.clone(),
+                    });
+                }
+                if binding.hierarchy_path.trim().is_empty()
+                    || binding.hierarchy_path.contains('\\')
+                    || !binding.weight.is_finite()
+                    || !(0.0..=1.0).contains(&binding.weight)
+                {
+                    return Err(PresentationError::InvalidPostProcessBinding {
+                        scene: scene.clone(),
+                        hierarchy_path: binding.hierarchy_path.clone(),
+                        reason: "hierarchy path and weight must be valid".into(),
+                    });
+                }
+            }
+        }
         for (id, mask) in &self.avatar_masks {
             if mask.source_path.contains('\\')
                 || mask.source_path.contains("..")

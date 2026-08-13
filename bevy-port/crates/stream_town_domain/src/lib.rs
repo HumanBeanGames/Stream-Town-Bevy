@@ -43,8 +43,11 @@ pub use presentation::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
-    PresentationError, RendererMaterialBinding, TextureDef, TextureTransform,
+    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
+    PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef, PostProcessProfileDef,
+    PostProcessTonemapping, PostProcessVignetteDef, PrefabPresentationBinding, PresentationCatalog,
+    PresentationError, RendererMaterialBinding, ScenePostProcessBinding, TextureDef,
+    TextureTransform,
 };
 pub use runtime_console::{
     CURRENT_RUNTIME_CONSOLE_SCHEMA, RuntimeConsoleAction, RuntimeConsoleRequest,

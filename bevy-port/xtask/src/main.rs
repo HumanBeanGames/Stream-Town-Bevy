@@ -520,7 +520,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (13, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
+    ) != (14, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || embedded_animation_clips != 122
         || (blend_states, inferred_parameters) != (11, 2)
@@ -530,6 +530,13 @@ fn validate() -> Result<()> {
         || material_texture_transforms != 32
         || (presentation_state_machines, presentation_layers) != (45, 33)
         || presentation.avatar_masks.len() != 3
+        || presentation.post_process_profiles.len() != 2
+        || presentation
+            .scene_post_process
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+            != 3
         || presentation
             .avatar_masks
             .values()

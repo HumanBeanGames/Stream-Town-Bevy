@@ -374,7 +374,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings)",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state
@@ -387,7 +387,14 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
             converted_clips,
             property_curves,
             animation_events,
-            state.presentation.controllers.len()
+            state.presentation.controllers.len(),
+            state.presentation.post_process_profiles.len(),
+            state
+                .presentation
+                .scene_post_process
+                .values()
+                .map(Vec::len)
+                .sum::<usize>()
         ));
     });
     ui.separator();

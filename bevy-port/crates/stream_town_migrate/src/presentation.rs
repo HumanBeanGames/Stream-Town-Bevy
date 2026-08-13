@@ -13,9 +13,18 @@ use stream_town_domain::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
-    RendererMaterialBinding, StableId, TextureDef, TextureTransform,
+    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
+    PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef, PostProcessProfileDef,
+    PostProcessTonemapping, PostProcessVignetteDef, PrefabPresentationBinding, PresentationCatalog,
+    RendererMaterialBinding, ScenePostProcessBinding, StableId, TextureDef, TextureTransform,
 };
+
+const SHIPPING_SCENES: [&str; 4] = [
+    "Assets/Scenes/LOADER_INITIAL.unity",
+    "Assets/Scenes/Menu/Main_Menu_02.unity",
+    "Assets/Scenes/Worlds/World_Town.unity",
+    "Assets/Scenes/Menu/Credits.unity",
+];
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationConversionReport {
@@ -50,6 +59,8 @@ pub struct PresentationConversionReport {
     pub inferred_parameters: usize,
     pub prefab_bindings: usize,
     pub native_animation_bindings: usize,
+    pub post_process_profiles: usize,
+    pub scene_post_process_bindings: usize,
     pub outputs: Vec<String>,
 }
 
@@ -75,6 +86,8 @@ struct UnityAsset {
     dependencies: Vec<UnityReference>,
     #[serde(default)]
     game_object: Option<UnityGameObject>,
+    #[serde(default)]
+    scene: Option<UnityScene>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +113,13 @@ struct UnityReference {
 struct UnityGameObject {
     #[serde(default)]
     components: Vec<UnityComponent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct UnityScene {
+    #[serde(default)]
+    roots: Vec<UnityGameObject>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +168,11 @@ struct RestTransform {
     scale: [f32; 3],
 }
 
+type PostProcessConversion = (
+    BTreeMap<StableId, PostProcessProfileDef>,
+    BTreeMap<String, Vec<ScenePostProcessBinding>>,
+);
+
 pub fn convert(
     export_path: &Path,
     unity_root: &Path,
@@ -187,6 +212,7 @@ pub fn convert(
     let model_materials = convert_model_materials(&export, &root, out_dir, &materials);
     let prefab_renderer_materials =
         convert_prefab_renderer_materials(&export, &assets_by_path, &materials, &model_materials);
+    let (post_process_profiles, scene_post_process) = convert_post_process(&export, &root)?;
     let mut clips = convert_clips(&export, &root)?;
     let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
@@ -201,7 +227,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 13,
+        schema_version: 14,
         textures,
         materials,
         clips,
@@ -211,6 +237,8 @@ pub fn convert(
         prefab_materials,
         model_materials,
         prefab_renderer_materials,
+        post_process_profiles,
+        scene_post_process,
     };
     catalog
         .validate()
@@ -221,7 +249,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 13,
+        schema_version: 14,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -334,6 +362,8 @@ pub fn convert(
             .values()
             .filter(|binding| binding.gltf_animation_index.is_some())
             .count(),
+        post_process_profiles: catalog.post_process_profiles.len(),
+        scene_post_process_bindings: catalog.scene_post_process.values().map(Vec::len).sum(),
         outputs: vec![
             normalized_path(&catalog_path),
             normalized_path(&report_path),
@@ -358,6 +388,188 @@ pub fn convert(
         bail!("generated presentation report changed during its RON round trip");
     }
     Ok(report)
+}
+
+fn convert_post_process(export: &UnityExport, unity_root: &Path) -> Result<PostProcessConversion> {
+    let assets_by_guid: BTreeMap<_, _> = export
+        .assets
+        .iter()
+        .map(|asset| (asset.guid.as_str(), asset))
+        .collect();
+    let mut referenced_profiles = BTreeSet::new();
+    let mut scene_post_process = BTreeMap::new();
+    for scene_path in SHIPPING_SCENES {
+        let Some(scene_asset) = export.assets.iter().find(|asset| asset.path == scene_path) else {
+            continue;
+        };
+        let mut bindings = Vec::new();
+        for component in scene_asset
+            .scene
+            .iter()
+            .flat_map(|scene| &scene.roots)
+            .flat_map(|root| &root.components)
+            .filter(|component| {
+                component
+                    .type_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("UnityEngine.Rendering.Volume,"))
+            })
+        {
+            if !field_bool(&component.fields, "m_IsGlobal").unwrap_or(false) {
+                continue;
+            }
+            let Some(reference) = field_value(&component.fields, "sharedProfile") else {
+                continue;
+            };
+            let Some(guid) = reference_field(reference, "Guid") else {
+                continue;
+            };
+            let profile = post_process_profile_id(guid)?;
+            referenced_profiles.insert(guid.to_owned());
+            bindings.push(ScenePostProcessBinding {
+                hierarchy_path: component.hierarchy_path.clone(),
+                profile,
+                weight: field_f32(&component.fields, "weight").unwrap_or(1.0),
+                inverse_daylight: scene_path == "Assets/Scenes/Worlds/World_Town.unity"
+                    && component
+                        .hierarchy_path
+                        .to_ascii_lowercase()
+                        .contains("night"),
+            });
+        }
+        if !bindings.is_empty() {
+            scene_post_process.insert(scene_path.to_owned(), bindings);
+        }
+    }
+
+    let mut profiles = BTreeMap::new();
+    for guid in referenced_profiles {
+        let asset = assets_by_guid
+            .get(guid.as_str())
+            .with_context(|| format!("reachable post-process profile {guid} is missing"))?;
+        let source = unity_root.join(&asset.path);
+        let contents = fs::read_to_string(&source)
+            .with_context(|| format!("failed to read post-process profile {}", source.display()))?;
+        let documents = parse_yaml_documents(&contents)?;
+        let component = |name: &str| {
+            documents.iter().find(|document| {
+                document.class_id == 114
+                    && scalar(&document.lines, "m_Name:").is_some_and(|value| value == name)
+                    && scalar_bool(&document.lines, "active:").unwrap_or(true)
+            })
+        };
+        let bloom = component("Bloom").map(|document| PostProcessBloomDef {
+            intensity: volume_parameter_f32(&document.lines, "intensity").unwrap_or(0.0),
+            threshold: volume_parameter_f32(&document.lines, "threshold").unwrap_or(1.0),
+            scatter: volume_parameter_f32(&document.lines, "scatter").unwrap_or(0.7),
+        });
+        let vignette = component("Vignette").map(|document| PostProcessVignetteDef {
+            color: volume_parameter(&document.lines, "color")
+                .map_or([0.0, 0.0, 0.0, 1.0], |value| {
+                    inline_color(value, [0.0, 0.0, 0.0, 1.0])
+                }),
+            center: volume_parameter(&document.lines, "center")
+                .map_or([0.5, 0.5], |value| inline_vec2(value, [0.5, 0.5])),
+            intensity: volume_parameter_f32(&document.lines, "intensity").unwrap_or(0.0),
+            smoothness: volume_parameter_f32(&document.lines, "smoothness").unwrap_or(0.2),
+            rounded: volume_parameter_bool(&document.lines, "rounded").unwrap_or(false),
+        });
+        let motion_blur = component("MotionBlur").map(|document| PostProcessMotionBlurDef {
+            intensity: volume_parameter_f32(&document.lines, "intensity").unwrap_or(0.0),
+            quality: volume_parameter(&document.lines, "quality")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(1),
+        });
+        let tonemapping = component("Tonemapping").map(|document| {
+            match volume_parameter(&document.lines, "mode")
+                .and_then(|value| value.parse::<u8>().ok())
+                .unwrap_or_default()
+            {
+                1 => PostProcessTonemapping::Neutral,
+                2 => PostProcessTonemapping::Aces,
+                _ => PostProcessTonemapping::None,
+            }
+        });
+        let color_adjustments =
+            component("ColorAdjustments").map(|document| PostProcessColorAdjustmentsDef {
+                post_exposure: volume_parameter_f32(&document.lines, "postExposure").unwrap_or(0.0),
+                color_filter: volume_parameter(&document.lines, "colorFilter")
+                    .map_or([1.0; 4], |value| inline_color(value, [1.0; 4])),
+                hue_shift_degrees: volume_parameter_f32(&document.lines, "hueShift").unwrap_or(0.0),
+                saturation: volume_parameter_f32(&document.lines, "saturation").unwrap_or(0.0),
+            });
+        profiles.insert(
+            post_process_profile_id(&guid)?,
+            PostProcessProfileDef {
+                display_name: asset.name.clone(),
+                source_guid: guid,
+                source_path: asset.path.clone(),
+                bloom,
+                vignette,
+                motion_blur,
+                tonemapping,
+                color_adjustments,
+            },
+        );
+    }
+    Ok((profiles, scene_post_process))
+}
+
+fn volume_parameter<'a>(lines: &'a [String], name: &str) -> Option<&'a str> {
+    let header = format!("{name}:");
+    let start = lines.iter().position(|line| line.trim() == header)?;
+    let header_indent = lines[start].len() - lines[start].trim_start().len();
+    lines
+        .iter()
+        .skip(start + 1)
+        .take_while(|line| {
+            line.trim().is_empty() || line.len() - line.trim_start().len() > header_indent
+        })
+        .find_map(|line| line.trim().strip_prefix("m_Value:").map(str::trim))
+}
+
+fn volume_parameter_f32(lines: &[String], name: &str) -> Option<f32> {
+    volume_parameter(lines, name)?.parse().ok()
+}
+
+fn volume_parameter_bool(lines: &[String], name: &str) -> Option<bool> {
+    match volume_parameter(lines, name)? {
+        "0" | "false" | "False" => Some(false),
+        "1" | "true" | "True" => Some(true),
+        _ => None,
+    }
+}
+
+fn inline_color(value: &str, fallback: [f32; 4]) -> [f32; 4] {
+    [
+        inline_component(value, "r").unwrap_or(fallback[0]),
+        inline_component(value, "g").unwrap_or(fallback[1]),
+        inline_component(value, "b").unwrap_or(fallback[2]),
+        inline_component(value, "a").unwrap_or(fallback[3]),
+    ]
+}
+
+fn inline_vec2(value: &str, fallback: [f32; 2]) -> [f32; 2] {
+    [
+        inline_component(value, "x").unwrap_or(fallback[0]),
+        inline_component(value, "y").unwrap_or(fallback[1]),
+    ]
+}
+
+fn inline_component(value: &str, component: &str) -> Option<f32> {
+    value
+        .trim_matches(|character| matches!(character, '{' | '}'))
+        .split(',')
+        .find_map(|entry| entry.trim().strip_prefix(&format!("{component}: ")))
+        .and_then(|value| value.parse().ok())
+}
+
+fn reference_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
+    value.as_object()?.get(name)?.as_str()
+}
+
+fn post_process_profile_id(guid: &str) -> Result<StableId> {
+    StableId::new(format!("post_process_profile:{guid}")).map_err(Into::into)
 }
 
 fn convert_textures(
@@ -2552,7 +2764,39 @@ mod tests {
             serialized_fields: Vec::new(),
             dependencies: Vec::new(),
             game_object: None,
+            scene: None,
         }
+    }
+
+    #[test]
+    fn parses_authored_volume_parameters() {
+        let documents = parse_yaml_documents(
+            r"%YAML 1.1
+--- !u!114 &1
+MonoBehaviour:
+  m_Name: Bloom
+  active: 1
+  threshold:
+    m_OverrideState: 1
+    m_Value: 1.5
+  intensity:
+    m_OverrideState: 1
+    m_Value: 1
+  tint:
+    m_OverrideState: 0
+    m_Value: {r: 0.25, g: 0.5, b: 1, a: 1}
+",
+        )
+        .unwrap();
+        let lines = &documents[0].lines;
+        assert_eq!(volume_parameter_f32(lines, "threshold"), Some(1.5));
+        assert_eq!(volume_parameter_f32(lines, "intensity"), Some(1.0));
+        assert!(
+            inline_color(volume_parameter(lines, "tint").unwrap(), [0.0; 4])
+                .into_iter()
+                .zip([0.25, 0.5, 1.0, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
     }
 
     #[test]
@@ -2782,6 +3026,7 @@ AnimatorController:
             serialized_fields: Vec::new(),
             dependencies: Vec::new(),
             game_object: None,
+            scene: None,
         };
         let clip_asset = UnityAsset {
             guid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
@@ -2792,6 +3037,7 @@ AnimatorController:
             serialized_fields: Vec::new(),
             dependencies: Vec::new(),
             game_object: None,
+            scene: None,
         };
         let assets = BTreeMap::from([(clip_asset.guid.as_str(), &clip_asset)]);
         let mut clips = BTreeMap::new();
@@ -2895,6 +3141,7 @@ AvatarMask:
             ],
             dependencies: Vec::new(),
             game_object: None,
+            scene: None,
         };
         assert_eq!(
             named_values(&asset, "m_SavedProperties.m_Floats.Array.data[")["_Metallic"],

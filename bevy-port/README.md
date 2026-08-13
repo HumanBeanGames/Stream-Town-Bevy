@@ -95,7 +95,7 @@ textures and emits `presentation.ron`: 33 material definitions with 141 retained
 Unity vector/color shader parameters and 32 texture transforms, 184 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 13 also
+`.anim` files into 1,196 stable transform tracks. Presentation schema 14 also
 maps 122 embedded FBX takes to stable model-GUID/local-ID clip records and their
 exact GLB animation indexes. It
 retains 110 component/UI property curves with 261 keys across 18 clips, including
@@ -108,7 +108,10 @@ prefab material bindings and 181 material dependencies. Presentation schema 7
 additionally resolves 241 model-importer material names plus 912 authored slots
 across 903 prefab renderers, preserving distinct materials on multi-primitive
 GLB meshes. The known missing Necrolands camera clip is an explicit validated
-record.
+record. The same schema converts the two reachable global URP volume profiles
+and all three shipping scene bindings. Runtime mapping applies the authored
+bloom, vignette, motion blur, ACES tonemapping, exposure, and the town's
+inverse-daylight night color grade while retaining player brightness/gamma.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:

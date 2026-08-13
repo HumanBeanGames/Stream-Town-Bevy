@@ -1,5 +1,5 @@
 (
-    schema_version: 13,
+    schema_version: 14,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -30,6 +30,8 @@
     inferred_parameters: 2,
     prefab_bindings: 22,
     native_animation_bindings: 18,
+    post_process_profiles: 2,
+    scene_post_process_bindings: 3,
     outputs: [
         "assets/content/presentation.ron",
         "assets/content/presentation-report.ron",

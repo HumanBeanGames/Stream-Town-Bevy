@@ -1,5 +1,5 @@
 (
-    schema_version: 13,
+    schema_version: 14,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -100836,6 +100836,75 @@
                 materials: {
                     "Building_Material": "material:fdfb0b9e62e356e46ae2218394e8fabc",
                 },
+            ),
+        ],
+    },
+    post_process_profiles: {
+        "post_process_profile:a487605e40ff60d4fa440ffa39f15275": (
+            display_name: "Post_Processing_Volume",
+            source_guid: "a487605e40ff60d4fa440ffa39f15275",
+            source_path: "Assets/URP/Post_Processing_Volume.asset",
+            bloom: Some((
+                intensity: 1.0,
+                threshold: 1.5,
+                scatter: 0.7,
+            )),
+            vignette: Some((
+                color: (0.0, 0.0, 0.0, 1.0),
+                center: (0.5, 0.5),
+                intensity: 0.3,
+                smoothness: 0.2,
+                rounded: false,
+            )),
+            motion_blur: Some((
+                intensity: 0.3,
+                quality: 2,
+            )),
+            tonemapping: Some(aces),
+            color_adjustments: Some((
+                post_exposure: 1.1,
+                color_filter: (1.0, 1.0, 1.0, 1.0),
+                hue_shift_degrees: 0.0,
+                saturation: 0.0,
+            )),
+        ),
+        "post_process_profile:ad6bd2c32104ebb49acd98d03a779119": (
+            display_name: "Night_Post_Processing_Volume",
+            source_guid: "ad6bd2c32104ebb49acd98d03a779119",
+            source_path: "Assets/URP/Night_Post_Processing_Volume.asset",
+            bloom: None,
+            vignette: None,
+            motion_blur: None,
+            tonemapping: None,
+            color_adjustments: Some((
+                post_exposure: 0.75,
+                color_filter: (0.6745283, 0.72803044, 1.0, 1.0),
+                hue_shift_degrees: 0.0,
+                saturation: 0.0,
+            )),
+        ),
+    },
+    scene_post_process: {
+        "Assets/Scenes/Menu/Credits.unity": [
+            (
+                hierarchy_path: "Post_Processing_Normal",
+                profile: "post_process_profile:a487605e40ff60d4fa440ffa39f15275",
+                weight: 1.0,
+                inverse_daylight: false,
+            ),
+        ],
+        "Assets/Scenes/Worlds/World_Town.unity": [
+            (
+                hierarchy_path: "Post_Processing_Normal",
+                profile: "post_process_profile:a487605e40ff60d4fa440ffa39f15275",
+                weight: 1.0,
+                inverse_daylight: false,
+            ),
+            (
+                hierarchy_path: "Post_Processing_Night",
+                profile: "post_process_profile:ad6bd2c32104ebb49acd98d03a779119",
+                weight: 1.0,
+                inverse_daylight: true,
             ),
         ],
     },

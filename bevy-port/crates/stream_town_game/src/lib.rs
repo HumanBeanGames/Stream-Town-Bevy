@@ -18,8 +18,9 @@ use bevy::{
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, Pitch, SpatialScale, Volume},
-    camera::ScalingMode,
+    camera::{Hdr, ScalingMode},
     color::LinearRgba,
+    core_pipeline::tonemapping::Tonemapping,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::system::SystemParam,
     gltf::{GltfMaterialName, GltfMeshName},
@@ -29,6 +30,11 @@ use bevy::{
     mesh::Indices,
     pbr::ScreenSpaceAmbientOcclusion,
     pbr::{ExtendedMaterial, MaterialExtension},
+    post_process::{
+        bloom::{Bloom, BloomCompositeMode, BloomPrefilter},
+        effect_stack::Vignette,
+        motion_blur::MotionBlur,
+    },
     prelude::*,
     render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
     render::view::screenshot::{Screenshot, save_to_disk},
@@ -52,15 +58,18 @@ use stream_town_domain::{
     EnemyRunAnimation, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
     LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
     NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef, RulerVoteKind,
-    RuntimeConsoleAction, RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh,
-    Season, StableId, StationDef, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
-    Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
+    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
+    RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
+    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
+    StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, Weather, WorldSimulation,
+    WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
+const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
+const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
@@ -525,6 +534,11 @@ struct GroupSelectionActions {
 struct EnvironmentPresentation {
     applied_environment: Option<(Season, Weather)>,
     applied_daylight_milli: u16,
+}
+
+#[derive(Resource, Default)]
+struct PostProcessPresentation {
+    applied: Option<(GameState, u16, i32, i32)>,
 }
 
 #[derive(Resource, Default)]
@@ -1771,6 +1785,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SelectedRecruitGroup>()
             .init_resource::<GroupSelectionActions>()
             .init_resource::<EnvironmentPresentation>()
+            .init_resource::<PostProcessPresentation>()
             .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
@@ -1795,6 +1810,7 @@ impl Plugin for StreamTownGamePlugin {
                     setup_procedural_jukebox.after(setup_rendering),
                     start_twitch_transport,
                     apply_player_settings.after(setup_rendering),
+                    sync_authored_post_processing.after(apply_player_settings),
                 ),
             )
             .add_systems(OnEnter(GameState::Boot), finish_boot)
@@ -2035,6 +2051,12 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
+            )
+            .add_systems(
+                Update,
+                sync_authored_post_processing
+                    .after(apply_player_settings)
+                    .after(update_environment_presentation),
             )
             .add_systems(OnEnter(GameState::Credits), spawn_credits)
             .add_systems(
@@ -2638,17 +2660,11 @@ fn apply_player_settings(
     }
     let msaa = player_msaa(&settings.0);
     for (entity, mut projection) in &mut cameras {
-        let mut grading = ColorGrading::default();
-        grading.global.exposure = settings.0.video.brightness_ev;
-        let gamma = (1.0 + settings.0.video.gamma * 0.1).clamp(0.5, 1.5);
-        grading.shadows.gamma = gamma;
-        grading.midtones.gamma = gamma;
-        grading.highlights.gamma = gamma;
         if let Projection::Orthographic(orthographic) = &mut *projection {
             orthographic.scale = f32::from(settings.0.camera.field_of_view_degrees) / 60.0;
         }
         let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((msaa, grading));
+        entity_commands.insert(msaa);
         entity_commands.remove::<Fxaa>();
         entity_commands.remove::<Smaa>();
         match settings.0.video.post_process_aa {
@@ -2681,6 +2697,169 @@ fn apply_player_settings(
                 UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
             });
     }
+}
+
+fn sync_authored_post_processing(
+    mut commands: Commands,
+    state: Res<State<GameState>>,
+    settings: Res<RuntimePlayerSettings>,
+    config: Res<RuntimeConfig>,
+    catalog: Res<RuntimePresentation>,
+    simulation: Option<Res<SimulationRuntime>>,
+    environment: Res<EnvironmentPresentation>,
+    mut runtime: ResMut<PostProcessPresentation>,
+    cameras: Query<Entity, With<TownCamera>>,
+) {
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let daylight_milli = if *state.get() == GameState::InGame {
+        simulation
+            .as_deref()
+            .map_or(environment.applied_daylight_milli, |simulation| {
+                normalized_milli(config.0.time.sample(simulation.0.elapsed_seconds).daylight)
+            })
+    } else {
+        1_000
+    };
+    let signature = (
+        *state.get(),
+        daylight_milli,
+        i32::from_ne_bytes(settings.0.video.brightness_ev.to_ne_bytes()),
+        i32::from_ne_bytes(settings.0.video.gamma.to_ne_bytes()),
+    );
+    if runtime.applied == Some(signature) {
+        return;
+    }
+
+    let scene_path = match state.get() {
+        GameState::InGame => Some(WORLD_SCENE_PATH),
+        GameState::Credits => Some(CREDITS_SCENE_PATH),
+        GameState::Boot | GameState::MainMenu | GameState::WorldLoading => None,
+    };
+    let daylight = f32::from(daylight_milli) / 1_000.0;
+    let stack = scene_path.map_or_else(Vec::new, |scene| {
+        authored_post_process_stack(&catalog.0, scene, daylight)
+    });
+    let primary = stack
+        .iter()
+        .find_map(|(profile, weight)| (*weight > f32::EPSILON).then_some(*profile));
+    let mut entity = commands.entity(camera);
+    entity.insert(authored_color_grading(&settings.0, &stack));
+    if primary.is_some() {
+        entity.insert(Hdr);
+    } else {
+        entity.remove::<Hdr>();
+    }
+
+    if let Some(bloom) = primary.and_then(|profile| profile.bloom) {
+        entity.insert(Bloom {
+            intensity: bloom.intensity,
+            low_frequency_boost: bloom.scatter,
+            prefilter: BloomPrefilter {
+                threshold: bloom.threshold,
+                threshold_softness: 0.2,
+            },
+            composite_mode: BloomCompositeMode::Additive,
+            ..Bloom::OLD_SCHOOL
+        });
+    } else {
+        entity.remove::<Bloom>();
+    }
+    if let Some(vignette) = primary.and_then(|profile| profile.vignette) {
+        entity.insert(Vignette {
+            intensity: vignette.intensity,
+            radius: 0.75,
+            smoothness: vignette.smoothness,
+            roundness: if vignette.rounded { 1.0 } else { 0.0 },
+            center: Vec2::from_array(vignette.center),
+            edge_compensation: 1.0,
+            color: Color::srgba(
+                vignette.color[0],
+                vignette.color[1],
+                vignette.color[2],
+                vignette.color[3],
+            ),
+        });
+    } else {
+        entity.remove::<Vignette>();
+    }
+    if let Some(motion_blur) = primary.and_then(|profile| profile.motion_blur) {
+        entity.insert(MotionBlur {
+            shutter_angle: motion_blur.intensity,
+            samples: u32::from(motion_blur.quality),
+        });
+    } else {
+        entity.remove::<MotionBlur>();
+    }
+    match primary.and_then(|profile| profile.tonemapping) {
+        Some(PostProcessTonemapping::Aces) => entity.insert(Tonemapping::AcesFitted),
+        Some(PostProcessTonemapping::Neutral) => {
+            entity.insert(Tonemapping::SomewhatBoringDisplayTransform)
+        }
+        Some(PostProcessTonemapping::None) | None => entity.insert(Tonemapping::None),
+    };
+    runtime.applied = Some(signature);
+}
+
+fn authored_post_process_stack<'a>(
+    catalog: &'a PresentationCatalog,
+    scene_path: &str,
+    daylight: f32,
+) -> Vec<(&'a PostProcessProfileDef, f32)> {
+    catalog
+        .scene_post_process
+        .get(scene_path)
+        .into_iter()
+        .flatten()
+        .filter_map(|binding| {
+            catalog
+                .post_process_profiles
+                .get(&binding.profile)
+                .map(|profile| {
+                    let weight = if binding.inverse_daylight {
+                        binding.weight * (1.0 - daylight.clamp(0.0, 1.0))
+                    } else {
+                        binding.weight
+                    };
+                    (profile, weight.clamp(0.0, 1.0))
+                })
+        })
+        .collect()
+}
+
+fn authored_color_grading(
+    settings: &PlayerSettings,
+    stack: &[(&PostProcessProfileDef, f32)],
+) -> ColorGrading {
+    let mut exposure = 0.0;
+    let mut filter = [1.0_f32; 4];
+    let mut hue_degrees = 0.0;
+    let mut saturation = 0.0;
+    for (profile, weight) in stack {
+        let Some(adjustments) = profile.color_adjustments else {
+            continue;
+        };
+        exposure += (adjustments.post_exposure - exposure) * weight;
+        for (current, target) in filter.iter_mut().zip(adjustments.color_filter) {
+            *current += (target - *current) * weight;
+        }
+        hue_degrees += (adjustments.hue_shift_degrees - hue_degrees) * weight;
+        saturation += (adjustments.saturation - saturation) * weight;
+    }
+    let mut grading = ColorGrading::default();
+    grading.global.exposure = settings.video.brightness_ev + exposure;
+    grading.global.hue = hue_degrees.to_radians();
+    grading.global.post_saturation = (1.0 + saturation / 100.0).max(0.0);
+    // Bevy exposes chromaticity temperature/tint rather than URP's RGB multiplier.
+    // Retain the exact filter in RON and approximate its blue/green bias here.
+    grading.global.temperature = (filter[0] - filter[2]) * 0.04;
+    grading.global.tint = ((filter[0] + filter[2]) * 0.5 - filter[1]) * 0.04;
+    let gamma = (1.0 + settings.video.gamma * 0.1).clamp(0.5, 1.5);
+    grading.shadows.gamma = gamma;
+    grading.midtones.gamma = gamma;
+    grading.highlights.gamma = gamma;
+    grading
 }
 
 fn player_msaa(settings: &PlayerSettings) -> Msaa {
@@ -26670,9 +26849,30 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 13);
+        assert_eq!(presentation.schema_version, 14);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
+        assert_eq!(presentation.post_process_profiles.len(), 2);
+        assert_eq!(
+            presentation
+                .scene_post_process
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            3
+        );
+        let day = authored_post_process_stack(&presentation, WORLD_SCENE_PATH, 1.0);
+        let night = authored_post_process_stack(&presentation, WORLD_SCENE_PATH, 0.0);
+        assert_eq!(day.len(), 2);
+        assert!((day[0].1 - 1.0).abs() < f32::EPSILON);
+        assert!(day[1].1.abs() < f32::EPSILON);
+        assert!((night[0].1 - 1.0).abs() < f32::EPSILON);
+        assert!((night[1].1 - 1.0).abs() < f32::EPSILON);
+        let day_grading = authored_color_grading(&PlayerSettings::default(), &day);
+        let night_grading = authored_color_grading(&PlayerSettings::default(), &night);
+        assert!((day_grading.global.exposure - 1.1).abs() < f32::EPSILON);
+        assert!((night_grading.global.exposure - 0.75).abs() < f32::EPSILON);
+        assert!(night_grading.global.temperature < day_grading.global.temperature);
         assert_eq!(
             presentation
                 .materials
