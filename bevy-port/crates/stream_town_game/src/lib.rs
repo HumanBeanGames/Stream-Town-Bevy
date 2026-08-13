@@ -68,6 +68,11 @@ const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98f
 const PING_POINTER_MODEL_MIN_Y: f32 = 851.829_35;
 const PING_POINTER_MODEL_HEIGHT: f32 = 314.468_26;
 const FISH_GOD_EXIT_DELAY_SECONDS: f32 = 2.5;
+const SELECTION_MASK_MATERIAL_ID: &str = "material:631afbf4de8b7ad4eabc5e30e0b2c778";
+#[cfg(test)]
+const SELECTION_MASK_TEXTURE_PATH: &str = "Assets/Textures/SelectionMask.png";
+const PLAYER_SELECTION_OUTLINE_SCALE_CELLS: f32 = 1.5 * 1.25 / 2.0;
+const SELECTION_OUTLINE_SURFACE_OFFSET: f32 = 0.15;
 // Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
 // building models are authored at Unity scale and then scaled by cell_size / 2.
 const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
@@ -1762,6 +1767,7 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
+                    sync_selection_outline.after(select_grid_cell),
                     update_selection_panel,
                     update_vote_panels.after(move_agents),
                     update_town_goal_panel.after(move_agents),
@@ -2240,7 +2246,7 @@ fn setup_rendering(
                 .map(|handle| ((*source_path).to_owned(), handle))
         })
         .collect();
-    let presentation_materials = presentation
+    let presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle> = presentation
         .0
         .materials
         .iter()
@@ -2273,6 +2279,21 @@ fn setup_rendering(
             (id.clone(), resolved)
         })
         .collect();
+    let selection = StableId::new(SELECTION_MASK_MATERIAL_ID)
+        .ok()
+        .and_then(|id| presentation_materials.get(&id))
+        .and_then(|material| match material {
+            ResolvedMaterialHandle::Standard(material) => Some(material.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(1.0, 0.983_102, 0.0),
+                emissive: LinearRgba::new(0.877_358_5, 0.836_833_4, 0.0, 1.0),
+                alpha_mode: AlphaMode::Mask(0.5),
+                ..default()
+            })
+        });
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         actor_lod: meshes.add(Capsule3d::new(0.42, 1.45)),
@@ -2304,12 +2325,7 @@ fn setup_rendering(
         enemy_moving: materials.add(Color::srgb(1.0, 0.28, 0.22)),
         player_idle: materials.add(Color::srgb(0.35, 0.72, 0.95)),
         player_moving: materials.add(Color::srgb(0.52, 0.86, 1.0)),
-        selection: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.95, 0.92, 0.18, 0.35),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        }),
+        selection,
         rain: materials.add(StandardMaterial {
             base_color: Color::srgba(0.36, 0.66, 0.95, 0.62),
             alpha_mode: AlphaMode::Blend,
@@ -5598,14 +5614,12 @@ fn generate_and_spawn_world(
     commands.spawn((
         WorldEntity,
         SelectionMarker,
-        Mesh3d(render.cube.clone()),
+        Mesh3d(render.cloud_plane.clone()),
         MeshMaterial3d(render.selection.clone()),
-        Transform::from_xyz(0.0, 0.12, 0.0).with_scale(Vec3::new(
-            config.0.world.cell_size * 0.9,
-            0.2,
-            config.0.world.cell_size * 0.9,
-        )),
+        Transform::from_xyz(0.0, SELECTION_OUTLINE_SURFACE_OFFSET, 0.0),
         Visibility::Hidden,
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
     ));
 
     let mut spawned = 0_u16;
@@ -13726,9 +13740,7 @@ fn select_grid_cell(
     cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
     spatial: Option<SpatialQuery>,
     config: Res<RuntimeConfig>,
-    world: Res<WorldRuntime>,
     mut selected: ResMut<SelectedCell>,
-    mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -13762,11 +13774,95 @@ fn select_grid_cell(
         return;
     };
     selected.0 = Some(cell);
-    if let Ok((mut transform, mut visibility)) = markers.single_mut() {
-        let marker_position = grid_to_world_on_surface(cell, &config.0, &world.generated);
-        transform.translation = marker_position + Vec3::Y * 0.12;
-        *visibility = Visibility::Visible;
+}
+
+fn sync_selection_outline(
+    selected: Res<SelectedCell>,
+    content: Res<RuntimeContent>,
+    config: Res<RuntimeConfig>,
+    world: Res<WorldRuntime>,
+    simulation: Res<SimulationRuntime>,
+    mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
+) {
+    if !selected.is_changed() && !simulation.is_changed() && !world.is_changed() {
+        return;
     }
+    let Ok((mut transform, mut visibility)) = markers.single_mut() else {
+        return;
+    };
+    let Some(cell) = selected.0 else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+    let footprint = selected_building_footprint(cell, &content.0, &simulation.0);
+    let player_selected = simulation
+        .0
+        .actors
+        .values()
+        .any(|actor| actor.position == cell);
+    *transform = selection_outline_transform(
+        cell,
+        footprint,
+        player_selected,
+        &config.0,
+        &world.generated,
+    );
+    *visibility = Visibility::Visible;
+}
+
+fn selected_building_footprint(
+    cell: GridPos,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Option<(GridPos, [u16; 2])> {
+    simulation.buildings.values().find_map(|building| {
+        let definition = content
+            .buildings
+            .values()
+            .find(|definition| definition.archetype == building.archetype)?;
+        let footprint = rotated_footprint(definition.footprint, building.rotation_quarter_turns);
+        let inside = cell.x >= building.position.x
+            && cell.z >= building.position.z
+            && cell.x < building.position.x.saturating_add(footprint[0])
+            && cell.z < building.position.z.saturating_add(footprint[1]);
+        inside.then_some((building.position, footprint))
+    })
+}
+
+fn selection_outline_transform(
+    cell: GridPos,
+    building: Option<(GridPos, [u16; 2])>,
+    player_selected: bool,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+) -> Transform {
+    let (origin, footprint, scale_factor) = building.map_or_else(
+        || {
+            (
+                cell,
+                [1, 1],
+                if player_selected {
+                    PLAYER_SELECTION_OUTLINE_SCALE_CELLS
+                } else {
+                    0.9
+                },
+            )
+        },
+        |(origin, footprint)| (origin, footprint, 1.0),
+    );
+    let last = GridPos {
+        x: origin.x.saturating_add(footprint[0].saturating_sub(1)),
+        z: origin.z.saturating_add(footprint[1].saturating_sub(1)),
+    };
+    let first_world = grid_to_world(origin, config);
+    let last_world = grid_to_world(last, config);
+    let mut centre = (first_world + last_world) * 0.5;
+    centre.y = terrain_height(world, cell) + SELECTION_OUTLINE_SURFACE_OFFSET;
+    Transform::from_translation(centre).with_scale(Vec3::new(
+        f32::from(footprint[0]) * config.world.cell_size * scale_factor,
+        1.0,
+        f32::from(footprint[1]) * config.world.cell_size * scale_factor,
+    ))
 }
 
 fn update_selection_panel(
@@ -23126,6 +23222,83 @@ mod tests {
                 .iter()
                 .any(|binding| binding.target_path == "VisualBounds"
                     && binding.materials["BoundsVisualizer"] == bounds_id)
+        );
+    }
+
+    #[test]
+    fn selection_outline_preserves_authored_material_texture_and_footprints() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let material_id = StableId::new(SELECTION_MASK_MATERIAL_ID).unwrap();
+        let authored = &presentation.materials[&material_id];
+        assert_eq!(authored.source_path, "Assets/Materials/SelectionMask.mat");
+        assert_eq!(authored.alpha_mode, AuthoredAlphaMode::Mask);
+        assert_eq!(
+            presentation.textures[&authored.textures["_BaseMap"]].source_path,
+            SELECTION_MASK_TEXTURE_PATH
+        );
+        let material = standard_material(authored, &presentation, None);
+        assert_eq!(material.alpha_mode, AlphaMode::Mask(0.5));
+        for (actual, expected) in material
+            .base_color
+            .to_srgba()
+            .to_f32_array()
+            .into_iter()
+            .zip([1.0, 0.983_102, 0.0, 1.0])
+        {
+            assert!((actual - expected).abs() <= f32::EPSILON);
+        }
+        assert_eq!(
+            material.emissive,
+            LinearRgba::new(0.877_358_5, 0.836_833_4, 0.0, 1.0)
+        );
+        let texture = &presentation.textures[&authored.textures["_BaseMap"]];
+        assert!(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets")
+                .join(&texture.asset_path)
+                .is_file()
+        );
+
+        let config = GameConfig::default();
+        let world = generate_world_with_content(&config.world, &content);
+        let mut simulation = WorldSimulation::new(world.seed);
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        let town_hall_id = StableId::new("building:townhall").unwrap();
+        let town_hall = &simulation.buildings[&town_hall_id];
+        let footprint = selected_building_footprint(town_hall.position, &content, &simulation)
+            .expect("Town Hall origin should resolve its complete footprint");
+        let outline = selection_outline_transform(
+            town_hall.position,
+            Some(footprint),
+            false,
+            &config,
+            &world,
+        );
+        assert_eq!(
+            outline.scale,
+            Vec3::new(
+                f32::from(footprint.1[0]) * config.world.cell_size,
+                1.0,
+                f32::from(footprint.1[1]) * config.world.cell_size,
+            )
+        );
+
+        let player = selection_outline_transform(town_hall.position, None, true, &config, &world);
+        assert_eq!(
+            player.scale,
+            Vec3::new(
+                config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
+                1.0,
+                config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
+            )
+        );
+        assert!(
+            (player.translation.y
+                - terrain_height(&world, town_hall.position)
+                - SELECTION_OUTLINE_SURFACE_OFFSET)
+                .abs()
+                <= f32::EPSILON
         );
     }
 

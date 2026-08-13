@@ -315,7 +315,11 @@ The vertical slice renders the deterministic navigation height field as a colore
 trimesh collider used for surface picking, lighting, converted GLB scenes for
 the representative town hall and actors, and primitive fallbacks when an asset
 is unavailable. Actors, resources, buildings, movement, joins, save restores,
-and selection markers use the same centimetre height data as navigation.
+and selection outlines use the same centimetre height data as navigation. The
+live picker uses the converted `SelectionMask` texture and authored emissive
+alpha-cutout material on a terrain-following plane; actor outlines preserve
+Unity's 1.5-unit collider and 1.25 scale, while building selections cover their
+full rotated footprint.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that
@@ -435,7 +439,8 @@ at once. The live placer uses a typed port of Unity's transparent lit
 `BoundsVisualiser` material, the serialized success/failure colours from
 `BuildingPlacer.prefab`, and the authored `_Alpha` value.
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
-the image-backed selection window can be captured without pointer automation.
+the image-backed selection window and authored footprint outline can be
+captured without pointer automation.
 `STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the
 corresponding shipping bottom-bar context for repeatable UI captures.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
