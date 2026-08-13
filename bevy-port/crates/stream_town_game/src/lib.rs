@@ -71,6 +71,8 @@ const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
 const GRASS_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Grass.mat";
+const CRITTER_SHADER_ASSET_PATH: &str = "shaders/critter_material.wgsl";
+const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -557,6 +559,29 @@ impl MaterialExtension for GrassMaterialExtension {
 
 type GrassMaterial = ExtendedMaterial<StandardMaterial, GrassMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct CritterMaterialUniform {
+    animation_controls: Vec4,
+    main_scale_offset: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct CritterMaterialExtension {
+    #[uniform(100)]
+    parameters: CritterMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    main_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for CritterMaterialExtension {
+    fn vertex_shader() -> ShaderRef {
+        CRITTER_SHADER_ASSET_PATH.into()
+    }
+}
+
+type CritterMaterial = ExtendedMaterial<StandardMaterial, CritterMaterialExtension>;
+
 #[derive(Clone)]
 enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
@@ -564,6 +589,7 @@ enum ResolvedMaterialHandle {
     Cloud(Handle<CloudMaterial>),
     Tree(Handle<TreeMaterial>),
     Grass(Handle<GrassMaterial>),
+    Critter(Handle<CritterMaterial>),
 }
 
 #[derive(Resource, Default)]
@@ -1394,6 +1420,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
+        .add_plugins(MaterialPlugin::<CritterMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -1528,6 +1555,7 @@ fn setup_rendering(
     cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
+    critter_materials: Option<ResMut<Assets<CritterMaterial>>>,
 ) {
     let (
         Some(mut meshes),
@@ -1538,6 +1566,7 @@ fn setup_rendering(
         Some(mut cloud_materials),
         Some(mut tree_materials),
         Some(mut grass_materials),
+        Some(mut critter_materials),
     ) = (
         meshes,
         materials,
@@ -1547,6 +1576,7 @@ fn setup_rendering(
         cloud_materials,
         tree_materials,
         grass_materials,
+        critter_materials,
     )
     else {
         commands.insert_resource(RenderAssets::default());
@@ -1622,6 +1652,7 @@ fn setup_rendering(
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
+    let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
     let presentation_materials = presentation
         .0
         .materials
@@ -1635,6 +1666,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Tree(tree.clone())
             } else if material.source_path == GRASS_MATERIAL_PATH {
                 ResolvedMaterialHandle::Grass(grass.clone())
+            } else if material.source_path == CRITTER_MATERIAL_PATH {
+                ResolvedMaterialHandle::Critter(critter.clone())
             } else {
                 ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
@@ -2802,6 +2835,60 @@ fn grass_material(
             },
             main_texture: texture("_MainTexture"),
             noise_texture: texture("_NoiseTexture"),
+        },
+    }
+}
+
+fn critter_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> CritterMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == CRITTER_MATERIAL_PATH);
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let main_texture = authored.and_then(|material| {
+        asset_server.and_then(|asset_server| {
+            material
+                .textures
+                .get("_MainTexture")
+                .and_then(|id| presentation.textures.get(id))
+                .map(|texture| asset_server.load(texture.asset_path.clone()))
+        })
+    });
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_MainTexture"))
+        .copied()
+        .unwrap_or_default();
+    CritterMaterial {
+        base: StandardMaterial {
+            base_color_texture: main_texture.clone(),
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.5,
+            ..default()
+        },
+        extension: CritterMaterialExtension {
+            parameters: CritterMaterialUniform {
+                animation_controls: Vec4::new(
+                    scalar("_Speed", 5.5),
+                    scalar("_Sync", 3.58),
+                    scalar("_Stretch", 0.3),
+                    0.0,
+                ),
+                main_scale_offset: Vec4::new(
+                    transform.scale[0],
+                    transform.scale[1],
+                    transform.offset[0],
+                    transform.offset[1],
+                ),
+            },
+            main_texture,
         },
     }
 }
@@ -4112,6 +4199,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Grass(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Critter(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
         }
         return;
     }
@@ -4209,6 +4299,9 @@ fn spawn_foliage_visual(
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Grass(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Critter(material)) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Cloud(_)) | None => {
@@ -9691,6 +9784,12 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Grass(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                        ResolvedMaterialHandle::Critter(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -17113,6 +17212,21 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.extension.noise_texture.is_none());
+    }
+
+    #[test]
+    fn critter_material_preserves_authored_vertex_animation_contract() {
+        let material = critter_material(&embedded_presentation(), None);
+        assert_eq!(
+            material.extension.parameters.animation_controls,
+            Vec4::new(5.5, 3.58, 0.3, 0.0)
+        );
+        assert_eq!(
+            material.extension.parameters.main_scale_offset,
+            Vec4::new(1.0, 1.0, 0.0, 0.0)
+        );
+        assert!(material.extension.main_texture.is_none());
+        assert!(material.base.base_color_texture.is_none());
     }
 
     #[test]
