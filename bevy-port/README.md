@@ -453,6 +453,13 @@ save state. `STREAM_TOWN_ACTOR_SCENE_BUDGET` and
 `STREAM_TOWN_ANIMATION_BUDGET` override those diagnostic budgets. Twitch joins,
 recruits, runtime enemies, and save-restored actors automatically promote from
 the lightweight representation whenever detail capacity is available.
+All 16 reachable Unity `EnemyModelHandler` records are typed content. Detailed
+enemy scenes deterministically select one base and weapon plus independent
+optional nodes from the persistent actor ID, keep permanent nodes visible, and
+hide every unselected glTF node. The selected weapon supplies its authored
+attack parameter, action-variant count, and generic/two-handed
+`RunAnimationIndex`, so skeleton sword-and-shield and pole-weapon animation
+contracts remain coupled across save/reload.
 
 `STREAM_TOWN_REPORT_FRAME_TIME=1` raises startup to at least 300 agents and
 enables the explicit GPU benchmark,

@@ -336,6 +336,12 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         .values()
         .filter(|archetype| archetype.enemy_spawner.is_some())
         .count();
+    let enemy_model_handlers = state
+        .catalog
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.enemy_models.is_some())
+        .count();
     ui.heading("Content catalog and stable references");
     ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
     ui.horizontal(|ui| {
@@ -346,6 +352,8 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.label(format!("Roles: {}", state.catalog.roles.len()));
         ui.separator();
         ui.label(format!("Enemies / camps: {enemies} / {camps}"));
+        ui.separator();
+        ui.label(format!("Enemy model sets: {enemy_model_handlers}"));
         ui.separator();
         ui.label(format!(
             "Technology: {}",
@@ -412,6 +420,25 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             "player kill reward: {} {}",
                             enemy.kill_reward.amount, enemy.kill_reward.resource
                         ));
+                    }
+                    if let Some(models) = &archetype.enemy_models {
+                        ui.label(format!(
+                            "Enemy models: {} base / {} permanent / {} optional / {} weapons",
+                            models.base_models.len(),
+                            models.permanent_models.len(),
+                            models.optional_models.len(),
+                            models.weapons.len()
+                        ));
+                        for weapon in &models.weapons {
+                            ui.monospace(format!(
+                                "weapon {}: {} x{}; {:?} run; {} off-hand",
+                                weapon.main_model,
+                                weapon.action_animation,
+                                weapon.action_animation_variants,
+                                weapon.run_animation,
+                                weapon.off_hand_models.len()
+                            ));
+                        }
                     }
                     for scene in &archetype.scenes {
                         let marker = if scene.is_default {

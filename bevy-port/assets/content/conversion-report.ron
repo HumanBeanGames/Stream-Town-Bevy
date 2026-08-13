@@ -1,5 +1,5 @@
 (
-    schema_version: 1,
+    schema_version: 2,
     source_schema_version: 1,
     source_unity_version: "6000.5.6f1",
     source_sha256: "5076f058bc198a27b906e4e2ade71de9f5bd8da8dc43f6c5e1fc4253655b3151",
@@ -16,6 +16,8 @@
     storage_model_handlers: 6,
     passive_resource_generators: 1,
     enemy_resource_rewards: 9,
+    enemy_model_handlers: 16,
+    enemy_model_nodes: 114,
     roles: 15,
     technology_nodes: 363,
     technology_groups: 20,

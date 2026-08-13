@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 24;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 25;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -80,6 +80,8 @@ pub struct ArchetypeDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enemy: Option<EnemyDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enemy_models: Option<EnemyModelSetDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enemy_spawner: Option<EnemySpawnerDef>,
 }
 
@@ -113,6 +115,48 @@ pub struct EnemyDef {
     pub targets_all: bool,
     #[serde(default)]
     pub target_kinds: BTreeSet<StableId>,
+}
+
+/// Unity `EnemyModelHandler` choices and the animation contract tied to each weapon.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EnemyModelSetDef {
+    #[serde(default)]
+    pub base_models: Vec<String>,
+    #[serde(default)]
+    pub permanent_models: Vec<String>,
+    #[serde(default)]
+    pub optional_models: Vec<String>,
+    #[serde(default)]
+    pub weapons: Vec<EnemyWeaponModelDef>,
+    pub base_animation_variants: u8,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EnemyWeaponModelDef {
+    pub main_model: String,
+    #[serde(default)]
+    pub off_hand_models: Vec<String>,
+    pub action_animation: String,
+    pub action_animation_variants: u8,
+    pub run_animation: EnemyRunAnimation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnemyRunAnimation {
+    #[default]
+    Generic,
+    TwoHanded,
+}
+
+impl EnemyRunAnimation {
+    #[must_use]
+    pub const fn controller_index(self) -> i32 {
+        match self {
+            Self::Generic => 0,
+            Self::TwoHanded => 1,
+        }
+    }
 }
 
 /// A resource amount granted by an authored gameplay event.
@@ -467,6 +511,8 @@ pub enum ContentError {
     InvalidHealth(StableId),
     #[error("archetype {0} has invalid enemy combat values")]
     InvalidEnemy(StableId),
+    #[error("archetype {0} has invalid enemy-model data")]
+    InvalidEnemyModels(StableId),
     #[error("foliage layer {0} has invalid generation or variant values")]
     InvalidFoliage(StableId),
     #[error("archetype {0} has invalid enemy-spawner values")]
@@ -614,6 +660,32 @@ impl ContentCatalog {
                     || (!enemy.targets_all && enemy.target_kinds.is_empty())
             }) {
                 return Err(ContentError::InvalidEnemy(id.clone()));
+            }
+            let has_enemy_model_handler = archetype
+                .component_types
+                .iter()
+                .any(|component| component == "Enemies.EnemyModelHandler");
+            if has_enemy_model_handler != archetype.enemy_models.is_some()
+                || archetype.enemy_models.as_ref().is_some_and(|models| {
+                    models.base_animation_variants == 0
+                        || models
+                            .base_models
+                            .iter()
+                            .chain(&models.permanent_models)
+                            .chain(&models.optional_models)
+                            .any(|name| name.trim().is_empty())
+                        || models.weapons.iter().any(|weapon| {
+                            weapon.main_model.trim().is_empty()
+                                || weapon.action_animation.trim().is_empty()
+                                || weapon.action_animation_variants == 0
+                                || weapon
+                                    .off_hand_models
+                                    .iter()
+                                    .any(|name| name.trim().is_empty())
+                        })
+                })
+            {
+                return Err(ContentError::InvalidEnemyModels(id.clone()));
             }
             if let Some(spawner) = &archetype.enemy_spawner {
                 if spawner.min_total_enemies == 0

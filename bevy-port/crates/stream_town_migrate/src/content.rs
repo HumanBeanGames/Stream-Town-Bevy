@@ -10,11 +10,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat,
-    FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
-    PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
-    RoleSlotContribution, StableId, StationDef, StorageContribution, StorageModelDef,
-    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemyModelSetDef, EnemyRunAnimation,
+    EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef,
+    HealthDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution, ProjectileShooterDef,
+    ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution, StableId, StationDef,
+    StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode, TechTree,
+    WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -51,6 +52,8 @@ pub struct ContentConversionReport {
     pub storage_model_handlers: usize,
     pub passive_resource_generators: usize,
     pub enemy_resource_rewards: usize,
+    pub enemy_model_handlers: usize,
+    pub enemy_model_nodes: usize,
     pub roles: usize,
     pub technology_nodes: usize,
     pub technology_groups: usize,
@@ -503,7 +506,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 1,
+        schema_version: 2,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -548,6 +551,17 @@ fn convert_export(
             .values()
             .filter(|archetype| archetype.enemy.is_some())
             .count(),
+        enemy_model_handlers: catalog
+            .archetypes
+            .values()
+            .filter(|archetype| archetype.enemy_models.is_some())
+            .count(),
+        enemy_model_nodes: catalog
+            .archetypes
+            .values()
+            .filter_map(|archetype| archetype.enemy_models.as_ref())
+            .map(enemy_model_node_count)
+            .sum(),
         roles: catalog.roles.len(),
         technology_nodes: catalog.technology.nodes.len(),
         technology_groups: catalog.technology.groups.len(),
@@ -958,6 +972,87 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
     }))
 }
 
+fn enemy_model_definition(asset: &UnityAsset) -> Result<Option<EnemyModelSetDef>> {
+    let Some(component) = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component) == "Enemies.EnemyModelHandler")
+    else {
+        return Ok(None);
+    };
+    let unsigned = |path: &str| -> Result<u8> {
+        component_field_value(component, path)
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .with_context(|| format!("{} enemy-model field {path} is invalid", asset.path))
+    };
+    let weapon_count = component_field_value(component, "_linkedWeaponModels.Array.size")
+        .and_then(Value::as_u64)
+        .with_context(|| {
+            format!(
+                "{} enemy-model component is missing _linkedWeaponModels.Array.size",
+                asset.path
+            )
+        })?;
+    let mut weapons = Vec::with_capacity(usize::try_from(weapon_count).unwrap_or(usize::MAX));
+    for index in 0..weapon_count {
+        let prefix = format!("_linkedWeaponModels.Array.data[{index}]");
+        let animation = component_field_value(component, &format!("{prefix}._weaponAnimationName"))
+            .and_then(enum_name)
+            .with_context(|| format!("{} {prefix} has no weapon animation", asset.path))?;
+        let run_animation =
+            match component_field_value(component, &format!("{prefix}._runAnimation"))
+                .and_then(enum_name)
+            {
+                Some("Generic") => EnemyRunAnimation::Generic,
+                Some("Two Handed") => EnemyRunAnimation::TwoHanded,
+                other => bail!(
+                    "{} {prefix} has unsupported run animation {other:?}",
+                    asset.path
+                ),
+            };
+        weapons.push(EnemyWeaponModelDef {
+            main_model: component_reference_name(
+                asset,
+                component,
+                &format!("{prefix}._mainWeaponModel"),
+            )?
+            .to_owned(),
+            off_hand_models: component_reference_names(
+                asset,
+                component,
+                &format!("{prefix}._offHandModels"),
+            )?,
+            action_animation: animation_parameter_name(animation),
+            action_animation_variants: unsigned(&format!("{prefix}._animationVariants"))?,
+            run_animation,
+        });
+    }
+    // EnemyModelHandler.RandomizeModel runs unconditionally from Awake in the
+    // Unity source, so the serialized `_randomize` flag is intentionally not
+    // carried into the portable contract.
+    Ok(Some(EnemyModelSetDef {
+        base_models: component_reference_names(asset, component, "_baseModels")?,
+        permanent_models: component_reference_names(asset, component, "_permanentModels")?,
+        optional_models: component_reference_names(asset, component, "_optionalModels")?,
+        weapons,
+        base_animation_variants: unsigned("_baseAnimationVariants")?,
+    }))
+}
+
+fn enemy_model_node_count(models: &EnemyModelSetDef) -> usize {
+    models.base_models.len()
+        + models.permanent_models.len()
+        + models.optional_models.len()
+        + models
+            .weapons
+            .iter()
+            .map(|weapon| 1 + weapon.off_hand_models.len())
+            .sum::<usize>()
+}
+
 fn enemy_spawner_definition(
     asset: &UnityAsset,
     pools: &PoolIndex,
@@ -1320,6 +1415,7 @@ fn convert_archetypes(
             target_size_milli_cells: targetable_size_milli_cells(asset)?,
             health: health_definition(asset)?,
             enemy: enemy_definition(asset, pools)?,
+            enemy_models: enemy_model_definition(asset)?,
             enemy_spawner: enemy_spawner_definition(asset, pools)?,
         };
         if let Some((building, _)) = active_building {
@@ -2801,6 +2897,67 @@ mod tests {
         assert_eq!(converted.spawn_milliseconds, 3_000);
         assert_eq!(converted.spawn_offsets_milli_cells, vec![[1_750, 2_250]]);
         assert_eq!(converted.weighted_enemies[0].weight_milli, 50_000);
+    }
+
+    #[test]
+    fn converts_enemy_model_and_weapon_animation_contracts() {
+        let mut enemy = asset(
+            "skeleton",
+            "Assets/Prefabs/Enemies/Enemy_Skeleton.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        enemy.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Enemies.EnemyModelHandler, Assembly-CSharp",
+                vec![
+                    field("_baseModels.Array.size", Value::from(0)),
+                    field("_permanentModels.Array.size", Value::from(1)),
+                    field(
+                        "_permanentModels.Array.data[0]",
+                        serde_json::json!({"Name": "SkeletonBody"}),
+                    ),
+                    field("_optionalModels.Array.size", Value::from(1)),
+                    field(
+                        "_optionalModels.Array.data[0]",
+                        serde_json::json!({"Name": "SkeletonHelmet"}),
+                    ),
+                    field("_linkedWeaponModels.Array.size", Value::from(1)),
+                    field(
+                        "_linkedWeaponModels.Array.data[0]._mainWeaponModel",
+                        serde_json::json!({"Name": "Enemy_SkelePoleaxe"}),
+                    ),
+                    field(
+                        "_linkedWeaponModels.Array.data[0]._offHandModels.Array.size",
+                        Value::from(0),
+                    ),
+                    field(
+                        "_linkedWeaponModels.Array.data[0]._weaponAnimationName",
+                        serde_json::json!({"Name": "Hammer Attack"}),
+                    ),
+                    field(
+                        "_linkedWeaponModels.Array.data[0]._animationVariants",
+                        Value::from(1),
+                    ),
+                    field(
+                        "_linkedWeaponModels.Array.data[0]._runAnimation",
+                        serde_json::json!({"Name": "Two Handed"}),
+                    ),
+                    field("_baseAnimationVariants", Value::from(1)),
+                    field("_randomize", Value::Bool(false)),
+                ],
+            )],
+        });
+        let models = enemy_model_definition(&enemy).unwrap().unwrap();
+        assert_eq!(models.permanent_models, ["SkeletonBody"]);
+        assert_eq!(models.optional_models, ["SkeletonHelmet"]);
+        assert_eq!(enemy_model_node_count(&models), 3);
+        assert_eq!(models.weapons[0].main_model, "Enemy_SkelePoleaxe");
+        assert_eq!(models.weapons[0].action_animation, "HammerAttack");
+        assert_eq!(
+            models.weapons[0].run_animation,
+            EnemyRunAnimation::TwoHanded
+        );
     }
 
     #[test]

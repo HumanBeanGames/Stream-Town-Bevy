@@ -47,14 +47,14 @@ use stream_town_domain::{
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
     CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
-    ChatCommand, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState, GameConfig,
-    GeneratedFoliage, GeneratedWorld, GridPos, LegacyMigrationMetadata,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
-    ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
-    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
-    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
-    StationDef, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, Weather,
-    WorldSimulation, WorldSnapshot, generate_world_with_content,
+    ChatCommand, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState, EnemyModelSetDef,
+    EnemyRunAnimation, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
+    LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
+    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef, RulerVoteKind,
+    RuntimeConsoleAction, RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh,
+    Season, StableId, StationDef, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
+    Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -1337,6 +1337,15 @@ struct EquipmentNode {
     name: String,
 }
 
+#[derive(Component, Default)]
+struct AgentEnemyModelPresentation;
+
+#[derive(Component)]
+struct EnemyModelNode {
+    actor_root: Entity,
+    name: String,
+}
+
 #[derive(Component)]
 struct BuildingModelNode {
     building_root: Entity,
@@ -1596,6 +1605,8 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     tag_equipment_nodes,
                     sync_equipment_nodes.after(tag_equipment_nodes),
+                    tag_enemy_model_nodes,
+                    sync_enemy_model_nodes.after(tag_enemy_model_nodes),
                     tag_cosmetic_nodes,
                     sync_cosmetic_nodes.after(tag_cosmetic_nodes),
                     tag_cosmetic_renderers.after(apply_material_overrides),
@@ -10989,6 +11000,174 @@ fn equipment_node_names(content: &ContentCatalog) -> BTreeSet<String> {
         .collect()
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct EnemyModelSelection {
+    base_model: Option<usize>,
+    optional_models: BTreeSet<usize>,
+    weapon: Option<usize>,
+}
+
+fn enemy_model_hash(actor: &StableId, choice: &str, index: usize) -> u32 {
+    actor
+        .as_str()
+        .bytes()
+        .chain(choice.bytes())
+        .chain(
+            u64::try_from(index)
+                .expect("model-choice index fits u64")
+                .to_le_bytes(),
+        )
+        .fold(2_166_136_261_u32, |hash, byte| {
+            hash.wrapping_mul(16_777_619) ^ u32::from(byte)
+        })
+}
+
+fn enemy_model_selection(actor: &StableId, models: &EnemyModelSetDef) -> EnemyModelSelection {
+    let selected_index = |choice: &str, count: usize| {
+        (count > 0).then(|| {
+            usize::try_from(enemy_model_hash(actor, choice, 0)).expect("u32 fits usize") % count
+        })
+    };
+    EnemyModelSelection {
+        base_model: selected_index("base", models.base_models.len()),
+        optional_models: (0..models.optional_models.len())
+            .filter(|index| enemy_model_hash(actor, "optional", *index) & 1 == 1)
+            .collect(),
+        weapon: selected_index("weapon", models.weapons.len()),
+    }
+}
+
+fn enemy_model_node_names(content: &ContentCatalog) -> BTreeSet<String> {
+    content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy_models.as_ref())
+        .flat_map(|models| {
+            models
+                .base_models
+                .iter()
+                .chain(&models.permanent_models)
+                .chain(&models.optional_models)
+                .cloned()
+                .chain(models.weapons.iter().flat_map(|weapon| {
+                    std::iter::once(weapon.main_model.clone())
+                        .chain(weapon.off_hand_models.iter().cloned())
+                }))
+        })
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn tag_enemy_model_nodes(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    agents: Query<&Agent>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(Entity, &Name), (Without<EnemyModelNode>, Without<Agent>)>,
+) {
+    let names = enemy_model_node_names(&content.0);
+    for (entity, name) in &nodes {
+        if !names.contains(name.as_str()) {
+            continue;
+        }
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            let Ok(agent) = agents.get(ancestor) else {
+                continue;
+            };
+            if content
+                .0
+                .archetypes
+                .get(&agent.archetype)
+                .is_some_and(|archetype| archetype.enemy_models.is_some())
+            {
+                commands.entity(entity).insert(EnemyModelNode {
+                    actor_root: ancestor,
+                    name: name.as_str().to_owned(),
+                });
+                commands
+                    .entity(ancestor)
+                    .insert(AgentEnemyModelPresentation);
+                break;
+            }
+        }
+    }
+}
+
+fn enemy_model_node_visible(
+    models: &EnemyModelSetDef,
+    selection: &EnemyModelSelection,
+    name: &str,
+) -> bool {
+    if models.permanent_models.iter().any(|model| model == name) {
+        return true;
+    }
+    let weapon_membership: Vec<_> = models
+        .weapons
+        .iter()
+        .enumerate()
+        .filter(|(_, weapon)| {
+            weapon.main_model == name || weapon.off_hand_models.iter().any(|model| model == name)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if !weapon_membership.is_empty() {
+        return selection
+            .weapon
+            .is_some_and(|index| weapon_membership.contains(&index));
+    }
+    let optional_membership: Vec<_> = models
+        .optional_models
+        .iter()
+        .enumerate()
+        .filter_map(|(index, model)| (model == name).then_some(index))
+        .collect();
+    if !optional_membership.is_empty() {
+        return optional_membership
+            .iter()
+            .any(|index| selection.optional_models.contains(index));
+    }
+    models
+        .base_models
+        .iter()
+        .enumerate()
+        .any(|(index, model)| selection.base_model == Some(index) && model == name)
+}
+
+fn sync_enemy_model_nodes(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<&Agent, With<AgentEnemyModelPresentation>>,
+    mut nodes: Query<(&EnemyModelNode, &mut Visibility)>,
+) {
+    for (node, mut visibility) in &mut nodes {
+        let Ok(agent) = agents.get(node.actor_root) else {
+            continue;
+        };
+        let Some(actor) = simulation.0.actors.get(&agent.id) else {
+            continue;
+        };
+        let visible = actor_archetype(&content.0, actor)
+            .and_then(|archetype| archetype.enemy_models.as_ref())
+            .is_some_and(|models| {
+                enemy_model_node_visible(
+                    models,
+                    &enemy_model_selection(&agent.id, models),
+                    &node.name,
+                )
+            });
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn tag_equipment_nodes(
     mut commands: Commands,
@@ -11552,6 +11731,17 @@ fn drive_converted_animations(
         if let Some(agent) = agent
             && let Some(actor) = simulation.0.actors.get(&agent.id)
         {
+            let enemy_contract = enemy_animation_contract(&content.0, actor, &agent.id);
+            let run_animation = enemy_contract
+                .as_ref()
+                .map_or(EnemyRunAnimation::Generic, |contract| {
+                    contract.run_animation
+                });
+            for layer in &mut driver.layers {
+                let _ = layer
+                    .runtime
+                    .set_integer("RunAnimationIndex", run_animation.controller_index());
+            }
             let action = agent_action_animation(&content.0, agent, actor);
             if driver.active_action.as_deref() != action.as_deref() {
                 if let Some(previous) = driver.active_action.take() {
@@ -11563,11 +11753,16 @@ fn drive_converted_animations(
                     let _ = layer.runtime.set_boolean("Action", action.is_some());
                 }
                 if let Some(action) = &action {
-                    let variants = content
-                        .0
-                        .roles
-                        .get(&actor.role)
-                        .map_or(1, |role| role.action_animation_variants.max(1));
+                    let variants = enemy_contract.as_ref().map_or_else(
+                        || {
+                            content
+                                .0
+                                .roles
+                                .get(&actor.role)
+                                .map_or(1, |role| role.action_animation_variants.max(1))
+                        },
+                        |contract| contract.action_animation_variants,
+                    );
                     let index = deterministic_animation_variant(&agent.id, action, variants);
                     let speed = action_animation_speed(&content.0, &simulation.0, actor);
                     for layer in &mut driver.layers {
@@ -11857,11 +12052,45 @@ fn agent_action_animation(
         | AgentGoal::Construct(_)
         | AgentGoal::Attack(_)
         | AgentGoal::AttackBuilding(_)
-        | AgentGoal::Heal(_) => content
-            .roles
-            .get(&actor.role)
-            .map(|role| role.action_animation.clone()),
+        | AgentGoal::Heal(_) => enemy_animation_contract(content, actor, &agent.id).map_or_else(
+            || {
+                content
+                    .roles
+                    .get(&actor.role)
+                    .map(|role| role.action_animation.clone())
+            },
+            |contract| Some(contract.action_animation),
+        ),
         AgentGoal::Deposit | AgentGoal::Wander => None,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EnemyAnimationContract {
+    action_animation: String,
+    action_animation_variants: u8,
+    run_animation: EnemyRunAnimation,
+}
+
+fn enemy_animation_contract(
+    content: &ContentCatalog,
+    actor: &ActorState,
+    actor_id: &StableId,
+) -> Option<EnemyAnimationContract> {
+    let models = actor_archetype(content, actor)?.enemy_models.as_ref()?;
+    let selection = enemy_model_selection(actor_id, models);
+    if let Some(weapon) = selection.weapon.and_then(|index| models.weapons.get(index)) {
+        Some(EnemyAnimationContract {
+            action_animation: weapon.action_animation.clone(),
+            action_animation_variants: weapon.action_animation_variants.max(1),
+            run_animation: weapon.run_animation,
+        })
+    } else {
+        Some(EnemyAnimationContract {
+            action_animation: "GenericAction".to_owned(),
+            action_animation_variants: models.base_animation_variants.max(1),
+            run_animation: EnemyRunAnimation::Generic,
+        })
     }
 }
 
@@ -19545,6 +19774,48 @@ mod tests {
             "Body_Logger_Slim",
             false
         ));
+    }
+
+    #[test]
+    fn enemy_model_selection_is_stable_and_preserves_weapon_contracts() {
+        let content = embedded_content();
+        let skeleton =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Skeleton.prefab")
+                .unwrap();
+        let models = content.archetypes[&skeleton].enemy_models.as_ref().unwrap();
+        assert!(models.base_models.is_empty());
+        assert_eq!(models.permanent_models.len(), 2);
+        assert_eq!(models.optional_models.len(), 12);
+        assert_eq!(models.weapons.len(), 3);
+
+        let actor_id = StableId::new("actor:model_selection_skeleton").unwrap();
+        let selection = enemy_model_selection(&actor_id, models);
+        assert_eq!(selection, enemy_model_selection(&actor_id, models));
+        assert!(selection.weapon.is_some_and(|index| index < 3));
+        assert!(
+            models
+                .permanent_models
+                .iter()
+                .all(|name| { enemy_model_node_visible(models, &selection, name) })
+        );
+        for (index, weapon) in models.weapons.iter().enumerate() {
+            assert_eq!(
+                enemy_model_node_visible(models, &selection, &weapon.main_model),
+                selection.weapon == Some(index)
+            );
+        }
+
+        let mut simulation = WorldSimulation::new(42);
+        assert!(simulation.spawn_enemy(actor_id.clone(), skeleton, GridPos { x: 10, z: 10 }, 100,));
+        let contract =
+            enemy_animation_contract(&content, &simulation.actors[&actor_id], &actor_id).unwrap();
+        let weapon = &models.weapons[selection.weapon.unwrap()];
+        assert_eq!(contract.action_animation, weapon.action_animation);
+        assert_eq!(
+            contract.action_animation_variants,
+            weapon.action_animation_variants
+        );
+        assert_eq!(contract.run_animation, weapon.run_animation);
     }
 
     #[test]

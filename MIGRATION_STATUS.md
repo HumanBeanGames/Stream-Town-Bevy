@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -463,6 +463,14 @@ mistaken for production-ready systems.
   advance resource-gained objectives, and cannot pay twice for an already-dead
   actor. Direct debug/state removal remains unrewarded, matching Unity's
   misleadingly named `killedByPlayer` damage-event gate.
+- Content schema 25 converts all 16 reachable `EnemyModelHandler` records: 21
+  base, nine permanent, 66 independently optional, and 16 weapon model sets
+  comprising 114 stable node references. Each enemy spawn uses its persistent
+  actor ID to choose a replay-stable base, optional set, and weapon, hides every
+  unselected converted glTF node, and restores the same appearance after load.
+  Weapon choice also drives the authored action name, variant count, and
+  generic/two-handed `RunAnimationIndex`; enemies without weapon sets use their
+  base variant count and `GenericAction`, matching Unity's fallback contract.
 - Content schema 21 promotes all 42 reachable Unity `BuildingModelHandler`
   records and all six `BuildingResourceModelHandler` records with exact glTF
   node names. Bevy now swaps authored construction stages, full and upgrade
@@ -526,9 +534,10 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- The remaining rare/non-gameplay action emitters. Direct and nested
-  layer/state-machine routing, conditioned entries,
-  parent exits, masks, and property curves are converted and live.
+- Any remaining animation-event behavior discovered outside the ten reachable
+  `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
+  conditioned entries, parent exits, masks, property curves, and the reachable
+  emitters are converted and live.
 - Chunked terrain/foliage LOD, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
   additional enemy archetype behaviors/spawners, remaining station behavior,

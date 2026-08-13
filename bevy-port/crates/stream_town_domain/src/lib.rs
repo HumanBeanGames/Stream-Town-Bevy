@@ -29,10 +29,11 @@ pub use config::{
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, BuildingModelDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef,
-    EnemySpawnerDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef,
-    ObjectiveKind, PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef,
-    RoleEquipmentDef, RoleSlotContribution, StationDef, StorageContribution, StorageModelDef,
-    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat,
+    FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
+    PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
+    RoleSlotContribution, StationDef, StorageContribution, StorageModelDef, TargetingScoreDef,
+    TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};

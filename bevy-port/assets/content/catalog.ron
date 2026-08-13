@@ -1,5 +1,5 @@
 (
-    schema_version: 24,
+    schema_version: 25,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -1719,6 +1719,28 @@
                     "target:player",
                 ],
             )),
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_GoblinBoss",
+                ],
+                permanent_models: [],
+                optional_models: [
+                    "Enemy_GoblinBossChestArmour",
+                    "Enemy_GoblinBossHelmet",
+                    "Enemy_GoblinBossShoulderArmour_L",
+                    "Enemy_GoblinBossShoulderArmour_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "Enemy_GoblinToolAxe",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:122de980ba16c8d44a0149e18fe5b03e": (
             display_name: "Env_Necrolands_Debris_15_03",
@@ -2006,6 +2028,15 @@
                     "target:player",
                 ],
             )),
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_NecroSlasher",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:1ebf70d17d1f1a048ac8af03f7400737": (
             display_name: "Enemy_Minotaur",
@@ -2082,6 +2113,30 @@
                     "target:player",
                 ],
             )),
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_Minotaur1",
+                    "Enemy_Minotaur2",
+                ],
+                permanent_models: [],
+                optional_models: [
+                    "Enemy_MinotaurHelmet",
+                    "Enemy_MinotaurKneeArmour_L",
+                    "Enemy_MinotaurKneeArmour_R",
+                    "Enemy_MinotaurShoulderArmour_L",
+                    "Enemy_MinotaurShoulderArmour_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "MinotaurToolAxe",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:216e6a0e74fb05841804c87d47dc5ead": (
             display_name: "Model_Goblin",
@@ -2108,6 +2163,44 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_Goblin1",
+                    "Enemy_Goblin2",
+                ],
+                permanent_models: [],
+                optional_models: [
+                    "Enemy_GoblinBoot1_L",
+                    "Enemy_GoblinBoot1_R",
+                    "Enemy_GoblinBracer1_L",
+                    "Enemy_GoblinBracer1_R",
+                    "Enemy_GoblinChestArmour1",
+                    "Enemy_GoblinHelmet1",
+                    "Enemy_GoblinHelmet2",
+                    "Enemy_GoblinHelmet3",
+                    "Enemy_GoblinKneeGuard1_L",
+                    "Enemy_GoblinKneeGuard1_R",
+                    "Enemy_GoblinShoulderPad1_L",
+                    "Enemy_GoblinShoulderPad1_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "Enemy_GoblinToolClub1",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                    (
+                        main_model: "Enemy_GoblinToolClub2",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:220b9325efc3ade41a3298ab568345ef": (
             display_name: "VFX_RainingFish",
@@ -2352,6 +2445,16 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [
+                    "Blargul1",
+                    "Blargul2",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:359a2b923e43b5a4f98d7ef741aa83c6": (
             display_name: "VFX_Necrosummon",
@@ -2581,6 +2684,15 @@
                     "target:injured_player",
                     "target:player",
                 ],
+            )),
+            enemy_models: Some((
+                base_models: [
+                    "ReaperGhoul",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [],
+                base_animation_variants: 1,
             )),
         ),
         "archetype:prefab:3d0b3ca82df27d84e874a3337e471441": (
@@ -3820,6 +3932,30 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_Minotaur1",
+                    "Enemy_Minotaur2",
+                ],
+                permanent_models: [],
+                optional_models: [
+                    "Enemy_MinotaurHelmet",
+                    "Enemy_MinotaurKneeArmour_L",
+                    "Enemy_MinotaurKneeArmour_R",
+                    "Enemy_MinotaurShoulderArmour_L",
+                    "Enemy_MinotaurShoulderArmour_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "MinotaurToolAxe",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:6a8b677803f218649ba0b13f615984c7": (
             display_name: "Generation_Main",
@@ -4181,6 +4317,53 @@
                     "target:injured_player",
                     "target:player",
                 ],
+            )),
+            enemy_models: Some((
+                base_models: [],
+                permanent_models: [
+                    "Enemy_SkeletonBody1",
+                    "Enemy_SkeletonHead1",
+                ],
+                optional_models: [
+                    "Enemy_SkeletonBody1",
+                    "Enemy_SkeletonBracer_L",
+                    "Enemy_SkeletonBracer_R",
+                    "Enemy_SkeletonChestPlate",
+                    "Enemy_SkeletonHelmet1",
+                    "Enemy_SkeletonHipArmour",
+                    "Enemy_SkeletonLegArmour_L",
+                    "Enemy_SkeletonLegArmour_R",
+                    "Enemy_SkeletonShoulderpad_L",
+                    "Enemy_SkeletonShoulderpad_R",
+                    "Enemy_SkeletonThighArmour_L",
+                    "Enemy_SkeletonThighArmour_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "Enemy_SkeleSword",
+                        off_hand_models: [
+                            "Enemy_SkeleShield",
+                        ],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                    (
+                        main_model: "Enemy_SkelePoleaxe",
+                        off_hand_models: [],
+                        action_animation: "HammerAttack",
+                        action_animation_variants: 1,
+                        run_animation: two_handed,
+                    ),
+                    (
+                        main_model: "Enemy_SkelePoleHammer",
+                        off_hand_models: [],
+                        action_animation: "HammerAttack",
+                        action_animation_variants: 1,
+                        run_animation: two_handed,
+                    ),
+                ],
+                base_animation_variants: 1,
             )),
         ),
         "archetype:prefab:7358640a0fe0e20439150c08750cecac": (
@@ -5056,6 +5239,30 @@
                     "target:player",
                 ],
             )),
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_Minotaur1",
+                    "Enemy_Minotaur2",
+                ],
+                permanent_models: [
+                    "Enemy_MinotaurHelmet",
+                    "Enemy_MinotaurKneeArmour_L",
+                    "Enemy_MinotaurKneeArmour_R",
+                    "Enemy_MinotaurShoulderArmour_L",
+                    "Enemy_MinotaurShoulderArmour_R",
+                ],
+                optional_models: [],
+                weapons: [
+                    (
+                        main_model: "MinotaurToolAxe",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:94690280dced35541b76136d86cb001c": (
             display_name: "Enemy_Goblin_Skull",
@@ -5444,6 +5651,15 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [
+                    "ReaperGhoul",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:a405432dbaa346045afe38269f20ca9d": (
             display_name: "Env_Necrolands_Debris_12",
@@ -5733,6 +5949,15 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_NecroSlasher",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:abaffbf8fe007c749b6c03249d66c1d7": (
             display_name: "TerrainPrefab",
@@ -5924,6 +6149,16 @@
                     "target:player",
                 ],
             )),
+            enemy_models: Some((
+                base_models: [
+                    "Blargul1",
+                    "Blargul2",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:b3437b5dafe6a15489132833187dc592": (
             display_name: "Model_Goblin_Boss",
@@ -5950,6 +6185,28 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_GoblinBoss",
+                ],
+                permanent_models: [],
+                optional_models: [
+                    "Enemy_GoblinBossChestArmour",
+                    "Enemy_GoblinBossHelmet",
+                    "Enemy_GoblinBossShoulderArmour_L",
+                    "Enemy_GoblinBossShoulderArmour_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "Enemy_GoblinToolAxe",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:b47eb4c1080cb46c1bf0cacfb3c28a14": (
             display_name: "Env_Necrolands_Bones_Ribs_01",
@@ -6188,6 +6445,44 @@
                     "target:injured_player",
                     "target:player",
                 ],
+            )),
+            enemy_models: Some((
+                base_models: [
+                    "Enemy_Goblin1",
+                    "Enemy_Goblin2",
+                ],
+                permanent_models: [],
+                optional_models: [
+                    "Enemy_GoblinBoot1_L",
+                    "Enemy_GoblinBoot1_R",
+                    "Enemy_GoblinBracer1_L",
+                    "Enemy_GoblinBracer1_R",
+                    "Enemy_GoblinChestArmour1",
+                    "Enemy_GoblinHelmet1",
+                    "Enemy_GoblinHelmet2",
+                    "Enemy_GoblinHelmet3",
+                    "Enemy_GoblinKneeGuard1_L",
+                    "Enemy_GoblinKneeGuard1_R",
+                    "Enemy_GoblinShoulderPad1_L",
+                    "Enemy_GoblinShoulderPad1_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "Enemy_GoblinToolClub1",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                    (
+                        main_model: "Enemy_GoblinToolClub2",
+                        off_hand_models: [],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
             )),
         ),
         "archetype:prefab:bb5331581e5fa8f44ad53933b712895d": (
@@ -6910,6 +7205,53 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            enemy_models: Some((
+                base_models: [],
+                permanent_models: [
+                    "Enemy_SkeletonBody1",
+                    "Enemy_SkeletonHead1",
+                ],
+                optional_models: [
+                    "Enemy_SkeletonBody1",
+                    "Enemy_SkeletonBracer_L",
+                    "Enemy_SkeletonBracer_R",
+                    "Enemy_SkeletonChestPlate",
+                    "Enemy_SkeletonHelmet1",
+                    "Enemy_SkeletonHipArmour",
+                    "Enemy_SkeletonLegArmour_L",
+                    "Enemy_SkeletonLegArmour_R",
+                    "Enemy_SkeletonShoulderpad_L",
+                    "Enemy_SkeletonShoulderpad_R",
+                    "Enemy_SkeletonThighArmour_L",
+                    "Enemy_SkeletonThighArmour_R",
+                ],
+                weapons: [
+                    (
+                        main_model: "Enemy_SkeleSword",
+                        off_hand_models: [
+                            "Enemy_SkeleShield",
+                        ],
+                        action_animation: "GenericAction",
+                        action_animation_variants: 2,
+                        run_animation: generic,
+                    ),
+                    (
+                        main_model: "Enemy_SkelePoleaxe",
+                        off_hand_models: [],
+                        action_animation: "HammerAttack",
+                        action_animation_variants: 1,
+                        run_animation: two_handed,
+                    ),
+                    (
+                        main_model: "Enemy_SkelePoleHammer",
+                        off_hand_models: [],
+                        action_animation: "HammerAttack",
+                        action_animation_variants: 1,
+                        run_animation: two_handed,
+                    ),
+                ],
+                base_animation_variants: 1,
+            )),
         ),
         "archetype:prefab:e75975d58a4655249adff12733f761dc": (
             display_name: "Env_Necrolands_Ruins_02",
@@ -7142,6 +7484,23 @@
                     "target:construction",
                     "target:damaged_building",
                 ],
+            )),
+            enemy_models: Some((
+                base_models: [
+                    "Goblin_BatteringRam",
+                ],
+                permanent_models: [],
+                optional_models: [],
+                weapons: [
+                    (
+                        main_model: "Ram",
+                        off_hand_models: [],
+                        action_animation: "Action",
+                        action_animation_variants: 1,
+                        run_animation: generic,
+                    ),
+                ],
+                base_animation_variants: 1,
             )),
         ),
         "archetype:prefab:ed617ade83fb3674abae4072fb62decd": (

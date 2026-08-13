@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786619389.3479097,
-    "ast_hash": "20f7211adee781d9660cd2e9367e8f46",
+    "mtime": 1786620366.200422,
+    "ast_hash": "dbc8d93b9fa078b1f162dcfc78a759ed",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786615584.9392538,
-    "ast_hash": "aab0a2712a53794c2bf490421a8600d1",
+    "mtime": 1786620366.201953,
+    "ast_hash": "471eb819853e081d2aacd946e3e2ef91",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786619417.4946806,
-    "ast_hash": "9fe9f6c3c54f60654ba2aea698198bf7",
+    "mtime": 1786621190.6928165,
+    "ast_hash": "0a8cc6e195c5a76a2decb3b5cadd9ba4",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2805,13 +2805,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786618888.6422558,
-    "ast_hash": "cd4d57a5a4c804f1e05419b8899a1745",
+    "mtime": 1786620541.399622,
+    "ast_hash": "e49bd2176ba7f9ff85562ac13fde52e6",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786618888.643263,
-    "ast_hash": "acfe935c8a76ced2c8b66204ddbdd059",
+    "mtime": 1786621190.6938205,
+    "ast_hash": "3cf71dc1c955f41be0a49a804d6e1f25",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786610510.6783295,
-    "ast_hash": "ebb1f18cf6d6605b22d0c8d298a3d05a",
+    "mtime": 1786620895.639848,
+    "ast_hash": "969d40f34f8f6e95f23cde46464e9d00",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786610510.6783295,
-    "ast_hash": "8e1898dc610dd3ccfa0c1811ac83fafe",
+    "mtime": 1786620895.639848,
+    "ast_hash": "2c97eddfddc9ce87c2bd7a84a170c09e",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -3630,8 +3630,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
-    "mtime": 1786618584.0403497,
-    "ast_hash": "e70bc685bc86927d737069de05000efd",
+    "mtime": 1786620609.6465087,
+    "ast_hash": "18d0da076234d08aa0a8d6911e692ff9",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/models.rs": {
@@ -4467,6 +4467,11 @@
   "graphify-out/memory/query_20260813_104920_how_does_the_bevy_runtime_preserve_unity_world_spa.md": {
     "mtime": 1786618160.5219145,
     "ast_hash": "2ea3a172790101c8b9aafc6c90715241",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_111134_how_does_the_bevy_migration_preserve_unity_targeta.md": {
+    "mtime": 1786619494.6265335,
+    "ast_hash": "63381936275eec49fd426e2ba7c8d823",
     "semantic_hash": ""
   }
 }

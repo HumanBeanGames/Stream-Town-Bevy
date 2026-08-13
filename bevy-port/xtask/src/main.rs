@@ -161,6 +161,35 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.target_size_milli_cells > 0)
         .count();
+    let enemy_model_handlers = content
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.enemy_models.is_some())
+        .count();
+    let enemy_base_models: usize = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy_models.as_ref())
+        .map(|models| models.base_models.len())
+        .sum();
+    let enemy_permanent_models: usize = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy_models.as_ref())
+        .map(|models| models.permanent_models.len())
+        .sum();
+    let enemy_optional_models: usize = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy_models.as_ref())
+        .map(|models| models.optional_models.len())
+        .sum();
+    let enemy_weapon_models: usize = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy_models.as_ref())
+        .map(|models| models.weapons.len())
+        .sum();
     if content.foliage.len() != 4
         || foliage_variants != 21
         || passive_resource_generators != 1
@@ -168,6 +197,13 @@ fn validate() -> Result<()> {
         || storage_model_handlers != 6
         || targeting_scores != 26
         || target_sizes != 44
+        || (
+            enemy_model_handlers,
+            enemy_base_models,
+            enemy_permanent_models,
+            enemy_optional_models,
+            enemy_weapon_models,
+        ) != (16, 21, 9, 66, 16)
         || (
             content.schema_version,
             content.archetypes.len(),
@@ -180,7 +216,7 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (24, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (25, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -504,7 +540,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes, 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes with 44 target sizes, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }
