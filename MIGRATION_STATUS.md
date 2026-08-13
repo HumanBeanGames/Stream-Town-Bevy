@@ -366,6 +366,11 @@ mistaken for production-ready systems.
   shares, vote totals, deterministic top-five candidate/yes-no tallies, and
   save-resumed countdowns read authoritative simulation state; the local vote
   button feeds the same typed `!vote` path used by Twitch.
+- Objective-backed technology goals now render through the shipping town-goal
+  surface: converted technology icon/title, Unity-equivalent objective wording,
+  exact saved progress counts, and packaged objective sliders. The tracker
+  follows the authoritative first goal and temporarily yields to an overlapping
+  technology ballot without losing state.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red

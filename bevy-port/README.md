@@ -487,6 +487,14 @@ the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|kee
 opens reproducible visual-acceptance fixtures without bypassing the real vote
 state or timer systems.
 
+Accepted technology votes that create objective-backed town goals now open the
+shipping objective tracker. It renders the converted technology icon and title,
+Unity-equivalent requirement labels, exact authoritative current/required
+amounts, and the packaged objective progress slider; it rebuilds after native
+save load and yields temporarily while a new technology ballot occupies the
+same screen region. `STREAM_TOWN_SMOKE_GOAL=1` starts a reproducible real-catalog
+goal fixture for visual acceptance.
+
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
 remaining work.

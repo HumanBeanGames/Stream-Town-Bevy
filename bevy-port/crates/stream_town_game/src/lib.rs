@@ -49,11 +49,11 @@ use stream_town_domain::{
     CURRENT_RUNTIME_CONSOLE_SCHEMA, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
     CustomizationKind, DisplayMode, EnemyCampState, GameConfig, GeneratedFoliage, GeneratedWorld,
     GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
-    NameDisplayMode, NativeSaveStore, ObjectiveEvent, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef, RulerVoteKind,
-    RuntimeConsoleAction, RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh,
-    Season, StableId, StationDef, StorageModelDef, StreamUserType, TownEvent, Weather,
-    WorldSimulation, WorldSnapshot, generate_world_with_content,
+    NameDisplayMode, NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings,
+    PlayerSettingsStore, PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef,
+    RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor,
+    SavedTerrainMesh, Season, StableId, StationDef, StorageModelDef, StreamUserType, TownEvent,
+    Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -123,6 +123,11 @@ const VOTE_TEXTURE_PATHS: [&str; 9] = [
 ];
 const RULER_VOTE_TIMER_UNFILLED_PATH: &str =
     "Assets/Sprites/RulerVotingMenu/UI_RulerVotingMenu_TimerSlider_Unfilled.png";
+const OBJECTIVE_TEXTURE_PATHS: [&str; 3] = [
+    "Assets/Sprites/Objectives/UI_Objectives_Background.png",
+    "Assets/Sprites/Objectives/UI_Objectives_Slider_Unfilled.png",
+    "Assets/Sprites/Objectives/UI_Objectives_Slider_Filled.png",
+];
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -731,6 +736,7 @@ struct RenderAssets {
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
     bottom_bar_textures: BTreeMap<String, Handle<Image>>,
     vote_textures: BTreeMap<String, Handle<Image>>,
+    objective_textures: BTreeMap<String, Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -911,6 +917,9 @@ struct TechnologyVoteCastButton;
 
 #[derive(Component)]
 struct TechnologyVoteCastEnabled(bool);
+
+#[derive(Component)]
+struct TownGoalPanel;
 
 type TechnologyVoteIconQuery<'w, 's> = Query<
     'w,
@@ -1505,6 +1514,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     update_selection_panel,
                     update_vote_panels.after(move_agents),
+                    update_town_goal_panel.after(move_agents),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -1925,6 +1935,13 @@ fn setup_rendering(
                 .map(|handle| (source_path.to_owned(), handle))
         })
         .collect();
+    let objective_textures = OBJECTIVE_TEXTURE_PATHS
+        .iter()
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
     let presentation_materials = presentation
         .0
         .materials
@@ -2089,6 +2106,7 @@ fn setup_rendering(
         selection_panel_textures,
         bottom_bar_textures,
         vote_textures,
+        objective_textures,
         presentation_materials,
     });
 }
@@ -3425,6 +3443,14 @@ fn vote_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
         .unwrap_or_default()
 }
 
+fn objective_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
+    render
+        .objective_textures
+        .get(source_path)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn spawn_vote_track(
     parent: &mut ChildSpawnerCommands,
     render: &RenderAssets,
@@ -3706,6 +3732,37 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 },
             ));
         });
+}
+
+fn spawn_town_goal_panel(commands: &mut Commands, render: &RenderAssets) {
+    commands.spawn((
+        WorldEntity,
+        TownGoalPanel,
+        Name::new("Town goal tracker"),
+        ImageNode::new(objective_texture(render, OBJECTIVE_TEXTURE_PATHS[0]))
+            .with_mode(NodeImageMode::Tiled {
+                tile_x: false,
+                tile_y: true,
+                stretch_value: 1.0,
+            })
+            .with_color(Color::srgb(0.055, 0.075, 0.14)),
+        GlobalZIndex(23),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(118),
+            right: px(18),
+            width: px(360),
+            min_height: px(150),
+            max_height: px(480),
+            padding: UiRect::all(px(18)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(9),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.035, 0.055, 0.11, 0.9)),
+    ));
 }
 
 fn spawn_bottom_bar_button(
@@ -4036,6 +4093,7 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
     ));
     spawn_vote_panels(commands, render);
+    spawn_town_goal_panel(commands, render);
 }
 
 fn main_menu_input(
@@ -4904,6 +4962,19 @@ fn generate_and_spawn_world(
             }
             _ => {}
         }
+    }
+    if std::env::var_os("STREAM_TOWN_SMOKE_GOAL").is_some()
+        && let Some(technology) = eligible_technology_ids(&content.0, &simulation)
+            .into_iter()
+            .find(|technology| !content.0.technology.nodes[technology].objectives.is_empty())
+    {
+        let node = &content.0.technology.nodes[&technology];
+        let _ = simulation.start_technology_goal(
+            technology,
+            &node.objectives,
+            &content.0.objectives,
+            MAX_TOWN_GOALS,
+        );
     }
     if let Some(day) = debug_start_day() {
         simulation.elapsed_seconds = f64::from(day) * f64::from(config.0.time.seconds_per_day);
@@ -11800,6 +11871,205 @@ fn technology_vote_cast_button(
             ));
         }
     }
+}
+
+fn content_label(id: Option<&StableId>, prefix: &str, fallback: &str) -> String {
+    id.map_or_else(
+        || fallback.to_owned(),
+        |id| title_case(&format_camel_words(id.as_str().trim_start_matches(prefix))),
+    )
+}
+
+fn objective_progress_ratio(amount: u32, required: u32) -> f32 {
+    if required == 0 {
+        return 1.0;
+    }
+    let permille = amount
+        .min(required)
+        .saturating_mul(1_000)
+        .checked_div(required)
+        .unwrap_or_default()
+        .min(1_000);
+    f32::from(u16::try_from(permille).expect("bounded permille fits u16")) / 1_000.0
+}
+
+fn objective_display_label(definition: &stream_town_domain::ObjectiveDef) -> String {
+    match definition.kind {
+        ObjectiveKind::Build => format!(
+            "Build {}",
+            content_label(definition.building.as_ref(), "building:", "Building")
+        ),
+        ObjectiveKind::BuildAny => "Build Buildings".to_owned(),
+        ObjectiveKind::Collect => format!(
+            "Gather {}",
+            content_label(definition.resource.as_ref(), "resource:", "Resources")
+        ),
+        ObjectiveKind::Kill => format!(
+            "Kill {}",
+            content_label(definition.enemy.as_ref(), "enemy:", "Enemy")
+        ),
+        ObjectiveKind::KillAny => "Kill Enemies".to_owned(),
+        ObjectiveKind::EarnPerHour => format!(
+            "Earn {}/Hour",
+            content_label(definition.resource.as_ref(), "resource:", "Resources")
+        ),
+        ObjectiveKind::Sell => format!(
+            "Sell {}",
+            content_label(definition.resource.as_ref(), "resource:", "Resources")
+        ),
+        ObjectiveKind::SellAny => "Sell Resources".to_owned(),
+        ObjectiveKind::Buy => format!(
+            "Buy {}",
+            content_label(definition.resource.as_ref(), "resource:", "Resources")
+        ),
+        ObjectiveKind::BuyAny => "Buy Resources".to_owned(),
+    }
+}
+
+fn town_goal_signature(simulation: &WorldSimulation) -> String {
+    simulation
+        .active_goals
+        .first()
+        .map_or_else(|| "closed".to_owned(), |goal| format!("{goal:?}"))
+        + if simulation.active_vote.is_some() {
+            ":ballot"
+        } else {
+            ":visible"
+        }
+}
+
+fn update_town_goal_panel(
+    mut commands: Commands,
+    simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    mut signature: Local<String>,
+    panels: Query<Entity, With<TownGoalPanel>>,
+) {
+    if !simulation.is_changed() && !content.is_changed() {
+        return;
+    }
+    let current_signature = town_goal_signature(&simulation.0);
+    if *signature == current_signature {
+        return;
+    }
+    *signature = current_signature;
+    let Ok(panel) = panels.single() else {
+        return;
+    };
+    commands.entity(panel).despawn_children();
+    let Some(goal) = simulation
+        .0
+        .active_goals
+        .first()
+        .filter(|_| simulation.0.active_vote.is_none())
+    else {
+        commands.entity(panel).insert(Visibility::Hidden);
+        return;
+    };
+    let technology = content.0.technology.nodes.get(&goal.technology);
+    commands
+        .entity(panel)
+        .insert(Visibility::Visible)
+        .with_children(|root| {
+            root.spawn(Node {
+                width: percent(100.0),
+                height: px(72),
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: px(12),
+                ..default()
+            })
+            .with_children(|header| {
+                let icon = technology
+                    .and_then(|technology| {
+                        presentation_texture_handle(
+                            &presentation.0,
+                            asset_server.as_deref(),
+                            &technology.icon_path,
+                        )
+                    })
+                    .map_or_else(ImageNode::default, ImageNode::new);
+                header.spawn((
+                    icon,
+                    Node {
+                        width: px(64),
+                        height: px(64),
+                        ..default()
+                    },
+                ));
+                header.spawn((
+                    Text::new(technology.map_or_else(
+                        || goal.technology.to_string(),
+                        |technology| {
+                            compact_technology_label(&technology.display_name).replace('\n', " ")
+                        },
+                    )),
+                    TextFont {
+                        font_size: FontSize::Px(24.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.97, 0.88, 0.58)),
+                    Node {
+                        flex_grow: 1.0,
+                        ..default()
+                    },
+                ));
+            });
+            for objective in &goal.objectives {
+                let definition = content.0.objectives.get(&objective.objective);
+                let label = definition
+                    .map_or_else(|| objective.objective.to_string(), objective_display_label);
+                let progress =
+                    objective_progress_ratio(objective.amount, objective.required_amount);
+                root.spawn(Node {
+                    width: percent(100.0),
+                    height: px(58),
+                    flex_shrink: 0.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(3),
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new(format!(
+                            "{label}   {} / {}",
+                            objective.amount.min(objective.required_amount),
+                            objective.required_amount
+                        )),
+                        TextFont {
+                            font_size: FontSize::Px(17.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                    row.spawn((
+                        ImageNode::new(objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[1]))
+                            .with_mode(NodeImageMode::Stretch),
+                        Node {
+                            width: percent(100.0),
+                            height: px(26),
+                            overflow: Overflow::clip_x(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|track| {
+                        track.spawn((
+                            ImageNode::new(objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[2]))
+                                .with_mode(NodeImageMode::Stretch),
+                            Node {
+                                width: percent((progress * 100.0).clamp(0.0, 100.0)),
+                                height: percent(100.0),
+                                ..default()
+                            },
+                        ));
+                    });
+                });
+            }
+        });
 }
 
 fn selection_panel_details(
@@ -19562,6 +19832,51 @@ mod tests {
         );
         assert_eq!(pending.actor_id, viewer);
         assert_eq!(pending.origin, CommandOrigin::LocalUi);
+    }
+
+    #[test]
+    fn shipping_town_goal_tracker_uses_objective_art_and_unity_labels() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        for source_path in OBJECTIVE_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing objective texture {source_path}"
+            );
+        }
+        let (technology, node) = content
+            .technology
+            .nodes
+            .iter()
+            .find(|(_, technology)| !technology.objectives.is_empty())
+            .expect("shipping technology graph has objective-backed goals");
+        let objective = &content.objectives[&node.objectives[0]];
+        let label = objective_display_label(objective);
+        assert!(!label.is_empty());
+        assert!(!label.contains("resource:"));
+        assert!(!label.contains("building:"));
+        assert!(!label.contains("enemy:"));
+        assert!((objective_progress_ratio(500, 1_000) - 0.5).abs() <= f32::EPSILON);
+        assert!((objective_progress_ratio(70_000, 100_000) - 0.7).abs() <= f32::EPSILON);
+        assert!((objective_progress_ratio(2, 1) - 1.0).abs() <= f32::EPSILON);
+        assert!((objective_progress_ratio(0, 0) - 1.0).abs() <= f32::EPSILON);
+
+        let mut simulation = WorldSimulation::new(17);
+        assert!(simulation.start_technology_goal(
+            technology.clone(),
+            &node.objectives,
+            &content.objectives,
+            MAX_TOWN_GOALS,
+        ));
+        let visible_signature = town_goal_signature(&simulation);
+        assert!(visible_signature.ends_with(":visible"));
+        simulation
+            .start_technology_vote(StableId::new("tech:other_vote").unwrap(), 60.0)
+            .unwrap();
+        assert!(town_goal_signature(&simulation).ends_with(":ballot"));
     }
 
     #[test]
