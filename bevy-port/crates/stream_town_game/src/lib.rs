@@ -14224,7 +14224,7 @@ fn load_input(
     mut io: ResMut<MenuIoRequest>,
     save: Res<SaveRuntime>,
     mut world: ResMut<WorldRuntime>,
-    config: Res<RuntimeConfig>,
+    mut config: ResMut<RuntimeConfig>,
     content: Res<RuntimeContent>,
     mut load_render: LoadRenderParams,
     mut placers: ResMut<BuildingPlacers>,
@@ -14249,7 +14249,9 @@ fn load_input(
         }
     };
     placers.0.clear();
-    let mut restored_world = generate_world_with_content(&config.0.world, &content.0);
+    let mut restored_config = config.0.clone();
+    restored_config.world.seed = snapshot.world_seed;
+    let mut restored_world = generate_world_with_content(&restored_config.world, &content.0);
     let compatibility = native_world_compatibility(
         snapshot.world_seed,
         snapshot.generator_version,
@@ -14274,13 +14276,13 @@ fn load_input(
     ) {
         info!(
             saved_generator_version = snapshot.generator_version,
-            runtime_generator_version = world.generated.generator_version,
+            runtime_generator_version = restored_world.generator_version,
             "upgrading native save world fingerprint; new typed resources start at full stock"
         );
-        snapshot.generator_version = world.generated.generator_version;
+        snapshot.generator_version = restored_world.generator_version;
         snapshot
             .world_hash
-            .clone_from(&world.generated.deterministic_hash);
+            .clone_from(&restored_world.deterministic_hash);
     }
 
     if !snapshot.resource_nodes.is_empty() {
@@ -14312,7 +14314,7 @@ fn load_input(
                     return;
                 }
             },
-            None => generated_terrain_mesh(&restored_world, &config.0),
+            None => generated_terrain_mesh(&restored_world, &restored_config),
         };
         let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
             error!("native save terrain does not produce a valid triangle collider");
@@ -14326,10 +14328,10 @@ fn load_input(
         }
         None
     };
-    ensure_town_hall_state(&content.0, &config.0, &mut snapshot.simulation);
+    ensure_town_hall_state(&content.0, &restored_config, &mut snapshot.simulation);
     snapshot
         .simulation
-        .upgrade_time_schema(config.0.time.seconds_per_day);
+        .upgrade_time_schema(restored_config.time.seconds_per_day);
     normalize_building_health(&content.0, &mut snapshot.simulation);
     for (entity, building) in &entities.runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
@@ -14367,7 +14369,7 @@ fn load_input(
         }
         spawn_runtime_building(
             &mut ecs,
-            &config.0,
+            &restored_config,
             &restored_world,
             &load_render.presentation.0,
             load_render.asset_server.as_deref(),
@@ -14397,7 +14399,7 @@ fn load_input(
         }
         spawn_enemy_camp(
             &mut ecs,
-            &config.0,
+            &restored_config,
             &restored_world,
             &load_render.presentation.0,
             load_render.asset_server.as_deref(),
@@ -14432,7 +14434,8 @@ fn load_input(
         x: saved_town_hall.position.x + town_hall_footprint[0] / 2,
         z: saved_town_hall.position.z + town_hall_footprint[1] / 2,
     };
-    let town_hall_surface = grid_to_world_on_surface(town_hall_centre, &config.0, &restored_world);
+    let town_hall_surface =
+        grid_to_world_on_surface(town_hall_centre, &restored_config, &restored_world);
     if let Ok((mut location, mut presentation, mut transform)) = entities.town_halls.single_mut() {
         location.0 = saved_town_hall.position;
         presentation.base_translation =
@@ -14475,7 +14478,8 @@ fn load_input(
         if let Some(actor) = snapshot.simulation.actors.get_mut(&saved.id) {
             actor.position = position;
         }
-        let mut world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
+        let mut world_position =
+            grid_to_world_on_surface(position, &restored_config, &world.generated);
         if !animation.native {
             world_position.y += animation.base_scale.y * 0.5;
         }
@@ -14508,11 +14512,11 @@ fn load_input(
         if let Some(actor) = snapshot.simulation.actors.get_mut(&saved.id) {
             actor.position = position;
         }
-        let world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
+        let world_position = grid_to_world_on_surface(position, &restored_config, &world.generated);
         let base_scale = Vec3::new(
-            config.0.world.cell_size * 0.3,
-            config.0.world.cell_size * 0.55,
-            config.0.world.cell_size * 0.3,
+            restored_config.world.cell_size * 0.3,
+            restored_config.world.cell_size * 0.55,
+            restored_config.world.cell_size * 0.3,
         );
         ecs.spawn((
             WorldEntity,
@@ -14547,6 +14551,7 @@ fn load_input(
     stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
     stats.paths_completed = 0;
     simulation.0 = snapshot.simulation;
+    config.0.world.seed = snapshot.world_seed;
     runtime_console.last_result = format!("Loaded {}", save.store.path().display());
     info!(
         path = %save.store.path().display(),
@@ -22979,6 +22984,70 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn native_load_restores_saved_world_seed_after_runtime_config_changes() {
+        let config = GameConfig::default();
+        let saved_seed = config.world.seed;
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("saved-seed.stbevy");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(config))
+        .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(&save_path),
+        });
+
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::WorldLoading);
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<MenuIoRequest>().save = true;
+        app.update();
+
+        let saved = NativeSaveStore::new(&save_path).load().unwrap();
+        let saved_wood = town_resource_amount(&saved.simulation, "resource:wood");
+        app.world_mut().resource_mut::<RuntimeConfig>().0.world.seed = saved_seed.wrapping_add(1);
+        app.world_mut()
+            .resource_mut::<SimulationRuntime>()
+            .0
+            .town_resources
+            .insert(StableId::new("resource:wood").unwrap(), 0);
+        app.world_mut().resource_mut::<MenuIoRequest>().load = true;
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<WorldRuntime>().generated.seed,
+            saved_seed
+        );
+        assert_eq!(
+            app.world().resource::<RuntimeConfig>().0.world.seed,
+            saved_seed
+        );
+        assert_eq!(
+            app.world().resource::<SimulationRuntime>().0.world_seed,
+            saved_seed
+        );
+        assert_eq!(
+            town_resource_amount(
+                &app.world().resource::<SimulationRuntime>().0,
+                "resource:wood"
+            ),
+            saved_wood
+        );
+        assert_eq!(
+            app.world().resource::<RuntimeConsoleRuntime>().last_result,
+            format!("Loaded {}", save_path.display())
+        );
     }
 
     #[test]
