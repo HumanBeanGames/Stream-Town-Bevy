@@ -70,5 +70,5 @@ pub use simulation::{
 };
 pub use world::{
     GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,
-    generate_world_with_content, legacy_v1_world_hash, shoreline_approaches,
+    generate_world_with_content, legacy_v1_world_hash, legacy_v2_world_hash, shoreline_approaches,
 };

@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786606715.2246902,
-    "ast_hash": "d4e0f33f5b789212cba6a734f323adbc",
+    "mtime": 1786607927.0074363,
+    "ast_hash": "309e49eaca9789bd1ee0867198c2f62e",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2785,13 +2785,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/world.rs": {
-    "mtime": 1786606715.2236955,
-    "ast_hash": "45f5d37a8a75ec574e59e14f2b70ebf3",
+    "mtime": 1786608066.158723,
+    "ast_hash": "73780953a1af48f9a1450101141ebf41",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786607488.1557395,
-    "ast_hash": "644087ff109f1f738705b4e093f4e764",
+    "mtime": 1786608247.068259,
+    "ast_hash": "2a577c207ec2b7a97a978e02f316e501",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786607566.5027978,
-    "ast_hash": "837d5d732f65f3d57274d06c153c97f0",
+    "mtime": 1786608226.0538833,
+    "ast_hash": "b4edffbe1f3d053cadb71146f5a86828",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786607566.5043013,
-    "ast_hash": "9c97b82114549ce69e5180267b24ae53",
+    "mtime": 1786608226.0553937,
+    "ast_hash": "e9cad8623519da63185aa15ebb8f5f4f",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -4397,6 +4397,11 @@
   "graphify-out/memory/query_20260813_074412_how_do_typed_unity_resource_targets__farm_harvesti.md": {
     "mtime": 1786607052.1757078,
     "ast_hash": "5df69bc8ea7b091cb4805a140f577f3d",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_075539_how_does_bevy_reproduce_unity_resourceprocessor_ze.md": {
+    "mtime": 1786607739.0507133,
+    "ast_hash": "537c30149ffa4441fff78ff608004d36",
     "semantic_hash": ""
   }
 }

@@ -6923,15 +6923,33 @@ fn resource_approach(
     if world.navigation.is_walkable(resource.position) {
         return Some(resource.position);
     }
-    stream_town_domain::shoreline_approaches(&world.navigation, resource.position).min_by_key(
-        |candidate| {
-            (
-                candidate.x.abs_diff(from.x) + candidate.z.abs_diff(from.z),
-                candidate.z,
-                candidate.x,
-            )
-        },
-    )
+    if resource.target_kind.as_str() == "target:fish" {
+        return stream_town_domain::shoreline_approaches(&world.navigation, resource.position)
+            .min_by_key(|candidate| {
+                (
+                    candidate.x.abs_diff(from.x) + candidate.z.abs_diff(from.z),
+                    candidate.z,
+                    candidate.x,
+                )
+            });
+    }
+    nearest_walkable(world, resource.position)
+}
+
+fn is_current_building_approach(
+    world: &GeneratedWorld,
+    content: &ContentCatalog,
+    building: &BuildingState,
+    current: GridPos,
+) -> bool {
+    building_def_for_archetype(content, &building.archetype).and_then(|definition| {
+        building_approach(
+            world,
+            building.position,
+            rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+            current,
+        )
+    }) == Some(current)
 }
 
 fn goal_reservation(goal: &AgentGoal) -> Option<&StableId> {
@@ -7555,7 +7573,10 @@ fn complete_agent_goal(
                 .resources
                 .iter()
                 .find(|resource| resource.id == *resource_id && resource.amount > 0)
-                .is_some_and(|resource| actor_accepts_resource(content, actor, resource))
+                .is_some_and(|resource| {
+                    actor_accepts_resource(content, actor, resource)
+                        && resource_approach(world, resource, current) == Some(current)
+                })
             {
                 return None;
             }
@@ -7580,11 +7601,23 @@ fn complete_agent_goal(
             experience_amount = amount;
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
+            let cleared_position = (resource.amount == 0
+                && resource.target_kind.as_str() != "target:fish")
+                .then_some(resource.position);
             if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
                 warn!(actor = %actor_id, %error, "resource gather action failed");
                 resource.amount = resource.amount.saturating_add(amount);
                 false
             } else {
+                if let Some(position) = cleared_position {
+                    let _ = world.navigation.set_blocked(
+                        stream_town_domain::DirtyRegion {
+                            min: position,
+                            max: position,
+                        },
+                        false,
+                    );
+                }
                 if amount > 0
                     && let Some(pet) = gathering_pet
                     && simulation
@@ -7611,7 +7644,10 @@ fn complete_agent_goal(
                 || !simulation
                     .buildings
                     .get(building_id)
-                    .is_some_and(|building| is_farm_resource_building(content, building))
+                    .is_some_and(|building| {
+                        is_farm_resource_building(content, building)
+                            && is_current_building_approach(world, content, building, current)
+                    })
             {
                 return None;
             }
@@ -7799,6 +7835,15 @@ fn complete_agent_goal(
             }
         }
         AgentGoal::Construct(building_id) => {
+            if !simulation
+                .buildings
+                .get(building_id)
+                .is_some_and(|building| {
+                    is_current_building_approach(world, content, building, current)
+                })
+            {
+                return None;
+            }
             let was_incomplete = simulation
                 .buildings
                 .get(building_id)
@@ -14227,7 +14272,10 @@ fn load_input(
         );
         return;
     }
-    if compatibility == Some(NativeWorldCompatibility::UpgradeV1) {
+    if matches!(
+        compatibility,
+        Some(NativeWorldCompatibility::UpgradeV1 | NativeWorldCompatibility::UpgradeV2)
+    ) {
         info!(
             saved_generator_version = snapshot.generator_version,
             runtime_generator_version = world.generated.generator_version,
@@ -14240,10 +14288,23 @@ fn load_input(
     }
 
     if !snapshot.resource_nodes.is_empty() {
+        let mut depleted_land = Vec::new();
         for resource in &mut restored_world.resources {
             if let Some(remaining) = snapshot.resource_nodes.get(&resource.id) {
                 resource.amount = *remaining;
+                if *remaining == 0 && resource.target_kind.as_str() != "target:fish" {
+                    depleted_land.push(resource.position);
+                }
             }
+        }
+        for position in depleted_land {
+            let _ = restored_world.navigation.set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: position,
+                    max: position,
+                },
+                false,
+            );
         }
     }
     let terrain_replacement = if let Some(meshes) = load_render.meshes.as_mut() {
@@ -14466,6 +14527,7 @@ fn load_input(
 enum NativeWorldCompatibility {
     Current,
     UpgradeV1,
+    UpgradeV2,
 }
 
 fn native_world_compatibility(
@@ -14480,8 +14542,11 @@ fn native_world_compatibility(
     if generator_version == world.generator_version && world_hash == world.deterministic_hash {
         return Some(NativeWorldCompatibility::Current);
     }
-    (generator_version == 1 && world_hash == stream_town_domain::legacy_v1_world_hash(world))
-        .then_some(NativeWorldCompatibility::UpgradeV1)
+    if generator_version == 1 && world_hash == stream_town_domain::legacy_v1_world_hash(world) {
+        return Some(NativeWorldCompatibility::UpgradeV1);
+    }
+    (generator_version == 2 && world_hash == stream_town_domain::legacy_v2_world_hash(world))
+        .then_some(NativeWorldCompatibility::UpgradeV2)
 }
 
 fn capture_screenshot(
@@ -19358,8 +19423,9 @@ mod tests {
             _ => "role:gatherer",
         };
         let actor_id = StableId::new("npc:test_worker").unwrap();
+        let approach = resource_approach(&world, &resource, resource.position).unwrap();
         let mut simulation = WorldSimulation::new(world.seed);
-        assert!(simulation.join_player(actor_id.clone(), resource.position));
+        assert!(simulation.join_player(actor_id.clone(), approach));
         simulation
             .assign_role(&actor_id, StableId::new(role).unwrap())
             .unwrap();
@@ -19373,7 +19439,7 @@ mod tests {
                 &content,
                 &actor_id,
                 &gather,
-                resource.position,
+                approach,
             );
         }
         assert_eq!(
@@ -19387,14 +19453,8 @@ mod tests {
         );
         assert_eq!(simulation.actors[&actor_id].inventory[&resource.kind], 10);
         assert_eq!(role_progress(&simulation.actors[&actor_id]).experience, 10);
-        let (goal, _) = next_agent_goal(
-            &simulation,
-            &world,
-            &config,
-            &content,
-            &actor_id,
-            resource.position,
-        );
+        let (goal, _) =
+            next_agent_goal(&simulation, &world, &config, &content, &actor_id, approach);
         assert_eq!(goal, AgentGoal::Deposit);
         complete_agent_goal(
             &mut simulation,
@@ -19403,14 +19463,14 @@ mod tests {
             &content,
             &actor_id,
             &AgentGoal::Deposit,
-            resource.position,
+            approach,
         );
         assert!(simulation.actors[&actor_id].inventory.is_empty());
         assert_eq!(simulation.town_resources[&resource.kind], 10);
     }
 
     #[test]
-    fn native_world_compatibility_accepts_current_and_verified_v1_only() {
+    fn native_world_compatibility_accepts_current_and_verified_upgrades_only() {
         let world = generate_world(&GameConfig::default().world);
         assert_eq!(
             native_world_compatibility(
@@ -19429,6 +19489,15 @@ mod tests {
                 &world,
             ),
             Some(NativeWorldCompatibility::UpgradeV1)
+        );
+        assert_eq!(
+            native_world_compatibility(
+                world.seed,
+                2,
+                &stream_town_domain::legacy_v2_world_hash(&world),
+                &world,
+            ),
+            Some(NativeWorldCompatibility::UpgradeV2)
         );
         assert_eq!(
             native_world_compatibility(world.seed, 1, "corrupt", &world),
@@ -19587,6 +19656,70 @@ mod tests {
             &actor_id,
             &goal,
         ));
+    }
+
+    #[test]
+    fn land_resource_occupancy_requires_an_edge_action_and_clears_on_depletion() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let resource = world
+            .resources
+            .iter()
+            .find(|resource| {
+                resource.target_kind.as_str() == "target:tree"
+                    && !world.navigation.is_walkable(resource.position)
+            })
+            .unwrap()
+            .clone();
+        let approach = resource_approach(&world, &resource, resource.position).unwrap();
+        let actor_id = StableId::new("npc:resource_edge_test").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), approach));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:logger").unwrap())
+            .unwrap();
+        world
+            .resources
+            .iter_mut()
+            .find(|candidate| candidate.id == resource.id)
+            .unwrap()
+            .amount = 1;
+        let goal = AgentGoal::Gather(resource.id.clone());
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &actor_id,
+                &goal,
+                resource.position,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            world
+                .resources
+                .iter()
+                .find(|candidate| candidate.id == resource.id)
+                .unwrap()
+                .amount,
+            1
+        );
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &actor_id,
+                &goal,
+                approach,
+            )
+            .is_none()
+        );
+        assert!(world.navigation.is_walkable(resource.position));
     }
 
     #[test]

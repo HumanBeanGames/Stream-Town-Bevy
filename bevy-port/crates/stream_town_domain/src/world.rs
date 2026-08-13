@@ -51,7 +51,7 @@ fn generate_world_from_layers(
     config: &WorldGenConfig,
     foliage_layers: &[FoliageLayerDef],
 ) -> GeneratedWorld {
-    const GENERATOR_VERSION: u32 = 2;
+    const GENERATOR_VERSION: u32 = 3;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let mut heights = Vec::with_capacity(cell_count);
     let mut blocked = Vec::with_capacity(cell_count);
@@ -105,6 +105,14 @@ fn generate_world_from_layers(
     let spawn_index = usize::from(spawn.z) * usize::from(config.width) + usize::from(spawn.x);
     blocked[spawn_index] = false;
 
+    for resource in &resources {
+        let index = usize::from(resource.position.z) * usize::from(config.width)
+            + usize::from(resource.position.x);
+        blocked[index] = true;
+    }
+    // The explicit town spawn remains the sole land-resource occupancy
+    // exception, matching the existing centre-safety guarantee.
+    blocked[spawn_index] = false;
     let navigation = NavGrid::new(config.width, config.height, blocked, heights)
         .expect("validated world configuration produces a valid grid");
     generate_shoreline_fish(config, &navigation, &mut resources);
@@ -198,17 +206,17 @@ pub fn legacy_v1_world_hash(world: &GeneratedWorld) -> String {
     let mut hasher = Sha256::new();
     hasher.update(world.seed.to_le_bytes());
     hasher.update(1_u32.to_le_bytes());
-    for z in 0..world.navigation.height() {
-        for x in 0..world.navigation.width() {
+    let navigation = legacy_resource_navigation(world);
+    for z in 0..navigation.height() {
+        for x in 0..navigation.width() {
             let position = GridPos { x, z };
             hasher.update(
-                world
-                    .navigation
+                navigation
                     .height_at(position)
                     .unwrap_or_default()
                     .to_le_bytes(),
             );
-            hasher.update([u8::from(world.navigation.is_walkable(position))]);
+            hasher.update([u8::from(navigation.is_walkable(position))]);
         }
     }
     for resource in resources {
@@ -219,6 +227,33 @@ pub fn legacy_v1_world_hash(world: &GeneratedWorld) -> String {
         hasher.update(resource.amount.to_le_bytes());
     }
     hex::encode(hasher.finalize())
+}
+
+#[must_use]
+pub fn legacy_v2_world_hash(world: &GeneratedWorld) -> String {
+    hash_world(
+        world.seed,
+        2,
+        &legacy_resource_navigation(world),
+        &world.resources,
+    )
+}
+
+fn legacy_resource_navigation(world: &GeneratedWorld) -> NavGrid {
+    let mut navigation = world.navigation.clone();
+    for resource in &world.resources {
+        if resource.target_kind.as_str() == "target:fish" {
+            continue;
+        }
+        let region = crate::DirtyRegion {
+            min: resource.position,
+            max: resource.position,
+        };
+        navigation
+            .set_blocked(region, false)
+            .expect("generated resource position is inside navigation");
+    }
+    navigation
 }
 
 fn generate_foliage(
@@ -419,8 +454,9 @@ mod tests {
     fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
         let config = GameConfig::default().world;
         let world = generate_world(&config);
-        assert_eq!(world.generator_version, 2);
+        assert_eq!(world.generator_version, 3);
         assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
+        assert_ne!(legacy_v2_world_hash(&world), world.deterministic_hash);
         for resource in &world.resources {
             match resource.kind.as_str() {
                 "resource:wood" => assert_eq!(resource.target_kind.as_str(), "target:tree"),
@@ -445,6 +481,20 @@ mod tests {
                     .next()
                     .is_some()
             );
+        }
+        for resource in world
+            .resources
+            .iter()
+            .filter(|resource| resource.target_kind.as_str() != "target:fish")
+            .filter(|resource| {
+                resource.position
+                    != GridPos {
+                        x: config.width / 2,
+                        z: config.height / 2,
+                    }
+            })
+        {
+            assert!(!world.navigation.is_walkable(resource.position));
         }
     }
 
