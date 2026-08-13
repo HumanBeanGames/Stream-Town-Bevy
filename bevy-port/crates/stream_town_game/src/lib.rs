@@ -62,6 +62,11 @@ const MAX_TOWN_GOALS: usize = 2;
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
+const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
+const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.glb";
+const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98fe";
+const PING_POINTER_MODEL_MIN_Y: f32 = 851.829_35;
+const PING_POINTER_MODEL_HEIGHT: f32 = 314.468_26;
 // Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
 // building models are authored at Unity scale and then scaled by cell_size / 2.
 const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
@@ -463,6 +468,7 @@ struct CameraRequest {
 #[derive(Clone, Debug)]
 enum AgentCommand {
     Teleport { actor: StableId, position: GridPos },
+    Ping(StableId),
     Despawn(StableId),
 }
 
@@ -909,6 +915,13 @@ struct LevelUpPresentation {
 
 #[derive(Component)]
 struct WorldEntity;
+
+#[derive(Component)]
+struct PingPointer {
+    actor: StableId,
+    elapsed_seconds: f32,
+    base_scale: f32,
+}
 
 #[derive(Component)]
 struct SeagullFlight {
@@ -1802,6 +1815,9 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     process_injected_commands.after(game_input),
                     apply_agent_commands.after(process_injected_commands),
+                    animate_ping_pointers
+                        .after(move_agents)
+                        .after(apply_agent_commands),
                     apply_building_commands.after(process_injected_commands),
                     sync_building_placers.after(process_injected_commands),
                     sync_foliage_clearance
@@ -2065,6 +2081,7 @@ fn setup_rendering(
     let healing_closeup = std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some();
     let combat_closeup = std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some();
     let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some();
+    let ping_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PING").is_some();
     let foliage_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some();
     let shoreline_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some();
     let overlay_closeup = std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some();
@@ -2091,6 +2108,8 @@ fn setup_rendering(
                     48.0
                 } else if building_closeup {
                     58.0
+                } else if ping_closeup {
+                    30.0
                 } else if foliage_closeup {
                     45.0
                 } else if shoreline_closeup {
@@ -5254,6 +5273,7 @@ fn generate_and_spawn_world(
     mut selected: ResMut<SelectedCell>,
     mut bottom_bar: ResMut<BottomBarRuntime>,
     mut placers: ResMut<BuildingPlacers>,
+    mut agent_commands: ResMut<AgentCommandQueue>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
@@ -5301,6 +5321,13 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
                 .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_PING").is_some() {
+            let focus = initial_actor_position(&generated, town_hall_position, 0)
+                .map_or(Vec3::ZERO, |position| {
+                    grid_to_world_on_surface(position, &config.0, &generated)
+                });
+            Transform::from_xyz(focus.x + 14.0, focus.y + 13.0, focus.z + 14.0)
+                .looking_at(focus + Vec3::Y * 3.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some() {
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 12.0, focus.y + 10.0, focus.z + 12.0)
@@ -5816,6 +5843,12 @@ fn generate_and_spawn_world(
         if spawned >= initial_agents {
             break;
         }
+    }
+
+    if std::env::var_os("STREAM_TOWN_SMOKE_PING").is_some() && spawned > 0 {
+        agent_commands.0.push_back(AgentCommand::Ping(
+            StableId::new("npc:starting_defender").expect("static smoke actor ID"),
+        ));
     }
 
     if let Some(position) = smoke_gate_position {
@@ -13260,11 +13293,87 @@ fn default_town_camera_transform() -> Transform {
     Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
 }
 
+fn ping_pointer_scale(elapsed_seconds: f32) -> f32 {
+    let normalized = (elapsed_seconds / PING_POINTER_DURATION_SECONDS).clamp(0.0, 1.0);
+    // Exact unweighted Unity AnimationCurve keys from VFX_PointerArrow.prefab:
+    // (time, value, in tangent, out tangent). Unity's weighted mode is disabled.
+    let keys = [
+        (0.0, 0.0, 0.0, 0.0),
+        (0.25, 0.7, -0.809_009_2, -0.809_009_2),
+        (0.5, 0.4, 0.000_833_988_2, 0.000_833_988_2),
+        (0.75, 0.7, 0.820_234_3, 0.820_234_3),
+        (1.0, 0.0, 0.0, 0.0),
+    ];
+    let pair = keys
+        .windows(2)
+        .find(|pair| normalized >= pair[0].0 && normalized <= pair[1].0)
+        .unwrap_or_else(|| keys.last_chunk::<2>().expect("pointer curve has two keys"));
+    let left = pair[0];
+    let right = pair[1];
+    let progress = (normalized - left.0) / (right.0 - left.0);
+    let progress_squared = progress * progress;
+    let progress_cubed = progress_squared * progress;
+    let duration = right.0 - left.0;
+    (2.0 * progress_cubed - 3.0 * progress_squared + 1.0) * left.1
+        + (progress_cubed - 2.0 * progress_squared + progress) * duration * left.3
+        + (-2.0 * progress_cubed + 3.0 * progress_squared) * right.1
+        + (progress_cubed - progress_squared) * duration * right.2
+}
+
+fn ping_pointer_transform(
+    actor_position: Vec3,
+    actor_height: f32,
+    base_scale: f32,
+    elapsed_seconds: f32,
+) -> Transform {
+    let scale = base_scale * ping_pointer_scale(elapsed_seconds);
+    Transform::from_translation(
+        actor_position + Vec3::Y * (actor_height - PING_POINTER_MODEL_MIN_Y * scale),
+    )
+    .with_scale(Vec3::splat(scale))
+}
+
+fn spawn_ping_pointer(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    asset_server: Option<&AssetServer>,
+    actor: StableId,
+    position: Vec3,
+    actor_height: f32,
+    cell_size: f32,
+) {
+    let base_scale = cell_size / PING_POINTER_MODEL_HEIGHT;
+    let mut pointer = commands.spawn((
+        WorldEntity,
+        PingPointer {
+            actor,
+            elapsed_seconds: 0.0,
+            base_scale,
+        },
+        ping_pointer_transform(position, actor_height, base_scale, 0.0),
+    ));
+    if let Some(asset_server) = asset_server {
+        pointer.insert(WorldAssetRoot(asset_server.load(
+            GltfAssetLabel::Scene(0).from_asset(PING_POINTER_MODEL_PATH.to_owned()),
+        )));
+        if let Some(material) = standalone_material_override(render, PING_POINTER_MATERIAL_ID) {
+            pointer.insert(material);
+        }
+    } else {
+        pointer.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.projectile.clone()),
+        ));
+    }
+}
+
 fn apply_agent_commands(
     mut commands: Commands,
     mut queue: ResMut<AgentCommandQueue>,
     config: Res<RuntimeConfig>,
     world: Res<WorldRuntime>,
+    render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
     mut agents: Query<(
         Entity,
         &mut Agent,
@@ -13272,7 +13381,12 @@ fn apply_agent_commands(
         &AgentAnimation,
         &mut Transform,
     )>,
+    pointers: Query<(Entity, &PingPointer)>,
 ) {
+    let mut pointed_actors = pointers
+        .iter()
+        .map(|(_, pointer)| pointer.actor.clone())
+        .collect::<BTreeSet<_>>();
     while let Some(command) = queue.0.pop_front() {
         match command {
             AgentCommand::Teleport { actor, position } => {
@@ -13295,6 +13409,32 @@ fn apply_agent_commands(
                     transform.translation = world_position;
                 }
             }
+            AgentCommand::Ping(actor) => {
+                if !pointed_actors.insert(actor.clone()) {
+                    continue;
+                }
+                if let Some((_, _, _, animation, transform)) = agents
+                    .iter_mut()
+                    .find(|(_, agent, _, _, _)| agent.id == actor)
+                {
+                    let actor_height = if animation.native {
+                        config.0.world.cell_size * 1.5
+                    } else {
+                        animation.base_scale.y * 1.5
+                    };
+                    spawn_ping_pointer(
+                        &mut commands,
+                        &render,
+                        asset_server.as_deref(),
+                        actor,
+                        transform.translation,
+                        actor_height,
+                        config.0.world.cell_size,
+                    );
+                } else {
+                    pointed_actors.remove(&actor);
+                }
+            }
             AgentCommand::Despawn(actor) => {
                 if let Some((entity, _, _, _, _)) = agents
                     .iter_mut()
@@ -13304,6 +13444,47 @@ fn apply_agent_commands(
                 }
             }
         }
+    }
+}
+
+fn animate_ping_pointers(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<(&Agent, &AgentAnimation, &Transform)>,
+    mut pointers: Query<(Entity, &mut PingPointer, &mut Transform), Without<Agent>>,
+) {
+    for (entity, mut pointer, mut transform) in &mut pointers {
+        pointer.elapsed_seconds += time.delta_secs();
+        let Some((_, animation, actor_transform)) = agents
+            .iter()
+            .find(|(agent, _, _)| agent.id == pointer.actor)
+        else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if pointer.elapsed_seconds >= PING_POINTER_DURATION_SECONDS
+            || !simulation
+                .0
+                .actors
+                .get(&pointer.actor)
+                .is_some_and(|actor| actor.alive)
+        {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let actor_height = if animation.native {
+            config.0.world.cell_size * 1.5
+        } else {
+            animation.base_scale.y * 1.5
+        };
+        *transform = ping_pointer_transform(
+            actor_transform.translation,
+            actor_height,
+            pointer.base_scale,
+            pointer.elapsed_seconds,
+        );
     }
 }
 
@@ -17827,7 +18008,11 @@ fn process_injected_commands(
                     .get(&actor_id)
                     .map(|actor| actor.position)
                     .ok_or_else(|| "join before using !ping".to_owned())?;
-                Ok(format!("you are at grid {},{}", position.x, position.z))
+                queues
+                    .agent
+                    .0
+                    .push_back(AgentCommand::Ping(actor_id.clone()));
+                Ok(format!("pinged at grid {},{}", position.x, position.z))
             }
             ChatCommand::Customize { kind, index } => {
                 let actor = simulation
@@ -22156,6 +22341,59 @@ mod tests {
     }
 
     #[test]
+    fn ping_pointer_preserves_shipping_curve_duration_and_mesh_anchor() {
+        for (elapsed, expected) in [(0.0, 0.0), (2.0, 0.7), (4.0, 0.4), (6.0, 0.7), (8.0, 0.0)] {
+            assert!((ping_pointer_scale(elapsed) - expected).abs() < 1.0e-6);
+        }
+        let actor_position = Vec3::new(12.0, 7.0, -3.0);
+        let actor_height = 6.0;
+        let base_scale = 12.0 / PING_POINTER_MODEL_HEIGHT;
+        let transform = ping_pointer_transform(actor_position, actor_height, base_scale, 2.0);
+        let mesh_bottom = transform.translation.y + PING_POINTER_MODEL_MIN_Y * transform.scale.y;
+        assert!((mesh_bottom - (actor_position.y + actor_height)).abs() < 1.0e-5);
+        assert!((transform.translation.x - actor_position.x).abs() < f32::EPSILON);
+        assert!((transform.translation.z - actor_position.z).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ping_pointer_uses_converted_shipping_model_and_material() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let archetype = content
+            .archetypes
+            .get(&StableId::new("archetype:prefab:3934bb254cb808a4f9f465f5a1f3ca48").unwrap())
+            .unwrap();
+        let scene = default_archetype_scene(archetype).unwrap();
+        assert_eq!(scene.source_model, "Assets/Models/VFX/PointerArrow.fbx");
+        assert_eq!(scene.asset_path, PING_POINTER_MODEL_PATH);
+        assert!(converted_asset_exists(
+            &locate_asset_root(),
+            PING_POINTER_MODEL_PATH
+        ));
+        assert_eq!(
+            presentation.model_materials[&scene.source_model]["Material.001"].as_str(),
+            PING_POINTER_MATERIAL_ID
+        );
+        let material = &presentation.materials
+            [&StableId::new(PING_POINTER_MATERIAL_ID).expect("static pointer material ID")];
+        assert_eq!(material.source_path, "Assets/Materials/VFX/VFX_Pointer.mat");
+        assert!(
+            material
+                .base_color
+                .into_iter()
+                .zip([0.858_490_6, 0.028_346_404, 0.028_346_404, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            material
+                .emissive
+                .into_iter()
+                .zip([0.890_021_1, 0.0, 0.0, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+    }
+
+    #[test]
     fn save_restore_keeps_players_on_completed_gate_cells_only() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -24871,6 +25109,8 @@ mod tests {
             }]),
             ChatCommand::Vote(eligible_technology.clone()),
             ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),
+            ChatCommand::Ping,
+            ChatCommand::Ping,
             ChatCommand::Save,
             ChatCommand::Help,
         ];
@@ -24890,6 +25130,29 @@ mod tests {
                 });
         }
         app.update();
+
+        let pointer_actors = app
+            .world_mut()
+            .query::<&PingPointer>()
+            .iter(app.world())
+            .map(|pointer| pointer.actor.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(pointer_actors, vec![actor_id.clone()]);
+        {
+            let mut query = app.world_mut().query::<&mut PingPointer>();
+            query
+                .single_mut(app.world_mut())
+                .expect("deduplicated pointer exists")
+                .elapsed_seconds = PING_POINTER_DURATION_SECONDS;
+        }
+        app.update();
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<PingPointer>>()
+                .iter(app.world())
+                .count(),
+            0
+        );
 
         let (placed_building, saved_building_id, food_before_revive) = {
             let simulation = &app.world().resource::<SimulationRuntime>().0;

@@ -399,6 +399,12 @@ quarter-second crossfade, and react only to living players inside the authored
 4x4 trigger. `STREAM_TOWN_SMOKE_GATE=1` places a completed gate around the first
 starting player and frames it for a deterministic opened-pose capture; combine
 it with `STREAM_TOWN_DEBUG_AGE_TWO=1` to exercise the stone-root retarget.
+The shipping `!ping` command now attaches the converted `PointerArrow.glb` and
+red emissive `VFX_Pointer` material to the requesting actor by stable ID. It
+follows living actors, evaluates the prefab's exact five-key Hermite size curve,
+deduplicates repeated requests, and expires at the authored eight-second
+duration without recreating Unity's general object pool. `STREAM_TOWN_SMOKE_PING=1`
+queues the starting defender's pointer and frames it for deterministic capture.
 `STREAM_TOWN_SMOKE_FOLIAGE=1` frames the generated foliage field for a
 repeatable land/shoreline visual capture.
 `STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated

@@ -494,6 +494,13 @@ mistaken for production-ready systems.
   transitions. Completed, living gates open while at least one living player is
   within the prefab's 4x4 trigger and close after the last player leaves. A
   deterministic `STREAM_TOWN_SMOKE_GATE` capture path covers the opened pose.
+- `!ping` now reproduces the reachable `VFXArrowPointer` behavior with the
+  converted `PointerArrow.glb`, its exact red emissive material, and the source
+  particle system's five-key Hermite size curve and eight-second duration. One
+  pointer follows each living actor by stable ID; repeat commands are
+  deduplicated, missing/dead actors clean it up, and its converted mesh bounds
+  are compensated so the visible base remains anchored above the character.
+  `STREAM_TOWN_SMOKE_PING` provides a deterministic close-up capture path.
 - Content schema 21 preserves the exact serialized maximum health and per-level
   health increase from every shipping building prefab. Construction, building
   work, repairs, upgrades, construction models, damage materials, and persistent
