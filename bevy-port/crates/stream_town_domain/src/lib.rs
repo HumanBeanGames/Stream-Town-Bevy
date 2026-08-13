@@ -51,9 +51,9 @@ pub use runtime_console::{
     RuntimeConsoleValidationError,
 };
 pub use save::{
-    ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,
-    NativeSaveStore, SavedActor, SavedTerrainMesh, SavedTerrainMeshError, WorldSnapshot,
-    inspect_legacy_save,
+    ActorKind, CURRENT_WORLD_SNAPSHOT_SCHEMA, LegacyMigrationMetadata, LegacySaveInfo,
+    LegacySaveKind, NativeSaveError, NativeSaveStore, SavedActor, SavedTerrainMesh,
+    SavedTerrainMeshError, WorldSnapshot, inspect_legacy_save,
 };
 pub use settings::{
     AudioMixSettings, BuildingHealthDisplayMode, CURRENT_PLAYER_SETTINGS_SCHEMA, CameraSettings,
@@ -62,11 +62,11 @@ pub use settings::{
     VideoSettings,
 };
 pub use simulation::{
-    ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState,
-    FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent, ObjectiveProgress, RULER_VOTE_DURATION_SECONDS,
-    RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress, RulerVoteKind, RulerVoteState, Season,
-    SimulationError, StreamUserType, TechVote, TownEvent, TownGoalState, Weather, WorldSimulation,
-    required_role_experience,
+    ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, CURRENT_SIMULATION_SCHEMA,
+    EnemyCampState, FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent, ObjectiveProgress,
+    RULER_VOTE_DURATION_SECONDS, RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress,
+    RulerVoteKind, RulerVoteState, Season, SimulationError, StreamUserType, TechVote, TownEvent,
+    TownGoalState, Weather, WorldSimulation, required_role_experience,
 };
 pub use world::{
     GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,

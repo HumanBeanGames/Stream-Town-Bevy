@@ -46,14 +46,15 @@ use stream_town_domain::{
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
-    CURRENT_RUNTIME_CONSOLE_SCHEMA, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
-    CustomizationKind, DisplayMode, EnemyCampState, GameConfig, GeneratedFoliage, GeneratedWorld,
-    GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
-    NameDisplayMode, NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings,
-    PlayerSettingsStore, PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef,
-    RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor,
-    SavedTerrainMesh, Season, StableId, StationDef, StorageModelDef, StreamUserType, TownEvent,
-    Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
+    CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
+    ChatCommand, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState, GameConfig,
+    GeneratedFoliage, GeneratedWorld, GridPos, LegacyMigrationMetadata,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
+    ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
+    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
+    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
+    StationDef, StorageModelDef, StreamUserType, TownEvent, Weather, WorldSimulation,
+    WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -1643,8 +1644,12 @@ impl Plugin for StreamTownGamePlugin {
                     sync_active_pets.after(move_agents),
                     select_grid_cell,
                     game_input,
-                    save_input,
-                    load_input,
+                    save_input
+                        .after(apply_agent_commands)
+                        .after(apply_building_commands),
+                    load_input
+                        .after(apply_agent_commands)
+                        .after(apply_building_commands),
                     drive_level_up_presentation.after(move_agents),
                     update_hud,
                 )
@@ -1707,6 +1712,8 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 autosave_game
                     .after(move_agents)
+                    .after(apply_agent_commands)
+                    .after(apply_building_commands)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -14171,14 +14178,13 @@ fn save_input(
     world: Res<WorldRuntime>,
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
-    agents: Query<(&Agent, &GridLocation)>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     let requested = std::mem::take(&mut io.save);
     if !keyboard.just_pressed(KeyCode::F5) && !requested {
         return;
     }
-    let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
+    let snapshot = snapshot_world(&world, &stats, &simulation);
     match save.store.write(&snapshot) {
         Ok(()) => {
             runtime_console.last_result = format!("Saved {}", save.store.path().display());
@@ -14199,7 +14205,6 @@ fn autosave_game(
     world: Res<WorldRuntime>,
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
-    agents: Query<(&Agent, &GridLocation)>,
 ) {
     if player_settings.0.autosave_minutes == 0 {
         settings.autosave_elapsed_seconds = 0.0;
@@ -14211,7 +14216,7 @@ fn autosave_game(
         return;
     }
     settings.autosave_elapsed_seconds = settings.autosave_elapsed_seconds.rem_euclid(interval);
-    let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
+    let snapshot = snapshot_world(&world, &stats, &simulation);
     match save.store.write(&snapshot) {
         Ok(()) => info!(path = %save.store.path().display(), "autosave written"),
         Err(error) => error!(%error, "autosave failed"),
@@ -16228,7 +16233,6 @@ fn process_injected_commands(
     mut world: ResMut<WorldRuntime>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
-    agents: Query<(&Agent, &GridLocation)>,
 ) {
     while let Some(pending) = queues.injected.0.pop_front() {
         let actor_id = pending.actor_id.clone();
@@ -17598,7 +17602,7 @@ fn process_injected_commands(
                 }),
             ChatCommand::Save => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
-                let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
+                let snapshot = snapshot_world(&world, &stats, &simulation);
                 save.store
                     .write(&snapshot)
                     .map(|()| "town saved".to_owned())
@@ -17850,31 +17854,42 @@ fn snapshot_world(
     world: &WorldRuntime,
     stats: &SessionStats,
     simulation: &SimulationRuntime,
-    agents: &Query<(&Agent, &GridLocation)>,
 ) -> WorldSnapshot {
     WorldSnapshot {
-        schema_version: 2,
+        schema_version: CURRENT_WORLD_SNAPSHOT_SCHEMA,
         world_seed: world.generated.seed,
         generator_version: world.generated.generator_version,
         world_hash: world.generated.deterministic_hash.clone(),
         elapsed_seconds: Duration::from_secs_f64(stats.elapsed_seconds.max(0.0)).as_secs(),
-        actors: agents
-            .iter()
-            .map(|(agent, location)| SavedActor {
-                id: agent.id.clone(),
-                kind: agent.kind.clone(),
-                archetype: agent.archetype.clone(),
-                grid_position: location.0,
-                height_centimetres: world
-                    .generated
-                    .navigation
-                    .height_at(location.0)
-                    .unwrap_or_default(),
-                health: simulation
-                    .0
-                    .actors
-                    .get(&agent.id)
-                    .map_or(100, |actor| actor.health),
+        actors: simulation
+            .0
+            .actors
+            .values()
+            .map(|actor| {
+                let kind = if actor.role.as_str() == "role:enemy" {
+                    ActorKind::Enemy
+                } else {
+                    ActorKind::Player
+                };
+                let archetype = actor.archetype.clone().unwrap_or_else(|| {
+                    StableId::new(match kind {
+                        ActorKind::Enemy => "archetype:enemy",
+                        _ => "archetype:viewer",
+                    })
+                    .expect("fallback actor archetype IDs are valid")
+                });
+                SavedActor {
+                    id: actor.id.clone(),
+                    kind,
+                    archetype,
+                    grid_position: actor.position,
+                    height_centimetres: world
+                        .generated
+                        .navigation
+                        .height_at(actor.position)
+                        .unwrap_or_default(),
+                    health: actor.health,
+                }
             })
             .collect(),
         simulation: simulation.0.clone(),
@@ -23586,8 +23601,25 @@ mod tests {
         ];
         expected_runtime_buildings.sort();
         assert_eq!(runtime_building_ids, expected_runtime_buildings);
-        assert!(save_path.is_file());
+        assert!(
+            save_path.is_file(),
+            "{}",
+            app.world().resource::<RuntimeConsoleRuntime>().last_result
+        );
         let saved = NativeSaveStore::new(&save_path).load().unwrap();
+        assert_eq!(
+            saved
+                .actors
+                .iter()
+                .map(|actor| actor.id.clone())
+                .collect::<BTreeSet<_>>(),
+            saved
+                .simulation
+                .actors
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        );
         assert_eq!(
             saved.simulation.buildings[&saved_building_id],
             placed_building

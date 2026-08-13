@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{GridPos, StableId, WorldSimulation};
+use crate::{CURRENT_SIMULATION_SCHEMA, GridPos, StableId, WorldSimulation};
 
 pub const NATIVE_SAVE_VERSION: u32 = 1;
+pub const CURRENT_WORLD_SNAPSHOT_SCHEMA: u32 = 2;
 const LEGACY_MAGIC: &[u8; 4] = b"STSV";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -176,6 +177,31 @@ pub enum NativeSaveError {
     Checksum,
     #[error("native save retained terrain mesh is invalid: {0}")]
     TerrainMesh(#[from] SavedTerrainMeshError),
+    #[error("unsupported world snapshot schema {0}")]
+    SnapshotSchema(u32),
+    #[error("unsupported world simulation schema {0}")]
+    SimulationSchema(u32),
+    #[error(
+        "world seed mismatch between snapshot ({snapshot_seed}) and simulation ({simulation_seed})"
+    )]
+    WorldSeedMismatch {
+        snapshot_seed: u64,
+        simulation_seed: u64,
+    },
+    #[error("duplicate saved actor ID {0}")]
+    DuplicateActor(StableId),
+    #[error("actor map key {key} does not match embedded ID {embedded}")]
+    ActorKeyMismatch { key: StableId, embedded: StableId },
+    #[error("building map key {key} does not match embedded ID {embedded}")]
+    BuildingKeyMismatch { key: StableId, embedded: StableId },
+    #[error("enemy camp map key {key} does not match embedded ID {embedded}")]
+    EnemyCampKeyMismatch { key: StableId, embedded: StableId },
+    #[error("persistent ID {0} is reused across simulation entity kinds")]
+    DuplicatePersistentId(StableId),
+    #[error("saved {kind} {id} has no authoritative simulation state")]
+    MissingSimulationState { kind: &'static str, id: StableId },
+    #[error("simulation actor {0} has no saved world entity record")]
+    MissingSavedActor(StableId),
     #[error("legacy save header is incomplete")]
     LegacyHeader,
     #[error("file is not a recognized Stream Town save")]
@@ -332,6 +358,87 @@ fn load_native(path: &Path) -> Result<WorldSnapshot, NativeSaveError> {
 }
 
 fn validate_snapshot(snapshot: &WorldSnapshot) -> Result<(), NativeSaveError> {
+    if !(1..=CURRENT_WORLD_SNAPSHOT_SCHEMA).contains(&snapshot.schema_version) {
+        return Err(NativeSaveError::SnapshotSchema(snapshot.schema_version));
+    }
+    if !(1..=CURRENT_SIMULATION_SCHEMA).contains(&snapshot.simulation.schema_version) {
+        return Err(NativeSaveError::SimulationSchema(
+            snapshot.simulation.schema_version,
+        ));
+    }
+    if snapshot.world_seed != snapshot.simulation.world_seed {
+        return Err(NativeSaveError::WorldSeedMismatch {
+            snapshot_seed: snapshot.world_seed,
+            simulation_seed: snapshot.simulation.world_seed,
+        });
+    }
+
+    let mut persistent_ids = BTreeSet::new();
+    for (key, actor) in &snapshot.simulation.actors {
+        if key != &actor.id {
+            return Err(NativeSaveError::ActorKeyMismatch {
+                key: key.clone(),
+                embedded: actor.id.clone(),
+            });
+        }
+        persistent_ids.insert(key.clone());
+    }
+    for (key, building) in &snapshot.simulation.buildings {
+        if key != &building.id {
+            return Err(NativeSaveError::BuildingKeyMismatch {
+                key: key.clone(),
+                embedded: building.id.clone(),
+            });
+        }
+        if !persistent_ids.insert(key.clone()) {
+            return Err(NativeSaveError::DuplicatePersistentId(key.clone()));
+        }
+    }
+    for (key, camp) in &snapshot.simulation.enemy_camps {
+        if key != &camp.id {
+            return Err(NativeSaveError::EnemyCampKeyMismatch {
+                key: key.clone(),
+                embedded: camp.id.clone(),
+            });
+        }
+        if !persistent_ids.insert(key.clone()) {
+            return Err(NativeSaveError::DuplicatePersistentId(key.clone()));
+        }
+    }
+
+    let mut actor_ids = BTreeSet::new();
+    let mut saved_simulation_actor_ids = BTreeSet::new();
+    for actor in &snapshot.actors {
+        if !actor_ids.insert(actor.id.clone()) {
+            return Err(NativeSaveError::DuplicateActor(actor.id.clone()));
+        }
+        let state_exists = match actor.kind {
+            ActorKind::Player | ActorKind::Enemy => {
+                saved_simulation_actor_ids.insert(actor.id.clone());
+                snapshot.simulation.actors.contains_key(&actor.id)
+            }
+            ActorKind::Building => snapshot.simulation.buildings.contains_key(&actor.id),
+            ActorKind::EnemyCamp => snapshot.simulation.enemy_camps.contains_key(&actor.id),
+            ActorKind::Resource | ActorKind::Foliage => true,
+        };
+        if !state_exists {
+            let kind = match actor.kind {
+                ActorKind::Player | ActorKind::Enemy => "actor",
+                ActorKind::Building => "building",
+                ActorKind::EnemyCamp => "enemy camp",
+                ActorKind::Resource | ActorKind::Foliage => unreachable!(),
+            };
+            return Err(NativeSaveError::MissingSimulationState {
+                kind,
+                id: actor.id.clone(),
+            });
+        }
+    }
+    for actor_id in snapshot.simulation.actors.keys() {
+        if !saved_simulation_actor_ids.contains(actor_id) {
+            return Err(NativeSaveError::MissingSavedActor(actor_id.clone()));
+        }
+    }
     if let Some(mesh) = &snapshot.legacy_terrain_mesh {
         mesh.validate()?;
     }
@@ -349,6 +456,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::{ActorCustomization, ActorState, BuildingState, EnemyCampState, StreamUserType};
 
     fn snapshot(seed: u64) -> WorldSnapshot {
         WorldSnapshot {
@@ -362,6 +470,42 @@ mod tests {
             resource_nodes: BTreeMap::new(),
             legacy_terrain_mesh: None,
             legacy_migration: None,
+        }
+    }
+
+    fn saved_player(id: &StableId) -> SavedActor {
+        SavedActor {
+            id: id.clone(),
+            kind: ActorKind::Player,
+            archetype: StableId::new("archetype:player").unwrap(),
+            grid_position: GridPos { x: 1, z: 2 },
+            height_centimetres: 0,
+            health: 100,
+        }
+    }
+
+    fn actor_state(id: StableId) -> ActorState {
+        ActorState {
+            id,
+            display_name: None,
+            login_name: None,
+            user_type: StreamUserType::Normal,
+            role: StableId::new("role:villager").unwrap(),
+            archetype: Some(StableId::new("archetype:player").unwrap()),
+            position: GridPos { x: 1, z: 2 },
+            last_building_position: None,
+            building_rotation_quarter_turns: 0,
+            health: 100,
+            max_health: 100,
+            alive: true,
+            respawn_remaining_seconds: None,
+            inventory: BTreeMap::new(),
+            station: None,
+            role_progression: BTreeMap::new(),
+            unlocked_pets: BTreeSet::new(),
+            active_pet: None,
+            preferred_target: None,
+            customization: ActorCustomization::default(),
         }
     }
 
@@ -384,6 +528,125 @@ mod tests {
                 .unwrap()
                 .contains("resource_nodes")
         );
+    }
+
+    #[test]
+    fn snapshot_validation_rejects_schema_and_seed_mismatches() {
+        let mut invalid = snapshot(7);
+        invalid.schema_version = CURRENT_WORLD_SNAPSHOT_SCHEMA + 1;
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::SnapshotSchema(_))
+        ));
+
+        invalid = snapshot(7);
+        invalid.simulation.schema_version = CURRENT_SIMULATION_SCHEMA + 1;
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::SimulationSchema(_))
+        ));
+
+        invalid = snapshot(7);
+        invalid.simulation.world_seed = 8;
+        assert_eq!(
+            validate_snapshot(&invalid).unwrap_err().to_string(),
+            "world seed mismatch between snapshot (7) and simulation (8)"
+        );
+    }
+
+    #[test]
+    fn snapshot_validation_rejects_duplicate_and_mismatched_actor_ids() {
+        let actor_id = StableId::new("actor:fixture").unwrap();
+        let mut invalid = snapshot(7);
+        invalid.actors = vec![saved_player(&actor_id), saved_player(&actor_id)];
+        invalid
+            .simulation
+            .actors
+            .insert(actor_id.clone(), actor_state(actor_id.clone()));
+        assert_eq!(
+            validate_snapshot(&invalid).unwrap_err().to_string(),
+            "duplicate saved actor ID actor:fixture"
+        );
+
+        invalid.actors.truncate(1);
+        invalid.simulation.actors.get_mut(&actor_id).unwrap().id =
+            StableId::new("actor:different").unwrap();
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::ActorKeyMismatch { .. })
+        ));
+
+        invalid.simulation.actors.clear();
+        assert_eq!(
+            validate_snapshot(&invalid).unwrap_err().to_string(),
+            "saved actor actor:fixture has no authoritative simulation state"
+        );
+
+        invalid.actors.clear();
+        invalid
+            .simulation
+            .actors
+            .insert(actor_id.clone(), actor_state(actor_id));
+        assert_eq!(
+            validate_snapshot(&invalid).unwrap_err().to_string(),
+            "simulation actor actor:fixture has no saved world entity record"
+        );
+    }
+
+    #[test]
+    fn snapshot_validation_rejects_mismatched_or_reused_persistent_ids() {
+        let persistent_id = StableId::new("entity:fixture").unwrap();
+        let mut invalid = snapshot(7);
+        invalid.simulation.buildings.insert(
+            persistent_id.clone(),
+            BuildingState {
+                id: StableId::new("building:different").unwrap(),
+                archetype: StableId::new("archetype:building:house").unwrap(),
+                position: GridPos { x: 2, z: 3 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::BuildingKeyMismatch { .. })
+        ));
+
+        invalid
+            .simulation
+            .buildings
+            .get_mut(&persistent_id)
+            .unwrap()
+            .id = persistent_id.clone();
+        invalid.simulation.enemy_camps.insert(
+            persistent_id.clone(),
+            EnemyCampState {
+                id: persistent_id.clone(),
+                archetype: StableId::new("archetype:camp:goblin").unwrap(),
+                position: GridPos { x: 4, z: 5 },
+                health: 100,
+                spawn_remaining_seconds: 0.0,
+                spawned_enemies: BTreeSet::new(),
+            },
+        );
+        assert_eq!(
+            validate_snapshot(&invalid).unwrap_err().to_string(),
+            "persistent ID entity:fixture is reused across simulation entity kinds"
+        );
+
+        invalid.simulation.buildings.clear();
+        invalid
+            .simulation
+            .enemy_camps
+            .get_mut(&persistent_id)
+            .unwrap()
+            .id = StableId::new("enemy_camp:different").unwrap();
+        assert!(matches!(
+            validate_snapshot(&invalid),
+            Err(NativeSaveError::EnemyCampKeyMismatch { .. })
+        ));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use thiserror::Error;
 use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
+pub const CURRENT_SIMULATION_SCHEMA: u32 = 2;
 pub const MAX_ROLE_LEVEL: u16 = 99;
 pub const RULER_VOTE_DURATION_SECONDS: f32 = 120.0;
 pub const RULER_VOTE_INTERVAL_SECONDS: f32 = 3_600.0;
@@ -324,7 +325,7 @@ impl WorldSimulation {
     #[must_use]
     pub fn new(world_seed: u64) -> Self {
         Self {
-            schema_version: 2,
+            schema_version: CURRENT_SIMULATION_SCHEMA,
             world_seed,
             elapsed_seconds: 0.0,
             day: 0,
@@ -1384,8 +1385,8 @@ impl WorldSimulation {
     /// restored. Timed gameplay state is preserved; only derived calendar data
     /// changes from the authoritative elapsed time.
     pub fn upgrade_time_schema(&mut self, seconds_per_day: u32) {
-        if self.schema_version < 2 {
-            self.schema_version = 2;
+        if self.schema_version < CURRENT_SIMULATION_SCHEMA {
+            self.schema_version = CURRENT_SIMULATION_SCHEMA;
             self.recalculate_calendar(seconds_per_day);
         }
     }
