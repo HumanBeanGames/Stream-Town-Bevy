@@ -5704,51 +5704,6 @@ fn generate_and_spawn_world(
         u32::try_from(recruited_actor_ids(&simulation).len()).unwrap_or(u32::MAX),
     );
 
-    if let Some((camp_archetype_id, camp_archetype)) = content
-        .0
-        .archetypes
-        .iter()
-        .find(|(_, archetype)| archetype.enemy_spawner.is_some())
-        && let Some(position) = find_building_site(
-            &generated,
-            GridPos {
-                x: generated.navigation.width().saturating_sub(8),
-                z: generated.navigation.height().saturating_sub(8),
-            },
-            camp_archetype.footprint,
-        )
-    {
-        let camp_id = StableId::new("enemy_camp:0000").expect("static ID");
-        if let Some(region) = building_region(position, camp_archetype.footprint, &generated) {
-            let _ = generated.navigation.set_blocked(region, true);
-        }
-        simulation.enemy_camps.insert(
-            camp_id.clone(),
-            EnemyCampState {
-                id: camp_id.clone(),
-                archetype: camp_archetype_id.clone(),
-                position,
-                health: camp_archetype.health.as_ref().map_or(1_000, |health| {
-                    i32::try_from(health.max_health).unwrap_or(i32::MAX)
-                }),
-                spawn_remaining_seconds: 0.0,
-                spawned_enemies: BTreeSet::new(),
-            },
-        );
-        spawn_enemy_camp(
-            &mut commands,
-            &config.0,
-            &generated,
-            &presentation.0,
-            asset_server.as_deref(),
-            &asset_root.0,
-            &render,
-            &camp_id,
-            camp_archetype,
-            position,
-        );
-    }
-
     spawn_hud(
         &mut commands,
         &render,
@@ -22751,6 +22706,13 @@ mod tests {
             .filter(|agent| agent.kind == ActorKind::Enemy)
             .count();
         assert_eq!(enemies, 1);
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .enemy_camps
+                .is_empty()
+        );
 
         app.world_mut()
             .resource_mut::<InjectedCommands>()

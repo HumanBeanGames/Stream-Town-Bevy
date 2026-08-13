@@ -259,12 +259,14 @@ enemy within 10 cells. Players trigger Death at zero health and use Unity's
 authored 60-second automatic revival. `!revive` pays 400 food for self-revival;
 Priests and Paladins can pay 200 food to revive another stable Twitch actor and
 receive role XP. Pending revival time and actor health survive native saves.
-Enemy camps are placed on a deterministic valid edge site because the shipping
-Unity camp-generation setting list is empty and its former placement loop is
-commented out. The clock uses Unity's shipping 3,600-second day, 66.6% daylight
+New towns do not create an enemy camp: Unity's procedural placement loop is
+commented out and the four shipping scenes contain no camp instance (the prefab
+appears only in the disabled Necrolands scene). Camp simulation/presentation is
+retained for imported legacy/native saves. The clock uses Unity's shipping
+3,600-second day, 66.6% daylight
 boundary, and 100-second dusk/dawn transitions; its 10/5 day/night light values
 drive sun, ambient, sky, and building emission, and day/season progression uses
-the same clock. At night, the camp applies Unity's day/player population cap,
+the same clock. When a restored camp exists, at night it applies Unity's day/player population cap,
 three-second authored cadence, weighted Goblin/Blargul/Goblin Boss selection,
 and four converted spawn offsets. `!event raid` disables normal camp spawning
 and starts the Unity-authored five-wave Minotaur raid: 50 tracked enemies must

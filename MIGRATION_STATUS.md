@@ -244,7 +244,11 @@ mistaken for production-ready systems.
   distance fog, plus deterministic rain and snow fields with no second clock.
   The authoritative clock now follows Unity's shipping day/night assets; it
   drives eased sky/light transitions, building emission, calendar/season
-  boundaries, and the camp's night-only spawn gate. Native simulation schema-1
+  boundaries, and a restored camp's night-only spawn gate. New games no longer
+  invent a camp: Unity's placement implementation is fully commented out and
+  the prefab occurs only in the disabled Necrolands scene, not the four shipping
+  scenes. Camp state and presentation remain supported for imported saves.
+  Native simulation schema-1
   clocks and user configuration schema 4 upgrade on load without advancing
   gameplay timers.
 - Checksummed native RON saves written atomically with backup recovery, plus
