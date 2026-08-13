@@ -172,6 +172,10 @@ const BUILDING_LEVEL_UP_TILE_SIZE: f32 = 4.0;
 const BUILDING_DAMAGED_RADIUS: f32 = 1.403_639_8;
 const BUILDING_DAMAGED_FIRE_AMOUNT: u16 = 128;
 const BUILDING_DAMAGED_SMOKE_AMOUNT: u16 = 200;
+const PET_CLOSEST_DISTANCE: f32 = 1.0;
+const PET_MAX_DISTANCE: f32 = 5.0;
+const PET_MAX_MOVE_SPEED: f32 = 10.0;
+const PET_ROTATION_SPEED: f32 = 5.0;
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -1252,6 +1256,7 @@ struct TownCamera;
 struct ActivePetVisual {
     owner: StableId,
     pet: StableId,
+    movement_speed: f32,
 }
 
 #[derive(Component)]
@@ -1595,14 +1600,18 @@ impl Plugin for StreamTownGamePlugin {
                     animate_agents,
                     resolve_native_animation_requests.after(upgrade_actor_placeholders),
                     attach_native_animations,
-                    attach_converted_animations.after(upgrade_actor_placeholders),
+                    attach_converted_animations
+                        .after(upgrade_actor_placeholders)
+                        .after(sync_active_pets),
                     drive_native_animations,
-                    drive_converted_animations.after(move_agents),
+                    drive_converted_animations
+                        .after(move_agents)
+                        .after(attach_converted_animations),
                     apply_material_overrides,
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
                     camera_controls,
-                    sync_active_pets,
+                    sync_active_pets.after(move_agents),
                     select_grid_cell,
                     game_input,
                     save_input,
@@ -5071,6 +5080,19 @@ fn debug_initial_agents(configured: u16) -> u16 {
         .map_or(configured, |agents: u16| agents.clamp(1, configured))
 }
 
+fn debug_smoke_pet() -> Option<StableId> {
+    let value = std::env::var("STREAM_TOWN_SMOKE_PET").ok()?;
+    let suffix = match value.trim().to_ascii_lowercase().as_str() {
+        "red_panda" | "red-panda" | "panda" => "red_panda",
+        "giraffe" => "giraffe",
+        "duck" => "duck",
+        "butterfly" => "butterfly",
+        "fish_god" | "fish-god" | "fishgod" => "fish_god",
+        _ => return None,
+    };
+    StableId::new(format!("pet:{suffix}")).ok()
+}
+
 fn actor_scene_budget() -> usize {
     actor_detail_budget(
         std::env::var("STREAM_TOWN_ACTOR_SCENE_BUDGET")
@@ -5198,6 +5220,13 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_translation(focus + Vec3::new(52.0, 66.0, 52.0))
                 .looking_at(focus + Vec3::Y * 22.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_PET").is_some() {
+            let focus = initial_actor_position(&generated, town_hall_position, 1)
+                .map_or(Vec3::ZERO, |position| {
+                    grid_to_world_on_surface(position, &config.0, &generated)
+                });
+            Transform::from_translation(focus + Vec3::new(22.0, 20.0, 22.0))
+                .looking_at(focus + Vec3::Y * 3.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some() {
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_translation(focus + Vec3::new(24.0, 24.0, 24.0))
@@ -5522,6 +5551,7 @@ fn generate_and_spawn_world(
         simulation.unlocked_technology.insert(technology.clone());
     }
     let initial_agents = debug_initial_agents(config.0.gameplay.initial_agents);
+    let smoke_pet = debug_smoke_pet();
     let spawn_positions =
         connected_actor_positions(&generated, centre, town_hall_position, initial_agents);
     for position in spawn_positions {
@@ -5554,6 +5584,12 @@ fn generate_and_spawn_world(
         };
         if let Some(actor) = simulation.actors.get_mut(&actor_id) {
             actor.archetype.clone_from(&authored_archetype);
+            if spawned == 1
+                && let Some(pet) = &smoke_pet
+            {
+                actor.unlocked_pets.insert(pet.clone());
+                actor.active_pet = Some(pet.clone());
+            }
             if spawned == 1 && std::env::var_os("STREAM_TOWN_DEBUG_CARRY").is_some() {
                 actor.role = StableId::new("role:logger").expect("static ID");
                 actor
@@ -6190,6 +6226,43 @@ fn converted_animation_spec(
             rig_scene,
         }
     })
+}
+
+fn pet_animation_spec(
+    pet: &StableId,
+    scene: &ArchetypeScene,
+    presentation: &PresentationCatalog,
+) -> Option<ConvertedAnimationSpec> {
+    let controller = match pet.as_str() {
+        "pet:giraffe" => "controller:7a24ad00bb657d1439fa86e0c2eb6b12",
+        "pet:red_panda" => "controller:7b5536b35afda8d41930f35e0e51215a",
+        "pet:duck" => "controller:bda358ac13f989345a8f46fd230f9826",
+        "pet:butterfly" => "controller:a1529f2d1d90b8b4198e099687f1bbea",
+        // Fish God and unknown IDs have no Animator/controller mapping.
+        _ => return None,
+    };
+    let controller = StableId::new(controller).expect("authored pet controller ID is valid");
+    let definition = presentation.controllers.get(&controller)?;
+    let state = definition
+        .states
+        .iter()
+        .find(|(_, state)| state.display_name.eq_ignore_ascii_case("special"))
+        .map(|(id, _)| id.clone())?;
+    definition
+        .states
+        .values()
+        .flat_map(|state| &state.motions)
+        .all(|motion| {
+            presentation
+                .clips
+                .get(&motion.clip)
+                .is_some_and(|clip| !clip.transform_tracks.is_empty())
+        })
+        .then(|| ConvertedAnimationSpec {
+            controller,
+            state,
+            rig_scene: scene.asset_path.clone(),
+        })
 }
 
 fn prefab_material_spec(
@@ -10105,7 +10178,8 @@ fn attach_converted_animations(
     children: Query<&Children>,
     names: Query<&Name>,
     transforms: Query<&Transform>,
-    applied: Query<(), With<ConvertedAnimationDriver>>,
+    applied: Query<(), (With<ConvertedAnimationDriver>, Without<ActivePetVisual>)>,
+    pets: Query<(), With<ActivePetVisual>>,
 ) {
     let (Some(mut animation_clips), Some(mut animation_graphs)) =
         (animation_clips, animation_graphs)
@@ -10118,8 +10192,9 @@ fn attach_converted_animations(
         .unwrap_or(DEFAULT_ACTOR_DETAIL_BUDGET);
     let mut remaining = animation_budget.saturating_sub(applied.iter().count());
     for (actor_root, spec) in &specs {
-        if remaining == 0 {
-            break;
+        let is_pet = pets.contains(actor_root);
+        if !is_pet && remaining == 0 {
+            continue;
         }
         let Some(controller) = presentation.0.controllers.get(&spec.controller) else {
             continue;
@@ -10203,7 +10278,9 @@ fn attach_converted_animations(
         commands
             .entity(actor_root)
             .insert(ConvertedAnimationApplied);
-        remaining -= 1;
+        if !is_pet {
+            remaining -= 1;
+        }
         info!(
             actor = ?actor_root,
             controller = %spec.controller,
@@ -10959,29 +11036,38 @@ fn drive_converted_animations(
     presentation: Res<RuntimePresentation>,
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
+    pets: Query<&ActivePetVisual>,
     mut players: Query<(&mut AnimationPlayer, &mut ConvertedAnimationDriver)>,
     mut audio_cache: ResMut<RoleActionAudioCache>,
     mut procedural_pitches: Option<ResMut<Assets<Pitch>>>,
 ) {
     let mut audio_cues = Vec::new();
     for (mut player, mut driver) in &mut players {
-        let Ok(agent) = agents.get(driver.actor_root) else {
+        let agent = agents.get(driver.actor_root).ok();
+        let pet = pets.get(driver.actor_root).ok();
+        if agent.is_none() && pet.is_none() {
             continue;
-        };
+        }
         let Some(controller) = presentation.0.controllers.get(&driver.controller) else {
             continue;
         };
-        let moving = !agent.path.is_empty() && agent.path_index < agent.path.len();
-        let move_speed = if moving {
+        let move_speed = if let Some(pet) = pet {
+            pet.movement_speed
+        } else if agent
+            .is_some_and(|agent| !agent.path.is_empty() && agent.path_index < agent.path.len())
+        {
             (config.0.gameplay.agent_speed_cells_per_second / 5.0).clamp(0.0, 1.0)
         } else {
             0.0
         };
         for layer in &mut driver.layers {
             let _ = layer.runtime.set_float("Move Speed", move_speed);
+            let _ = layer.runtime.set_float("MoveSpeed", move_speed);
         }
 
-        if let Some(alive) = simulation.0.actors.get(&agent.id).map(|actor| actor.alive) {
+        if let Some(agent) = agent
+            && let Some(alive) = simulation.0.actors.get(&agent.id).map(|actor| actor.alive)
+        {
             if let Some(previous) = driver.last_alive
                 && alive != previous
             {
@@ -10992,7 +11078,9 @@ fn drive_converted_animations(
             }
             driver.last_alive = Some(alive);
         }
-        if let Some(actor) = simulation.0.actors.get(&agent.id) {
+        if let Some(agent) = agent
+            && let Some(actor) = simulation.0.actors.get(&agent.id)
+        {
             let action = agent_action_animation(&content.0, agent, actor);
             if driver.active_action.as_deref() != action.as_deref() {
                 if let Some(previous) = driver.active_action.take() {
@@ -11111,14 +11199,16 @@ fn drive_converted_animations(
                     restarts.push((*node, offset_seconds));
                 }
             }
-            collect_animation_audio_events(
-                &player,
-                layer,
-                &selection,
-                &presentation.0,
-                &agent.id,
-                &mut audio_cues,
-            );
+            if let Some(agent) = agent {
+                collect_animation_audio_events(
+                    &player,
+                    layer,
+                    &selection,
+                    &presentation.0,
+                    &agent.id,
+                    &mut audio_cues,
+                );
+            }
             let state_speed = layer.runtime.state_speed(controller).unwrap_or(1.0);
             let changed = !same_animation_blend(&layer.active, &desired);
             if changed {
@@ -11912,9 +12002,43 @@ fn pet_scene<'a>(archetype: &'a ArchetypeDef, pet: &StableId) -> Option<&'a Arch
         .find(|scene| scene.source_model.ends_with(suffix))
 }
 
+fn pet_follow_step(
+    transform: &mut Transform,
+    owner_position: Vec3,
+    cell_size: f32,
+    delta_seconds: f32,
+) -> f32 {
+    let direction = owner_position - transform.translation;
+    let distance_squared = direction.length_squared();
+    if distance_squared <= f32::EPSILON {
+        return 0.0;
+    }
+    let closest_distance_squared = (PET_CLOSEST_DISTANCE * cell_size).powi(2);
+    let max_distance_squared = (PET_MAX_DISTANCE * cell_size).powi(2);
+    let movement_speed = ((distance_squared - closest_distance_squared) * PET_MAX_MOVE_SPEED
+        / (max_distance_squared - closest_distance_squared))
+        .clamp(0.0, PET_MAX_MOVE_SPEED);
+    let distance = distance_squared.sqrt();
+    let world_step = (movement_speed * cell_size * delta_seconds).min(distance);
+    transform.translation += direction / distance * world_step;
+
+    let horizontal = Vec3::new(direction.x, 0.0, direction.z);
+    if horizontal.length_squared() > f32::EPSILON {
+        let target_rotation = Transform::default()
+            .looking_to(horizontal.normalize(), Vec3::Y)
+            .rotation;
+        transform.rotation = transform.rotation.slerp(
+            target_rotation,
+            (delta_seconds * PET_ROTATION_SPEED).clamp(0.0, 1.0),
+        );
+    }
+    movement_speed
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sync_active_pets(
     mut commands: Commands,
+    time: Res<Time>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
@@ -11923,7 +12047,7 @@ fn sync_active_pets(
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     owners: Query<(&Agent, &Transform), Without<ActivePetVisual>>,
-    mut visuals: Query<(Entity, &ActivePetVisual, &mut Transform), Without<Agent>>,
+    mut visuals: Query<(Entity, &mut ActivePetVisual, &mut Transform), Without<Agent>>,
 ) {
     let desired: BTreeMap<_, _> = simulation
         .0
@@ -11941,7 +12065,7 @@ fn sync_active_pets(
         .map(|(agent, transform)| (agent.id.clone(), transform.translation))
         .collect();
     let mut existing = BTreeSet::new();
-    for (entity, visual, mut transform) in &mut visuals {
+    for (entity, mut visual, mut transform) in &mut visuals {
         let key = (visual.owner.clone(), visual.pet.clone());
         existing.insert(key.clone());
         let Some(position) = owner_positions.get(&visual.owner) else {
@@ -11949,12 +12073,12 @@ fn sync_active_pets(
             continue;
         };
         if desired.get(&visual.owner) == Some(&visual.pet) {
-            let offset = Vec3::new(
-                config.0.world.cell_size * 0.55,
-                0.0,
-                config.0.world.cell_size * 0.4,
+            visual.movement_speed = pet_follow_step(
+                &mut transform,
+                *position,
+                config.0.world.cell_size,
+                time.delta_secs(),
             );
-            transform.translation = *position + offset;
         } else {
             commands.entity(entity).despawn();
         }
@@ -11982,20 +12106,27 @@ fn sync_active_pets(
         else {
             continue;
         };
-        let offset = Vec3::new(
-            config.0.world.cell_size * 0.55,
-            0.0,
-            config.0.world.cell_size * 0.4,
-        );
+        let spawn_position = if std::env::var_os("STREAM_TOWN_SMOKE_PET").is_some() {
+            *owner_position + Vec3::X * config.0.world.cell_size * PET_MAX_DISTANCE
+        } else {
+            *owner_position
+        };
         let mut visual = commands.spawn((
             WorldEntity,
-            ActivePetVisual { owner, pet },
+            ActivePetVisual {
+                owner,
+                pet: pet.clone(),
+                movement_speed: 0.0,
+            },
             WorldAssetRoot(
                 server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
             ),
-            Transform::from_translation(*owner_position + offset)
+            Transform::from_translation(spawn_position)
                 .with_scale(Vec3::splat(config.0.world.cell_size * 0.28)),
         ));
+        if let Some(animation) = pet_animation_spec(&pet, scene, &presentation.0) {
+            visual.insert(animation);
+        }
         if let Some(materials) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
             visual.insert(materials);
         }
@@ -20440,6 +20571,73 @@ mod tests {
                 "giraffe lacks {attribute}"
             );
         }
+    }
+
+    #[test]
+    fn animated_pets_resolve_their_own_unity_controllers_and_rigs() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let archetype = content
+            .archetypes
+            .values()
+            .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
+            .unwrap();
+        let cases = [
+            (
+                "pet:giraffe",
+                "controller:7a24ad00bb657d1439fa86e0c2eb6b12",
+                "Pet_TallBoi.glb",
+            ),
+            (
+                "pet:red_panda",
+                "controller:7b5536b35afda8d41930f35e0e51215a",
+                "Pet_RedPanda.glb",
+            ),
+            (
+                "pet:duck",
+                "controller:bda358ac13f989345a8f46fd230f9826",
+                "Pet_Duck.glb",
+            ),
+            (
+                "pet:butterfly",
+                "controller:a1529f2d1d90b8b4198e099687f1bbea",
+                "Pet_Butterfly.glb",
+            ),
+        ];
+        for (pet, controller, scene_suffix) in cases {
+            let pet = StableId::new(pet).unwrap();
+            let scene = pet_scene(archetype, &pet).unwrap();
+            let spec = pet_animation_spec(&pet, scene, &presentation).unwrap();
+            assert_eq!(spec.controller.as_str(), controller);
+            assert!(spec.rig_scene.ends_with(scene_suffix));
+            let state = &presentation.controllers[&spec.controller].states[&spec.state];
+            assert_eq!(state.display_name, "Special");
+        }
+        let fish_god = StableId::new("pet:fish_god").unwrap();
+        assert!(
+            pet_animation_spec(
+                &fish_god,
+                pet_scene(archetype, &fish_god).unwrap(),
+                &presentation
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn pet_follow_uses_unity_distance_remap_and_rotation() {
+        let mut near = Transform::from_translation(Vec3::ZERO);
+        let stopped = pet_follow_step(&mut near, Vec3::X, 1.0, 0.5);
+        assert!(stopped.abs() <= f32::EPSILON);
+        assert_eq!(near.translation, Vec3::ZERO);
+
+        let mut far = Transform::from_translation(Vec3::ZERO);
+        let speed = pet_follow_step(&mut far, Vec3::new(5.0, 0.0, 0.0), 1.0, 0.1);
+        assert!((speed - PET_MAX_MOVE_SPEED).abs() <= f32::EPSILON);
+        assert_eq!(far.translation, Vec3::X);
+        // Unity's Quaternion.Slerp uses delta * rotation speed, so a 100 ms
+        // update rotates halfway toward the owner rather than snapping.
+        assert!(far.forward().dot(Vec3::X) > 0.7);
     }
 
     #[test]

@@ -487,6 +487,12 @@ mistaken for production-ready systems.
   514 post-warmup frames with 457 generated foliage instances and the
   depth-aware 81×81 water surface on the documented
   reference machine.
+- Live pets now reproduce the shipping `Pet.Update` follow behavior with the
+  authored distance-squared speed remap, 10-unit cap, and five-radians-per-
+  second smoothed facing. Red Panda, Giraffe, Duck, and Butterfly resolve their
+  individual Unity controllers and retarget exported idle/walk transform tracks
+  onto their own converted GLB rigs. Fish God intentionally stays static because
+  its shipping model has no Animator.
 
 ## Not yet at parity
 
@@ -514,7 +520,8 @@ mistaken for production-ready systems.
   verification. The functional Main Menu, in-game menu, save/load actions, and
   complete persisted-settings workflow are live.
 - Legacy target, active/unlocked pet, and customization data now map into native
-  actor state and live presentation.
+  actor state and live presentation. Pet locomotion and per-model animation are
+  live; remaining pet work is presentation polish rather than static follow.
 - Interactive technology graph layout. Persistent validated catalog writes,
   node/group creation/deletion/moves, live runtime bridging, integrated frame
   capture, stable command injection, and rolling profiling controls are
