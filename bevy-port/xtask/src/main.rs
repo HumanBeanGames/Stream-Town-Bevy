@@ -520,7 +520,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (14, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
+    ) != (15, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || embedded_animation_clips != 122
         || (blend_states, inferred_parameters) != (11, 2)
@@ -537,6 +537,13 @@ fn validate() -> Result<()> {
             .map(Vec::len)
             .sum::<usize>()
             != 3
+        || presentation.fireworks_effects.len() != 1
+        || presentation
+            .scene_fireworks
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+            != 2
         || presentation
             .avatar_masks
             .values()

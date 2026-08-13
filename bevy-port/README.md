@@ -95,7 +95,7 @@ textures and emits `presentation.ron`: 33 material definitions with 141 retained
 Unity vector/color shader parameters and 32 texture transforms, 184 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 14 also
+`.anim` files into 1,196 stable transform tracks. Presentation schema 15 also
 maps 122 embedded FBX takes to stable model-GUID/local-ID clip records and their
 exact GLB animation indexes. It
 retains 110 component/UI property curves with 261 keys across 18 clips, including
@@ -573,8 +573,14 @@ strength, and 1.64 vertex-alpha multiplier instead of receiving a generic PBR
 fallback. The remaining reachable WGSL shader ports remain presentation work.
 Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
-shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
-the live level-up toast consume the converted float-property curves directly.
+shipping catalog currently contains 261 unweighted keys. The Credits panels/end
+fade, fireworks activation, and live level-up toast consume the converted
+float-property curves directly. The reachable `vfx_fireworks` graph is converted
+to engine-neutral launch/burst rates, capacities, ranges, delays, and its eight
+HDR gradient colors, while both exact Credits scene placements are retained.
+At the Unity-authored 56-second key, a deterministic Bevy UI particle runtime
+launches rockets, delayed flashes, and radial sparks instead of displaying the
+earlier text-glyph placeholder.
 Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
 stacked built-in planes directly in Bevy. A typed WGSL material consumes its
 authored texture and exact dual world-space time offsets, cutoff, tint, and

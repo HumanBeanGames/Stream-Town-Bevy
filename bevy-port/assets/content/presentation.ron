@@ -1,5 +1,5 @@
 (
-    schema_version: 14,
+    schema_version: 15,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -100905,6 +100905,48 @@
                 profile: "post_process_profile:ad6bd2c32104ebb49acd98d03a779119",
                 weight: 1.0,
                 inverse_daylight: true,
+            ),
+        ],
+    },
+    fireworks_effects: {
+        "vfx:6c66704c63ecdfc4189ea3dc04caf41e": (
+            display_name: "vfx_fireworks",
+            source_guid: "6c66704c63ecdfc4189ea3dc04caf41e",
+            source_path: "Assets/VFX/vfx_fireworks.vfx",
+            sparks_speed: 2.0,
+            launch_rate_per_second: 16.0,
+            rocket_capacity: 8,
+            rocket_lifetime_seconds: (0.75, 1.0),
+            rocket_velocity_min: (-1.0, 12.0, -1.0),
+            rocket_velocity_max: (1.0, 16.0, 1.0),
+            burst_lifetime_seconds: (0.5, 1.0),
+            spark_lifetime_seconds: (1.0, 2.0),
+            burst_particle_rate: 30,
+            burst_count: (1, 3),
+            burst_delay_seconds: (1.0, 2.0),
+            colors: [
+                (10.680627, 10.680627, 10.680627, 1.0),
+                (12.062827, 0.0, 11.73169, 1.0),
+                (42.722507, 5.1879115, 0.0, 1.0),
+                (31.32984, 31.999996, 0.0, 1.0),
+                (31.999996, 0.0, 0.0, 1.0),
+                (0.2713807, 31.748665, 0.0, 1.0),
+                (2.5277083, 0.0, 57.0379, 1.0),
+                (0.0, 1.8050734, 42.722507, 1.0),
+            ],
+        ),
+    },
+    scene_fireworks: {
+        "Assets/Scenes/Menu/Credits.unity": [
+            (
+                hierarchy_path: "VFX_FireWorks",
+                effect: "vfx:6c66704c63ecdfc4189ea3dc04caf41e",
+                local_position: (-23.94, 12.81, -24.78),
+            ),
+            (
+                hierarchy_path: "VFX_FireWorks (1)",
+                effect: "vfx:6c66704c63ecdfc4189ea3dc04caf41e",
+                local_position: (-23.94, 12.81, -44.2),
             ),
         ],
     },

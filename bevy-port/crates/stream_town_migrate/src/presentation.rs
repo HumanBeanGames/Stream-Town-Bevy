@@ -13,10 +13,11 @@ use stream_town_domain::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
+    AvatarMaskDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
     PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef, PostProcessProfileDef,
     PostProcessTonemapping, PostProcessVignetteDef, PrefabPresentationBinding, PresentationCatalog,
-    RendererMaterialBinding, ScenePostProcessBinding, StableId, TextureDef, TextureTransform,
+    RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding, StableId, TextureDef,
+    TextureTransform,
 };
 
 const SHIPPING_SCENES: [&str; 4] = [
@@ -61,6 +62,8 @@ pub struct PresentationConversionReport {
     pub native_animation_bindings: usize,
     pub post_process_profiles: usize,
     pub scene_post_process_bindings: usize,
+    pub fireworks_effects: usize,
+    pub scene_fireworks_bindings: usize,
     pub outputs: Vec<String>,
 }
 
@@ -173,6 +176,11 @@ type PostProcessConversion = (
     BTreeMap<String, Vec<ScenePostProcessBinding>>,
 );
 
+type FireworksConversion = (
+    BTreeMap<StableId, FireworksVfxDef>,
+    BTreeMap<String, Vec<SceneFireworksBinding>>,
+);
+
 pub fn convert(
     export_path: &Path,
     unity_root: &Path,
@@ -213,6 +221,7 @@ pub fn convert(
     let prefab_renderer_materials =
         convert_prefab_renderer_materials(&export, &assets_by_path, &materials, &model_materials);
     let (post_process_profiles, scene_post_process) = convert_post_process(&export, &root)?;
+    let (fireworks_effects, scene_fireworks) = convert_fireworks(&export, &root)?;
     let mut clips = convert_clips(&export, &root)?;
     let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
@@ -227,7 +236,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 14,
+        schema_version: 15,
         textures,
         materials,
         clips,
@@ -239,6 +248,8 @@ pub fn convert(
         prefab_renderer_materials,
         post_process_profiles,
         scene_post_process,
+        fireworks_effects,
+        scene_fireworks,
     };
     catalog
         .validate()
@@ -249,7 +260,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 14,
+        schema_version: 15,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -364,6 +375,8 @@ pub fn convert(
             .count(),
         post_process_profiles: catalog.post_process_profiles.len(),
         scene_post_process_bindings: catalog.scene_post_process.values().map(Vec::len).sum(),
+        fireworks_effects: catalog.fireworks_effects.len(),
+        scene_fireworks_bindings: catalog.scene_fireworks.values().map(Vec::len).sum(),
         outputs: vec![
             normalized_path(&catalog_path),
             normalized_path(&report_path),
@@ -515,6 +528,255 @@ fn convert_post_process(export: &UnityExport, unity_root: &Path) -> Result<PostP
     Ok((profiles, scene_post_process))
 }
 
+fn convert_fireworks(export: &UnityExport, unity_root: &Path) -> Result<FireworksConversion> {
+    let mut effects = BTreeMap::new();
+    let mut scene_bindings = BTreeMap::new();
+    let Some(asset) = export
+        .assets
+        .iter()
+        .find(|asset| asset.path == "Assets/VFX/vfx_fireworks.vfx")
+    else {
+        return Ok((effects, scene_bindings));
+    };
+    let source = unity_root.join(&asset.path);
+    let contents = fs::read_to_string(&source)
+        .with_context(|| format!("failed to read fireworks graph {}", source.display()))?;
+    let documents = parse_yaml_documents(&contents)?;
+    let effect_id = fireworks_effect_id(&asset.guid)?;
+    let launch_rates = vfx_named_scalar_values(&documents, "Rate");
+    let rocket_capacity = documents
+        .iter()
+        .find_map(|document| scalar(&document.lines, "capacity:")?.parse::<u32>().ok())
+        .context("fireworks graph has no rocket capacity")?;
+    let rocket_lifetime = vfx_attribute_range(&documents, "lifetime", rocket_capacity)?;
+    let rocket_velocity = vfx_attribute_vector_range(&documents, "velocity", rocket_capacity)?;
+    let burst_lifetime = vfx_attribute_range(&documents, "lifetime", 12_800)?;
+    let spark_lifetime = vfx_attribute_range(&documents, "lifetime", 40_000)?;
+    let burst_count = vfx_named_vec2(&documents, "Count")?;
+    let burst_delay = vfx_named_vec2(&documents, "Delay")?;
+    let colors = vfx_gradient_colors(&contents, "name: FireworkColour")?;
+    let sparks_speed = vfx_parameter_scalar(&contents, "name: SparksSpeed")?;
+    let effect = FireworksVfxDef {
+        display_name: asset.name.clone(),
+        source_guid: asset.guid.clone(),
+        source_path: asset.path.clone(),
+        sparks_speed,
+        launch_rate_per_second: *launch_rates
+            .first()
+            .context("fireworks graph has no launch Rate")?,
+        rocket_capacity: u16::try_from(rocket_capacity)
+            .context("fireworks rocket capacity is outside u16 range")?,
+        rocket_lifetime_seconds: rocket_lifetime,
+        rocket_velocity_min: rocket_velocity.0,
+        rocket_velocity_max: rocket_velocity.1,
+        burst_lifetime_seconds: burst_lifetime,
+        spark_lifetime_seconds: spark_lifetime,
+        burst_particle_rate: f32_to_u16(
+            launch_rates
+                .get(1)
+                .copied()
+                .context("fireworks graph has no burst Rate")?,
+            "fireworks burst Rate",
+        )?,
+        burst_count: [
+            f32_to_u16(burst_count[0], "fireworks burst count minimum")?,
+            f32_to_u16(burst_count[1], "fireworks burst count maximum")?,
+        ],
+        burst_delay_seconds: burst_delay,
+        colors,
+    };
+    effects.insert(effect_id.clone(), effect);
+
+    if let Some(scene_asset) = export
+        .assets
+        .iter()
+        .find(|asset| asset.path == "Assets/Scenes/Menu/Credits.unity")
+    {
+        let bindings = scene_asset
+            .scene
+            .iter()
+            .flat_map(|scene| &scene.roots)
+            .flat_map(|root| &root.components)
+            .filter(|component| {
+                component.hierarchy_path.starts_with("VFX_FireWorks")
+                    && component
+                        .type_name
+                        .as_deref()
+                        .is_some_and(|name| name.starts_with("UnityEngine.Transform,"))
+            })
+            .filter_map(|component| {
+                Some(SceneFireworksBinding {
+                    hierarchy_path: component.hierarchy_path.clone(),
+                    effect: effect_id.clone(),
+                    local_position: field_array(&component.fields, "localPosition")?,
+                })
+            })
+            .collect::<Vec<_>>();
+        if !bindings.is_empty() {
+            scene_bindings.insert(scene_asset.path.clone(), bindings);
+        }
+    }
+    Ok((effects, scene_bindings))
+}
+
+fn vfx_named_scalar_values(documents: &[YamlDocument], name: &str) -> Vec<f32> {
+    documents
+        .iter()
+        .filter(|document| scalar(&document.lines, "name:") == Some(name))
+        .filter_map(|document| scalar_f32(&document.lines, "m_SerializableObject:"))
+        .collect()
+}
+
+fn vfx_named_vec2(documents: &[YamlDocument], name: &str) -> Result<[f32; 2]> {
+    let encoded = documents
+        .iter()
+        .find(|document| scalar(&document.lines, "name:") == Some(name))
+        .and_then(|document| scalar(&document.lines, "m_SerializableObject:"))
+        .with_context(|| format!("fireworks graph has no {name} property"))?;
+    let value: Value = serde_json::from_str(encoded.trim_matches('\''))?;
+    Ok([
+        json_f32(&value, "x").with_context(|| format!("{name}.x is missing"))?,
+        json_f32(&value, "y").with_context(|| format!("{name}.y is missing"))?,
+    ])
+}
+
+fn vfx_attribute_range(
+    documents: &[YamlDocument],
+    attribute: &str,
+    capacity: u32,
+) -> Result<[f32; 2]> {
+    let values = vfx_attribute_values(documents, attribute, capacity)?;
+    if values.len() != 2 {
+        bail!("fireworks {attribute} for capacity {capacity} is not a two-value range");
+    }
+    Ok([values[0], values[1]])
+}
+
+fn vfx_attribute_vector_range(
+    documents: &[YamlDocument],
+    attribute: &str,
+    capacity: u32,
+) -> Result<([f32; 3], [f32; 3])> {
+    let context = vfx_attribute_document(documents, attribute, capacity)?;
+    let input_ids = yaml_reference_list(&context.lines, "m_InputSlots:");
+    let values = input_ids
+        .iter()
+        .filter_map(|id| documents.iter().find(|document| document.file_id == *id))
+        .filter_map(|document| scalar(&document.lines, "m_SerializableObject:"))
+        .filter_map(|encoded| serde_json::from_str::<Value>(encoded.trim_matches('\'')).ok())
+        .filter_map(|value| value.get("vector").cloned())
+        .filter_map(|value| {
+            Some([
+                json_f32(&value, "x")?,
+                json_f32(&value, "y")?,
+                json_f32(&value, "z")?,
+            ])
+        })
+        .collect::<Vec<_>>();
+    if values.len() != 2 {
+        bail!("fireworks {attribute} for capacity {capacity} is not a two-vector range");
+    }
+    Ok((values[0], values[1]))
+}
+
+fn vfx_attribute_values(
+    documents: &[YamlDocument],
+    attribute: &str,
+    capacity: u32,
+) -> Result<Vec<f32>> {
+    let context = vfx_attribute_document(documents, attribute, capacity)?;
+    Ok(yaml_reference_list(&context.lines, "m_InputSlots:")
+        .iter()
+        .filter_map(|id| documents.iter().find(|document| document.file_id == *id))
+        .filter_map(|document| scalar_f32(&document.lines, "m_SerializableObject:"))
+        .collect())
+}
+
+fn vfx_attribute_document<'a>(
+    documents: &'a [YamlDocument],
+    attribute: &str,
+    capacity: u32,
+) -> Result<&'a YamlDocument> {
+    documents
+        .iter()
+        .filter(|document| scalar(&document.lines, "attribute:") == Some(attribute))
+        .find(|document| vfx_owner_capacity(documents, document) == Some(capacity))
+        .with_context(|| format!("fireworks graph has no {attribute} for capacity {capacity}"))
+}
+
+fn vfx_owner_capacity(documents: &[YamlDocument], attribute: &YamlDocument) -> Option<u32> {
+    let parent = reference_id(&attribute.lines, "m_Parent:")?;
+    let context = documents
+        .iter()
+        .find(|document| document.file_id == parent)?;
+    let data = reference_id(&context.lines, "m_Data:")?;
+    let data = documents.iter().find(|document| document.file_id == data)?;
+    scalar(&data.lines, "capacity:")?.parse().ok()
+}
+
+fn yaml_reference_list(lines: &[String], key: &str) -> Vec<i64> {
+    let Some(start) = lines.iter().position(|line| line.trim() == key) else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .skip(start + 1)
+        .take_while(|line| line.trim_start().starts_with("- {fileID:"))
+        .filter_map(|line| inline_file_id(line))
+        .collect()
+}
+
+fn vfx_parameter_scalar(contents: &str, marker: &str) -> Result<f32> {
+    let tail = contents
+        .split_once(marker)
+        .with_context(|| format!("fireworks graph has no {marker}"))?
+        .1;
+    tail.lines()
+        .find_map(|line| line.trim().strip_prefix("m_SerializableObject: "))
+        .and_then(|value| value.trim_matches('\'').parse().ok())
+        .with_context(|| format!("fireworks graph {marker} has no scalar default"))
+}
+
+fn vfx_gradient_colors(contents: &str, marker: &str) -> Result<Vec<[f32; 4]>> {
+    let tail = contents
+        .split_once(marker)
+        .with_context(|| format!("fireworks graph has no {marker}"))?
+        .1;
+    let encoded = tail
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("m_SerializableObject: "))
+        .context("fireworks gradient has no serialized value")?;
+    let value: Value = serde_json::from_str(encoded.trim_matches('\''))?;
+    value
+        .get("colorKeys")
+        .and_then(Value::as_array)
+        .context("fireworks gradient has no color keys")?
+        .iter()
+        .map(|key| {
+            let color = key.get("color").context("gradient key has no color")?;
+            Ok([
+                json_f32(color, "r").context("gradient color.r is missing")?,
+                json_f32(color, "g").context("gradient color.g is missing")?,
+                json_f32(color, "b").context("gradient color.b is missing")?,
+                json_f32(color, "a").context("gradient color.a is missing")?,
+            ])
+        })
+        .collect()
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn json_f32(value: &Value, key: &str) -> Option<f32> {
+    value.get(key)?.as_f64().map(|value| value as f32)
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn f32_to_u16(value: f32, label: &str) -> Result<u16> {
+    if !value.is_finite() || value < 0.0 || value > f32::from(u16::MAX) {
+        bail!("{label} is outside u16 range");
+    }
+    Ok(value.round() as u16)
+}
+
 fn volume_parameter<'a>(lines: &'a [String], name: &str) -> Option<&'a str> {
     let header = format!("{name}:");
     let start = lines.iter().position(|line| line.trim() == header)?;
@@ -570,6 +832,10 @@ fn reference_field<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
 
 fn post_process_profile_id(guid: &str) -> Result<StableId> {
     StableId::new(format!("post_process_profile:{guid}")).map_err(Into::into)
+}
+
+fn fireworks_effect_id(guid: &str) -> Result<StableId> {
+    StableId::new(format!("vfx:{guid}")).map_err(Into::into)
 }
 
 fn convert_textures(
@@ -2797,6 +3063,51 @@ MonoBehaviour:
                 .zip([0.25, 0.5, 1.0, 1.0])
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
+    }
+
+    #[test]
+    fn parses_authored_fireworks_graph_parameters() {
+        let contents = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Assets/VFX/vfx_fireworks.vfx"),
+        )
+        .unwrap();
+        let documents = parse_yaml_documents(&contents).unwrap();
+        assert_eq!(
+            vfx_named_scalar_values(&documents, "Rate"),
+            [16.0, 30.0, 1_000.0]
+        );
+        assert!(
+            vfx_attribute_range(&documents, "lifetime", 8)
+                .unwrap()
+                .into_iter()
+                .zip([0.75, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert_eq!(
+            vfx_attribute_vector_range(&documents, "velocity", 8).unwrap(),
+            ([-1.0, 12.0, -1.0], [1.0, 16.0, 1.0])
+        );
+        assert!(
+            vfx_named_vec2(&documents, "Count")
+                .unwrap()
+                .into_iter()
+                .zip([1.0, 3.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            vfx_named_vec2(&documents, "Delay")
+                .unwrap()
+                .into_iter()
+                .zip([1.0, 2.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            (vfx_parameter_scalar(&contents, "name: SparksSpeed").unwrap() - 2.0).abs()
+                < f32::EPSILON
+        );
+        let colors = vfx_gradient_colors(&contents, "name: FireworkColour").unwrap();
+        assert_eq!(colors.len(), 8);
+        assert!((colors[2][0] - 42.722_507).abs() < 0.000_01);
     }
 
     #[test]

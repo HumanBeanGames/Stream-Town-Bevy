@@ -124,12 +124,17 @@ mistaken for production-ready systems.
   targets become Bevy animation mask groups. Character's Top `Carry`/`CarryHip`
   state machine follows live inventory parameters but, matching its source
   controller, its authored zero weight gives it no pose influence.
-- Presentation schema 11 retains 110 Unity float-property curves with 261 keys
+- Presentation schema 15 retains 110 Unity float-property curves with 261 keys
   across 18 clips and all ten authored `PlayRoleActionAudio` events. The runtime
   samples constant, unweighted Hermite, and weighted Bezier segments (all 261
   shipping keys are currently unweighted); the Credits state uses the
-  converted seven-panel visibility timeline, two fireworks cues, and end fade,
-  while actor level changes use the converted LevelUp position/alpha curves.
+  converted seven-panel visibility timeline and end fade, while actor level
+  changes use the converted LevelUp position/alpha curves. It also converts the
+  reachable `vfx_fireworks` graph's launch/burst rates, capacities, lifetime and
+  velocity ranges, HDR color gradient, and both exact Credits scene placements.
+  A deterministic Bevy particle runtime replaces the former text-glyph cue with
+  visible rockets, delayed flashes, and radial sparks beginning at Unity's
+  authored 56-second activation key.
 - Combat roles acquire living enemies while Goblins acquire the nearest living
   player and retaliate. Melee roles apply deterministic damage in range;
   Necromancer, Ranger, and Wizard attacks spawn visible homing ECS projectiles
@@ -378,6 +383,11 @@ mistaken for production-ready systems.
   verifies the transparent layer field and authored `_CloudTint=200` value.
   Both scenes render the shipping 2048x1227 `Game_Logo_DropShadow` sprite with
   its source aspect ratio while preserving a text fallback for assetless tests.
+- Credits now recreates both reachable `VFX_FireWorks` instances as a
+  deterministic purpose-built particle effect driven by presentation schema 15.
+  The converter resolves their exact Unity scene positions and graph GUID, the
+  graph data remains engine-neutral RON, and the runtime respects the converted
+  `CreditsFireworks` activation curve rather than carrying a hard-coded start.
 - The in-game HUD now reconstructs Unity's image-backed top bar from all ten
   packaged TopBar sprites: tiled dark/gold background, four town-resource
   icons, player/building/play-time counters, and the seasonal gauge/meter. The
@@ -617,10 +627,11 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining reachable WGSL shader ports, VFX, remaining HUD/menu art parity,
-  post-processing, rare action/UI sound cues, and screen-reader/accessibility
-  verification. The functional Main Menu, in-game menu, save/load actions, and
-  complete persisted-settings workflow are live.
+- Remaining reachable WGSL shader ports, particle fields and VFX, remaining
+  HUD/menu art parity, rare action/UI sound cues, and screen-reader/accessibility
+  verification. Authored global post-processing and the Credits fireworks are
+  live, alongside the functional Main Menu, in-game menu, save/load actions,
+  and complete persisted-settings workflow.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation. Pet locomotion and per-model animation are
   live; remaining pet work is presentation polish rather than static follow.
@@ -690,8 +701,7 @@ camera-projected player/building overlays. The shipping town seagull also flies
 its authored 32-second boundary route using the converted model and emits three
 generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
-ports backed by converted renderer bindings. It is still
-missing remaining chunked LOD work, particle fields, remaining custom-shader
-parity, and the recorded
-reference-machine GPU measurement required to close the milestone.
+ports backed by converted renderer bindings. It is still missing remaining
+chunked LOD work, particle fields, remaining custom-shader parity, and broader
+curated screenshot coverage required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

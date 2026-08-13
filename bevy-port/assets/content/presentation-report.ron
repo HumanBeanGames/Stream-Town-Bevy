@@ -1,5 +1,5 @@
 (
-    schema_version: 14,
+    schema_version: 15,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -32,6 +32,8 @@
     native_animation_bindings: 18,
     post_process_profiles: 2,
     scene_post_process_bindings: 3,
+    fireworks_effects: 1,
+    scene_fireworks_bindings: 2,
     outputs: [
         "assets/content/presentation.ron",
         "assets/content/presentation-report.ron",

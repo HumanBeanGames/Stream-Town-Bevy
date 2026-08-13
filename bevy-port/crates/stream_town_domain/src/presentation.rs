@@ -35,6 +35,39 @@ pub struct PresentationCatalog {
     /// Global volume bindings keyed by the shipping Unity scene path.
     #[serde(default)]
     pub scene_post_process: BTreeMap<String, Vec<ScenePostProcessBinding>>,
+    /// Reachable Unity VFX Graph fireworks converted for the Credits sequence.
+    #[serde(default)]
+    pub fireworks_effects: BTreeMap<StableId, FireworksVfxDef>,
+    /// Fireworks instances keyed by the shipping Unity scene path.
+    #[serde(default)]
+    pub scene_fireworks: BTreeMap<String, Vec<SceneFireworksBinding>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FireworksVfxDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub sparks_speed: f32,
+    pub launch_rate_per_second: f32,
+    pub rocket_capacity: u16,
+    pub rocket_lifetime_seconds: [f32; 2],
+    pub rocket_velocity_min: [f32; 3],
+    pub rocket_velocity_max: [f32; 3],
+    pub burst_lifetime_seconds: [f32; 2],
+    pub spark_lifetime_seconds: [f32; 2],
+    pub burst_particle_rate: u16,
+    pub burst_count: [u16; 2],
+    pub burst_delay_seconds: [f32; 2],
+    /// HDR linear colors from the exposed Unity `FireworkColour` gradient.
+    pub colors: Vec<[f32; 4]>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SceneFireworksBinding {
+    pub hierarchy_path: String,
+    pub effect: StableId,
+    pub local_position: [f32; 3],
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -690,10 +723,103 @@ pub enum PresentationError {
         hierarchy_path: String,
         reason: String,
     },
+    #[error("fireworks effect {effect} is invalid: {reason}")]
+    InvalidFireworksEffect { effect: StableId, reason: String },
+    #[error("scene {scene} has an invalid fireworks binding at {hierarchy_path}: {reason}")]
+    InvalidFireworksBinding {
+        scene: String,
+        hierarchy_path: String,
+        reason: String,
+    },
+    #[error("scene {scene} references missing fireworks effect {effect}")]
+    MissingFireworksEffect { scene: String, effect: StableId },
 }
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (id, effect) in &self.fireworks_effects {
+            let source_valid = effect.source_guid.len() == 32
+                && effect
+                    .source_guid
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                && effect.source_path.starts_with("Assets/")
+                && Path::new(&effect.source_path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("vfx"))
+                && !effect.source_path.contains('\\')
+                && !effect.source_path.contains("..");
+            let ordered_positive = |range: [f32; 2]| {
+                range.into_iter().all(f32::is_finite) && range[0] > 0.0 && range[1] >= range[0]
+            };
+            let values_valid = effect.sparks_speed.is_finite()
+                && effect.sparks_speed > 0.0
+                && effect.launch_rate_per_second.is_finite()
+                && effect.launch_rate_per_second > 0.0
+                && effect.rocket_capacity > 0
+                && ordered_positive(effect.rocket_lifetime_seconds)
+                && effect.rocket_velocity_min.into_iter().all(f32::is_finite)
+                && effect.rocket_velocity_max.into_iter().all(f32::is_finite)
+                && effect
+                    .rocket_velocity_min
+                    .into_iter()
+                    .zip(effect.rocket_velocity_max)
+                    .all(|(minimum, maximum)| maximum >= minimum)
+                && ordered_positive(effect.burst_lifetime_seconds)
+                && ordered_positive(effect.spark_lifetime_seconds)
+                && effect.burst_particle_rate > 0
+                && effect.burst_count[0] > 0
+                && effect.burst_count[1] >= effect.burst_count[0]
+                && effect.burst_delay_seconds.into_iter().all(f32::is_finite)
+                && effect.burst_delay_seconds[0] >= 0.0
+                && effect.burst_delay_seconds[1] >= effect.burst_delay_seconds[0]
+                && !effect.colors.is_empty()
+                && effect
+                    .colors
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .all(|value| value.is_finite() && value >= 0.0);
+            if !source_valid || !values_valid {
+                return Err(PresentationError::InvalidFireworksEffect {
+                    effect: id.clone(),
+                    reason: "source metadata, ranges, rates, and colors must be portable and valid"
+                        .into(),
+                });
+            }
+        }
+        for (scene, bindings) in &self.scene_fireworks {
+            let scene_valid = scene.starts_with("Assets/")
+                && Path::new(scene)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("unity"))
+                && !scene.contains('\\')
+                && !scene.contains("..");
+            for binding in bindings {
+                if !self.fireworks_effects.contains_key(&binding.effect) {
+                    return Err(PresentationError::MissingFireworksEffect {
+                        scene: scene.clone(),
+                        effect: binding.effect.clone(),
+                    });
+                }
+                if !scene_valid
+                    || binding.hierarchy_path.trim().is_empty()
+                    || binding.hierarchy_path.contains('\\')
+                    || binding
+                        .local_position
+                        .into_iter()
+                        .any(|value| !value.is_finite())
+                {
+                    return Err(PresentationError::InvalidFireworksBinding {
+                        scene: scene.clone(),
+                        hierarchy_path: binding.hierarchy_path.clone(),
+                        reason:
+                            "scene path, hierarchy path, and position must be portable and valid"
+                                .into(),
+                    });
+                }
+            }
+        }
         for (id, profile) in &self.post_process_profiles {
             let source_valid = profile.source_guid.len() == 32
                 && profile
@@ -1490,6 +1616,58 @@ mod tests {
                 mask: mask_id,
             })
         );
+    }
+
+    #[test]
+    fn validates_portable_fireworks_settings() {
+        let effect_id = StableId::new("vfx:fireworks").unwrap();
+        let effect = FireworksVfxDef {
+            display_name: "Fireworks".into(),
+            source_guid: "a".repeat(32),
+            source_path: "Assets/VFX/fireworks.vfx".into(),
+            sparks_speed: 2.0,
+            launch_rate_per_second: 16.0,
+            rocket_capacity: 8,
+            rocket_lifetime_seconds: [0.75, 1.0],
+            rocket_velocity_min: [-1.0, 12.0, -1.0],
+            rocket_velocity_max: [1.0, 16.0, 1.0],
+            burst_lifetime_seconds: [0.5, 1.0],
+            spark_lifetime_seconds: [1.0, 2.0],
+            burst_particle_rate: 30,
+            burst_count: [1, 3],
+            burst_delay_seconds: [1.0, 2.0],
+            colors: vec![[10.0, 1.0, 0.0, 1.0]],
+        };
+        let catalog = PresentationCatalog {
+            schema_version: 15,
+            fireworks_effects: BTreeMap::from([(effect_id.clone(), effect.clone())]),
+            scene_fireworks: BTreeMap::from([(
+                "Assets/Scenes/Menu/Credits.unity".into(),
+                vec![SceneFireworksBinding {
+                    hierarchy_path: "VFX_FireWorks".into(),
+                    effect: effect_id.clone(),
+                    local_position: [-23.94, 12.81, -24.78],
+                }],
+            )]),
+            ..PresentationCatalog::default()
+        };
+        assert_eq!(catalog.validate(), Ok(()));
+
+        let invalid = PresentationCatalog {
+            schema_version: 15,
+            fireworks_effects: BTreeMap::from([(
+                effect_id,
+                FireworksVfxDef {
+                    launch_rate_per_second: 0.0,
+                    ..effect
+                },
+            )]),
+            ..PresentationCatalog::default()
+        };
+        assert!(matches!(
+            invalid.validate(),
+            Err(PresentationError::InvalidFireworksEffect { .. })
+        ));
     }
 
     #[test]
