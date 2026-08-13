@@ -1040,6 +1040,19 @@ struct SelectionPanelDetails {
     experience_progress: Option<f32>,
 }
 
+type SelectionPanelTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Text, &'static mut Visibility),
+    (With<SelectionPanel>, Without<SelectionPanelSliderTrack>),
+>;
+type SelectionPanelTrackQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static SelectionPanelSliderTrack, &'static mut Visibility),
+    (With<SelectionPanelSliderTrack>, Without<SelectionPanel>),
+>;
+
 impl SelectionPanelDetails {
     const fn progress(&self, bar: SelectionPanelBar) -> Option<f32> {
         match bar {
@@ -14210,11 +14223,27 @@ fn sync_group_selection_outlines(
     }
 }
 
-fn group_role_ids(content: &ContentCatalog) -> Vec<StableId> {
+fn role_slot_is_available(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    role: &StableId,
+) -> bool {
+    role_capacity(content, simulation, role).is_none_or(|capacity| {
+        let used = simulation
+            .actors
+            .values()
+            .filter(|actor| actor.role == *role)
+            .count();
+        used < usize::try_from(capacity).unwrap_or(usize::MAX)
+    })
+}
+
+fn group_role_ids(content: &ContentCatalog, simulation: &WorldSimulation) -> Vec<StableId> {
     content
         .roles
         .keys()
-        .filter(|id| !matches!(id.as_str(), "role:ruler" | "role:blacksmith" | "role:enemy"))
+        .filter(|id| !matches!(id.as_str(), "role:ruler" | "role:enemy"))
+        .filter(|id| role_slot_is_available(content, simulation, id))
         .cloned()
         .collect()
 }
@@ -14225,7 +14254,7 @@ fn assign_group_role(
     content: &ContentCatalog,
     simulation: &mut WorldSimulation,
 ) -> usize {
-    if !group_role_ids(content).contains(role) {
+    if !group_role_ids(content, simulation).contains(role) {
         return 0;
     }
     let mut changed = 0;
@@ -14374,12 +14403,23 @@ fn group_selection_panel_signature(
     simulation: &WorldSimulation,
 ) -> String {
     if !group.actors.is_empty() {
-        return group
+        let selected = group
             .actors
+            .iter()
+            .filter_map(|id| {
+                simulation
+                    .actors
+                    .get(id)
+                    .map(|actor| format!("{}={}", id, actor.role))
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        let roles = group_role_ids(content, simulation)
             .iter()
             .map(StableId::as_str)
             .collect::<Vec<_>>()
             .join("|");
+        return format!("{selected}#{roles}");
     }
     let Some(runtime_id) = selected
         .0
@@ -14457,7 +14497,7 @@ fn update_group_selection_panel(
                         ..default()
                     },
                 ));
-                for role in group_role_ids(&content.0) {
+                for role in group_role_ids(&content.0, &simulation.0) {
                     parent
                         .spawn((
                             GroupSelectionAction::AssignRole(role.clone()),
@@ -14858,14 +14898,8 @@ fn update_selection_panel(
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
-    mut panels: Query<
-        (&mut Text, &mut Visibility),
-        (With<SelectionPanel>, Without<SelectionPanelSliderTrack>),
-    >,
-    mut tracks: Query<
-        (&SelectionPanelSliderTrack, &mut Visibility),
-        (With<SelectionPanelSliderTrack>, Without<SelectionPanel>),
-    >,
+    mut panels: SelectionPanelTextQuery,
+    mut tracks: SelectionPanelTrackQuery,
     mut sliders: Query<
         (
             &SelectionPanelSlider,
@@ -17311,9 +17345,7 @@ fn apply_passive_building_income(
             continue;
         };
         for (resource, rate) in passive_resource_rate_milli_per_second(definition, building.level) {
-            let entry = rates
-                .entry((building.id.clone(), resource))
-                .or_default();
+            let entry = rates.entry((building.id.clone(), resource)).or_default();
             *entry = entry.saturating_add(rate);
         }
     }
@@ -24401,6 +24433,54 @@ mod tests {
             .into_iter()
             .collect::<BTreeSet<_>>();
         assert_eq!(selected.len(), 2);
+
+        let blacksmith = StableId::new("role:blacksmith").unwrap();
+        assert!(!group_role_ids(&content, &simulation).contains(&blacksmith));
+        let forge = &content.buildings[&StableId::new("building:forge").unwrap()];
+        let mut role_simulation = simulation.clone();
+        role_simulation.buildings.insert(
+            StableId::new("building:selection_forge").unwrap(),
+            BuildingState {
+                id: StableId::new("building:selection_forge").unwrap(),
+                archetype: forge.archetype.clone(),
+                position: GridPos { x: 35, z: 35 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: building_base_max_health(&content, forge)
+                    .try_into()
+                    .unwrap(),
+                complete: true,
+            },
+        );
+        assert!(group_role_ids(&content, &role_simulation).contains(&blacksmith));
+        let signature_before = group_selection_panel_signature(
+            &SelectedRecruitGroup {
+                actors: selected.clone(),
+                drag_start: None,
+            },
+            &SelectedCell::default(),
+            &content,
+            &role_simulation,
+        );
+        assert_eq!(
+            assign_group_role(&selected, &blacksmith, &content, &mut role_simulation),
+            1,
+            "Unity applies mass changes in order until the role becomes full"
+        );
+        assert!(!group_role_ids(&content, &role_simulation).contains(&blacksmith));
+        assert_ne!(
+            group_selection_panel_signature(
+                &SelectedRecruitGroup {
+                    actors: selected.clone(),
+                    drag_start: None,
+                },
+                &SelectedCell::default(),
+                &content,
+                &role_simulation,
+            ),
+            signature_before,
+            "role occupancy must rebuild the live selection controls"
+        );
 
         let town_hall = StableId::new("building:townhall").unwrap();
         let town_hall_cell = simulation.buildings[&town_hall].position;

@@ -327,7 +327,11 @@ load/new-world boundaries rather than entering save data. The same action
 surface supports single-recruit role changes and confirmed dismissal, plus
 selected-building level-up and confirmed removal through the authoritative
 cost, level-cap, navigation, station, and target cleanup transactions; the Town
-Hall remains protected. Enemy selection resolves the converted enemy type, and
+Hall remains protected. Role choices now follow Unity's live `RoleSlot`
+availability contract: full and zero-slot roles are omitted, building-granted
+roles such as Blacksmith appear when their station contributes capacity, and
+mass changes fill the remaining slots deterministically. Enemy selection
+resolves the converted enemy type, and
 enemy camps are selectable across their complete authored footprint with live
 health, maximum-health, and correctly sized outline feedback. Player selection
 restores distinct live health and role-experience meters (including level caps
