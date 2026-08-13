@@ -495,6 +495,13 @@ save load and yields temporarily while a new technology ballot occupies the
 same screen region. `STREAM_TOWN_SMOKE_GOAL=1` starts a reproducible real-catalog
 goal fixture for visual acceptance.
 
+Reachable Fish God and raid events now open Unity's shared current-event panel
+using the three packaged CurrentEvent sprites. Fish God shows the live praise
+command and exact praise count; raids show live enemies in the active wave and
+completed-wave progress (not merely the spawned-wave index). Both rebuild from
+native saved event state. `STREAM_TOWN_SMOKE_EVENT=fish|raid` opens deterministic
+real-runtime fixtures for visual acceptance.
+
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
 remaining work.

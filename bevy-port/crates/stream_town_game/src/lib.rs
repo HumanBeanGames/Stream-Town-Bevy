@@ -128,6 +128,11 @@ const OBJECTIVE_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/Objectives/UI_Objectives_Slider_Unfilled.png",
     "Assets/Sprites/Objectives/UI_Objectives_Slider_Filled.png",
 ];
+const CURRENT_EVENT_TEXTURE_PATHS: [&str; 3] = [
+    "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Background.png",
+    "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Unfilled.png",
+    "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Filled.png",
+];
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -737,6 +742,7 @@ struct RenderAssets {
     bottom_bar_textures: BTreeMap<String, Handle<Image>>,
     vote_textures: BTreeMap<String, Handle<Image>>,
     objective_textures: BTreeMap<String, Handle<Image>>,
+    current_event_textures: BTreeMap<String, Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -920,6 +926,19 @@ struct TechnologyVoteCastEnabled(bool);
 
 #[derive(Component)]
 struct TownGoalPanel;
+
+#[derive(Component)]
+struct CurrentEventPanel;
+
+#[derive(Component, Clone, Copy)]
+enum CurrentEventText {
+    Title,
+    Description,
+    Progress,
+}
+
+#[derive(Component)]
+struct CurrentEventFill;
 
 type TechnologyVoteIconQuery<'w, 's> = Query<
     'w,
@@ -1515,6 +1534,7 @@ impl Plugin for StreamTownGamePlugin {
                     update_selection_panel,
                     update_vote_panels.after(move_agents),
                     update_town_goal_panel.after(move_agents),
+                    update_current_event_panel.after(update_enemy_encounters),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -1942,6 +1962,13 @@ fn setup_rendering(
                 .map(|handle| ((*source_path).to_owned(), handle))
         })
         .collect();
+    let current_event_textures = CURRENT_EVENT_TEXTURE_PATHS
+        .iter()
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
     let presentation_materials = presentation
         .0
         .materials
@@ -2107,6 +2134,7 @@ fn setup_rendering(
         bottom_bar_textures,
         vote_textures,
         objective_textures,
+        current_event_textures,
         presentation_materials,
     });
 }
@@ -3451,6 +3479,14 @@ fn objective_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> 
         .unwrap_or_default()
 }
 
+fn current_event_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
+    render
+        .current_event_textures
+        .get(source_path)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn spawn_vote_track(
     parent: &mut ChildSpawnerCommands,
     render: &RenderAssets,
@@ -3763,6 +3799,123 @@ fn spawn_town_goal_panel(commands: &mut Commands, render: &RenderAssets) {
         },
         BackgroundColor(Color::srgba(0.035, 0.055, 0.11, 0.9)),
     ));
+}
+
+fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
+    commands
+        .spawn((
+            WorldEntity,
+            CurrentEventPanel,
+            Name::new("Current town event"),
+            ImageNode::new(current_event_texture(
+                render,
+                CURRENT_EVENT_TEXTURE_PATHS[0],
+            ))
+            .with_mode(NodeImageMode::Sliced(TextureSlicer {
+                border: BorderRect::all(24.0),
+                center_scale_mode: default(),
+                sides_scale_mode: default(),
+                max_corner_scale: 1.0,
+            })),
+            GlobalZIndex(23),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(96),
+                left: percent(40.0),
+                width: percent(20.0),
+                min_width: px(330),
+                height: px(148),
+                padding: UiRect::all(px(15)),
+                ..default()
+            },
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                CurrentEventText::Title,
+                Text::new("Current Event"),
+                TextFont {
+                    font_size: FontSize::Px(25.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.97, 0.88, 0.58)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(12),
+                    left: px(15),
+                    right: px(15),
+                    ..default()
+                },
+            ));
+            panel.spawn((
+                CurrentEventText::Description,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(17.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(50),
+                    left: px(15),
+                    right: px(15),
+                    ..default()
+                },
+            ));
+            panel
+                .spawn((
+                    ImageNode::new(current_event_texture(
+                        render,
+                        CURRENT_EVENT_TEXTURE_PATHS[1],
+                    ))
+                    .with_mode(NodeImageMode::Stretch),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(18),
+                        right: px(18),
+                        bottom: px(22),
+                        height: px(28),
+                        overflow: Overflow::clip_x(),
+                        ..default()
+                    },
+                ))
+                .with_children(|track| {
+                    track.spawn((
+                        CurrentEventFill,
+                        ImageNode::new(current_event_texture(
+                            render,
+                            CURRENT_EVENT_TEXTURE_PATHS[2],
+                        ))
+                        .with_mode(NodeImageMode::Stretch),
+                        Node {
+                            width: percent(0.0),
+                            height: percent(100.0),
+                            ..default()
+                        },
+                    ));
+                    track.spawn((
+                        CurrentEventText::Progress,
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(16.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(4),
+                            right: px(4),
+                            top: px(3),
+                            ..default()
+                        },
+                    ));
+                });
+        });
 }
 
 fn spawn_bottom_bar_button(
@@ -4094,6 +4247,7 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
     ));
     spawn_vote_panels(commands, render);
     spawn_town_goal_panel(commands, render);
+    spawn_current_event_panel(commands, render);
 }
 
 fn main_menu_input(
@@ -4975,6 +5129,33 @@ fn generate_and_spawn_world(
             &content.0.objectives,
             MAX_TOWN_GOALS,
         );
+    }
+    if let Ok(smoke_event) = std::env::var("STREAM_TOWN_SMOKE_EVENT") {
+        match smoke_event.to_ascii_lowercase().as_str() {
+            "fish" | "fishgod" => {
+                let _ = simulation.start_fish_god(true);
+                if let Some(event) = &mut simulation.fish_god {
+                    event.praises_given = 7;
+                }
+            }
+            "raid" => {
+                if let (Some(enemy), Some(boss)) = (
+                    archetype_id_by_source(
+                        &content.0,
+                        ArchetypeKind::Enemy,
+                        "Enemy_Minotaur.prefab",
+                    ),
+                    archetype_id_by_source(
+                        &content.0,
+                        ArchetypeKind::Enemy,
+                        "Enemy_MinotaurBoss.prefab",
+                    ),
+                ) {
+                    let _ = simulation.start_raid(5, 50, enemy, boss);
+                }
+            }
+            _ => {}
+        }
     }
     if let Some(day) = debug_start_day() {
         simulation.elapsed_seconds = f64::from(day) * f64::from(config.0.time.seconds_per_day);
@@ -12070,6 +12251,71 @@ fn update_town_goal_panel(
                 });
             }
         });
+}
+
+fn current_event_panel_state(
+    simulation: &WorldSimulation,
+) -> Option<(String, String, String, f32)> {
+    if let Some(event) = &simulation.fish_god {
+        return Some((
+            "Fish God".to_owned(),
+            "Praise the Fish God!  Type !praise".to_owned(),
+            format!("{}  /  {}", event.praises_given, event.praises_required),
+            objective_progress_ratio(
+                u32::from(event.praises_given),
+                u32::from(event.praises_required),
+            ),
+        ));
+    }
+    simulation.active_raid.as_ref().map(|raid| {
+        let completed_waves = if raid.tracked_enemies.is_empty() {
+            raid.current_wave
+        } else {
+            raid.current_wave.saturating_sub(1)
+        };
+        (
+            "Raid".to_owned(),
+            format!("Enemies In Wave: {}", raid.tracked_enemies.len()),
+            format!(
+                "Waves Completed: {}/{}",
+                completed_waves.min(raid.total_waves),
+                raid.total_waves
+            ),
+            objective_progress_ratio(u32::from(completed_waves), u32::from(raid.total_waves)),
+        )
+    })
+}
+
+fn update_current_event_panel(
+    simulation: Res<SimulationRuntime>,
+    mut panels: Query<&mut Visibility, With<CurrentEventPanel>>,
+    mut texts: Query<(&CurrentEventText, &mut Text)>,
+    mut fills: Query<&mut Node, With<CurrentEventFill>>,
+) {
+    if !simulation.is_changed() {
+        return;
+    }
+    let Some((title, description, progress_text, progress)) =
+        current_event_panel_state(&simulation.0)
+    else {
+        for mut visibility in &mut panels {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+    for mut visibility in &mut panels {
+        *visibility = Visibility::Visible;
+    }
+    for (kind, mut text) in &mut texts {
+        text.0 = match kind {
+            CurrentEventText::Title => title.clone(),
+            CurrentEventText::Description => description.clone(),
+            CurrentEventText::Progress => progress_text.clone(),
+        };
+    }
+    for mut node in &mut fills {
+        node.width = percent((progress * 100.0).clamp(0.0, 100.0));
+    }
 }
 
 fn selection_panel_details(
@@ -19877,6 +20123,53 @@ mod tests {
             .start_technology_vote(StableId::new("tech:other_vote").unwrap(), 60.0)
             .unwrap();
         assert!(town_goal_signature(&simulation).ends_with(":ballot"));
+    }
+
+    #[test]
+    fn shipping_current_event_panel_maps_fish_god_and_raid_progress() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        for source_path in CURRENT_EVENT_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing current-event texture {source_path}"
+            );
+        }
+        let mut simulation = WorldSimulation::new(17);
+        assert!(simulation.start_fish_god(true));
+        simulation.fish_god.as_mut().unwrap().praises_given = 7;
+        let fish = current_event_panel_state(&simulation).unwrap();
+        assert_eq!(fish.0, "Fish God");
+        assert_eq!(fish.2, "7  /  20");
+        assert!((fish.3 - 0.35).abs() <= f32::EPSILON);
+
+        simulation.stop_active_event();
+        let enemy = archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Minotaur.prefab")
+            .unwrap();
+        let boss =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_MinotaurBoss.prefab")
+                .unwrap();
+        assert!(simulation.start_raid(5, 50, enemy, boss));
+        simulation.active_raid.as_mut().unwrap().current_wave = 2;
+        let raid = current_event_panel_state(&simulation).unwrap();
+        assert_eq!(raid.0, "Raid");
+        assert_eq!(raid.2, "Waves Completed: 2/5");
+        assert!((raid.3 - 0.4).abs() <= f32::EPSILON);
+        simulation
+            .active_raid
+            .as_mut()
+            .unwrap()
+            .tracked_enemies
+            .insert(StableId::new("enemy:wave").unwrap());
+        let active_wave = current_event_panel_state(&simulation).unwrap();
+        assert_eq!(active_wave.1, "Enemies In Wave: 1");
+        assert_eq!(active_wave.2, "Waves Completed: 1/5");
+        assert!((active_wave.3 - 0.2).abs() <= f32::EPSILON);
+        simulation.finish_raid();
+        assert!(current_event_panel_state(&simulation).is_none());
     }
 
     #[test]

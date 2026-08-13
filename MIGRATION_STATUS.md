@@ -371,6 +371,10 @@ mistaken for production-ready systems.
   exact saved progress counts, and packaged objective sliders. The tracker
   follows the authoritative first goal and temporarily yields to an overlapping
   technology ballot without losing state.
+- Fish God and raid progress now render through Unity's shared current-event
+  panel with the converted background and slider sprites. Praise counts,
+  enemies currently alive, and waves actually completed read authoritative
+  saved event state; Twitch commands remain the original participation path.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red
