@@ -361,6 +361,11 @@ mistaken for production-ready systems.
   serialized item ordering, ten-item paging, and live affordability/role-slot/
   storage/vote disabled states; actions reuse the authoritative typed command
   path for placement, recruitment, and voting.
+- Shipping technology and ruler vote panels now consume the converted menu,
+  slider, prompt, timer, and governance artwork. Technology icons, approval
+  shares, vote totals, deterministic top-five candidate/yes-no tallies, and
+  save-resumed countdowns read authoritative simulation state; the local vote
+  button feeds the same typed `!vote` path used by Twitch.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red

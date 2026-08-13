@@ -479,6 +479,14 @@ Unity's serialized ordering and live enabled state, and dispatch through the
 same typed building-placement, NPC recruitment, and technology-vote command
 path used by Twitch rather than duplicating gameplay rules.
 
+Active technology and governance votes use the shipping voting-menu art.
+Technology votes show their converted icon, live approval share, total votes,
+countdown, and a broadcaster-equivalent local vote button. Ruler elections and
+retention votes show the Unity prompt, deterministic top-five/yes-no tally, and
+the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|keep`
+opens reproducible visual-acceptance fixtures without bypassing the real vote
+state or timer systems.
+
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
 remaining work.

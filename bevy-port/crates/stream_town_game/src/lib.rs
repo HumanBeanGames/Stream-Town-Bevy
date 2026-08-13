@@ -57,6 +57,7 @@ use stream_town_domain::{
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
@@ -109,6 +110,19 @@ const BOTTOM_BAR_TEXTURE_PATHS: [&str; 11] = [
     "Assets/Sprites/BuildRecruitMenus/UI_Arrow.png",
     "Assets/Resources/Icons/UI_Icon_BuildRecruit_Background.png",
 ];
+const VOTE_TEXTURE_PATHS: [&str; 9] = [
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_Background.png",
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_TimerSlider_Filled.png",
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_TimerSlider_Unfilled.png",
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_Timer_Icon.png",
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_VotePrompt.png",
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_VoteSlider_Filled.png",
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_VoteSlider_Unfilled.png",
+    "Assets/Sprites/RulerVotingMenu/UI_RulerVotingMenu_Icon.png",
+    "Assets/Sprites/RulerVotingMenu/UI_RulerVotingMenu_TimerSlider_Filled.png",
+];
+const RULER_VOTE_TIMER_UNFILLED_PATH: &str =
+    "Assets/Sprites/RulerVotingMenu/UI_RulerVotingMenu_TimerSlider_Unfilled.png";
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -716,6 +730,7 @@ struct RenderAssets {
     top_bar_textures: BTreeMap<String, Handle<Image>>,
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
     bottom_bar_textures: BTreeMap<String, Handle<Image>>,
+    vote_textures: BTreeMap<String, Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -864,6 +879,64 @@ enum BottomBarAction {
 
 #[derive(Component)]
 struct BottomBarActionEnabled(bool);
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+enum VotePanelKind {
+    Technology,
+    Ruler,
+}
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+enum VoteTextKind {
+    TechnologyTitle,
+    TechnologyTimer,
+    TechnologyCount,
+    RulerDescription,
+    RulerTimer,
+    RulerOptions,
+}
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+enum VoteFillKind {
+    TechnologyTimer,
+    TechnologyApproval,
+    RulerTimer,
+}
+
+#[derive(Component)]
+struct TechnologyVoteIcon;
+
+#[derive(Component)]
+struct TechnologyVoteCastButton;
+
+#[derive(Component)]
+struct TechnologyVoteCastEnabled(bool);
+
+type TechnologyVoteIconQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut ImageNode,
+    (With<TechnologyVoteIcon>, Without<TechnologyVoteCastButton>),
+>;
+type TechnologyVoteCastQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut TechnologyVoteCastEnabled,
+        &'static mut ImageNode,
+    ),
+    (With<TechnologyVoteCastButton>, Without<TechnologyVoteIcon>),
+>;
+type TechnologyVoteCastInteractionQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static TechnologyVoteCastEnabled,
+        &'static mut ImageNode,
+    ),
+    (Changed<Interaction>, With<TechnologyVoteCastButton>),
+>;
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1429,7 +1502,11 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                update_selection_panel.run_if(in_state(GameState::InGame)),
+                (
+                    update_selection_panel,
+                    update_vote_panels.after(move_agents),
+                )
+                    .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
                 Update,
@@ -1438,6 +1515,7 @@ impl Plugin for StreamTownGamePlugin {
                     bottom_bar_main_buttons,
                     bottom_bar_scroll_buttons,
                     bottom_bar_action_buttons,
+                    technology_vote_cast_button,
                     rebuild_bottom_bar_context,
                     update_bottom_bar_main_visuals,
                 )
@@ -1838,6 +1916,15 @@ fn setup_rendering(
                 .map(|handle| ((*source_path).to_owned(), handle))
         })
         .collect();
+    let vote_textures = VOTE_TEXTURE_PATHS
+        .iter()
+        .copied()
+        .chain(std::iter::once(RULER_VOTE_TIMER_UNFILLED_PATH))
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| (source_path.to_owned(), handle))
+        })
+        .collect();
     let presentation_materials = presentation
         .0
         .materials
@@ -2001,6 +2088,7 @@ fn setup_rendering(
         top_bar_textures,
         selection_panel_textures,
         bottom_bar_textures,
+        vote_textures,
         presentation_materials,
     });
 }
@@ -3329,6 +3417,297 @@ fn bottom_bar_texture(render: &RenderAssets, source_path: &str) -> Handle<Image>
         .unwrap_or_default()
 }
 
+fn vote_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
+    render
+        .vote_textures
+        .get(source_path)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn spawn_vote_track(
+    parent: &mut ChildSpawnerCommands,
+    render: &RenderAssets,
+    fill_kind: VoteFillKind,
+    unfilled_path: &str,
+    filled_path: &str,
+    node: Node,
+) {
+    parent
+        .spawn((
+            ImageNode::new(vote_texture(render, unfilled_path)).with_mode(NodeImageMode::Stretch),
+            node,
+        ))
+        .with_children(|track| {
+            track.spawn((
+                fill_kind,
+                ImageNode::new(vote_texture(render, filled_path)).with_mode(NodeImageMode::Stretch),
+                Node {
+                    width: percent(100.0),
+                    height: percent(100.0),
+                    overflow: Overflow::clip_x(),
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
+    commands
+        .spawn((
+            WorldEntity,
+            VotePanelKind::Technology,
+            Name::new("Technology voting menu"),
+            ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[0])).with_mode(
+                NodeImageMode::Sliced(TextureSlicer {
+                    border: BorderRect::all(44.0),
+                    center_scale_mode: default(),
+                    sides_scale_mode: default(),
+                    max_corner_scale: 1.0,
+                }),
+            ),
+            GlobalZIndex(24),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(126),
+                right: px(24),
+                width: px(420),
+                height: px(280),
+                padding: UiRect::all(px(22)),
+                ..default()
+            },
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                VoteTextKind::TechnologyTitle,
+                Text::new("Town technology vote"),
+                TextFont {
+                    font_size: FontSize::Px(25.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.97, 0.88, 0.58)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(17),
+                    left: px(22),
+                    right: px(22),
+                    ..default()
+                },
+            ));
+            panel.spawn((
+                TechnologyVoteIcon,
+                ImageNode::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(61),
+                    left: px(26),
+                    width: px(82),
+                    height: px(82),
+                    ..default()
+                },
+            ));
+            panel.spawn((
+                VoteTextKind::TechnologyCount,
+                Text::new("0% (0 votes)"),
+                TextFont {
+                    font_size: FontSize::Px(21.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(71),
+                    left: px(126),
+                    right: px(22),
+                    ..default()
+                },
+            ));
+            spawn_vote_track(
+                panel,
+                render,
+                VoteFillKind::TechnologyApproval,
+                VOTE_TEXTURE_PATHS[6],
+                VOTE_TEXTURE_PATHS[5],
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(107),
+                    left: px(126),
+                    width: px(258),
+                    height: px(44),
+                    ..default()
+                },
+            );
+            panel.spawn((
+                ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[3])),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(27),
+                    bottom: px(73),
+                    width: px(32),
+                    height: px(32),
+                    ..default()
+                },
+            ));
+            spawn_vote_track(
+                panel,
+                render,
+                VoteFillKind::TechnologyTimer,
+                VOTE_TEXTURE_PATHS[2],
+                VOTE_TEXTURE_PATHS[1],
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(69),
+                    bottom: px(77),
+                    width: px(254),
+                    height: px(24),
+                    ..default()
+                },
+            );
+            panel.spawn((
+                VoteTextKind::TechnologyTimer,
+                Text::new("00:30"),
+                TextFont {
+                    font_size: FontSize::Px(19.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(24),
+                    bottom: px(74),
+                    ..default()
+                },
+            ));
+            panel
+                .spawn((
+                    TechnologyVoteCastButton,
+                    TechnologyVoteCastEnabled(true),
+                    Button,
+                    ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]))
+                        .with_mode(NodeImageMode::Stretch),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(82),
+                        right: px(82),
+                        bottom: px(16),
+                        height: px(49),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                ))
+                .with_children(|button| {
+                    button.spawn((
+                        ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[4])),
+                        Pickable::IGNORE,
+                        Node {
+                            width: px(27),
+                            height: px(27),
+                            margin: UiRect::right(px(8)),
+                            ..default()
+                        },
+                    ));
+                    button.spawn((
+                        Text::new("VOTE YES"),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                });
+        });
+
+    commands
+        .spawn((
+            WorldEntity,
+            VotePanelKind::Ruler,
+            Name::new("Ruler voting menu"),
+            ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[7]))
+                .with_mode(NodeImageMode::Stretch),
+            GlobalZIndex(24),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(126),
+                left: px(24),
+                width: px(390),
+                height: px(312),
+                padding: UiRect::all(px(24)),
+                ..default()
+            },
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                VoteTextKind::RulerDescription,
+                Text::new("Who should be Ruler?"),
+                TextFont {
+                    font_size: FontSize::Px(25.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.12, 0.10, 0.07)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(25),
+                    left: px(24),
+                    right: px(24),
+                    ..default()
+                },
+            ));
+            panel.spawn((
+                VoteTextKind::RulerOptions,
+                Text::new("Waiting for !vote playername"),
+                TextFont {
+                    font_size: FontSize::Px(19.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.13, 0.11, 0.08)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(77),
+                    left: px(30),
+                    right: px(30),
+                    ..default()
+                },
+            ));
+            spawn_vote_track(
+                panel,
+                render,
+                VoteFillKind::RulerTimer,
+                RULER_VOTE_TIMER_UNFILLED_PATH,
+                VOTE_TEXTURE_PATHS[8],
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(47),
+                    bottom: px(36),
+                    width: px(254),
+                    height: px(28),
+                    ..default()
+                },
+            );
+            panel.spawn((
+                VoteTextKind::RulerTimer,
+                Text::new("02:00"),
+                TextFont {
+                    font_size: FontSize::Px(18.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.12, 0.10, 0.07)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(24),
+                    bottom: px(34),
+                    ..default()
+                },
+            ));
+        });
+}
+
 fn spawn_bottom_bar_button(
     parent: &mut ChildSpawnerCommands,
     render: &RenderAssets,
@@ -3656,6 +4035,7 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         BackgroundColor(Color::srgba(0.035, 0.065, 0.045, 0.35)),
         BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
     ));
+    spawn_vote_panels(commands, render);
 }
 
 fn main_menu_input(
@@ -4503,6 +4883,28 @@ fn generate_and_spawn_world(
             .filter(|(_, technology)| technology.initially_unlocked)
             .map(|(id, _)| id.clone()),
     );
+    if let Ok(smoke_vote) = std::env::var("STREAM_TOWN_SMOKE_VOTE") {
+        match smoke_vote.to_ascii_lowercase().as_str() {
+            "technology" | "tech" => {
+                if let Some(technology) = eligible_technology_ids(&content.0, &simulation)
+                    .into_iter()
+                    .next()
+                {
+                    let _ = simulation
+                        .start_technology_vote(technology, TECHNOLOGY_VOTE_DURATION_SECONDS);
+                }
+            }
+            "ruler" | "election" => {
+                let _ = simulation.start_ruler_vote(RulerVoteKind::NewRuler);
+            }
+            "retention" | "keep" => {
+                simulation.current_ruler =
+                    Some(StableId::new("npc:starting_defender").expect("static smoke ruler ID"));
+                let _ = simulation.start_ruler_vote(RulerVoteKind::KeepRuler);
+            }
+            _ => {}
+        }
+    }
     if let Some(day) = debug_start_day() {
         simulation.elapsed_seconds = f64::from(day) * f64::from(config.0.time.seconds_per_day);
         simulation.tick(0.0, config.0.time.seconds_per_day);
@@ -11200,6 +11602,206 @@ fn update_selection_panel(
     }
 }
 
+fn vote_timer_text(remaining_seconds: f32) -> String {
+    let total = Duration::from_secs_f32(remaining_seconds.max(0.0).ceil()).as_secs();
+    format!("{:02}:{:02}", total / 60, total % 60)
+}
+
+fn technology_vote_tally(simulation: &WorldSimulation) -> Option<(usize, usize, f32)> {
+    let vote = simulation.active_vote.as_ref()?;
+    let approvals = vote.votes.values().filter(|approve| **approve).count();
+    let total = vote.votes.len();
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        let approvals = u16::try_from(approvals).unwrap_or(u16::MAX);
+        let total = u16::try_from(total).unwrap_or(u16::MAX);
+        f32::from(approvals) / f32::from(total)
+    };
+    Some((approvals, total, ratio))
+}
+
+fn ruler_vote_option_text(simulation: &WorldSimulation) -> String {
+    let Some(vote) = simulation.ruler_vote.as_ref() else {
+        return String::new();
+    };
+    let mut options = vote
+        .option_order
+        .iter()
+        .enumerate()
+        .map(|(order, option)| {
+            let count = vote
+                .votes
+                .values()
+                .filter(|selected| *selected == option)
+                .count();
+            (option, count, order)
+        })
+        .collect::<Vec<_>>();
+    options.sort_by_key(|(_, count, order)| (std::cmp::Reverse(*count), *order));
+    let lines = options
+        .into_iter()
+        .take(5)
+        .map(|(option, count, _)| {
+            let label = simulation
+                .actors
+                .get(option)
+                .and_then(|actor| actor.display_name.as_deref())
+                .unwrap_or(option.as_str());
+            format!("!vote {label}  ({count})")
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        match vote.kind {
+            RulerVoteKind::NewRuler => "Waiting for !vote playername".to_owned(),
+            RulerVoteKind::KeepRuler => "!vote yes  (0)\n!vote no  (0)".to_owned(),
+        }
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn update_vote_panels(
+    simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    mut panels: Query<(&VotePanelKind, &mut Visibility)>,
+    mut texts: Query<(&VoteTextKind, &mut Text)>,
+    mut fills: Query<(&VoteFillKind, &mut Node)>,
+    mut technology_icons: TechnologyVoteIconQuery,
+    mut cast_buttons: TechnologyVoteCastQuery,
+) {
+    if !simulation.is_changed() {
+        return;
+    }
+    let technology_visible = simulation.0.active_vote.is_some();
+    let ruler_visible = simulation.0.ruler_vote.is_some();
+    for (kind, mut visibility) in &mut panels {
+        *visibility = match kind {
+            VotePanelKind::Technology if technology_visible => Visibility::Visible,
+            VotePanelKind::Ruler if ruler_visible => Visibility::Visible,
+            _ => Visibility::Hidden,
+        };
+    }
+
+    if let Some(vote) = &simulation.0.active_vote {
+        let technology = content.0.technology.nodes.get(&vote.technology);
+        let (approvals, total, ratio) =
+            technology_vote_tally(&simulation.0).expect("active technology vote has a tally");
+        for (kind, mut text) in &mut texts {
+            text.0 = match kind {
+                VoteTextKind::TechnologyTitle => technology.map_or_else(
+                    || vote.technology.to_string(),
+                    |node| compact_technology_label(&node.display_name).replace('\n', " "),
+                ),
+                VoteTextKind::TechnologyTimer => vote_timer_text(vote.remaining_seconds),
+                VoteTextKind::TechnologyCount => {
+                    format!("{:.0}% ({approvals}/{total} votes)", ratio * 100.0)
+                }
+                _ => continue,
+            };
+        }
+        for (kind, mut node) in &mut fills {
+            match kind {
+                VoteFillKind::TechnologyTimer => {
+                    node.width = percent(
+                        (vote.remaining_seconds / TECHNOLOGY_VOTE_DURATION_SECONDS * 100.0)
+                            .clamp(0.0, 100.0),
+                    );
+                }
+                VoteFillKind::TechnologyApproval => {
+                    node.width = percent((ratio * 100.0).clamp(0.0, 100.0));
+                }
+                VoteFillKind::RulerTimer => {}
+            }
+        }
+        if let Some(icon_path) = technology.map(|node| node.icon_path.as_str())
+            && let Some(handle) =
+                presentation_texture_handle(&presentation.0, asset_server.as_deref(), icon_path)
+        {
+            for mut icon in &mut technology_icons {
+                icon.image = handle.clone();
+            }
+        }
+        let local_actor = local_ui_voter(&simulation.0);
+        let enabled = local_actor
+            .as_ref()
+            .is_some_and(|actor| !vote.votes.contains_key(actor));
+        for (mut state, mut image) in &mut cast_buttons {
+            state.0 = enabled;
+            image.image = bottom_bar_texture(
+                &render,
+                if enabled {
+                    BOTTOM_BAR_TEXTURE_PATHS[0]
+                } else {
+                    BOTTOM_BAR_TEXTURE_PATHS[2]
+                },
+            );
+            image.color = if enabled {
+                Color::WHITE
+            } else {
+                Color::srgb(0.5, 0.5, 0.5)
+            };
+        }
+    }
+
+    if let Some(vote) = &simulation.0.ruler_vote {
+        let description = match vote.kind {
+            RulerVoteKind::NewRuler => "Who should be Ruler?\ntype !vote playername",
+            RulerVoteKind::KeepRuler => "Keep the current Ruler?",
+        };
+        let options = ruler_vote_option_text(&simulation.0);
+        for (kind, mut text) in &mut texts {
+            text.0 = match kind {
+                VoteTextKind::RulerDescription => description.to_owned(),
+                VoteTextKind::RulerTimer => vote_timer_text(vote.remaining_seconds),
+                VoteTextKind::RulerOptions => options.clone(),
+                _ => continue,
+            };
+        }
+        for (kind, mut node) in &mut fills {
+            if *kind == VoteFillKind::RulerTimer {
+                node.width = percent((vote.remaining_seconds / 120.0 * 100.0).clamp(0.0, 100.0));
+            }
+        }
+    }
+}
+
+fn technology_vote_cast_button(
+    simulation: Option<Res<SimulationRuntime>>,
+    mut injected: ResMut<InjectedCommands>,
+    mut buttons: TechnologyVoteCastInteractionQuery,
+) {
+    let technology = simulation.as_deref().and_then(|simulation| {
+        simulation
+            .0
+            .active_vote
+            .as_ref()
+            .map(|vote| vote.technology.clone())
+    });
+    for (interaction, enabled, mut image) in &mut buttons {
+        image.color = if enabled.0 && *interaction == Interaction::Hovered {
+            Color::srgb(1.0, 0.93, 0.72)
+        } else if enabled.0 {
+            Color::WHITE
+        } else {
+            Color::srgb(0.5, 0.5, 0.5)
+        };
+        if *interaction == Interaction::Pressed
+            && enabled.0
+            && let Some(technology) = &technology
+            && let Some(simulation) = simulation.as_deref()
+        {
+            injected.0.push_back(local_ui_vote_command(
+                &simulation.0,
+                ChatCommand::Vote(technology.clone()),
+            ));
+        }
+    }
+}
+
 fn selection_panel_details(
     cell: GridPos,
     content: &ContentCatalog,
@@ -11405,6 +12007,30 @@ fn local_ui_command(command: ChatCommand) -> PendingChatCommand {
         is_subscriber: false,
         origin: CommandOrigin::LocalUi,
     }
+}
+
+fn local_ui_voter(simulation: &WorldSimulation) -> Option<StableId> {
+    let starting_builder = StableId::new("npc:starting_builder").expect("static local UI actor ID");
+    simulation
+        .actors
+        .contains_key(&starting_builder)
+        .then_some(starting_builder)
+        .or_else(|| {
+            simulation
+                .actors
+                .values()
+                .filter(|actor| actor.role.as_str() != "role:enemy" && actor.alive)
+                .map(|actor| actor.id.clone())
+                .min()
+        })
+}
+
+fn local_ui_vote_command(simulation: &WorldSimulation, command: ChatCommand) -> PendingChatCommand {
+    let mut pending = local_ui_command(command);
+    if let Some(voter) = local_ui_voter(simulation) {
+        pending.actor_id = voter;
+    }
+    pending
 }
 
 fn bottom_bar_entries(
@@ -14649,7 +15275,10 @@ fn process_injected_commands(
                         return Err("another technology vote is active".to_owned());
                     }
                 if simulation.0.active_vote.is_none() {
-                    let _ = simulation.0.start_technology_vote(technology.clone(), 30.0);
+                    let _ = simulation.0.start_technology_vote(
+                        technology.clone(),
+                        TECHNOLOGY_VOTE_DURATION_SECONDS,
+                    );
                 }
                     simulation
                         .0
@@ -18846,6 +19475,93 @@ mod tests {
         assert!(!pointer_is_over_button([Interaction::None].iter()));
         assert!(pointer_is_over_button([Interaction::Hovered].iter()));
         assert!(pointer_is_over_button([Interaction::Pressed].iter()));
+    }
+
+    #[test]
+    fn shipping_vote_panels_preserve_art_timers_and_deterministic_tallies() {
+        let presentation = embedded_presentation();
+        for source_path in VOTE_TEXTURE_PATHS
+            .into_iter()
+            .chain(std::iter::once(RULER_VOTE_TIMER_UNFILLED_PATH))
+        {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing vote texture {source_path}"
+            );
+        }
+        assert_eq!(vote_timer_text(0.0), "00:00");
+        assert_eq!(vote_timer_text(30.01), "00:31");
+        assert_eq!(vote_timer_text(120.0), "02:00");
+        assert!((TECHNOLOGY_VOTE_DURATION_SECONDS - 60.0).abs() <= f32::EPSILON);
+
+        let mut simulation = WorldSimulation::new(17);
+        let first = StableId::new("viewer:first").unwrap();
+        let second = StableId::new("viewer:second").unwrap();
+        simulation.join_player(first.clone(), GridPos { x: 1, z: 1 });
+        simulation.join_player(second.clone(), GridPos { x: 2, z: 2 });
+        simulation
+            .start_technology_vote(StableId::new("tech:test_vote").unwrap(), 30.0)
+            .unwrap();
+        simulation.cast_vote(&first, true).unwrap();
+        simulation.cast_vote(&second, false).unwrap();
+        assert_eq!(technology_vote_tally(&simulation), Some((1, 2, 0.5)));
+
+        simulation.active_vote = None;
+        simulation
+            .start_ruler_vote(RulerVoteKind::NewRuler)
+            .unwrap();
+        simulation.cast_ruler_vote(&first, second.clone()).unwrap();
+        simulation.actors.get_mut(&second).unwrap().display_name = Some("Second Viewer".to_owned());
+        assert_eq!(
+            ruler_vote_option_text(&simulation),
+            "!vote Second Viewer  (1)"
+        );
+    }
+
+    #[test]
+    fn technology_vote_button_dispatches_through_the_typed_command_queue() {
+        let technology = StableId::new("tech:test_vote").unwrap();
+        let mut simulation = WorldSimulation::new(17);
+        simulation
+            .start_technology_vote(technology.clone(), 30.0)
+            .unwrap();
+        let mut app = App::new();
+        app.insert_resource(SimulationRuntime(simulation))
+            .init_resource::<InjectedCommands>()
+            .add_systems(Update, technology_vote_cast_button);
+        app.world_mut().spawn((
+            Interaction::Pressed,
+            TechnologyVoteCastButton,
+            TechnologyVoteCastEnabled(true),
+            ImageNode::default(),
+        ));
+
+        app.update();
+
+        let queue = app.world().resource::<InjectedCommands>();
+        let command = queue.0.front().expect("vote button dispatches one command");
+        assert_eq!(command.actor_id.as_str(), "npc:starting_builder");
+        assert_eq!(command.command, ChatCommand::Vote(technology));
+    }
+
+    #[test]
+    fn local_vote_falls_back_to_a_live_non_enemy_actor() {
+        let mut simulation = WorldSimulation::new(17);
+        let enemy = StableId::new("actor:enemy").unwrap();
+        let viewer = StableId::new("actor:viewer").unwrap();
+        simulation.join_player(enemy.clone(), GridPos { x: 1, z: 1 });
+        simulation.join_player(viewer.clone(), GridPos { x: 2, z: 2 });
+        simulation.actors.get_mut(&enemy).unwrap().role = StableId::new("role:enemy").unwrap();
+        assert_eq!(local_ui_voter(&simulation), Some(viewer.clone()));
+        let pending = local_ui_vote_command(
+            &simulation,
+            ChatCommand::Vote(StableId::new("tech:test_vote").unwrap()),
+        );
+        assert_eq!(pending.actor_id, viewer);
+        assert_eq!(pending.origin, CommandOrigin::LocalUi);
     }
 
     #[test]
