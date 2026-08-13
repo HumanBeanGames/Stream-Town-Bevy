@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786613743.803063,
-    "ast_hash": "b04f6dfd532353810423b203c0abd1cc",
+    "mtime": 1786615000.4018955,
+    "ast_hash": "48abc5468f0bc5cb6afe9cba0ab24787",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -4447,6 +4447,11 @@
   "graphify-out/memory/query_20260813_092627_worldsnapshot_validate_snapshot_stable_id_duplicat.md": {
     "mtime": 1786613187.6947303,
     "ast_hash": "dce5aef5b65165e3d849ceb27337dad8",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_094114_shipping_role_station_behavior_town_hall_saved_pos.md": {
+    "mtime": 1786614074.9128664,
+    "ast_hash": "d3303eae6403ae06e405172e732b94ec",
     "semantic_hash": ""
   }
 }

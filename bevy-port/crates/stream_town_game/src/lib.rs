@@ -61,6 +61,9 @@ const MAX_TOWN_GOALS: usize = 2;
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
+// Player_Character.prefab authors 100 Unity world units for both its target
+// and builder-resource sensors. Shipping terrain uses two units per cell.
+const PLAYER_TARGET_SEARCH_RANGE_CELLS: u16 = 50;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 const BUILDING_PLACEMENT_SUCCESS_COLOR: [f32; 3] = [0.242_250_26, 0.896_226_4, 0.054_957_304];
 const BUILDING_PLACEMENT_FAIL_COLOR: [f32; 3] = [0.933_962_3, 0.0, 0.0];
@@ -6848,7 +6851,7 @@ fn best_station_id(
         })
         .min_by_key(|station| {
             (
-                station.position.x.abs_diff(from.x) + station.position.z.abs_diff(from.z),
+                grid_distance_squared(station.position, from),
                 station.id.clone(),
             )
         })
@@ -6889,9 +6892,21 @@ fn station_search_range_cells(station: StationCandidate<'_>) -> u16 {
     u16::try_from(station.definition.search_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
 }
 
-fn within_station_range(position: GridPos, station: StationCandidate<'_>) -> bool {
-    position.x.abs_diff(station.position.x) + position.z.abs_diff(station.position.z)
-        <= station_search_range_cells(station)
+fn grid_distance_squared(left: GridPos, right: GridPos) -> u64 {
+    let x = u64::from(left.x.abs_diff(right.x));
+    let z = u64::from(left.z.abs_diff(right.z));
+    x * x + z * z
+}
+
+fn within_station_search_region(position: GridPos, station: StationCandidate<'_>) -> bool {
+    let range = station_search_range_cells(station);
+    position.x.abs_diff(station.position.x) <= range
+        && position.z.abs_diff(station.position.z) <= range
+}
+
+fn within_player_target_search_region(position: GridPos, player: GridPos) -> bool {
+    position.x.abs_diff(player.x) <= PLAYER_TARGET_SEARCH_RANGE_CELLS
+        && position.z.abs_diff(player.z) <= PLAYER_TARGET_SEARCH_RANGE_CELLS
 }
 
 fn building_def_for_archetype<'a>(
@@ -7131,9 +7146,6 @@ fn next_agent_goal_with_reservations(
             .get(preferred)
             .filter(|target| target.alive && target.role.as_str() == "role:enemy")
             .filter(|_| is_combat_role(&actor.role))
-            .filter(|target| {
-                station.is_none_or(|station| within_station_range(target.position, station))
-            })
         {
             let distance =
                 target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
@@ -7155,9 +7167,6 @@ fn next_agent_goal_with_reservations(
                     && target.health < target.max_health
             })
             .filter(|_| is_healer_role(&actor.role))
-            .filter(|target| {
-                station.is_none_or(|station| within_station_range(target.position, station))
-            })
         {
             let distance =
                 target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
@@ -7178,9 +7187,6 @@ fn next_agent_goal_with_reservations(
             .filter(|resource| actor_accepts_resource(content, actor, resource))
             .filter(|_| actor_remaining_carry_capacity(content, simulation, actor) > 0)
             .filter(|_| actor_resource_storage_has_room(config, content, simulation, actor))
-            .filter(|resource| {
-                station.is_none_or(|station| within_station_range(resource.position, station))
-            })
             && let Some(approach) = resource_approach(world, resource, current)
         {
             return (AgentGoal::Gather(resource.id.clone()), approach);
@@ -7200,9 +7206,6 @@ fn next_agent_goal_with_reservations(
             })
             .filter(|_| actor_remaining_carry_capacity(content, simulation, actor) > 0)
             .filter(|_| actor_resource_storage_has_room(config, content, simulation, actor))
-            .filter(|building| {
-                station.is_none_or(|station| within_station_range(building.position, station))
-            })
             && let Some(definition) = building_def_for_archetype(content, &building.archetype)
             && let Some(approach) = building_approach(
                 world,
@@ -7213,18 +7216,10 @@ fn next_agent_goal_with_reservations(
         {
             return (AgentGoal::HarvestFarm(building.id.clone()), approach);
         }
-        if let Some(building) = simulation
-            .buildings
-            .get(preferred)
-            .filter(|building| {
-                actor.role.as_str() == "role:builder"
-                    && (!building.complete
-                        || building.health < building_max_health(content, building))
-            })
-            .filter(|building| {
-                station.is_none_or(|station| within_station_range(building.position, station))
-            })
-            && let Some(definition) = building_def_for_archetype(content, &building.archetype)
+        if let Some(building) = simulation.buildings.get(preferred).filter(|building| {
+            actor.role.as_str() == "role:builder"
+                && (!building.complete || building.health < building_max_health(content, building))
+        }) && let Some(definition) = building_def_for_archetype(content, &building.archetype)
             && let Some(approach) = building_approach(
                 world,
                 building.position,
@@ -7236,7 +7231,7 @@ fn next_agent_goal_with_reservations(
         }
     }
     if is_healer_role(&actor.role) {
-        let mut candidates: Vec<_> = simulation
+        let candidates: Vec<_> = simulation
             .actors
             .values()
             .filter(|target| {
@@ -7245,23 +7240,11 @@ fn next_agent_goal_with_reservations(
                     && target.role.as_str() != "role:enemy"
                     && target.health < target.max_health
             })
-            .filter(|target| {
-                station.is_none_or(|station| within_station_range(target.position, station))
-            })
+            .filter(|target| within_player_target_search_region(target.position, current))
             .collect();
-        if let Some(station) = station {
-            candidates.sort_by_key(|target| {
-                (
-                    target.position.x.abs_diff(station.position.x)
-                        + target.position.z.abs_diff(station.position.z),
-                    target.id.clone(),
-                )
-            });
-            candidates.truncate(usize::from(station.definition.max_targets));
-        }
         if let Some(target) = candidates.into_iter().min_by_key(|target| {
             (
-                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
+                grid_distance_squared(target.position, current),
                 target.id.clone(),
             )
         }) {
@@ -7359,30 +7342,17 @@ fn next_agent_goal_with_reservations(
         }
     }
     let combat_target = if is_combat_role(&actor.role) {
-        let mut candidates: Vec<_> = simulation
+        simulation
             .actors
             .values()
             .filter(|target| target.alive && target.role.as_str() == "role:enemy")
-            .filter(|target| {
-                station.is_none_or(|station| within_station_range(target.position, station))
-            })
-            .collect();
-        if let Some(station) = station {
-            candidates.sort_by_key(|target| {
+            .filter(|target| within_player_target_search_region(target.position, current))
+            .min_by_key(|target| {
                 (
-                    target.position.x.abs_diff(station.position.x)
-                        + target.position.z.abs_diff(station.position.z),
+                    grid_distance_squared(target.position, current),
                     target.id.clone(),
                 )
-            });
-            candidates.truncate(usize::from(station.definition.max_targets));
-        }
-        candidates.into_iter().min_by_key(|target| {
-            (
-                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z),
-                target.id.clone(),
-            )
-        })
+            })
     } else {
         None
     };
@@ -7397,14 +7367,14 @@ fn next_agent_goal_with_reservations(
         return (AgentGoal::Attack(target.id.clone()), destination);
     }
     if actor.role.as_str() == "role:builder" {
-        let mut candidates: Vec<_> = simulation
+        let candidates: Vec<_> = simulation
             .buildings
             .values()
             .filter(|building| {
                 !building.complete || building.health < building_max_health(content, building)
             })
             .filter(|building| {
-                station.is_none_or(|station| within_station_range(building.position, station))
+                within_player_target_search_region(building_visual_grid(content, building), current)
             })
             .filter_map(|building| {
                 let definition = building_def_for_archetype(content, &building.archetype)?;
@@ -7415,24 +7385,16 @@ fn next_agent_goal_with_reservations(
                     current,
                 )?;
                 Some((
-                    station.map_or(0, |station| {
-                        building.position.x.abs_diff(station.position.x)
-                            + building.position.z.abs_diff(station.position.z)
-                    }),
-                    approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
+                    grid_distance_squared(building_visual_grid(content, building), current),
                     building.id.clone(),
                     approach,
                 ))
             })
             .collect();
-        if let Some(station) = station {
-            candidates.sort_by_key(|(station_distance, _, id, _)| (*station_distance, id.clone()));
-            candidates.truncate(usize::from(station.definition.max_targets));
-        }
         let construction = candidates
             .into_iter()
-            .min_by_key(|(_, distance, id, _)| (*distance, id.clone()));
-        if let Some((_, _, building, approach)) = construction {
+            .min_by_key(|(distance, id, _)| (*distance, id.clone()));
+        if let Some((_, building, approach)) = construction {
             return (AgentGoal::Construct(building), approach);
         }
     }
@@ -7462,7 +7424,9 @@ fn next_agent_goal_with_reservations(
             .filter(|building| is_farm_resource_building(content, building))
             .filter(|building| reservation_available(reservations, actor_id, &building.id))
             .filter(|building| {
-                station.is_none_or(|station| within_station_range(building.position, station))
+                station.is_none_or(|station| {
+                    within_station_search_region(building_visual_grid(content, building), station)
+                })
             })
             .filter_map(|building| {
                 let definition = building_def_for_archetype(content, &building.archetype)?;
@@ -7474,8 +7438,10 @@ fn next_agent_goal_with_reservations(
                 )?;
                 Some((
                     station.map_or(0, |station| {
-                        building.position.x.abs_diff(station.position.x)
-                            + building.position.z.abs_diff(station.position.z)
+                        grid_distance_squared(
+                            building_visual_grid(content, building),
+                            station.position,
+                        )
                     }),
                     approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
                     building.id.clone(),
@@ -7501,31 +7467,20 @@ fn next_agent_goal_with_reservations(
             resource.kind == resource_kind
                 && resource.amount > 0
                 && actor_accepts_resource(content, actor, resource)
-                && reservation_available(reservations, actor_id, &resource.id)
-        })
-        .filter(|resource| {
-            station.is_none_or(|station| within_station_range(resource.position, station))
         })
         .collect();
-    if let Some(station) = station {
-        resources.sort_by_key(|resource| {
-            (
-                resource.position.x.abs_diff(station.position.x)
-                    + resource.position.z.abs_diff(station.position.z),
-                resource.position.z,
-                resource.position.x,
-            )
-        });
-        resources.truncate(usize::from(station.definition.max_targets));
-    }
-    let resource = resources.into_iter().min_by_key(|resource| {
+    resources.sort_by_key(|resource| {
         (
-            resource.position.x.abs_diff(current.x) + resource.position.z.abs_diff(current.z),
+            grid_distance_squared(resource.position, current),
             resource.position.z,
             resource.position.x,
+            resource.id.clone(),
         )
     });
-    resource
+    resources.truncate(20);
+    resources
+        .into_iter()
+        .find(|resource| reservation_available(reservations, actor_id, &resource.id))
         .and_then(|resource| {
             resource_approach(world, resource, current)
                 .map(|approach| (AgentGoal::Gather(resource.id.clone()), approach))
@@ -19105,6 +19060,111 @@ mod tests {
     }
 
     #[test]
+    fn station_search_matches_unity_broad_phase_and_distance_ranking() {
+        let content = embedded_content();
+        let station_id = StableId::new("building:lumbermill").unwrap();
+        let definition = content.buildings[&station_id].station.as_ref().unwrap();
+        let station = StationCandidate {
+            id: &station_id,
+            position: GridPos { x: 100, z: 100 },
+            definition,
+        };
+        let range = station_search_range_cells(station);
+
+        // Unity's cell-space broad phase queries an axis-aligned rectangle,
+        // so a diagonal target at both authored extents remains eligible.
+        assert!(within_station_search_region(
+            GridPos {
+                x: station.position.x + range,
+                z: station.position.z + range,
+            },
+            station,
+        ));
+        assert!(!within_station_search_region(
+            GridPos {
+                x: station.position.x + range + 1,
+                z: station.position.z,
+            },
+            station,
+        ));
+
+        // Unity then ranks cached targets using Vector3.SqrMagnitude. The
+        // diagonal target is closer even though its Manhattan sum is larger.
+        let axis = GridPos { x: 100, z: 106 };
+        let diagonal = GridPos { x: 104, z: 104 };
+        assert!(
+            grid_distance_squared(diagonal, station.position)
+                < grid_distance_squared(axis, station.position)
+        );
+        assert!(
+            diagonal.x.abs_diff(station.position.x) + diagonal.z.abs_diff(station.position.z)
+                > axis.x.abs_diff(station.position.x) + axis.z.abs_diff(station.position.z)
+        );
+    }
+
+    #[test]
+    fn combat_and_healing_bypass_station_target_caches() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let tower_id = StableId::new("building:target_sensor_tower").unwrap();
+        let tower = &content.buildings[&StableId::new("building:tower").unwrap()];
+        let tower_state = BuildingState {
+            id: tower_id.clone(),
+            archetype: tower.archetype.clone(),
+            position: GridPos { x: 1, z: 1 },
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: BUILDING_MAX_HEALTH,
+            complete: true,
+        };
+        let current = GridPos { x: 30, z: 30 };
+
+        let defender = StableId::new("npc:target_sensor_defender").unwrap();
+        let axis_enemy = StableId::new("actor:target_sensor_axis_enemy").unwrap();
+        let diagonal_enemy = StableId::new("actor:target_sensor_diagonal_enemy").unwrap();
+        let mut combat = WorldSimulation::new(world.seed);
+        assert!(combat.join_player(defender.clone(), current));
+        assert!(combat.join_player(axis_enemy.clone(), GridPos { x: 30, z: 36 }));
+        assert!(combat.join_player(diagonal_enemy.clone(), GridPos { x: 34, z: 34 }));
+        combat
+            .assign_role(&defender, StableId::new("role:defender").unwrap())
+            .unwrap();
+        for enemy in [&axis_enemy, &diagonal_enemy] {
+            combat
+                .assign_role(enemy, StableId::new("role:enemy").unwrap())
+                .unwrap();
+        }
+        combat
+            .buildings
+            .insert(tower_id.clone(), tower_state.clone());
+        combat.actors.get_mut(&defender).unwrap().station = Some(tower_id.clone());
+        assert!(assigned_station(&content, &combat, &config, &combat.actors[&defender]).is_some());
+        assert_eq!(
+            next_agent_goal(&combat, &world, &config, &content, &defender, current).0,
+            AgentGoal::Attack(diagonal_enemy)
+        );
+
+        let priest = StableId::new("npc:target_sensor_priest").unwrap();
+        let patient = StableId::new("npc:target_sensor_patient").unwrap();
+        let patient_position = GridPos { x: 35, z: 35 };
+        let mut healing = WorldSimulation::new(world.seed);
+        assert!(healing.join_player(priest.clone(), current));
+        assert!(healing.join_player(patient.clone(), patient_position));
+        healing
+            .assign_role(&priest, StableId::new("role:priest").unwrap())
+            .unwrap();
+        healing.damage_actor(&patient, 20).unwrap();
+        healing.buildings.insert(tower_id.clone(), tower_state);
+        healing.actors.get_mut(&priest).unwrap().station = Some(tower_id);
+        assert!(assigned_station(&content, &healing, &config, &healing.actors[&priest]).is_some());
+        assert_eq!(
+            next_agent_goal(&healing, &world, &config, &content, &priest, current).0,
+            AgentGoal::Heal(patient)
+        );
+    }
+
+    #[test]
     fn equipment_visibility_matches_role_and_carry_state() {
         let content = embedded_content();
         let logger = content.roles[&StableId::new("role:logger").unwrap()]
@@ -19735,6 +19795,63 @@ mod tests {
             &second,
             &claimed.id
         ));
+    }
+
+    #[test]
+    fn generated_resource_claims_only_consider_unitys_twenty_closest() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        world.resources.clear();
+        let current = GridPos { x: 20, z: 20 };
+        for offset in 1..=21_u16 {
+            world.resources.push(stream_town_domain::GeneratedResource {
+                id: StableId::new(format!("resource:target_window_{offset:02}")).unwrap(),
+                kind: StableId::new("resource:wood").unwrap(),
+                target_kind: StableId::new("target:tree").unwrap(),
+                position: GridPos {
+                    x: current.x + offset,
+                    z: current.z,
+                },
+                amount: 100,
+            });
+        }
+        let actor_id = StableId::new("npc:target_window_logger").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), current));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:logger").unwrap())
+            .unwrap();
+        let reservations: BTreeMap<_, _> = world
+            .resources
+            .iter()
+            .take(20)
+            .map(|resource| {
+                (
+                    resource.id.clone(),
+                    StableId::new(format!(
+                        "npc:claim_{}",
+                        resource.id.as_str().replace(':', "_")
+                    ))
+                    .unwrap(),
+                )
+            })
+            .collect();
+
+        assert!(matches!(
+            next_agent_goal_with_reservations(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &actor_id,
+                current,
+                &reservations,
+            )
+            .0,
+            AgentGoal::Wander
+        ));
+        assert!(world.resources[20].id.as_str().ends_with("21"));
     }
 
     #[test]
