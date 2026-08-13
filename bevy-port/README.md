@@ -365,7 +365,12 @@ upgrades are visibly disabled and cannot dispatch.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that
-blend to the deterministic replacement terrain generator. A second PBR
+blend to the deterministic replacement terrain generator. Its render and Avian
+collision surfaces are partitioned into deterministic 16×16-cell chunks with
+duplicated, bit-identical seam vertices, allowing frustum culling and localized
+spatial queries without changing navigation, terrain heights, or world/save
+hashes. Schema-1 saves with an explicit Unity terrain mesh retain that mesh as
+one exact legacy surface. A second PBR
 extension ports the reachable water material's shallow/deep colors, animated
 dual-noise wind, foam controls, transparency, and winter ice pattern. A
 terrain-matched 6,561-vertex water mesh carries deterministic depth into the

@@ -362,7 +362,12 @@ mistaken for production-ready systems.
   converted `Env_Terrain` palette, noise texture, texture scale, blend height,
   and tint controls. Its shoreline-height transition is anchored to Bevy's
   configured waterline so the authored look remains meaningful on the
-  deterministic replacement terrain, and season tint stays live.
+  deterministic replacement terrain, and season tint stays live. Generated
+  terrain now spawns as deterministic 16×16-cell render/collider chunks with
+  bit-identical shared seams and complete cell/triangle coverage, while the
+  authoritative height/navigation grid and save hashes remain unchanged.
+  Explicit schema-1 Unity terrain meshes still reload as one exact retained
+  surface rather than being resampled.
 - A separate PBR water extension consumes `Env_Water`'s shallow/deep, foam,
   wind, noise, alpha, and ice controls. Its WGSL port animates both authored
   noise textures and restores Unity's winter ice toggle while preserving live

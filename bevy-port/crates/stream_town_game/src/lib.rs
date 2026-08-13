@@ -73,6 +73,7 @@ const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
 const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const CHIMNEY_ALPHA_STEPS: usize = 8;
+const TERRAIN_CHUNK_CELLS: u16 = 16;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
 const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.glb";
@@ -7716,17 +7717,19 @@ fn generate_and_spawn_world(
         f32::from(config.0.world.height) * config.0.world.cell_size,
     );
     if let Some(meshes) = meshes.as_deref_mut() {
-        let terrain_mesh = generated_terrain_mesh(&generated, &config.0);
-        let terrain_collider = Collider::trimesh_from_mesh(&terrain_mesh)
-            .expect("generated terrain mesh has indexed triangle geometry");
-        commands.spawn((
-            WorldEntity,
-            TerrainSurface,
-            Mesh3d(meshes.add(terrain_mesh)),
-            MeshMaterial3d(render.ground.clone()),
-            terrain_collider,
-            RigidBody::Static,
-        ));
+        for (chunk_x, chunk_z, terrain_mesh) in generated_terrain_chunks(&generated, &config.0) {
+            let terrain_collider = Collider::trimesh_from_mesh(&terrain_mesh)
+                .expect("generated terrain chunk has indexed triangle geometry");
+            commands.spawn((
+                WorldEntity,
+                TerrainSurface,
+                Name::new(format!("TerrainChunk_{chunk_x}_{chunk_z}")),
+                Mesh3d(meshes.add(terrain_mesh)),
+                MeshMaterial3d(render.ground.clone()),
+                terrain_collider,
+                RigidBody::Static,
+            ));
+        }
     } else {
         commands.spawn((
             WorldEntity,
@@ -19594,9 +19597,9 @@ fn load_input(
     }
 
     let terrain_replacement = if let Some(meshes) = load_render.meshes.as_mut() {
-        let mesh = match snapshot.legacy_terrain_mesh.as_ref() {
+        let terrain_meshes = match snapshot.legacy_terrain_mesh.as_ref() {
             Some(saved) => match retained_terrain_mesh(saved) {
-                Ok(mesh) => mesh,
+                Ok(mesh) => vec![("TerrainLegacy".to_owned(), mesh)],
                 Err(error) => {
                     runtime_console.last_result = format!(
                         "Load failed: retained terrain could not be reconstructed: {error}"
@@ -19605,15 +19608,22 @@ fn load_input(
                     return;
                 }
             },
-            None => generated_terrain_mesh(&restored_world, &restored_config),
+            None => generated_terrain_chunks(&restored_world, &restored_config)
+                .into_iter()
+                .map(|(chunk_x, chunk_z, mesh)| (format!("TerrainChunk_{chunk_x}_{chunk_z}"), mesh))
+                .collect(),
         };
-        let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
-            "Load failed: saved terrain does not produce a valid collider"
-                .clone_into(&mut runtime_console.last_result);
-            error!("native save terrain does not produce a valid triangle collider");
-            return;
-        };
-        Some((meshes.add(mesh), collider))
+        let mut replacements = Vec::with_capacity(terrain_meshes.len());
+        for (name, mesh) in terrain_meshes {
+            let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
+                "Load failed: saved terrain does not produce a valid collider"
+                    .clone_into(&mut runtime_console.last_result);
+                error!("native save terrain does not produce a valid triangle collider");
+                return;
+            };
+            replacements.push((name, meshes.add(mesh), collider));
+        }
+        Some(replacements)
     } else {
         if snapshot.legacy_terrain_mesh.is_some() {
             "Load failed: retained terrain requires rendering assets"
@@ -19682,18 +19692,21 @@ fn load_input(
             camp.position,
         );
     }
-    if let Some((mesh, collider)) = terrain_replacement {
+    if let Some(replacements) = terrain_replacement {
         for entity in &load_render.terrain_surfaces {
             ecs.entity(entity).despawn();
         }
-        ecs.spawn((
-            WorldEntity,
-            TerrainSurface,
-            Mesh3d(mesh),
-            MeshMaterial3d(load_render.render.ground.clone()),
-            collider,
-            RigidBody::Static,
-        ));
+        for (name, mesh, collider) in replacements {
+            ecs.spawn((
+                WorldEntity,
+                TerrainSurface,
+                Name::new(name),
+                Mesh3d(mesh),
+                MeshMaterial3d(load_render.render.ground.clone()),
+                collider,
+                RigidBody::Static,
+            ));
+        }
     }
     let town_hall_id = StableId::new("building:townhall").expect("static ID");
     let saved_town_hall = &snapshot.simulation.buildings[&town_hall_id];
@@ -24394,32 +24407,73 @@ fn shoreline_focus(world: &GeneratedWorld, config: &GameConfig) -> Vec3 {
     boundary + inward * config.world.cell_size * 2.5
 }
 
-fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
+fn generated_terrain_chunks(world: &GeneratedWorld, config: &GameConfig) -> Vec<(u16, u16, Mesh)> {
     let width = world.navigation.width();
     let height = world.navigation.height();
-    let columns = u32::from(width) + 1;
-    let mut positions = Vec::with_capacity(usize::from(width + 1) * usize::from(height + 1));
+    (0..height.div_ceil(TERRAIN_CHUNK_CELLS))
+        .flat_map(|chunk_z| {
+            (0..width.div_ceil(TERRAIN_CHUNK_CELLS)).map(move |chunk_x| {
+                let start_x = chunk_x * TERRAIN_CHUNK_CELLS;
+                let start_z = chunk_z * TERRAIN_CHUNK_CELLS;
+                let cells_x = (width - start_x).min(TERRAIN_CHUNK_CELLS);
+                let cells_z = (height - start_z).min(TERRAIN_CHUNK_CELLS);
+                (
+                    chunk_x,
+                    chunk_z,
+                    generated_terrain_chunk_mesh(world, config, start_x, start_z, cells_x, cells_z),
+                )
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
+    generated_terrain_chunk_mesh(
+        world,
+        config,
+        0,
+        0,
+        world.navigation.width(),
+        world.navigation.height(),
+    )
+}
+
+fn generated_terrain_chunk_mesh(
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    start_x: u16,
+    start_z: u16,
+    cells_x: u16,
+    cells_z: u16,
+) -> Mesh {
+    let world_width = world.navigation.width();
+    let world_height = world.navigation.height();
+    let columns = u32::from(cells_x) + 1;
+    let mut positions = Vec::with_capacity(usize::from(cells_x + 1) * usize::from(cells_z + 1));
     let mut colors = Vec::with_capacity(positions.capacity());
     let mut uvs = Vec::with_capacity(positions.capacity());
-    for z in 0..=height {
-        for x in 0..=width {
+    for local_z in 0..=cells_z {
+        for local_x in 0..=cells_x {
+            let x = start_x + local_x;
+            let z = start_z + local_z;
             let elevation = terrain_corner_height(world, x, z);
             positions.push([
-                (f32::from(x) - f32::from(width) * 0.5) * config.world.cell_size,
+                (f32::from(x) - f32::from(world_width) * 0.5) * config.world.cell_size,
                 elevation,
-                (f32::from(z) - f32::from(height) * 0.5) * config.world.cell_size,
+                (f32::from(z) - f32::from(world_height) * 0.5) * config.world.cell_size,
             ]);
             colors.push(terrain_vertex_color(elevation, config));
             uvs.push([
-                f32::from(x) / f32::from(width),
-                f32::from(z) / f32::from(height),
+                f32::from(x) / f32::from(world_width),
+                f32::from(z) / f32::from(world_height),
             ]);
         }
     }
 
-    let mut indices = Vec::with_capacity(usize::from(width) * usize::from(height) * 6);
-    for z in 0..u32::from(height) {
-        for x in 0..u32::from(width) {
+    let mut indices = Vec::with_capacity(usize::from(cells_x) * usize::from(cells_z) * 6);
+    for z in 0..u32::from(cells_z) {
+        for x in 0..u32::from(cells_x) {
             let top_left = z * columns + x;
             let top_right = top_left + 1;
             let bottom_left = top_left + columns;
@@ -29519,6 +29573,63 @@ mod tests {
         );
         assert!(depth_colors.iter().any(|color| color[0] == 0.0));
         assert!(depth_colors.iter().any(|color| color[0] > 0.0));
+    }
+
+    #[test]
+    fn generated_terrain_chunks_cover_the_grid_with_watertight_seams() {
+        let config = GameConfig::default();
+        let world = generate_world(&config.world);
+        let chunks = generated_terrain_chunks(&world, &config);
+        assert_eq!(chunks.len(), 16);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|(_, _, mesh)| mesh.indices().unwrap().len())
+                .sum::<usize>(),
+            64 * 64 * 6
+        );
+        assert!(chunks.iter().all(|(_, _, mesh)| {
+            mesh.count_vertices() == 17 * 17 && Collider::trimesh_from_mesh(mesh).is_some()
+        }));
+
+        let positions = |chunk_x: u16, chunk_z: u16| {
+            let (_, _, mesh) = chunks
+                .iter()
+                .find(|(x, z, _)| *x == chunk_x && *z == chunk_z)
+                .unwrap();
+            let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
+                mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+            else {
+                panic!("terrain positions must use float triples");
+            };
+            positions.clone()
+        };
+        let left = positions(0, 0);
+        let right = positions(1, 0);
+        for row in 0..=usize::from(TERRAIN_CHUNK_CELLS) {
+            let left_seam = left[row * 17 + usize::from(TERRAIN_CHUNK_CELLS)];
+            let right_seam = right[row * 17];
+            assert!(
+                left_seam
+                    .into_iter()
+                    .zip(right_seam)
+                    .all(|(left, right)| { (left - right).abs() <= f32::EPSILON })
+            );
+        }
+
+        let mut uneven = config.clone();
+        uneven.world.width = 35;
+        uneven.world.height = 19;
+        let uneven_world = generate_world(&uneven.world);
+        let uneven_chunks = generated_terrain_chunks(&uneven_world, &uneven);
+        assert_eq!(uneven_chunks.len(), 6);
+        assert_eq!(
+            uneven_chunks
+                .iter()
+                .map(|(_, _, mesh)| mesh.indices().unwrap().len())
+                .sum::<usize>(),
+            35 * 19 * 6
+        );
     }
 
     #[test]
