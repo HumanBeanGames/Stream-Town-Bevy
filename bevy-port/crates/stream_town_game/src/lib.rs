@@ -1220,6 +1220,17 @@ struct ActorNameOverlay {
 }
 
 #[derive(Component)]
+struct ActorHealthOverlay {
+    actor: StableId,
+    last_health: i32,
+    was_damaged: bool,
+    hide_remaining_seconds: f32,
+}
+
+#[derive(Component)]
+struct ActorHealthFill;
+
+#[derive(Component)]
 struct BuildingHealthOverlay {
     building: StableId,
 }
@@ -1930,7 +1941,11 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                (sync_actor_name_overlays, sync_building_health_overlays)
+                (
+                    sync_actor_name_overlays,
+                    sync_actor_health_overlays,
+                    sync_building_health_overlays,
+                )
                     .chain()
                     .after(move_agents)
                     .run_if(in_state(GameState::InGame)),
@@ -21004,6 +21019,173 @@ fn sync_actor_name_overlays(
     }
 }
 
+fn actor_health_bar_hide_seconds(content: &ContentCatalog, actor: &ActorState) -> Option<f32> {
+    actor_archetype(content, actor)?
+        .health_bar_hide_milliseconds
+        .map(|milliseconds| Duration::from_millis(u64::from(milliseconds)).as_secs_f32())
+}
+
+fn update_actor_health_overlay_timer(
+    overlay: &mut ActorHealthOverlay,
+    health: i32,
+    max_health: i32,
+    hide_delay_seconds: f32,
+    delta_seconds: f32,
+) -> bool {
+    if health < overlay.last_health {
+        overlay.was_damaged = true;
+        overlay.hide_remaining_seconds = hide_delay_seconds;
+    } else if health != overlay.last_health && overlay.was_damaged {
+        overlay.hide_remaining_seconds = hide_delay_seconds;
+    }
+    overlay.last_health = health;
+    if !overlay.was_damaged {
+        return false;
+    }
+    if health < max_health {
+        return true;
+    }
+    overlay.hide_remaining_seconds =
+        (overlay.hide_remaining_seconds - delta_seconds.max(0.0)).max(0.0);
+    if overlay.hide_remaining_seconds > 0.0 {
+        true
+    } else {
+        overlay.was_damaged = false;
+        false
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_actor_health_overlays(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    agents: Query<(&Agent, &GlobalTransform)>,
+    mut overlays: Query<(
+        Entity,
+        &mut ActorHealthOverlay,
+        &Children,
+        &mut Node,
+        &mut Visibility,
+    )>,
+    mut fills: Query<
+        &mut Node,
+        (
+            With<ActorHealthFill>,
+            Without<ActorHealthOverlay>,
+            Without<ActorNameOverlay>,
+            Without<BuildingHealthOverlay>,
+        ),
+    >,
+) {
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
+    let actor_positions: BTreeMap<_, _> = agents
+        .iter()
+        .filter(|(agent, _)| agent.kind == ActorKind::Player)
+        .map(|(agent, transform)| (agent.id.clone(), transform.translation()))
+        .collect();
+    let mut existing = BTreeSet::new();
+    for (entity, mut overlay, children, mut node, mut visibility) in &mut overlays {
+        existing.insert(overlay.actor.clone());
+        let Some(actor) = simulation.0.actors.get(&overlay.actor) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(position) = actor_positions.get(&overlay.actor) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(hide_delay) = actor_health_bar_hide_seconds(&content.0, actor) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let show = actor.alive
+            && update_actor_health_overlay_timer(
+                &mut overlay,
+                actor.health,
+                actor.max_health.max(1),
+                hide_delay,
+                time.delta_secs(),
+            );
+        let screen = show.then(|| {
+            overlay_viewport_position(
+                camera,
+                camera_transform,
+                *position + Vec3::Y * config.0.world.cell_size * 1.15,
+            )
+        });
+        let Some(screen) = screen.flatten() else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        node.left = px(screen.x - 45.0);
+        node.top = px(screen.y - 5.0);
+        *visibility = Visibility::Visible;
+        let health_fraction = building_health_fraction(actor.health, actor.max_health.max(1));
+        for child in children.iter() {
+            if let Ok(mut fill) = fills.get_mut(child) {
+                fill.width = percent(health_fraction * 100.0);
+            }
+        }
+    }
+    for (actor_id, position) in actor_positions {
+        let Some(actor) = simulation.0.actors.get(&actor_id) else {
+            continue;
+        };
+        let Some(hide_delay) = actor_health_bar_hide_seconds(&content.0, actor) else {
+            continue;
+        };
+        if existing.contains(&actor_id) || !actor.alive || actor.health >= actor.max_health.max(1) {
+            continue;
+        }
+        let Some(screen) = overlay_viewport_position(
+            camera,
+            camera_transform,
+            position + Vec3::Y * config.0.world.cell_size * 1.15,
+        ) else {
+            continue;
+        };
+        let health_fraction = building_health_fraction(actor.health, actor.max_health.max(1));
+        commands
+            .spawn((
+                WorldEntity,
+                ActorHealthOverlay {
+                    actor: actor_id,
+                    last_health: actor.health,
+                    was_damaged: true,
+                    hide_remaining_seconds: hide_delay,
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(screen.x - 45.0),
+                    top: px(screen.y - 5.0),
+                    width: px(90),
+                    height: px(10),
+                    padding: UiRect::all(px(1)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
+                GlobalZIndex(100),
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    ActorHealthFill,
+                    Node {
+                        width: percent(health_fraction * 100.0),
+                        height: percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.85, 0.1, 0.1)),
+                ));
+            });
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn sync_building_health_overlays(
     mut commands: Commands,
@@ -26773,6 +26955,59 @@ mod tests {
             100
         ));
         assert!((building_health_fraction(25, 100) - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn player_health_bar_uses_authored_damage_and_hide_contract() {
+        let content = embedded_content();
+        let player = content
+            .archetypes
+            .values()
+            .find(|archetype| archetype.source_path.ends_with("Player_Character.prefab"))
+            .unwrap();
+        assert_eq!(player.health_bar_hide_milliseconds, Some(3_000));
+        assert!(
+            player
+                .component_types
+                .iter()
+                .any(|component| component == "Units.UnitHealthBar")
+        );
+
+        let mut overlay = ActorHealthOverlay {
+            actor: StableId::new("twitch:health_bar_test").unwrap(),
+            last_health: 100,
+            was_damaged: false,
+            hide_remaining_seconds: 0.0,
+        };
+        assert!(update_actor_health_overlay_timer(
+            &mut overlay,
+            75,
+            100,
+            3.0,
+            0.1
+        ));
+        assert!(update_actor_health_overlay_timer(
+            &mut overlay,
+            100,
+            100,
+            3.0,
+            1.0
+        ));
+        assert!(update_actor_health_overlay_timer(
+            &mut overlay,
+            100,
+            100,
+            3.0,
+            1.9
+        ));
+        assert!(!update_actor_health_overlay_timer(
+            &mut overlay,
+            100,
+            100,
+            3.0,
+            0.2
+        ));
+        assert!(!overlay.was_damaged);
     }
 
     #[test]

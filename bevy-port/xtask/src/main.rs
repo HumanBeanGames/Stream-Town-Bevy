@@ -141,6 +141,11 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.disable_after_milliseconds.is_some())
         .count();
+    let unit_health_bar_prefabs = content
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.health_bar_hide_milliseconds.is_some())
+        .count();
     let foliage_variants: usize = content
         .foliage
         .iter()
@@ -212,6 +217,7 @@ fn validate() -> Result<()> {
         || storage_model_handlers != 6
         || rotating_nodes != 3
         || disable_after_time_prefabs != 1
+        || unit_health_bar_prefabs != 1
         || targeting_scores != 26
         || target_sizes != 44
         || (
@@ -233,7 +239,7 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (28, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (29, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -652,7 +658,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes and 1 disable-after-time lifetime, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, and 1 unit health-bar contract, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

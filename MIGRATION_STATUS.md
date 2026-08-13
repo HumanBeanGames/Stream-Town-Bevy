@@ -504,6 +504,11 @@ mistaken for production-ready systems.
   `WorldLoading` state now renders the converted background, overlay, and icon,
   rotating that icon around local Z at its authored 500 degrees/second; the two
   age-specific Windmill rotors continue through the same validated data path.
+- Content schema 29 captures the sole shipping `UnitHealthBar` contract from
+  `Player_Character.prefab`, including its authored three-second full-health
+  hide delay. Bevy now renders a camera-projected red-on-black player health bar
+  after damage, keeps it visible while injured, resets its timer after healing,
+  and removes it after the authored delay at full health.
 - Completed gates now preserve Unity's asymmetric traversal rule: player A* may
   cross their occupied cells while enemies still see the same cells as blocked.
   Gates under construction remain blocked for everyone, and the exception is

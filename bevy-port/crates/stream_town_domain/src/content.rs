@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 28;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 29;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -75,6 +75,9 @@ pub struct ArchetypeDef {
     /// Unity `SimpleDisableAfterTime` lifetime for self-disabling pooled prefabs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_after_milliseconds: Option<u32>,
+    /// Unity `UnitHealthBar` delay after a damaged unit returns to full health.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_bar_hide_milliseconds: Option<u32>,
     #[serde(default)]
     pub rotating_nodes: Vec<RotatingNodeDef>,
     /// Unity `Targetable.SizeSqr` expressed as its unsquared logical-cell size.
@@ -535,6 +538,8 @@ pub enum ContentError {
     InvalidEnemySpawner(StableId),
     #[error("archetype {0} has invalid disable-after-time data")]
     InvalidDisableAfterTime(StableId),
+    #[error("archetype {0} has invalid unit-health-bar data")]
+    InvalidUnitHealthBar(StableId),
     #[error("enemy spawner {spawner} references invalid enemy archetype {enemy}")]
     InvalidSpawnedEnemy { spawner: StableId, enemy: StableId },
     #[error("role {role} equipment contains an empty renderer node for {slot}")]
@@ -648,6 +653,15 @@ impl ContentCatalog {
                 || archetype.disable_after_milliseconds == Some(0)
             {
                 return Err(ContentError::InvalidDisableAfterTime(id.clone()));
+            }
+            let has_unit_health_bar = archetype
+                .component_types
+                .iter()
+                .any(|component| component == "Units.UnitHealthBar");
+            if has_unit_health_bar != archetype.health_bar_hide_milliseconds.is_some()
+                || archetype.health_bar_hide_milliseconds == Some(0)
+            {
+                return Err(ContentError::InvalidUnitHealthBar(id.clone()));
             }
             let has_rotate_component = archetype
                 .component_types

@@ -45,6 +45,7 @@ pub struct ContentConversionReport {
     pub archetypes: usize,
     pub archetype_scenes: usize,
     pub disable_after_time_prefabs: usize,
+    pub unit_health_bar_prefabs: usize,
     pub foliage_layers: usize,
     pub foliage_variants: usize,
     pub buildings: usize,
@@ -508,7 +509,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 5,
+        schema_version: 6,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -529,6 +530,11 @@ fn convert_export(
             .archetypes
             .values()
             .filter(|archetype| archetype.disable_after_milliseconds.is_some())
+            .count(),
+        unit_health_bar_prefabs: catalog
+            .archetypes
+            .values()
+            .filter(|archetype| archetype.health_bar_hide_milliseconds.is_some())
             .count(),
         foliage_layers: catalog.foliage.len(),
         foliage_variants: catalog
@@ -1425,6 +1431,7 @@ fn convert_archetypes(
             scenes,
             component_types,
             disable_after_milliseconds: disable_after_milliseconds(asset)?,
+            health_bar_hide_milliseconds: health_bar_hide_milliseconds(asset)?,
             rotating_nodes: rotating_node_definitions(asset)?,
             target_size_milli_cells: targetable_size_milli_cells(asset)?,
             health: health_definition(asset)?,
@@ -1484,6 +1491,32 @@ fn disable_after_milliseconds(asset: &UnityAsset) -> Result<Option<u32>> {
         .to_string()
         .parse::<u32>()
         .with_context(|| format!("{} disable-after lifetime is out of range", asset.path))?;
+    Ok(Some(milliseconds))
+}
+
+fn health_bar_hide_milliseconds(asset: &UnityAsset) -> Result<Option<u32>> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Units.UnitHealthBar")
+        .collect::<Vec<_>>();
+    let Some(component) = components.first() else {
+        return Ok(None);
+    };
+    if components.len() != 1 {
+        bail!("{} has multiple unit-health-bar components", asset.path);
+    }
+    let seconds = component_field_value(component, "_hideDelay")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .with_context(|| format!("{} has invalid unit-health-bar hide delay", asset.path))?;
+    let milliseconds = (seconds * 1_000.0)
+        .round()
+        .to_string()
+        .parse::<u32>()
+        .with_context(|| format!("{} unit-health-bar hide delay is out of range", asset.path))?;
     Ok(Some(milliseconds))
 }
 
@@ -2781,6 +2814,20 @@ mod tests {
         assert_eq!(disable_after_milliseconds(&healing).unwrap(), Some(1_200));
         healing.game_object.as_mut().unwrap().components[0].fields[0].value = Value::from(0.0);
         assert!(disable_after_milliseconds(&healing).is_err());
+    }
+
+    #[test]
+    fn converts_unit_health_bar_hide_delay() {
+        let mut player = asset("player", PLAYER_PREFAB, "UnityEngine.GameObject", vec![]);
+        player.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Units.UnitHealthBar, Assembly-CSharp",
+                vec![field("_hideDelay", Value::from(3.0))],
+            )],
+        });
+        assert_eq!(health_bar_hide_milliseconds(&player).unwrap(), Some(3_000));
+        player.game_object.as_mut().unwrap().components[0].fields[0].value = Value::from(0.0);
+        assert!(health_bar_hide_milliseconds(&player).is_err());
     }
 
     #[test]

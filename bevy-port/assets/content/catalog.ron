@@ -1,5 +1,5 @@
 (
-    schema_version: 28,
+    schema_version: 29,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -5636,6 +5636,7 @@
                 "Utils.SelectionBase",
                 "Utils.SimpleLookAtCamera",
             ],
+            health_bar_hide_milliseconds: Some(3000),
             rotating_nodes: [],
             target_size_milli_cells: 750,
             health: Some((

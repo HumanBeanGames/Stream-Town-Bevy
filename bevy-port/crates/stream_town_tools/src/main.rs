@@ -393,6 +393,12 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             f64::from(milliseconds) / 1_000.0
                         ));
                     }
+                    if let Some(milliseconds) = archetype.health_bar_hide_milliseconds {
+                        ui.monospace(format!(
+                            "unit health bar hides {:.3}s after full health",
+                            f64::from(milliseconds) / 1_000.0
+                        ));
+                    }
                     for rotating in &archetype.rotating_nodes {
                         ui.monospace(format!(
                             "rotates {}{}: [{:.1}, {:.1}, {:.1}] at {:.1} deg/s",
