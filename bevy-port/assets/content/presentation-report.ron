@@ -1,5 +1,5 @@
 (
-    schema_version: 11,
+    schema_version: 13,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -11,8 +11,8 @@
     model_material_bindings: 241,
     renderer_material_bindings: 903,
     renderer_material_slots: 912,
-    clips: 75,
-    converted_clips: 57,
+    clips: 184,
+    converted_clips: 179,
     property_curve_clips: 18,
     property_curves: 110,
     property_curve_keys: 261,

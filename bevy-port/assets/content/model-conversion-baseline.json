@@ -1,11 +1,11 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "blender_version": "4.2.0",
   "models": 253,
-  "bytes": 95464596,
+  "bytes": 96889124,
   "meshes": 820,
   "skins": 43,
-  "animations": 33,
+  "animations": 165,
   "materials": 253,
   "images": 1
 }

@@ -123,6 +123,7 @@ struct YamlDocument {
 #[derive(Clone, Debug)]
 struct ParsedMotion {
     guid: String,
+    local_id: i64,
     threshold: Option<f32>,
 }
 
@@ -187,8 +188,10 @@ pub fn convert(
     let prefab_renderer_materials =
         convert_prefab_renderer_materials(&export, &assets_by_path, &materials, &model_materials);
     let mut clips = convert_clips(&export, &root)?;
+    let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
-    let controllers = convert_controllers(&export, &root, &assets_by_guid, &mut clips)?;
+    let controllers =
+        convert_controllers(&export, &root, &assets_by_guid, &embedded_clips, &mut clips)?;
     let prefab_bindings = convert_prefab_bindings(&export, &assets_by_path, &controllers);
     assign_clip_rigs_and_reference_poses(
         &export,
@@ -198,7 +201,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 11,
+        schema_version: 13,
         textures,
         materials,
         clips,
@@ -218,7 +221,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 11,
+        schema_version: 13,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -585,6 +588,143 @@ fn convert_clips(
     Ok(clips)
 }
 
+fn convert_embedded_model_clips(
+    export: &UnityExport,
+    unity_root: &Path,
+    clips: &mut BTreeMap<StableId, AnimationClipDef>,
+) -> Result<BTreeMap<(String, i64), StableId>> {
+    let mut embedded = BTreeMap::new();
+    for model in export.assets.iter().filter(|asset| asset.kind == "model") {
+        let configured_count = usize::try_from(
+            field_u64(&model.importer_fields, "m_ClipAnimations.Array.size").unwrap_or(0),
+        )
+        .context("Unity model clip count does not fit the current platform")?;
+        let imported_count = usize::try_from(
+            field_u64(&model.importer_fields, "m_ImportedTakeInfos.Array.size").unwrap_or(0),
+        )
+        .context("Unity imported take count does not fit the current platform")?;
+        let take_count = configured_count.max(imported_count);
+        if take_count == 0 {
+            continue;
+        }
+        let meta_path = unity_root.join(format!("{}.meta", model.path));
+        let meta = fs::read_to_string(&meta_path)
+            .with_context(|| format!("failed to read model metadata {}", meta_path.display()))?;
+        let local_ids = parse_model_clip_local_ids(&meta);
+        let animation_names = glb_animation_names(
+            &unity_root
+                .join("bevy-port/assets")
+                .join(glb_asset_path(&model.path)),
+        )?;
+        // Several Unity importers retain stale clip configuration after the
+        // corresponding FBX takes were removed. Only publish clips that the
+        // reproducible GLB conversion can actually load.
+        if animation_names.is_empty() {
+            continue;
+        }
+        for index in 0..take_count {
+            let take_prefix = format!("m_ImportedTakeInfos.Array.data[{index}]");
+            let clip_prefix = format!("m_ClipAnimations.Array.data[{index}]");
+            let Some(name) = field_str(&model.importer_fields, &format!("{clip_prefix}.name"))
+                .or_else(|| {
+                    field_str(
+                        &model.importer_fields,
+                        &format!("{take_prefix}.defaultClipName"),
+                    )
+                })
+            else {
+                continue;
+            };
+            let take_name = field_str(&model.importer_fields, &format!("{clip_prefix}.takeName"))
+                .or_else(|| {
+                    field_str(
+                        &model.importer_fields,
+                        &format!("{take_prefix}.defaultClipName"),
+                    )
+                })
+                .unwrap_or(name);
+            let local_id = local_ids.get(name).copied().with_context(|| {
+                format!(
+                    "embedded clip {name:?} in {} has no Unity local ID",
+                    model.path
+                )
+            })?;
+            let Some(animation_index) = animation_names
+                .iter()
+                .position(|animation| animation_take_name(animation) == take_name)
+            else {
+                continue;
+            };
+            let start = field_f32(&model.importer_fields, &format!("{take_prefix}.startTime"))
+                .or_else(|| {
+                    field_f32(&model.importer_fields, &format!("{clip_prefix}.firstFrame"))
+                        .zip(field_f32(
+                            &model.importer_fields,
+                            &format!("{take_prefix}.sampleRate"),
+                        ))
+                        .map(|(frame, sample_rate)| frame / sample_rate.max(f32::EPSILON))
+                })
+                .unwrap_or(0.0);
+            let stop = field_f32(&model.importer_fields, &format!("{take_prefix}.stopTime"))
+                .or_else(|| {
+                    field_f32(&model.importer_fields, &format!("{clip_prefix}.lastFrame"))
+                        .zip(field_f32(
+                            &model.importer_fields,
+                            &format!("{take_prefix}.sampleRate"),
+                        ))
+                        .map(|(frame, sample_rate)| frame / sample_rate.max(f32::EPSILON))
+                })
+                .unwrap_or(start);
+            let sample_rate =
+                field_f32(&model.importer_fields, &format!("{take_prefix}.sampleRate"))
+                    .unwrap_or(0.0);
+            let looping = field_bool(&model.importer_fields, &format!("{clip_prefix}.loopTime"))
+                .unwrap_or(false);
+            let id = embedded_clip_id(&model.guid, local_id)?;
+            clips.insert(
+                id.clone(),
+                AnimationClipDef {
+                    display_name: name.to_owned(),
+                    source_guid: model.guid.clone(),
+                    source_path: model.path.clone(),
+                    duration_seconds: (stop - start).max(0.0),
+                    sample_rate,
+                    looping,
+                    rig_asset_path: Some(glb_asset_path(&model.path)),
+                    transform_tracks: Vec::new(),
+                    property_curves: Vec::new(),
+                    events: Vec::new(),
+                    converted_asset_path: Some(glb_asset_path(&model.path)),
+                    gltf_animation_index: Some(
+                        u32::try_from(animation_index)
+                            .context("GLB animation index does not fit in u32")?,
+                    ),
+                },
+            );
+            embedded.insert((model.guid.clone(), local_id), id);
+        }
+    }
+    Ok(embedded)
+}
+
+fn parse_model_clip_local_ids(contents: &str) -> BTreeMap<String, i64> {
+    let mut result = BTreeMap::new();
+    let mut local_id = None;
+    for line in contents.lines() {
+        if line.trim() == "externalObjects:" {
+            break;
+        }
+        if let Some(value) = line.trim().strip_prefix("74: ") {
+            local_id = value.parse().ok();
+        } else if let Some(name) = line.trim().strip_prefix("second: ")
+            && let Some(local_id) = local_id.take()
+        {
+            result.insert(name.trim_matches(['\'', '"']).to_owned(), local_id);
+        }
+    }
+    result
+}
+
 fn parse_transform_tracks(contents: &str) -> Result<Vec<AnimationTransformTrack>> {
     let mut tracks = BTreeMap::<String, AnimationTransformTrack>::new();
     let mut kind = None;
@@ -938,6 +1078,7 @@ fn convert_controllers(
     export: &UnityExport,
     unity_root: &Path,
     assets_by_guid: &BTreeMap<&str, &UnityAsset>,
+    embedded_clips: &BTreeMap<(String, i64), StableId>,
     clips: &mut BTreeMap<StableId, AnimationClipDef>,
 ) -> Result<BTreeMap<StableId, AnimationControllerDef>> {
     let mut controllers = BTreeMap::new();
@@ -949,7 +1090,7 @@ fn convert_controllers(
         let source = unity_root.join(&asset.path);
         let contents = fs::read_to_string(&source)
             .with_context(|| format!("failed to read controller {}", source.display()))?;
-        let controller = parse_controller(asset, &contents, assets_by_guid, clips)?;
+        let controller = parse_controller(asset, &contents, assets_by_guid, embedded_clips, clips)?;
         controllers.insert(controller_id(&asset.guid)?, controller);
     }
     Ok(controllers)
@@ -1050,6 +1191,7 @@ fn parse_controller(
     asset: &UnityAsset,
     contents: &str,
     assets_by_guid: &BTreeMap<&str, &UnityAsset>,
+    embedded_clips: &BTreeMap<(String, i64), StableId>,
     clips: &mut BTreeMap<StableId, AnimationClipDef>,
 ) -> Result<AnimationControllerDef> {
     let documents = parse_yaml_documents(contents)?;
@@ -1119,7 +1261,10 @@ fn parse_controller(
         let parsed_motion = parse_state_motions(document, &blend_trees);
         let mut converted_motions = Vec::new();
         for motion in parsed_motion.motions {
-            let clip = clip_id(&motion.guid)?;
+            let clip = embedded_clips
+                .get(&(motion.guid.clone(), motion.local_id))
+                .cloned()
+                .unwrap_or(clip_id(&motion.guid)?);
             if !clips.contains_key(&clip) {
                 let source_asset = assets_by_guid.get(motion.guid.as_str());
                 clips.insert(
@@ -1304,17 +1449,31 @@ fn convert_prefab_bindings(
             &mut BTreeSet::new(),
             &mut dependency_paths,
         );
-        let Some(controller) = dependency_paths
-            .iter()
-            .find_map(|path| controller_paths.get(path.as_str()).copied())
+        let authored_controller = animator_reference_path(prefab, "runtimeAnimatorController");
+        let Some(controller) = authored_controller
+            .and_then(|path| controller_paths.get(path).copied())
+            .or_else(|| {
+                dependency_paths
+                    .iter()
+                    .find_map(|path| controller_paths.get(path.as_str()).copied())
+            })
         else {
             continue;
         };
-        let animated_model = dependency_paths.iter().find_map(|path| {
-            let model = assets_by_path.get(path.as_str())?;
-            (model.kind == "model" && model_has_animation(model)).then_some(path.as_str())
-        });
-        let rig_model = animated_model.or_else(|| {
+        let preferred_model = preferred_animator_model(prefab, &dependency_paths, assets_by_path);
+        let animated_model = preferred_model
+            .filter(|path| {
+                assets_by_path
+                    .get(*path)
+                    .is_some_and(|model| model_has_animation(model))
+            })
+            .or_else(|| {
+                dependency_paths.iter().find_map(|path| {
+                    let model = assets_by_path.get(path.as_str())?;
+                    (model.kind == "model" && model_has_animation(model)).then_some(path.as_str())
+                })
+            });
+        let rig_model = preferred_model.or(animated_model).or_else(|| {
             dependency_paths.iter().find_map(|path| {
                 assets_by_path
                     .get(path.as_str())
@@ -1334,6 +1493,49 @@ fn convert_prefab_bindings(
         );
     }
     bindings
+}
+
+fn animator_component(prefab: &UnityAsset) -> Option<&UnityComponent> {
+    prefab
+        .game_object
+        .as_ref()?
+        .components
+        .iter()
+        .find(|component| {
+            component
+                .type_name
+                .as_deref()
+                .is_some_and(|name| name.starts_with("UnityEngine.Animator,"))
+        })
+}
+
+fn animator_reference_path<'a>(prefab: &'a UnityAsset, field_path: &str) -> Option<&'a str> {
+    animator_component(prefab)?
+        .fields
+        .iter()
+        .find(|field| field.path == field_path)
+        .and_then(|field| reference_path(&field.value))
+}
+
+fn preferred_animator_model<'a>(
+    prefab: &UnityAsset,
+    dependency_paths: &'a BTreeSet<String>,
+    assets_by_path: &BTreeMap<&str, &UnityAsset>,
+) -> Option<&'a str> {
+    let animator_name = animator_component(prefab)?
+        .hierarchy_path
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())?;
+    dependency_paths.iter().find_map(|path| {
+        let model = assets_by_path.get(path.as_str())?;
+        if model.kind != "model" {
+            return None;
+        }
+        let stem = Path::new(path).file_stem()?.to_str()?;
+        (stem.eq_ignore_ascii_case(animator_name) || model.name.eq_ignore_ascii_case(animator_name))
+            .then_some(path.as_str())
+    })
 }
 
 fn assign_clip_rigs_and_reference_poses(
@@ -1770,6 +1972,7 @@ fn parse_state_motions(
             parameter: None,
             motions: vec![ParsedMotion {
                 guid: guid.to_owned(),
+                local_id: inline_file_id(line).unwrap_or_default(),
                 threshold: None,
             }],
         };
@@ -1799,6 +2002,7 @@ fn parse_blend_tree(lines: &[String]) -> ParsedBlendTree {
             .and_then(|value| value.parse().ok());
         motions.push(ParsedMotion {
             guid: guid.to_owned(),
+            local_id: inline_file_id(line).unwrap_or_default(),
             threshold,
         });
     }
@@ -2174,6 +2378,21 @@ fn inline_file_id(line: &str) -> Option<i64> {
         .ok()
 }
 
+fn field_value<'a>(fields: &'a [UnityField], path: &str) -> Option<&'a Value> {
+    fields
+        .iter()
+        .find(|field| field.path == path)
+        .map(|field| &field.value)
+}
+
+fn field_str<'a>(fields: &'a [UnityField], path: &str) -> Option<&'a str> {
+    field_value(fields, path)?.as_str()
+}
+
+fn field_u64(fields: &[UnityField], path: &str) -> Option<u64> {
+    field_value(fields, path)?.as_u64()
+}
+
 fn reference_guid(line: &str) -> Option<&str> {
     let value = line.split("guid: ").nth(1)?;
     let guid = value.split(',').next()?.trim();
@@ -2231,6 +2450,42 @@ fn glb_asset_path(source_model: &str) -> String {
     format!("migrated/models/{stem}.glb")
 }
 
+fn glb_animation_names(path: &Path) -> Result<Vec<String>> {
+    let payload = fs::read(path)
+        .with_context(|| format!("failed to read converted model {}", path.display()))?;
+    if payload.len() < 20 || &payload[..4] != b"glTF" {
+        bail!("converted model {} is not a GLB file", path.display());
+    }
+    let json_length = usize::try_from(u32::from_le_bytes(
+        payload[12..16].try_into().expect("four bytes"),
+    ))
+    .context("GLB JSON length does not fit the current platform")?;
+    if u32::from_le_bytes(payload[16..20].try_into().expect("four bytes")) != 0x4E4F_534A
+        || 20 + json_length > payload.len()
+    {
+        bail!(
+            "converted model {} has an invalid JSON chunk",
+            path.display()
+        );
+    }
+    let document: Value = serde_json::from_slice(&payload[20..20 + json_length])
+        .with_context(|| format!("failed to parse converted model {}", path.display()))?;
+    Ok(document
+        .get("animations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|animation| animation.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect())
+}
+
+fn animation_take_name(name: &str) -> &str {
+    let mut parts = name.split('|');
+    let first = parts.next().unwrap_or(name);
+    parts.next().unwrap_or(first)
+}
+
 fn texture_id(guid: &str) -> Result<StableId> {
     StableId::new(format!("texture:{guid}")).map_err(Into::into)
 }
@@ -2241,6 +2496,10 @@ fn material_id(guid: &str) -> Result<StableId> {
 
 fn clip_id(guid: &str) -> Result<StableId> {
     StableId::new(format!("clip:{guid}")).map_err(Into::into)
+}
+
+fn embedded_clip_id(guid: &str, local_id: i64) -> Result<StableId> {
+    StableId::new(format!("clip:{guid}:{local_id}")).map_err(Into::into)
 }
 
 fn controller_id(guid: &str) -> Result<StableId> {
@@ -2282,6 +2541,86 @@ fn write_ron_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_asset(guid: &str, path: &str, kind: &str, name: &str) -> UnityAsset {
+        UnityAsset {
+            guid: guid.to_owned(),
+            path: path.to_owned(),
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            importer_fields: Vec::new(),
+            serialized_fields: Vec::new(),
+            dependencies: Vec::new(),
+            game_object: None,
+        }
+    }
+
+    #[test]
+    fn prefab_binding_prefers_authored_animator_controller_and_rig() {
+        let minotaur_model_path = "Assets/Models/Enemies/Minotaur.fbx";
+        let goblin_model_path = "Assets/Models/Enemies/Goblin.fbx";
+        let controller_path = "Assets/Animation Controllers/Minotaur.controller";
+        let mut prefab = fixture_asset("prefab", "Assets/Enemy.prefab", "prefab", "Enemy");
+        prefab.dependencies = vec![
+            UnityReference {
+                guid: None,
+                path: Some(goblin_model_path.to_owned()),
+                name: None,
+            },
+            UnityReference {
+                guid: None,
+                path: Some(minotaur_model_path.to_owned()),
+                name: None,
+            },
+            UnityReference {
+                guid: None,
+                path: Some(controller_path.to_owned()),
+                name: None,
+            },
+        ];
+        prefab.game_object = Some(UnityGameObject {
+            components: vec![UnityComponent {
+                hierarchy_path: "Model_Minotaur/Minotaur".to_owned(),
+                type_name: Some("UnityEngine.Animator, UnityEngine.AnimationModule".to_owned()),
+                fields: vec![UnityField {
+                    path: "runtimeAnimatorController".to_owned(),
+                    value: serde_json::json!({"Path": controller_path}),
+                }],
+            }],
+        });
+        let goblin = fixture_asset("goblin", goblin_model_path, "model", "Goblin");
+        let minotaur = fixture_asset("minotaur", minotaur_model_path, "model", "Minotaur");
+        let export = UnityExport {
+            schema_version: 1,
+            assets: vec![prefab, goblin, minotaur],
+        };
+        let by_path = export
+            .assets
+            .iter()
+            .map(|asset| (asset.path.as_str(), asset))
+            .collect();
+        let controller_id = StableId::new("controller:minotaur").unwrap();
+        let controllers = BTreeMap::from([(
+            controller_id.clone(),
+            AnimationControllerDef {
+                display_name: "Minotaur".to_owned(),
+                source_guid: "controller".to_owned(),
+                source_path: controller_path.to_owned(),
+                parameters: Vec::new(),
+                states: BTreeMap::new(),
+                transitions: Vec::new(),
+                state_machines: BTreeMap::new(),
+                layers: Vec::new(),
+                default_states: Vec::new(),
+            },
+        )]);
+        let binding = &convert_prefab_bindings(&export, &by_path, &controllers)["prefab"];
+        assert_eq!(binding.controller, controller_id);
+        assert_eq!(
+            binding.rig_scene.as_deref(),
+            Some("migrated/models/Models/Enemies/Minotaur.glb")
+        );
+    }
 
     #[test]
     fn parses_unity_transform_curves_without_editor_types() {
@@ -2456,7 +2795,8 @@ AnimatorController:
         };
         let assets = BTreeMap::from([(clip_asset.guid.as_str(), &clip_asset)]);
         let mut clips = BTreeMap::new();
-        let controller = parse_controller(&asset, yaml, &assets, &mut clips).unwrap();
+        let controller =
+            parse_controller(&asset, yaml, &assets, &BTreeMap::new(), &mut clips).unwrap();
         assert_eq!(controller.states.len(), 1);
         assert_eq!(controller.transitions.len(), 1);
         assert!((controller.transitions[0].duration - 0.2).abs() < f32::EPSILON);
@@ -2612,6 +2952,20 @@ AvatarMask:
         assert_eq!(mapped.len(), 2);
         assert_eq!(mapped["GameMaterial"], game);
         assert_eq!(mapped["SkinMaterial"], skin);
+    }
+
+    #[test]
+    fn parses_embedded_model_clip_ids_and_blender_take_names() {
+        let metadata = "ModelImporter:\n  internalIDToNameTable:\n  - first:\n      74: -42\n    second: Attack\n  - first:\n      74: 84\n    second: Idle\n  externalObjects:\n";
+        assert_eq!(
+            parse_model_clip_local_ids(metadata),
+            BTreeMap::from([("Attack".to_owned(), -42), ("Idle".to_owned(), 84)])
+        );
+        assert_eq!(animation_take_name("Armature|Attack"), "Attack");
+        assert_eq!(
+            animation_take_name("Gate|Gate_Closing|BaseLayer"),
+            "Gate_Closing"
+        );
     }
 
     #[test]

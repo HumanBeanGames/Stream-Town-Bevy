@@ -62,7 +62,7 @@ pub fn validate(
         .with_context(|| format!("failed to read model report {}", report_path.display()))?;
     let report: ModelConversionReport = serde_json::from_str(&encoded)
         .with_context(|| format!("failed to parse model report {}", report_path.display()))?;
-    if report.schema_version != 2 {
+    if report.schema_version != 3 {
         bail!(
             "unsupported model conversion schema {}",
             report.schema_version

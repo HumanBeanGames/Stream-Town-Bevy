@@ -15,7 +15,7 @@ import bpy
 from mathutils import Matrix
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EXCLUDED_PARTS = {
     "astarpathfindingproject",
     "migrationonly",
@@ -216,8 +216,12 @@ def preserve_unity_vertex_colors() -> None:
             ]
         else:
             vertex_colors = [tuple(float(channel) for channel in datum.color) for datum in meaningful.data]
-        for color in list(mesh.color_attributes):
-            mesh.color_attributes.remove(color)
+        # Blender collection elements are live proxies: removing an earlier
+        # element can retarget a proxy retained by ``list(...)`` to another
+        # layer, eventually producing an empty-name removal error. Remove by
+        # current reverse index so every proxy remains valid for its call.
+        for index in reversed(range(len(mesh.color_attributes))):
+            mesh.color_attributes.remove(mesh.color_attributes[index])
         primary = mesh.color_attributes.new(
             name="UnityColor",
             type="FLOAT_COLOR",
@@ -227,6 +231,31 @@ def preserve_unity_vertex_colors() -> None:
             datum.color = value
         mesh.color_attributes.active_color = primary
         mesh.color_attributes.render_color_index = 0
+
+
+def name_unnamed_attributes() -> None:
+    """Give legacy FBX mesh attributes deterministic Blender-safe names."""
+    for source_object in bpy.context.scene.objects:
+        if source_object.type != "MESH":
+            continue
+        for index, attribute in enumerate(source_object.data.attributes):
+            if not attribute.name:
+                attribute.name = f"UnityAttribute{index}"
+
+
+def preserve_all_fbx_animation_takes() -> None:
+    """Mark every imported FBX take as an object action for glTF export.
+
+    Blender's FBX importer creates one action per Unity-authored take, but only
+    assigns the default take to the armature. The remaining actions have an
+    unset ``id_root`` and the glTF exporter silently excludes them even when
+    extra animation export is enabled. FBX skeletal takes target object
+    animation data, so explicitly classifying and retaining every imported
+    action makes all controller clips available to Bevy.
+    """
+    for action in bpy.data.actions:
+        action.id_root = "OBJECT"
+        action.use_fake_user = True
 
 
 def inspect_glb(path: Path) -> dict[str, int]:
@@ -297,6 +326,8 @@ def convert(
 ) -> dict[str, object]:
     reset_scene()
     bpy.ops.import_scene.fbx(filepath=str(source), use_anim=True)
+    preserve_all_fbx_animation_takes()
+    name_unnamed_attributes()
     preserve_unity_vertex_colors()
     normalization_scale, output_bounds = normalize_to_unity_bounds(target_bounds)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +337,8 @@ def convert(
         export_format="GLB",
         export_yup=True,
         export_animations=True,
+        export_animation_mode="ACTIONS",
+        export_extra_animations=True,
         export_skins=True,
         export_morph=True,
         export_materials="EXPORT",

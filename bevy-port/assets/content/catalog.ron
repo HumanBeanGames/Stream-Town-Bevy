@@ -2053,13 +2053,13 @@
                     source_model: "Assets/Models/Enemies/Goblin.fbx",
                     asset_path: "migrated/models/Models/Enemies/Goblin.glb",
                     age: None,
-                    is_default: true,
+                    is_default: false,
                 ),
                 (
                     source_model: "Assets/Models/Enemies/Minotaur.fbx",
                     asset_path: "migrated/models/Models/Enemies/Minotaur.glb",
                     age: None,
-                    is_default: false,
+                    is_default: true,
                 ),
             ],
             component_types: [
@@ -5179,13 +5179,13 @@
                     source_model: "Assets/Models/Enemies/Goblin.fbx",
                     asset_path: "migrated/models/Models/Enemies/Goblin.glb",
                     age: None,
-                    is_default: true,
+                    is_default: false,
                 ),
                 (
                     source_model: "Assets/Models/Enemies/Minotaur.fbx",
                     asset_path: "migrated/models/Models/Enemies/Minotaur.glb",
                     age: None,
-                    is_default: false,
+                    is_default: true,
                 ),
             ],
             component_types: [
@@ -7427,13 +7427,13 @@
                     source_model: "Assets/Models/Enemies/Goblin.fbx",
                     asset_path: "migrated/models/Models/Enemies/Goblin.glb",
                     age: None,
-                    is_default: true,
+                    is_default: false,
                 ),
                 (
                     source_model: "Assets/Models/Enemies/Goblin_BatteringRam.fbx",
                     asset_path: "migrated/models/Models/Enemies/Goblin_BatteringRam.glb",
                     age: None,
-                    is_default: false,
+                    is_default: true,
                 ),
             ],
             component_types: [

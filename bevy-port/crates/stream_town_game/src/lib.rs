@@ -6222,26 +6222,28 @@ fn converted_animation_spec(
     let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
     let controller = presentation.controllers.get(&binding.controller)?;
     let rig_scene = binding.rig_scene.clone()?;
-    let (state, locomotion) = controller
+    let (state, _) = controller
         .states
         .iter()
         .find(|(_, state)| state.display_name.eq_ignore_ascii_case("locomotion"))?;
-    let converted_motions = locomotion
-        .motions
+    let motions: Vec<_> = controller
+        .states
+        .values()
+        .flat_map(|state| &state.motions)
+        .collect();
+    let converted_motions = motions
         .iter()
         .filter(|motion| {
-            presentation
-                .clips
-                .get(&motion.clip)
-                .is_some_and(|clip| !clip.transform_tracks.is_empty())
+            presentation.clips.get(&motion.clip).is_some_and(|clip| {
+                !clip.transform_tracks.is_empty()
+                    || clip.converted_asset_path.is_some() && clip.gltf_animation_index.is_some()
+            })
         })
         .count();
-    (converted_motions == locomotion.motions.len() && converted_motions > 0).then(|| {
-        ConvertedAnimationSpec {
-            controller: binding.controller.clone(),
-            state: state.clone(),
-            rig_scene,
-        }
+    (converted_motions == motions.len() && converted_motions > 0).then(|| ConvertedAnimationSpec {
+        controller: binding.controller.clone(),
+        state: state.clone(),
+        rig_scene,
     })
 }
 
@@ -10552,10 +10554,14 @@ fn upgrade_actor_placeholders(
         else {
             continue;
         };
-        let native = native_animation_request(archetype, scene, &presentation.0);
-        let converted = native
+        // Imported FBXs often contain a bind/default-pose clip. The authored
+        // Animator controller remains authoritative whenever all of its
+        // locomotion clips can be translated; native GLB animation is only the
+        // fallback for assets without a complete converted controller.
+        let converted = converted_animation_spec(archetype, &presentation.0);
+        let native = converted
             .is_none()
-            .then(|| converted_animation_spec(archetype, &presentation.0))
+            .then(|| native_animation_request(archetype, scene, &presentation.0))
             .flatten();
         let base_scale = Vec3::splat(config.0.world.cell_size / 2.0);
         animation.base_scale = base_scale;
@@ -10652,6 +10658,7 @@ fn attach_native_animations(
 
 fn attach_converted_animations(
     mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
     presentation: Res<RuntimePresentation>,
     animation_clips: Option<ResMut<Assets<AnimationClip>>>,
     animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
@@ -10660,11 +10667,12 @@ fn attach_converted_animations(
     children: Query<&Children>,
     names: Query<&Name>,
     transforms: Query<&Transform>,
+    native_players: Query<(), With<AnimationPlayer>>,
     applied: Query<(), (With<ConvertedAnimationDriver>, Without<ActivePetVisual>)>,
     pets: Query<(), With<ActivePetVisual>>,
 ) {
-    let (Some(mut animation_clips), Some(mut animation_graphs)) =
-        (animation_clips, animation_graphs)
+    let (Some(asset_server), Some(mut animation_clips), Some(mut animation_graphs)) =
+        (asset_server, animation_clips, animation_graphs)
     else {
         return;
     };
@@ -10691,11 +10699,12 @@ fn attach_converted_animations(
         else {
             continue;
         };
-        let Some(root_name) = animation_root_name(root_clip) else {
-            continue;
-        };
-        let Some(animation_root) = find_named_descendant(actor_root, root_name, &children, &names)
-        else {
+        let animation_root = find_component_descendant(actor_root, &children, &native_players)
+            .or_else(|| {
+                animation_root_name(root_clip)
+                    .and_then(|root| find_named_descendant(actor_root, root, &children, &names))
+            });
+        let Some(animation_root) = animation_root else {
             continue;
         };
         let targets = collect_animation_targets(animation_root, &children, &names, &transforms);
@@ -10710,6 +10719,7 @@ fn attach_converted_animations(
                 spec,
                 &presentation.0,
                 &targets,
+                &asset_server,
                 &mut animation_clips,
                 &mut animation_graphs,
             ) else {
@@ -10780,6 +10790,7 @@ fn build_converted_animation(
     spec: &ConvertedAnimationSpec,
     presentation: &PresentationCatalog,
     targets: &BTreeMap<String, (Entity, Transform)>,
+    asset_server: &AssetServer,
     animation_clips: &mut Assets<AnimationClip>,
     animation_graphs: &mut Assets<AnimationGraph>,
 ) -> Option<CachedConvertedAnimation> {
@@ -10794,8 +10805,14 @@ fn build_converted_animation(
             continue;
         }
         let source = presentation.clips.get(&motion.clip)?;
-        let clip = retargeted_animation_clip(source, targets)?;
-        converted.push((motion.clip.clone(), animation_clips.add(clip)));
+        let handle = if source.transform_tracks.is_empty() {
+            let path = source.converted_asset_path.as_ref()?;
+            let index = usize::try_from(source.gltf_animation_index?).ok()?;
+            asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
+        } else {
+            animation_clips.add(retargeted_animation_clip(source, targets)?)
+        };
+        converted.push((motion.clip.clone(), handle));
     }
     if converted.is_empty() {
         return None;
@@ -10974,6 +10991,23 @@ fn find_named_descendant(
     let mut pending = vec![root];
     while let Some(entity) = pending.pop() {
         if names.get(entity).is_ok_and(|name| name.as_str() == target) {
+            return Some(entity);
+        }
+        if let Ok(entity_children) = children.get(entity) {
+            pending.extend(entity_children.iter().rev());
+        }
+    }
+    None
+}
+
+fn find_component_descendant<T: Component>(
+    root: Entity,
+    children: &Query<&Children>,
+    components: &Query<(), With<T>>,
+) -> Option<Entity> {
+    let mut pending = vec![root];
+    while let Some(entity) = pending.pop() {
+        if components.contains(entity) {
             return Some(entity);
         }
         if let Ok(entity_children) = children.get(entity) {
@@ -19819,6 +19853,65 @@ mod tests {
     }
 
     #[test]
+    fn shipping_enemies_use_authored_rigs_and_translated_controllers() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let expected = [
+            ("Enemy_Blargul.prefab", "Blargul", "Blargul.glb"),
+            ("Enemy_Goblin.prefab", "Goblin", "Goblin.glb"),
+            (
+                "Enemy_Goblin_BatteringRam.prefab",
+                "BatteringRam",
+                "Goblin_BatteringRam.glb",
+            ),
+            ("Enemy_Goblin_Boss.prefab", "GoblinBoss", "GoblinBoss.glb"),
+            ("Enemy_Minotaur.prefab", "Minotaur", "Minotaur.glb"),
+            ("Enemy_MinotaurBoss.prefab", "Minotaur", "Minotaur.glb"),
+            (
+                "Enemy_NecroSlasher.prefab",
+                "NecroSlasher",
+                "NecroSlasher.glb",
+            ),
+            (
+                "Enemy_NecroStalker.prefab",
+                "NecroStalker",
+                "NecroStalker.glb",
+            ),
+            ("Enemy_Skeleton.prefab", "Skeleton", "Skeleton.glb"),
+        ];
+        for (source, controller_name, rig_suffix) in expected {
+            let archetype = archetype_by_source(&content, ArchetypeKind::Enemy, source).unwrap();
+            let scene = default_archetype_scene(archetype).unwrap();
+            assert!(scene.asset_path.ends_with(rig_suffix), "{source}");
+            let binding = &presentation.prefab_bindings[&archetype.source_guid];
+            assert_eq!(
+                presentation.controllers[&binding.controller].display_name, controller_name,
+                "{source}"
+            );
+            assert_eq!(
+                binding.rig_scene.as_deref(),
+                Some(scene.asset_path.as_str()),
+                "{source}"
+            );
+            assert!(
+                converted_animation_spec(archetype, &presentation).is_some(),
+                "{source} does not have a complete translated locomotion contract: {:?}",
+                presentation.controllers[&binding.controller]
+                    .states
+                    .values()
+                    .filter(|state| state.display_name.eq_ignore_ascii_case("locomotion"))
+                    .flat_map(|state| &state.motions)
+                    .map(|motion| (
+                        presentation.clips[&motion.clip].display_name.clone(),
+                        presentation.clips[&motion.clip].transform_tracks.len(),
+                        presentation.clips[&motion.clip].rig_asset_path.clone(),
+                    ))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
     fn town_hall_is_a_stable_authoritative_building_and_ages_with_technology() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -23118,7 +23211,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 11);
+        assert_eq!(presentation.schema_version, 13);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(

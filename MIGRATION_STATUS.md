@@ -323,12 +323,15 @@ mistaken for production-ready systems.
   and checked as an explicit missing-source baseline instead of being discarded.
 - A pinned Blender 4.2.0 headless FBX-to-GLB pipeline with atomic outputs and
   independent hash/header/unit validation. Unity renderer bounds normalize the
-  imported geometry, rigs, and translation curves. All 253 GLBs are reproducible
-  and tracked with Git LFS: 820 meshes, 43 skins, 33 embedded animations, 253
-  materials, one embedded image, and 95,464,596 output bytes.
-- Bevy runtime animation binding for compatible converted scenes. The shipping
-  Goblin prefab inherits its controller/model relationship through the nested
-  model prefab and plays GLB animation zero. The Player locomotion controller
+  imported geometry, rigs, and translation curves. All imported FBX actions are
+  exported as named GLB animations. All 253 GLBs are reproducible and tracked
+  with Git LFS: 820 meshes, 43 skins, 165 embedded animations, 253 materials,
+  one embedded image, and 96,889,124 output bytes.
+- Bevy runtime animation binding for compatible converted scenes. Presentation
+  schema 13 assigns model-GUID/local-ID stable IDs and exact GLB indexes to 122
+  reachable embedded FBX clips. All nine shipping enemy prefabs resolve their
+  authored model rig and full controller clip set instead of falling back to a
+  default-pose animation. The Player locomotion controller
   resolves stable Idle and Walk clip IDs, builds Bevy `AnimationClip` assets
   from the converted Unity tracks, retargets curve deltas onto the converted
   GLB rest pose, and drives a native `AnimationGraph` across 23 bone targets.
@@ -615,8 +618,8 @@ cargo run -p stream_town_migrate -- convert-content generated/unity-export.json 
 Foundation is substantially implemented. The vertical slice is runnable and its
 deterministic 300-agent navigation gate passes with semantically converted
 prefabs, representative production GLBs, and connected Twitch transport, but it
-now also has complete presentation metadata, packaged textures, native Goblin
-animation binding, 57 converted standalone transform clips, Player locomotion
+now also has complete presentation metadata, packaged textures, 122 indexed
+embedded FBX clips, full shipping-enemy controller binding, 57 converted standalone transform clips, Player locomotion
 retargeting, a typed controller interpreter, 19-clip Player blend-graph playback,
 the generated heightfield/water/collider surface, inherited prefab material
 bindings, runtime PBR material reconstruction, simulation-driven season/weather

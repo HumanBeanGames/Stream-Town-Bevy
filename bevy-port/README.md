@@ -81,17 +81,19 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   the authored Goblin camp weights and spawn transforms, the Tower's consolidated projectile
   shooter, the Marketplace's authored level-scaled passive gold generator, all
   nine authored enemy kill rewards, all 42 reachable construction/upgrade model
-  handlers, all six storage-fill model handlers, and 422 typed objectives from the production
-  technology graph in content schema 21, and follows nested prefabs to
+handlers, all six storage-fill model handlers, and 422 typed objectives from the production
+technology graph in content schema 25, and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.
 The same command copies all 133 reachable
 textures and emits `presentation.ron`: 33 material definitions with 141 retained
-Unity vector/color shader parameters and 32 texture transforms, 75 clip records,
+Unity vector/color shader parameters and 32 texture transforms, 184 clip records,
 31 controller definitions, 94 stable states, 166 transitions, and inherited
 prefab/controller/model bindings. The YAML fallback converts 57 standalone
-`.anim` files into 1,196 stable transform tracks. Presentation schema 11 also
+`.anim` files into 1,196 stable transform tracks. Presentation schema 13 also
+maps 122 embedded FBX takes to stable model-GUID/local-ID clip records and their
+exact GLB animation indexes. It
 retains 110 component/UI property curves with 261 keys across 18 clips, including
 the four transform-free clips, plus all ten authored animation events, and
 fixed/normalized duration plus destination offset for all 166 transitions. It retains
@@ -116,7 +118,8 @@ cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model
 Converted GLBs are reproducible package inputs under `assets/migrated/models`.
 They are versioned with Git LFS; reports and Blender logs remain generated files.
 The converter uses exported Unity renderer bounds to bake model units into
-geometry, rigs, and translation animation curves.
+geometry, rigs, and translation animation curves. It exports every imported FBX
+take as a named GLB animation rather than retaining only the active action.
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 Legacy Unity saves are never modified by migration tools.
@@ -432,8 +435,9 @@ specific point for repeatable property-curve smoke captures.
 its complete runtime draft can be captured repeatably.
 `STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
 capture so GPU smoke runs can terminate without an external process killer.
-Compatible embedded GLB clips use Bevy animation graphs (currently the shipping
-Goblin path). The Player controller builds 19 converted clips retargeted onto 23
+Compatible embedded GLB clips and translated standalone clips share Bevy
+animation graphs. The nine shipping enemy prefabs resolve their authored rig and
+full controller clip sets; the Player controller builds 19 converted clips retargeted onto 23
 bones in the Player GLB rest pose. An engine-independent interpreter evaluates
 typed parameters, trigger consumption, direct transitions, exit gates, and 1D
 threshold blending; runtime movement feeds the authored velocity/5 `Move Speed`

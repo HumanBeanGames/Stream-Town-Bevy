@@ -1818,11 +1818,28 @@ fn archetype_scenes(
     let mut models = BTreeSet::new();
     collect_model_dependencies(asset, assets_by_path, &mut BTreeSet::new(), &mut models);
     let models: Vec<_> = models.into_iter().collect();
-    let default_index = models
-        .iter()
-        .position(|path| {
-            let path = path.to_ascii_lowercase();
-            path.contains("age01") && path.contains("straight")
+    let animator_model = asset.game_object.as_ref().and_then(|game_object| {
+        game_object
+            .components
+            .iter()
+            .find(|component| component_type(component) == "UnityEngine.Animator")
+            .and_then(|component| component.hierarchy_path.rsplit('/').next())
+            .filter(|name| !name.is_empty())
+    });
+    let default_index = animator_model
+        .and_then(|animator_model| {
+            models.iter().position(|path| {
+                Path::new(path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| stem.eq_ignore_ascii_case(animator_model))
+            })
+        })
+        .or_else(|| {
+            models.iter().position(|path| {
+                let path = path.to_ascii_lowercase();
+                path.contains("age01") && path.contains("straight")
+            })
         })
         .or_else(|| {
             models

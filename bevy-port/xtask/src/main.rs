@@ -102,12 +102,12 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", model_baseline_path.display()))?;
     for (field, expected) in [
-        ("/schema_version", 2_u64),
+        ("/schema_version", 3_u64),
         ("/models", 253),
-        ("/bytes", 95_464_596),
+        ("/bytes", 96_889_124),
         ("/meshes", 820),
         ("/skins", 43),
-        ("/animations", 33),
+        ("/animations", 165),
         ("/materials", 253),
         ("/images", 1),
     ] {
@@ -290,12 +290,12 @@ fn validate() -> Result<()> {
             }
         }
         if let Some(models) = &archetype.enemy_models {
-            let mut packaged_nodes = BTreeSet::new();
-            for scene in &archetype.scenes {
-                packaged_nodes.extend(glb_node_names(
-                    &Path::new("assets").join(&scene.asset_path),
-                )?);
-            }
+            let scene = archetype
+                .scenes
+                .iter()
+                .find(|scene| scene.is_default)
+                .context("enemy model handler archetype has no default scene")?;
+            let packaged_nodes = glb_node_names(&Path::new("assets").join(&scene.asset_path))?;
             for expected in models
                 .base_models
                 .iter()
@@ -366,6 +366,54 @@ fn validate() -> Result<()> {
         .values()
         .filter(|clip| !clip.transform_tracks.is_empty())
         .count();
+    let embedded_animation_clips = presentation
+        .clips
+        .values()
+        .filter(|clip| clip.converted_asset_path.is_some())
+        .count();
+    let mut glb_animation_counts = BTreeMap::new();
+    for (clip_id, clip) in &presentation.clips {
+        let Some(path) = clip.converted_asset_path.as_ref() else {
+            if clip.gltf_animation_index.is_some() {
+                bail!("animation clip {clip_id} has an index without a converted GLB path");
+            }
+            continue;
+        };
+        let Some(index) = clip.gltf_animation_index else {
+            bail!("animation clip {clip_id} has a converted GLB path without an index");
+        };
+        let count = if let Some(count) = glb_animation_counts.get(path) {
+            *count
+        } else {
+            let count = glb_animation_count(&Path::new("assets").join(path))?;
+            glb_animation_counts.insert(path.clone(), count);
+            count
+        };
+        if usize::try_from(index)
+            .ok()
+            .is_none_or(|index| index >= count)
+        {
+            bail!(
+                "animation clip {clip_id} references animation {index} outside {path}'s {count} animations"
+            );
+        }
+    }
+    for (controller_id, controller) in &presentation.controllers {
+        for motion in controller.states.values().flat_map(|state| &state.motions) {
+            let clip = &presentation.clips[&motion.clip];
+            if Path::new(&clip.source_path)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("fbx"))
+                && (clip.converted_asset_path.is_none() || clip.gltf_animation_index.is_none())
+            {
+                bail!(
+                    "animation controller {controller_id} references unconverted embedded FBX clip {} ({})",
+                    motion.clip,
+                    clip.source_path
+                );
+            }
+        }
+    }
     let transform_tracks: usize = presentation
         .clips
         .values()
@@ -428,8 +476,9 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (11, 133, 33, 75, 31, 94, 166, 22, 18, 141, 181)
+    ) != (13, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
+        || embedded_animation_clips != 122
         || (blend_states, inferred_parameters) != (11, 2)
         || (fixed_transitions, offset_transitions) != (166, 2)
         || weighted_property_keys != 0
@@ -568,7 +617,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes with 44 target sizes, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }
@@ -579,7 +628,30 @@ fn glb_node_names(path: &Path) -> Result<BTreeSet<String>> {
         .with_context(|| format!("failed to inspect GLB nodes in {}", path.display()))
 }
 
+fn glb_animation_count(path: &Path) -> Result<usize> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let document = glb_document_from_bytes(&bytes)
+        .with_context(|| format!("failed to inspect GLB animations in {}", path.display()))?;
+    Ok(document
+        .get("animations")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len))
+}
+
 fn glb_node_names_from_bytes(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    let document = glb_document_from_bytes(bytes)?;
+    let nodes = document
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .context("GLB JSON has no nodes array")?;
+    Ok(nodes
+        .iter()
+        .filter_map(|node| node.get("name").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect())
+}
+
+fn glb_document_from_bytes(bytes: &[u8]) -> Result<serde_json::Value> {
     if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
         bail!("missing glTF 2.0 binary header");
     }
@@ -602,17 +674,7 @@ fn glb_node_names_from_bytes(bytes: &[u8]) -> Result<BTreeSet<String>> {
         .checked_add(usize::try_from(json_length).context("GLB JSON chunk is too large")?)
         .filter(|end| *end <= bytes.len())
         .context("GLB JSON chunk exceeds file bounds")?;
-    let document: serde_json::Value =
-        serde_json::from_slice(&bytes[20..json_end]).context("GLB JSON chunk is invalid")?;
-    let nodes = document
-        .get("nodes")
-        .and_then(serde_json::Value::as_array)
-        .context("GLB JSON has no nodes array")?;
-    Ok(nodes
-        .iter()
-        .filter_map(|node| node.get("name").and_then(serde_json::Value::as_str))
-        .map(str::to_owned)
-        .collect())
+    serde_json::from_slice(&bytes[20..json_end]).context("GLB JSON chunk is invalid")
 }
 
 fn stress(agents: u32) -> Result<()> {
