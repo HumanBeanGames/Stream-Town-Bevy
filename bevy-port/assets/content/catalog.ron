@@ -1,5 +1,12 @@
 (
-    schema_version: 29,
+    schema_version: 30,
+    loading_screen: (
+        progress_milli_per_second: 500,
+        completion_hold_milliseconds: 500,
+        tooltips: [
+            "This is a tooltip! Isn\'t that neat?",
+        ],
+    ),
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",

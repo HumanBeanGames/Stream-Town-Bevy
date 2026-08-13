@@ -12,10 +12,10 @@ use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemyModelSetDef, EnemyRunAnimation,
     EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef,
-    HealthDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution, ProjectileShooterDef,
-    ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StableId,
-    StationDef, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode,
-    TechTree, WeightedEnemySpawn,
+    HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution,
+    ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution,
+    RotatingNodeDef, StableId, StationDef, StorageContribution, StorageModelDef, TargetingScoreDef,
+    TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -29,6 +29,7 @@ const PLAYER_PREFAB: &str = "Assets/Prefabs/Player_Character.prefab";
 const POOL_SETTINGS: &str = "Assets/DefaultSettings/D_ObjectPoolingSettings.asset";
 const LAND_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_FoliageGenSettings.asset";
 const WATER_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_WaterFoliageGenSettings.asset";
+const LOADER_SCENE: &str = "Assets/Scenes/LOADER_INITIAL.unity";
 
 type ArchetypesById = BTreeMap<StableId, ArchetypeDef>;
 type BuildingArchetypesBySlug = BTreeMap<String, (StableId, [u16; 2])>;
@@ -90,6 +91,7 @@ struct UnityAsset {
     #[serde(default)]
     dependencies: Vec<UnityReference>,
     game_object: Option<UnityGameObject>,
+    scene: Option<UnityScene>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +113,13 @@ struct UnityReference {
 struct UnityGameObject {
     #[serde(default)]
     components: Vec<UnityComponent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct UnityScene {
+    #[serde(default)]
+    roots: Vec<UnityGameObject>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -498,6 +507,7 @@ fn convert_export(
         .count();
     let catalog = ContentCatalog {
         schema_version: stream_town_domain::CURRENT_CONTENT_SCHEMA,
+        loading_screen: loading_screen_definition(required_asset(&assets_by_path, LOADER_SCENE)?)?,
         archetypes,
         foliage,
         buildings,
@@ -509,7 +519,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 6,
+        schema_version: 7,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -1853,6 +1863,53 @@ fn component_field_value<'a>(component: &'a UnityComponent, path: &str) -> Optio
         .map(|field| &field.value)
 }
 
+fn loading_screen_definition(asset: &UnityAsset) -> Result<LoadingScreenDef> {
+    let component = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .chain(
+            asset
+                .scene
+                .as_ref()
+                .into_iter()
+                .flat_map(|scene| &scene.roots),
+        )
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component) == "UserInterface.MainMenu.LoadingManager")
+        .with_context(|| format!("{} has no loading manager", asset.path))?;
+    let scaled_milliseconds = |path: &str| -> Result<u32> {
+        let seconds = component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .with_context(|| format!("{} has invalid {path}", asset.path))?;
+        (seconds * 1_000.0)
+            .round()
+            .to_string()
+            .parse::<u32>()
+            .with_context(|| format!("{} {path} is out of range", asset.path))
+    };
+    let tooltip_count = component_field_value(component, "_toolTips.Array.size")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .with_context(|| format!("{} has no loading tooltips", asset.path))?;
+    let tooltips = (0..tooltip_count)
+        .map(|index| {
+            component_field_value(component, &format!("_toolTips.Array.data[{index}]"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+                .with_context(|| format!("{} tooltip {index} is invalid", asset.path))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(LoadingScreenDef {
+        progress_milli_per_second: scaled_milliseconds("_loadingSpeed")?,
+        completion_hold_milliseconds: scaled_milliseconds("_waitTime")?,
+        tooltips,
+    })
+}
+
 fn enum_name(value: &Value) -> Option<&str> {
     value
         .as_object()
@@ -2709,6 +2766,7 @@ mod tests {
             serialized_fields,
             dependencies: Vec::new(),
             game_object: None,
+            scene: None,
         }
     }
 
@@ -2828,6 +2886,36 @@ mod tests {
         assert_eq!(health_bar_hide_milliseconds(&player).unwrap(), Some(3_000));
         player.game_object.as_mut().unwrap().components[0].fields[0].value = Value::from(0.0);
         assert!(health_bar_hide_milliseconds(&player).is_err());
+    }
+
+    #[test]
+    fn converts_loader_timing_and_tooltips() {
+        let mut loader = asset("loader", LOADER_SCENE, "UnityEditor.SceneAsset", vec![]);
+        loader.scene = Some(UnityScene {
+            roots: vec![UnityGameObject {
+                components: vec![component_at(
+                    "LoadingManager",
+                    "UserInterface.MainMenu.LoadingManager, Assembly-CSharp",
+                    vec![
+                        field("_loadingSpeed", Value::from(0.5)),
+                        field("_waitTime", Value::from(0.5)),
+                        field("_toolTips.Array.size", Value::from(1)),
+                        field(
+                            "_toolTips.Array.data[0]",
+                            Value::from("This is a tooltip! Isn't that neat?"),
+                        ),
+                    ],
+                )],
+            }],
+        });
+        assert_eq!(
+            loading_screen_definition(&loader).unwrap(),
+            LoadingScreenDef {
+                progress_milli_per_second: 500,
+                completion_hold_milliseconds: 500,
+                tooltips: vec!["This is a tooltip! Isn't that neat?".to_owned()],
+            }
+        );
     }
 
     #[test]
@@ -3495,11 +3583,35 @@ mod tests {
                 vec![field("_equipmentSets.Array.size", Value::from(0))],
             )],
         });
+        let mut loader = asset(
+            "dddddddddddddddddddddddddddddddd",
+            LOADER_SCENE,
+            "UnityEditor.SceneAsset",
+            vec![],
+        );
+        loader.scene = Some(UnityScene {
+            roots: vec![UnityGameObject {
+                components: vec![component_at(
+                    "LoadingManager",
+                    "UserInterface.MainMenu.LoadingManager, Assembly-CSharp",
+                    vec![
+                        field("_loadingSpeed", Value::from(0.5)),
+                        field("_waitTime", Value::from(0.5)),
+                        field("_toolTips.Array.size", Value::from(1)),
+                        field(
+                            "_toolTips.Array.data[0]",
+                            Value::from("This is a tooltip! Isn't that neat?"),
+                        ),
+                    ],
+                )],
+            }],
+        });
         let export = UnityExport {
             schema_version: 1,
             unity_version: "6000.5.6f1".to_owned(),
             warnings: vec![],
             assets: vec![
+                loader,
                 placer,
                 prefab,
                 player_prefab,
@@ -3621,7 +3733,7 @@ mod tests {
         };
 
         let (catalog, report) = convert_export(&export, "fixture-sha".to_owned()).unwrap();
-        assert_eq!(report.source_assets, 13);
+        assert_eq!(report.source_assets, 14);
         assert_eq!(report.archetypes, 3);
         assert_eq!(report.archetype_scenes, 1);
         assert_eq!(report.disable_after_time_prefabs, 0);

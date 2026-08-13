@@ -917,9 +917,28 @@ struct LoadingIconSpinner {
     radians_per_second: f32,
 }
 
+#[derive(Component)]
+struct LoadingStatusText;
+
+#[derive(Component)]
+struct LoadingPercentText;
+
+#[derive(Component)]
+struct LoadingProgressFill;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum WorldLoadingPhase {
+    #[default]
+    Presenting,
+    Generating,
+    Complete,
+}
+
 #[derive(Resource, Default)]
 struct WorldLoadingRuntime {
-    presented_frame: bool,
+    phase: WorldLoadingPhase,
+    progress: f32,
+    completion_remaining_seconds: f32,
 }
 
 #[derive(Component)]
@@ -1808,7 +1827,12 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(OnEnter(GameState::WorldLoading), spawn_loading_screen)
             .add_systems(
                 Update,
-                (animate_loading_icon, generate_and_spawn_world)
+                (
+                    animate_loading_icon,
+                    generate_and_spawn_world,
+                    advance_loading_phase,
+                    sync_loading_screen_status,
+                )
                     .chain()
                     .run_if(in_state(GameState::WorldLoading)),
             )
@@ -4098,6 +4122,7 @@ fn loading_icon_rotation(content: &ContentCatalog) -> Option<&stream_town_domain
 
 fn spawn_loading_screen(
     mut commands: Commands,
+    config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     render: Res<RenderAssets>,
 ) {
@@ -4128,6 +4153,91 @@ fn spawn_loading_screen(
             },
         ));
     }
+    commands.spawn((
+        LoadingScreenEntity,
+        LoadingStatusText,
+        Text::new("Preparing town..."),
+        TextFont {
+            font_size: FontSize::Px(20.0),
+            ..default()
+        },
+        TextLayout::justify(Justify::Center),
+        TextColor(Color::srgb(0.93, 0.91, 0.78)),
+        GlobalZIndex(103),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(34.0),
+            bottom: percent(20.0),
+            width: percent(32.0),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        LoadingScreenEntity,
+        LoadingPercentText,
+        Text::new("0%"),
+        TextFont {
+            font_size: FontSize::Px(16.0),
+            ..default()
+        },
+        TextLayout::justify(Justify::Center),
+        TextColor(Color::WHITE),
+        GlobalZIndex(103),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(47.0),
+            bottom: percent(15.0),
+            width: percent(6.0),
+            ..default()
+        },
+    ));
+    commands
+        .spawn((
+            LoadingScreenEntity,
+            GlobalZIndex(103),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(30.0),
+                bottom: percent(13.0),
+                width: percent(40.0),
+                height: px(10),
+                padding: UiRect::all(px(1)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.03, 0.04, 0.85)),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                LoadingProgressFill,
+                Node {
+                    width: percent(0.0),
+                    height: percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+            ));
+        });
+    let tooltip = &content.0.loading_screen.tooltips[usize::try_from(config.0.world.seed)
+        .unwrap_or_default()
+        % content.0.loading_screen.tooltips.len()];
+    commands.spawn((
+        LoadingScreenEntity,
+        Text::new(tooltip.clone()),
+        TextFont {
+            font_size: FontSize::Px(15.0),
+            ..default()
+        },
+        TextLayout::justify(Justify::Center),
+        TextColor(Color::srgb(0.82, 0.82, 0.82)),
+        GlobalZIndex(103),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(25.0),
+            bottom: percent(4.0),
+            width: percent(50.0),
+            ..default()
+        },
+    ));
     let Some(icon) = &render.loading_icon else {
         return;
     };
@@ -4150,6 +4260,66 @@ fn spawn_loading_screen(
             ..default()
         },
     ));
+}
+
+fn advance_loading_phase(
+    time: Res<Time>,
+    content: Res<RuntimeContent>,
+    mut loading: ResMut<WorldLoadingRuntime>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    let progress_per_second = Duration::from_millis(u64::from(
+        content.0.loading_screen.progress_milli_per_second,
+    ))
+    .as_secs_f32();
+    if advance_loading_runtime(&mut loading, progress_per_second, time.delta_secs()) {
+        next_state.set(GameState::InGame);
+    }
+}
+
+fn advance_loading_runtime(
+    loading: &mut WorldLoadingRuntime,
+    progress_per_second: f32,
+    delta_seconds: f32,
+) -> bool {
+    let delta_seconds = delta_seconds.max(0.0);
+    match loading.phase {
+        WorldLoadingPhase::Presenting => {
+            loading.phase = WorldLoadingPhase::Generating;
+            false
+        }
+        WorldLoadingPhase::Generating => {
+            loading.progress = (loading.progress + progress_per_second * delta_seconds).min(0.95);
+            false
+        }
+        WorldLoadingPhase::Complete => {
+            loading.completion_remaining_seconds =
+                (loading.completion_remaining_seconds - delta_seconds).max(0.0);
+            loading.completion_remaining_seconds <= 0.0
+        }
+    }
+}
+
+fn sync_loading_screen_status(
+    loading: Res<WorldLoadingRuntime>,
+    mut status: Query<&mut Text, With<LoadingStatusText>>,
+    mut percent_text: Query<&mut Text, (With<LoadingPercentText>, Without<LoadingStatusText>)>,
+    mut fills: Query<&mut Node, With<LoadingProgressFill>>,
+) {
+    let progress_percent = (loading.progress * 100.0).round();
+    if let Ok(mut text) = status.single_mut() {
+        **text = if loading.phase == WorldLoadingPhase::Complete {
+            "Ready".to_owned()
+        } else {
+            "Preparing town...".to_owned()
+        };
+    }
+    if let Ok(mut text) = percent_text.single_mut() {
+        **text = format!("{progress_percent:.0}%");
+    }
+    if let Ok(mut fill) = fills.single_mut() {
+        fill.width = percent(progress_percent);
+    }
 }
 
 fn animate_loading_icon(
@@ -5632,9 +5802,8 @@ fn generate_and_spawn_world(
     mut placers: ResMut<BuildingPlacers>,
     mut agent_commands: ResMut<AgentCommandQueue>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
-    mut next_state: ResMut<NextState<GameState>>,
 ) {
-    if !loading_generation_ready(&mut loading) {
+    if loading.phase != WorldLoadingPhase::Generating {
         return;
     }
     selected.0 = None;
@@ -6382,16 +6551,12 @@ fn generate_and_spawn_world(
     });
     commands.insert_resource(SimulationRuntime(simulation));
     commands.insert_resource(EnvironmentPresentation::default());
-    next_state.set(GameState::InGame);
-}
-
-fn loading_generation_ready(loading: &mut WorldLoadingRuntime) -> bool {
-    if loading.presented_frame {
-        true
-    } else {
-        loading.presented_frame = true;
-        false
-    }
+    loading.phase = WorldLoadingPhase::Complete;
+    loading.progress = 1.0;
+    loading.completion_remaining_seconds = Duration::from_millis(u64::from(
+        content.0.loading_screen.completion_hold_milliseconds,
+    ))
+    .as_secs_f32();
 }
 
 fn actor_material(
@@ -24147,8 +24312,15 @@ mod tests {
         apply_loading_icon_rotation(&mut transform, 500.0_f32.to_radians(), 0.1);
         assert!((transform.rotation.as_degrees() + 50.0).abs() < 1e-5);
         let mut loading = WorldLoadingRuntime::default();
-        assert!(!loading_generation_ready(&mut loading));
-        assert!(loading_generation_ready(&mut loading));
+        assert!(!advance_loading_runtime(&mut loading, 0.5, 0.1));
+        assert_eq!(loading.phase, WorldLoadingPhase::Generating);
+        assert!(!advance_loading_runtime(&mut loading, 0.5, 0.1));
+        assert!((loading.progress - 0.05).abs() < f32::EPSILON);
+        loading.phase = WorldLoadingPhase::Complete;
+        loading.progress = 1.0;
+        loading.completion_remaining_seconds = 0.5;
+        assert!(!advance_loading_runtime(&mut loading, 0.5, 0.49));
+        assert!(advance_loading_runtime(&mut loading, 0.5, 0.02));
         let presentation = embedded_presentation();
         for source_path in [
             LOADING_SCREEN_TEXTURE_PATH,
@@ -27146,6 +27318,30 @@ mod tests {
         );
     }
 
+    fn enter_headless_world(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::WorldLoading);
+        app.update();
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_millis(250),
+        ));
+        for _ in 0..4 {
+            app.update();
+            if *app.world().resource::<State<GameState>>().get() == GameState::InGame {
+                break;
+            }
+        }
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ));
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::InGame
+        );
+    }
+
     #[test]
     fn headless_new_town_matches_shipping_starting_roster() {
         let config = GameConfig::default();
@@ -27165,11 +27361,7 @@ mod tests {
 
         app.update();
         app.update();
-        app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::WorldLoading);
-        app.update();
-        app.update();
+        enter_headless_world(&mut app);
 
         {
             let simulation = &app.world().resource::<SimulationRuntime>().0;
@@ -27233,11 +27425,7 @@ mod tests {
 
         app.update();
         app.update();
-        app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::WorldLoading);
-        app.update();
-        app.update();
+        enter_headless_world(&mut app);
         app.world_mut().resource_mut::<MenuIoRequest>().save = true;
         app.update();
 
@@ -27355,11 +27543,7 @@ mod tests {
 
         app.update();
         app.update();
-        app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::WorldLoading);
-        app.update();
-        app.update();
+        enter_headless_world(&mut app);
         app.world_mut().resource_mut::<MenuIoRequest>().save = true;
         app.update();
 
@@ -27418,11 +27602,7 @@ mod tests {
 
         app.update();
         app.update();
-        app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::WorldLoading);
-        app.update();
-        app.update();
+        enter_headless_world(&mut app);
         app.world_mut().resource_mut::<MenuIoRequest>().save = true;
         app.update();
 
@@ -27530,11 +27710,7 @@ mod tests {
 
         app.update();
         app.update();
-        app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::WorldLoading);
-        app.update();
-        app.update();
+        enter_headless_world(&mut app);
 
         let actual = app
             .world_mut()

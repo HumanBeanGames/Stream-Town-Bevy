@@ -509,6 +509,13 @@ mistaken for production-ready systems.
   hide delay. Bevy now renders a camera-projected red-on-black player health bar
   after damage, keeps it visible while injured, resets its timer after healing,
   and removes it after the authored delay at full health.
+- Content schema 30 promotes `LOADER_INITIAL`'s serialized `LoadingManager`
+  contract: its 0.5 progress rate, 0.5-second completion hold, and tooltip list.
+  `WorldLoading` now presents status, percentage, a progress fill, and a
+  deterministic authored tip; it renders the loading screen for a frame before
+  synchronous generation and holds the truthful `Ready`/100% state for the
+  authored interval before entering the game. The focused tool exposes those
+  values and repository validation locks them to the verified Unity baseline.
 - The `!rid`, parameterless `!station`, and parameterless `!target` command
   paths now reproduce Unity's `UnitTextDisplay` feedback by projecting matching
   numbered labels over recruits, compatible stations, resources, buildings, or

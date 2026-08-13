@@ -8,11 +8,12 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 29;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 30;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
     pub schema_version: u32,
+    pub loading_screen: LoadingScreenDef,
     #[serde(default)]
     pub archetypes: BTreeMap<StableId, ArchetypeDef>,
     #[serde(default)]
@@ -24,6 +25,13 @@ pub struct ContentCatalog {
     pub technology: TechTree,
     #[serde(default)]
     pub source_records: BTreeMap<StableId, AuthoredRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LoadingScreenDef {
+    pub progress_milli_per_second: u32,
+    pub completion_hold_milliseconds: u32,
+    pub tooltips: Vec<String>,
 }
 
 /// An authored Unity foliage generation layer reduced to portable world-space data.
@@ -499,6 +507,8 @@ pub enum AuthoredValue {
 pub enum ContentError {
     #[error("unsupported content schema version {0}")]
     Schema(u32),
+    #[error("loading-screen timing or tooltip data is invalid")]
+    InvalidLoadingScreen,
     #[error("technology {node} references missing prerequisite {prerequisite}")]
     MissingPrerequisite {
         node: StableId,
@@ -601,6 +611,17 @@ impl ContentCatalog {
     pub fn validate(&self) -> Result<(), ContentError> {
         if self.schema_version != CURRENT_CONTENT_SCHEMA {
             return Err(ContentError::Schema(self.schema_version));
+        }
+        if self.loading_screen.progress_milli_per_second == 0
+            || self.loading_screen.completion_hold_milliseconds == 0
+            || self.loading_screen.tooltips.is_empty()
+            || self
+                .loading_screen
+                .tooltips
+                .iter()
+                .any(|tooltip| tooltip.trim().is_empty())
+        {
+            return Err(ContentError::InvalidLoadingScreen);
         }
         let mut foliage_ids = BTreeSet::new();
         for layer in &self.foliage {

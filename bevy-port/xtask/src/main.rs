@@ -239,7 +239,10 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (29, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (30, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        || content.loading_screen.progress_milli_per_second != 500
+        || content.loading_screen.completion_hold_milliseconds != 500
+        || content.loading_screen.tooltips.len() != 1
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }

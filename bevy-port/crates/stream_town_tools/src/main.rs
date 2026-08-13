@@ -344,6 +344,14 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         .count();
     ui.heading("Content catalog and stable references");
     ui.label("Versioned RON uses stable IDs; Unity GUIDs remain in typed provenance records.");
+    let loading_percent_tenths = state.catalog.loading_screen.progress_milli_per_second;
+    ui.label(format!(
+        "Loading: {}.{}%/s · {}ms ready hold · {} tooltip(s)",
+        loading_percent_tenths / 10,
+        loading_percent_tenths % 10,
+        state.catalog.loading_screen.completion_hold_milliseconds,
+        state.catalog.loading_screen.tooltips.len(),
+    ));
     ui.horizontal(|ui| {
         ui.label(format!("Archetypes: {}", state.catalog.archetypes.len()));
         ui.separator();
