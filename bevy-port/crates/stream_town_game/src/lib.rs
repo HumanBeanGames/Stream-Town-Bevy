@@ -16,7 +16,7 @@ use bevy::{
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
-    audio::{AudioPlugin, AudioSink, AudioSinkPlayback, AudioSource, Pitch, Volume},
+    audio::{AudioSink, AudioSinkPlayback, AudioSource, Pitch, Volume},
     camera::ScalingMode,
     color::LinearRgba,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -45,8 +45,8 @@ use stream_town_domain::{
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState, CameraAction,
-    CameraDirection, ChatCommand, ContentCatalog, CustomizationKind, EnemyCampState, GameConfig,
-    GeneratedFoliage, GeneratedWorld, GridPos, LegacyMigrationMetadata,
+    CameraDirection, ChatCommand, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
+    GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, LegacyMigrationMetadata,
     MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
     ObjectiveEvent, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
     PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, SavedTerrainMesh, Season,
@@ -82,6 +82,7 @@ const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
 const MUSIC_TRACK_SECONDS: f32 = 32.0;
 const MUSIC_FADE_IN_SECONDS: f32 = 5.0;
 const MUSIC_FADE_OUT_SECONDS: f32 = 10.0;
+const SETTINGS_MENU_ITEM_COUNT: usize = 29;
 const MUSIC_GAIN: f32 = 0.22;
 const AMBIENCE_GAIN: f32 = 0.16;
 const PROCEDURAL_AUDIO_SAMPLE_RATE: u32 = 16_000;
@@ -218,6 +219,41 @@ struct InjectedCommands(VecDeque<PendingChatCommand>);
 
 #[derive(Resource, Default)]
 struct CommandFeedback(String);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum MenuPage {
+    #[default]
+    Closed,
+    Game,
+    Settings,
+}
+
+#[derive(Resource)]
+struct MenuRuntime {
+    page: MenuPage,
+    return_page: MenuPage,
+    selected: usize,
+    draft: PlayerSettings,
+    feedback: String,
+}
+
+impl Default for MenuRuntime {
+    fn default() -> Self {
+        Self {
+            page: MenuPage::Closed,
+            return_page: MenuPage::Closed,
+            selected: 0,
+            draft: PlayerSettings::default(),
+            feedback: String::new(),
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+struct MenuIoRequest {
+    save: bool,
+    load: bool,
+}
 
 #[derive(Resource, Default)]
 struct CameraCommandQueue(VecDeque<CameraRequest>);
@@ -581,6 +617,9 @@ struct FoliageVisual;
 
 #[derive(Component)]
 struct Hud;
+
+#[derive(Component)]
+struct MenuOverlay;
 
 #[derive(Component)]
 struct TownHall;
@@ -1014,6 +1053,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SessionStats>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
+            .init_resource::<MenuRuntime>()
+            .init_resource::<MenuIoRequest>()
             .init_resource::<CameraCommandQueue>()
             .init_resource::<AgentCommandQueue>()
             .init_resource::<BuildingCommandQueue>()
@@ -1047,7 +1088,10 @@ impl Plugin for StreamTownGamePlugin {
                 ),
             )
             .add_systems(OnEnter(GameState::Boot), finish_boot)
-            .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
+            .add_systems(
+                OnEnter(GameState::MainMenu),
+                (spawn_main_menu, spawn_menu_overlay),
+            )
             .add_systems(
                 Update,
                 upgrade_actor_placeholders.run_if(in_state(GameState::InGame)),
@@ -1063,11 +1107,14 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                main_menu_input.run_if(in_state(GameState::MainMenu)),
+                (main_menu_input, menu_input, update_menu_overlay)
+                    .chain()
+                    .run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
             .add_systems(OnEnter(GameState::WorldLoading), generate_and_spawn_world)
             .add_systems(OnEnter(GameState::InGame), spawn_level_up_toast)
+            .add_systems(OnEnter(GameState::InGame), spawn_menu_overlay)
             .add_systems(
                 Update,
                 (
@@ -1142,6 +1189,13 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                (menu_input, update_menu_overlay)
+                    .chain()
+                    .after(game_input)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 animate_healing_effects
                     .after(move_agents)
                     .run_if(in_state(GameState::InGame)),
@@ -1174,7 +1228,14 @@ impl Plugin for StreamTownGamePlugin {
                 )
                     .run_if(in_state(GameState::InGame)),
             )
-            .add_systems(OnExit(GameState::InGame), cleanup_world)
+            .add_systems(
+                OnExit(GameState::InGame),
+                (cleanup_world, cleanup_menu_overlay),
+            )
+            .add_systems(
+                Update,
+                apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
+            )
             .add_systems(OnEnter(GameState::Credits), spawn_credits)
             .add_systems(
                 Update,
@@ -1209,10 +1270,6 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
             DefaultPlugins
                 .set(AssetPlugin {
                     file_path: asset_root.to_string_lossy().into_owned(),
-                    ..default()
-                })
-                .set(AudioPlugin {
-                    global_volume: GlobalVolume::new(Volume::Linear(player_settings.audio.master)),
                     ..default()
                 })
                 .set(WindowPlugin {
@@ -1620,8 +1677,9 @@ fn apply_player_settings(
     settings: Res<RuntimePlayerSettings>,
     mut commands: Commands,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
-    mut cameras: Query<Entity, With<TownCamera>>,
+    mut cameras: Query<(Entity, &mut Projection), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
+    mut shadow_map: Option<ResMut<DirectionalLightShadowMap>>,
     mut winit: Option<ResMut<WinitSettings>>,
 ) {
     if let Ok(mut window) = windows.single_mut() {
@@ -1636,16 +1694,21 @@ fn apply_player_settings(
             f32::from(u16::try_from(settings.0.video.height).unwrap_or(u16::MAX)),
         );
     }
-    let msaa = Msaa::from_samples(u32::from(settings.0.video.msaa_samples));
-    for entity in &mut cameras {
+    let msaa = player_msaa(&settings.0);
+    for (entity, mut projection) in &mut cameras {
         let mut grading = ColorGrading::default();
         grading.global.exposure = settings.0.video.brightness_ev;
         let gamma = (1.0 + settings.0.video.gamma * 0.1).clamp(0.5, 1.5);
         grading.shadows.gamma = gamma;
         grading.midtones.gamma = gamma;
         grading.highlights.gamma = gamma;
+        if let Projection::Orthographic(orthographic) = &mut *projection {
+            orthographic.scale = f32::from(settings.0.camera.field_of_view_degrees) / 60.0;
+        }
         let mut entity_commands = commands.entity(entity);
         entity_commands.insert((msaa, grading));
+        entity_commands.remove::<Fxaa>();
+        entity_commands.remove::<Smaa>();
         match settings.0.video.post_process_aa {
             PostProcessAntiAliasing::None => {}
             PostProcessAntiAliasing::Fxaa => {
@@ -1657,10 +1720,15 @@ fn apply_player_settings(
         }
         if settings.0.video.ambient_occlusion {
             entity_commands.insert(ScreenSpaceAmbientOcclusion::default());
+        } else {
+            entity_commands.remove::<ScreenSpaceAmbientOcclusion>();
         }
     }
     for mut light in &mut lights {
         light.shadow_maps_enabled = settings.0.video.shadows_enabled;
+    }
+    if let Some(shadow_map) = shadow_map.as_deref_mut() {
+        shadow_map.size = usize::from(settings.0.video.shadow_map_resolution);
     }
     if let Some(winit) = winit.as_deref_mut() {
         winit.focused_mode = settings
@@ -1670,6 +1738,16 @@ fn apply_player_settings(
             .map_or(UpdateMode::Continuous, |limit| {
                 UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
             });
+    }
+}
+
+fn player_msaa(settings: &PlayerSettings) -> Msaa {
+    // Bevy 0.19's SSAO render node requires multisampling to be disabled.
+    // Retain the authored MSAA preference and apply it whenever SSAO is off.
+    if settings.video.ambient_occlusion {
+        Msaa::Off
+    } else {
+        Msaa::from_samples(u32::from(settings.video.msaa_samples))
     }
 }
 
@@ -1710,7 +1788,7 @@ fn setup_procedural_jukebox(
         AmbienceAudio,
         AudioPlayer(ambience.clone()),
         PlaybackSettings::LOOP.with_volume(Volume::Linear(
-            AMBIENCE_GAIN * player_settings.0.audio.ambience,
+            AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
         )),
     ));
     jukebox.ambience = Some(ambience);
@@ -1730,7 +1808,7 @@ fn drive_procedural_jukebox(
 ) {
     for mut sink in &mut ambience_sinks {
         sink.set_volume(Volume::Linear(
-            AMBIENCE_GAIN * player_settings.0.audio.ambience,
+            AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
         ));
     }
     let Some(simulation) = simulation else {
@@ -1760,7 +1838,7 @@ fn drive_procedural_jukebox(
         let fade = jukebox_music_fade(jukebox.elapsed_seconds, MUSIC_TRACK_SECONDS);
         if let Ok(mut sink) = music_sinks.get_mut(entity) {
             sink.set_volume(Volume::Linear(
-                MUSIC_GAIN * player_settings.0.audio.music * fade,
+                MUSIC_GAIN * player_settings.0.audio.master * player_settings.0.audio.music * fade,
             ));
         }
         if jukebox.elapsed_seconds >= MUSIC_TRACK_SECONDS {
@@ -2356,7 +2434,7 @@ fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
     spawn_cloud_field(&mut commands, &render, 72.0);
     commands.spawn((
         StateEntity,
-        Text::new("STREAM TOWN\n\nENTER  Generate Town\nC  Credits\nESC  Quit"),
+        Text::new("STREAM TOWN\n\nENTER  Generate Town\nS  Menu & Settings\nC  Credits\nESC  Quit"),
         TextFont {
             font_size: FontSize::Px(48.0),
             ..default()
@@ -2386,16 +2464,501 @@ fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height
 
 fn main_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    menu: Res<MenuRuntime>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if menu.page != MenuPage::Closed {
+        return;
+    }
     if keyboard.just_pressed(KeyCode::Enter) {
         next_state.set(GameState::WorldLoading);
     } else if keyboard.just_pressed(KeyCode::KeyC) {
         next_state.set(GameState::Credits);
-    } else if keyboard.just_pressed(KeyCode::Escape) {
+    } else if keyboard.just_pressed(KeyCode::Escape)
+        && !keyboard.pressed(KeyCode::ShiftLeft)
+        && !keyboard.pressed(KeyCode::ShiftRight)
+    {
         exit.write(AppExit::Success);
     }
+}
+
+fn spawn_menu_overlay(
+    mut commands: Commands,
+    mut menu: ResMut<MenuRuntime>,
+    settings: Res<RuntimePlayerSettings>,
+) {
+    if std::env::var_os("STREAM_TOWN_AUTOSTART_SETTINGS").is_some() {
+        open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
+    }
+    commands.spawn((
+        StateEntity,
+        MenuOverlay,
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(20.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.92, 0.97, 0.91)),
+        Visibility::Hidden,
+        GlobalZIndex(100),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(5.0),
+            top: percent(3.0),
+            width: percent(90.0),
+            min_height: percent(90.0),
+            padding: UiRect::all(px(28)),
+            border: UiRect::all(px(2)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.025, 0.045, 0.04, 0.97)),
+        BorderColor::all(Color::srgb(0.42, 0.76, 0.52)),
+    ));
+}
+
+fn update_menu_overlay(
+    state: Res<State<GameState>>,
+    menu: Res<MenuRuntime>,
+    save: Res<SaveRuntime>,
+    mut overlay: Query<(&mut Text, &mut Visibility), With<MenuOverlay>>,
+) {
+    let Ok((mut text, mut visibility)) = overlay.single_mut() else {
+        return;
+    };
+    if menu.page == MenuPage::Closed {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    **text = match menu.page {
+        MenuPage::Closed => String::new(),
+        MenuPage::Game => game_menu_text(*state.get(), menu.selected, save.store.path().is_file()),
+        MenuPage::Settings => settings_menu_text(&menu.draft, menu.selected, &menu.feedback),
+    };
+    *visibility = Visibility::Visible;
+}
+
+fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
+    use std::fmt::Write as _;
+
+    let items: &[(&str, bool)] = if state == GameState::InGame {
+        &[
+            ("Resume", true),
+            ("Save game", true),
+            ("Load game", has_save),
+            ("Settings", true),
+            ("Main menu", true),
+        ]
+    } else {
+        &[
+            ("New town", true),
+            ("Load game", has_save),
+            ("Settings", true),
+            ("Credits", true),
+            ("Quit", true),
+        ]
+    };
+    let mut text = String::from("STREAM TOWN MENU\n\n");
+    for (index, (label, enabled)) in items.iter().enumerate() {
+        let marker = if index == selected { ">" } else { " " };
+        let suffix = if *enabled { "" } else { "  [No save]" };
+        writeln!(text, "{marker} {label}{suffix}").expect("writing to String cannot fail");
+    }
+    text.push_str("\nUP/DOWN Select   ENTER Confirm   ESC Resume/Close");
+    text
+}
+
+fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str) -> String {
+    use std::fmt::Write as _;
+    const COLUMN_BREAK: usize = 15;
+
+    let video = &settings.video;
+    let camera = &settings.camera;
+    let interface = &settings.interface;
+    let items = [
+        format!("Display mode: {:?}", video.display_mode),
+        format!("Resolution: {} x {}", video.width, video.height),
+        format!("VSync: {}", on_off(video.vsync)),
+        format!(
+            "FPS limit: {}",
+            video
+                .fps_limit
+                .map_or("Unlimited".to_owned(), |value| value.to_string())
+        ),
+        format!("Shadows: {}", on_off(video.shadows_enabled)),
+        format!("Shadow map: {}", video.shadow_map_resolution),
+        format!("Ambient occlusion: {}", on_off(video.ambient_occlusion)),
+        format!("MSAA samples: {}", video.msaa_samples),
+        format!("Post-process AA: {:?}", video.post_process_aa),
+        format!("Brightness: {:.1}", video.brightness_ev),
+        format!("Gamma: {:.1}", video.gamma),
+        format!("Master volume: {}%", volume_percent(settings.audio.master)),
+        format!("Music volume: {}%", volume_percent(settings.audio.music)),
+        format!(
+            "Sound effects: {}%",
+            volume_percent(settings.audio.sound_effects)
+        ),
+        format!(
+            "Ambience volume: {}%",
+            volume_percent(settings.audio.ambience)
+        ),
+        format!("Keyboard movement: {}", on_off(camera.keyboard_movement)),
+        format!("Mouse controls: {}", on_off(camera.mouse_controls)),
+        format!("Edge scrolling: {}", on_off(camera.edge_scrolling)),
+        format!("Mouse pan sensitivity: {:.0}", camera.pan_sensitivity),
+        format!("Zoom sensitivity: {:.0}", camera.zoom_sensitivity),
+        format!(
+            "Keyboard pan sensitivity: {:.0}",
+            camera.keyboard_pan_sensitivity
+        ),
+        format!(
+            "Edge scroll sensitivity: {:.0}",
+            camera.edge_scroll_sensitivity
+        ),
+        format!("Camera field of view: {}", camera.field_of_view_degrees),
+        format!("Name display: {:?}", interface.display_names),
+        format!("Building health: {:?}", interface.display_building_health),
+        format!(
+            "Autosave: {}",
+            if settings.autosave_minutes == 0 {
+                "Off".to_owned()
+            } else {
+                format!("{} min", settings.autosave_minutes)
+            }
+        ),
+        "Apply and save".to_owned(),
+        "Restore Unity defaults".to_owned(),
+        "Cancel changes".to_owned(),
+    ];
+    let mut text = String::from("SETTINGS\n\n");
+    for row in 0..COLUMN_BREAK {
+        let left = settings_menu_item(&items, row, selected);
+        let right = settings_menu_item(&items, row + COLUMN_BREAK, selected);
+        writeln!(text, "{left:<44}{right}").expect("writing to String cannot fail");
+    }
+    text.push_str("\nUP/DOWN Select   LEFT/RIGHT Change   ENTER Confirm   ESC Cancel");
+    if !feedback.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(feedback);
+    }
+    text
+}
+
+fn settings_menu_item(items: &[String], index: usize, selected: usize) -> String {
+    items.get(index).map_or_else(String::new, |item| {
+        format!("{} {item}", if index == selected { ">" } else { " " })
+    })
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "On" } else { "Off" }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn volume_percent(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 100.0).round() as u8
+}
+
+fn menu_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    state: Res<State<GameState>>,
+    save: Res<SaveRuntime>,
+    mut menu: ResMut<MenuRuntime>,
+    mut io: ResMut<MenuIoRequest>,
+    mut player_settings: ResMut<RuntimePlayerSettings>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let shift_escape = keyboard.just_pressed(KeyCode::Escape)
+        && (keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight));
+    let open_key = if *state.get() == GameState::InGame {
+        keyboard.just_pressed(KeyCode::Escape)
+    } else {
+        shift_escape || keyboard.just_pressed(KeyCode::KeyS)
+    };
+    if menu.page == MenuPage::Closed {
+        if open_key {
+            menu.page = MenuPage::Game;
+            menu.return_page = MenuPage::Closed;
+            menu.selected = 0;
+            menu.feedback.clear();
+        }
+        return;
+    }
+    if keyboard.just_pressed(KeyCode::Escape) {
+        let target = menu.return_page;
+        menu.page = target;
+        if target == MenuPage::Game {
+            menu.return_page = MenuPage::Closed;
+        }
+        menu.selected = 0;
+        menu.feedback.clear();
+        return;
+    }
+    let item_count = if menu.page == MenuPage::Settings {
+        SETTINGS_MENU_ITEM_COUNT
+    } else {
+        5
+    };
+    if keyboard.just_pressed(KeyCode::ArrowUp) {
+        menu.selected = menu.selected.checked_sub(1).unwrap_or(item_count - 1);
+    } else if keyboard.just_pressed(KeyCode::ArrowDown) {
+        menu.selected = (menu.selected + 1) % item_count;
+    }
+    if menu.page == MenuPage::Settings {
+        let adjustment = i8::from(keyboard.just_pressed(KeyCode::ArrowRight))
+            - i8::from(keyboard.just_pressed(KeyCode::ArrowLeft));
+        if adjustment != 0 {
+            let selected = menu.selected;
+            adjust_settings_menu(&mut menu.draft, selected, adjustment);
+            menu.feedback.clear();
+        }
+        if !keyboard.just_pressed(KeyCode::Enter) {
+            return;
+        }
+        match menu.selected {
+            26 => {
+                if let Err(error) = menu.draft.validate() {
+                    menu.feedback = format!("Settings are invalid: {error}");
+                } else {
+                    match PlayerSettingsStore::new(player_settings_path()).write(&menu.draft) {
+                        Ok(()) => {
+                            player_settings.0 = menu.draft.clone();
+                            "Applied and saved settings".clone_into(&mut menu.feedback);
+                        }
+                        Err(error) => {
+                            menu.feedback = format!("Settings could not be saved: {error}");
+                        }
+                    }
+                }
+            }
+            27 => {
+                menu.draft = PlayerSettings::default();
+                "Restored Unity defaults in this draft".clone_into(&mut menu.feedback);
+            }
+            28 => {
+                let target = menu.return_page;
+                menu.page = target;
+                if target == MenuPage::Game {
+                    menu.return_page = MenuPage::Closed;
+                }
+                menu.selected = 0;
+                menu.feedback.clear();
+            }
+            _ => {
+                let selected = menu.selected;
+                adjust_settings_menu(&mut menu.draft, selected, 1);
+            }
+        }
+        return;
+    }
+    if !keyboard.just_pressed(KeyCode::Enter) {
+        return;
+    }
+    if *state.get() == GameState::InGame {
+        match menu.selected {
+            0 => menu.page = MenuPage::Closed,
+            1 => {
+                io.save = true;
+                "Save requested".clone_into(&mut menu.feedback);
+                menu.page = MenuPage::Closed;
+            }
+            2 if save.store.path().is_file() => {
+                io.load = true;
+                menu.page = MenuPage::Closed;
+            }
+            3 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
+            4 => {
+                menu.page = MenuPage::Closed;
+                next_state.set(GameState::MainMenu);
+            }
+            _ => "No native save exists yet".clone_into(&mut menu.feedback),
+        }
+    } else {
+        match menu.selected {
+            0 => {
+                menu.page = MenuPage::Closed;
+                next_state.set(GameState::WorldLoading);
+            }
+            1 if save.store.path().is_file() => {
+                io.load = true;
+                menu.page = MenuPage::Closed;
+                next_state.set(GameState::WorldLoading);
+            }
+            2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
+            3 => {
+                menu.page = MenuPage::Closed;
+                next_state.set(GameState::Credits);
+            }
+            4 => {
+                exit.write(AppExit::Success);
+            }
+            _ => "No native save exists yet".clone_into(&mut menu.feedback),
+        }
+    }
+}
+
+fn open_settings_menu(menu: &mut MenuRuntime, return_page: MenuPage, settings: &PlayerSettings) {
+    menu.page = MenuPage::Settings;
+    menu.return_page = return_page;
+    menu.selected = 0;
+    menu.draft = settings.clone();
+    menu.feedback.clear();
+}
+
+fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, direction: i8) {
+    let increase = direction > 0;
+    match selected {
+        0 => {
+            settings.video.display_mode = match (settings.video.display_mode, increase) {
+                (DisplayMode::Windowed, true) | (DisplayMode::Fullscreen, false) => {
+                    DisplayMode::Borderless
+                }
+                (DisplayMode::Borderless, true) | (DisplayMode::Windowed, false) => {
+                    DisplayMode::Fullscreen
+                }
+                (DisplayMode::Borderless, false) | (DisplayMode::Fullscreen, true) => {
+                    DisplayMode::Windowed
+                }
+            };
+        }
+        1 => {
+            const RESOLUTIONS: [(u32, u32); 6] = [
+                (1_280, 720),
+                (1_600, 900),
+                (1_920, 1_080),
+                (2_560, 1_440),
+                (3_440, 1_440),
+                (3_840, 2_160),
+            ];
+            let resolution = cycle_choice(
+                &RESOLUTIONS,
+                (settings.video.width, settings.video.height),
+                increase,
+            );
+            (settings.video.width, settings.video.height) = resolution;
+        }
+        2 => settings.video.vsync = !settings.video.vsync,
+        3 => {
+            const LIMITS: [Option<u16>; 6] =
+                [Some(24), Some(30), Some(60), Some(120), Some(240), None];
+            settings.video.fps_limit = cycle_choice(&LIMITS, settings.video.fps_limit, increase);
+        }
+        4 => settings.video.shadows_enabled = !settings.video.shadows_enabled,
+        5 => {
+            const RESOLUTIONS: [u16; 5] = [256, 512, 1_024, 2_048, 4_096];
+            settings.video.shadow_map_resolution =
+                cycle_choice(&RESOLUTIONS, settings.video.shadow_map_resolution, increase);
+        }
+        6 => settings.video.ambient_occlusion = !settings.video.ambient_occlusion,
+        7 => {
+            const SAMPLES: [u8; 4] = [1, 2, 4, 8];
+            settings.video.msaa_samples =
+                cycle_choice(&SAMPLES, settings.video.msaa_samples, increase);
+        }
+        8 => {
+            const MODES: [PostProcessAntiAliasing; 3] = [
+                PostProcessAntiAliasing::None,
+                PostProcessAntiAliasing::Fxaa,
+                PostProcessAntiAliasing::Smaa,
+            ];
+            settings.video.post_process_aa =
+                cycle_choice(&MODES, settings.video.post_process_aa, increase);
+        }
+        9 => {
+            settings.video.brightness_ev =
+                step_f32(settings.video.brightness_ev, direction, -5.0, 5.0, 0.5);
+        }
+        10 => settings.video.gamma = step_f32(settings.video.gamma, direction, -5.0, 5.0, 0.5),
+        11 => settings.audio.master = step_f32(settings.audio.master, direction, 0.0, 1.0, 0.05),
+        12 => settings.audio.music = step_f32(settings.audio.music, direction, 0.0, 1.0, 0.05),
+        13 => {
+            settings.audio.sound_effects =
+                step_f32(settings.audio.sound_effects, direction, 0.0, 1.0, 0.05);
+        }
+        14 => {
+            settings.audio.ambience = step_f32(settings.audio.ambience, direction, 0.0, 1.0, 0.05);
+        }
+        15 => settings.camera.keyboard_movement = !settings.camera.keyboard_movement,
+        16 => settings.camera.mouse_controls = !settings.camera.mouse_controls,
+        17 => settings.camera.edge_scrolling = !settings.camera.edge_scrolling,
+        18 => {
+            settings.camera.pan_sensitivity =
+                step_f32(settings.camera.pan_sensitivity, direction, 0.0, 100.0, 1.0);
+        }
+        19 => {
+            settings.camera.zoom_sensitivity =
+                step_f32(settings.camera.zoom_sensitivity, direction, 0.0, 100.0, 1.0);
+        }
+        20 => {
+            settings.camera.keyboard_pan_sensitivity = step_f32(
+                settings.camera.keyboard_pan_sensitivity,
+                direction,
+                0.0,
+                100.0,
+                1.0,
+            );
+        }
+        21 => {
+            settings.camera.edge_scroll_sensitivity = step_f32(
+                settings.camera.edge_scroll_sensitivity,
+                direction,
+                0.0,
+                100.0,
+                1.0,
+            );
+        }
+        22 => {
+            settings.camera.field_of_view_degrees =
+                step_u16(settings.camera.field_of_view_degrees, direction, 30, 120, 5);
+        }
+        23 => {
+            const MODES: [NameDisplayMode; 3] = [
+                NameDisplayMode::None,
+                NameDisplayMode::StaffAndSubscribers,
+                NameDisplayMode::AllPlayers,
+            ];
+            settings.interface.display_names =
+                cycle_choice(&MODES, settings.interface.display_names, increase);
+        }
+        24 => {
+            const MODES: [BuildingHealthDisplayMode; 3] = [
+                BuildingHealthDisplayMode::None,
+                BuildingHealthDisplayMode::DamagedOnly,
+                BuildingHealthDisplayMode::Always,
+            ];
+            settings.interface.display_building_health =
+                cycle_choice(&MODES, settings.interface.display_building_health, increase);
+        }
+        25 => {
+            const MINUTES: [u16; 5] = [0, 5, 10, 30, 60];
+            settings.autosave_minutes = cycle_choice(&MINUTES, settings.autosave_minutes, increase);
+        }
+        _ => {}
+    }
+}
+
+fn cycle_choice<T: Copy + PartialEq>(choices: &[T], current: T, increase: bool) -> T {
+    let current = choices
+        .iter()
+        .position(|choice| *choice == current)
+        .unwrap_or_default();
+    let next = if increase {
+        (current + 1) % choices.len()
+    } else {
+        current.checked_sub(1).unwrap_or(choices.len() - 1)
+    };
+    choices[next]
+}
+
+fn step_f32(value: f32, direction: i8, minimum: f32, maximum: f32, step: f32) -> f32 {
+    (value + f32::from(direction) * step).clamp(minimum, maximum)
+}
+
+fn step_u16(value: u16, direction: i8, minimum: u16, maximum: u16, step: u16) -> u16 {
+    let delta = i32::from(direction) * i32::from(step);
+    u16::try_from((i32::from(value) + delta).clamp(i32::from(minimum), i32::from(maximum)))
+        .expect("clamped camera setting fits u16")
 }
 
 fn debug_start_day() -> Option<u32> {
@@ -8260,8 +8823,9 @@ fn drive_converted_animations(
                     cue.display_name, cue.actor
                 )),
                 AudioPlayer(source),
-                PlaybackSettings::DESPAWN
-                    .with_volume(Volume::Linear(0.08 * player_settings.0.audio.sound_effects)),
+                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(
+                    0.08 * player_settings.0.audio.master * player_settings.0.audio.sound_effects,
+                )),
             ));
         }
     }
@@ -8862,11 +9426,15 @@ fn camera_controls(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
+    menu: Res<MenuRuntime>,
     settings: Res<RuntimePlayerSettings>,
     mut requests: ResMut<CameraCommandQueue>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<TownCamera>>,
 ) {
+    if menu.page != MenuPage::Closed {
+        return;
+    }
     let Ok((mut transform, mut projection)) = cameras.single_mut() else {
         return;
     };
@@ -9271,12 +9839,12 @@ fn select_grid_cell(
 
 fn game_input(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut next_state: ResMut<NextState<GameState>>,
+    menu: Res<MenuRuntime>,
     mut injected: ResMut<InjectedCommands>,
     mut injected_debug_commands: Local<bool>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        next_state.set(GameState::MainMenu);
+    if menu.page != MenuPage::Closed {
+        return;
     }
     if keyboard.just_pressed(KeyCode::KeyJ) {
         injected.0.push_back(PendingChatCommand {
@@ -9437,13 +10005,15 @@ fn handle_twitch_event(
 
 fn save_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut io: ResMut<MenuIoRequest>,
     save: Res<SaveRuntime>,
     world: Res<WorldRuntime>,
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
     agents: Query<(&Agent, &GridLocation)>,
 ) {
-    if !keyboard.just_pressed(KeyCode::F5) {
+    let requested = std::mem::take(&mut io.save);
+    if !keyboard.just_pressed(KeyCode::F5) && !requested {
         return;
     }
     let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
@@ -9483,6 +10053,7 @@ fn autosave_game(
 fn load_input(
     mut ecs: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut io: ResMut<MenuIoRequest>,
     save: Res<SaveRuntime>,
     mut world: ResMut<WorldRuntime>,
     config: Res<RuntimeConfig>,
@@ -9503,7 +10074,8 @@ fn load_input(
     mut automatic_complete: Local<bool>,
 ) {
     let automatic = !*automatic_complete && std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some();
-    if !keyboard.just_pressed(KeyCode::F9) && !automatic {
+    let requested = std::mem::take(&mut io.load);
+    if !keyboard.just_pressed(KeyCode::F9) && !automatic && !requested {
         return;
     }
     *automatic_complete = true;
@@ -13240,6 +13812,12 @@ fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntit
     commands.insert_resource(BuildingCommandQueue::default());
 }
 
+fn cleanup_menu_overlay(mut commands: Commands, overlays: Query<Entity, With<MenuOverlay>>) {
+    for entity in &overlays {
+        commands.entity(entity).despawn();
+    }
+}
+
 fn should_show_actor_name(mode: NameDisplayMode, user_type: StreamUserType) -> bool {
     match mode {
         NameDisplayMode::None => false,
@@ -13884,6 +14462,81 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 mod tests {
     use super::*;
     use stream_town_domain::generate_world;
+
+    #[test]
+    fn game_menu_exposes_state_appropriate_actions_and_save_availability() {
+        let in_game = game_menu_text(GameState::InGame, 2, false);
+        assert!(in_game.contains("STREAM TOWN MENU"));
+        assert!(in_game.contains("> Load game  [No save]"));
+        assert!(in_game.contains("Main menu"));
+
+        let main_menu = game_menu_text(GameState::MainMenu, 1, true);
+        assert!(main_menu.contains("New town"));
+        assert!(main_menu.contains("> Load game\n"));
+        assert!(main_menu.contains("Credits"));
+        assert!(main_menu.contains("Quit"));
+    }
+
+    #[test]
+    fn settings_menu_edits_a_complete_valid_draft() {
+        let original = PlayerSettings::default();
+        let mut draft = original.clone();
+
+        adjust_settings_menu(&mut draft, 0, 1);
+        adjust_settings_menu(&mut draft, 1, 1);
+        adjust_settings_menu(&mut draft, 5, -1);
+        adjust_settings_menu(&mut draft, 8, 1);
+        adjust_settings_menu(&mut draft, 11, -1);
+        adjust_settings_menu(&mut draft, 18, 1);
+        adjust_settings_menu(&mut draft, 22, 1);
+        adjust_settings_menu(&mut draft, 23, 1);
+        adjust_settings_menu(&mut draft, 25, 1);
+
+        assert_ne!(draft, original);
+        assert_eq!(draft.video.display_mode, DisplayMode::Windowed);
+        assert_eq!((draft.video.width, draft.video.height), (2_560, 1_440));
+        assert_eq!(draft.video.shadow_map_resolution, 2_048);
+        assert_eq!(draft.video.post_process_aa, PostProcessAntiAliasing::None);
+        assert!((draft.audio.master - 0.95).abs() < f32::EPSILON);
+        assert!((draft.camera.pan_sensitivity - 11.0).abs() < f32::EPSILON);
+        assert_eq!(draft.camera.field_of_view_degrees, 65);
+        assert_eq!(
+            draft.interface.display_names,
+            NameDisplayMode::StaffAndSubscribers
+        );
+        assert_eq!(draft.autosave_minutes, 60);
+        draft.validate().unwrap();
+
+        let text = settings_menu_text(&draft, SETTINGS_MENU_ITEM_COUNT - 1, "draft feedback");
+        assert!(text.contains("> Cancel changes"));
+        assert!(text.contains("Resolution: 2560 x 1440"));
+        assert!(text.contains("draft feedback"));
+    }
+
+    #[test]
+    fn ssao_disables_incompatible_msaa_without_losing_the_preference() {
+        let mut settings = PlayerSettings::default();
+        settings.video.msaa_samples = 8;
+        settings.video.ambient_occlusion = true;
+        assert_eq!(player_msaa(&settings), Msaa::Off);
+        assert_eq!(settings.video.msaa_samples, 8);
+
+        settings.video.ambient_occlusion = false;
+        assert_eq!(player_msaa(&settings), Msaa::Sample8);
+    }
+
+    #[test]
+    fn in_game_menu_overlay_cleanup_does_not_remove_world_entities() {
+        let mut app = App::new();
+        app.add_systems(Update, cleanup_menu_overlay);
+        let overlay = app.world_mut().spawn(MenuOverlay).id();
+        let world_entity = app.world_mut().spawn(WorldEntity).id();
+
+        app.update();
+
+        assert!(app.world().get_entity(overlay).is_err());
+        assert!(app.world().get_entity(world_entity).is_ok());
+    }
 
     #[test]
     fn production_crowd_lod_budget_matches_measured_gpu_gate() {

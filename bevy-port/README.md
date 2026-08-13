@@ -110,10 +110,13 @@ Player preferences are written atomically to `.stream-town/settings.ron` with a
 backup. On first launch, the Windows game imports Unity's
 `Documents/Panda Belly/Stream Town/SettingsData.json` when available; set
 `STREAM_TOWN_PLAYER_SETTINGS_PATH` or `STREAM_TOWN_UNITY_SETTINGS_PATH` to use
-explicit paths. The Settings tab in `stream_town_tools` edits and validates the
-native file. Window mode/resolution, VSync/FPS limit, MSAA, shadows, SSAO,
-brightness/gamma, audio volume, keyboard/mouse/edge camera controls, and the
-Unity 0/5/10/30/60-minute autosave choices are applied by the runtime.
+explicit paths. The Settings tab in `stream_town_tools` and the shipping Main
+Menu/in-game Escape panel edit and validate the native file. The runtime panel
+uses a draft workflow with apply/save, restore-defaults, and cancel actions.
+Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
+shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
+all camera controls/sensitivities, name/building-health overlays, and the Unity
+0/5/10/30/60-minute autosave choices are applied by the runtime.
 Because the Unity repository contains no redistributable soundtrack files, the
 runtime synthesizes four seasonal day/night music beds and a continuous ambient
 wind/bird loop. Unity's separate master, music, ambience, and sound-effect gains,
@@ -131,7 +134,9 @@ local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass
 
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
-save/load, F12 to capture a screenshot, and Escape to return to the menu. The
+save/load, F12 to capture a screenshot, and Escape to open the game menu. Use
+arrow keys and Enter to select Resume, Save, Load, Settings, or Main Menu. The
+Main Menu's `S` shortcut opens the same keyboard-driven settings workflow. The
 stable chat grammar executes the player query, role/station/target selection,
 cosmetic/pet, building/catalog, recruit administration, ruler economy, camera,
 governance, moderation, save, and event commands documented by `!help` with
@@ -354,6 +359,8 @@ state deterministically.
 `STREAM_TOWN_AUTOSTART_CREDITS=1` opens the Credits state directly, and
 `STREAM_TOWN_DEBUG_CREDITS_TIME=<seconds>` starts its authored timeline at a
 specific point for repeatable property-curve smoke captures.
+`STREAM_TOWN_AUTOSTART_SETTINGS=1` opens the settings overlay on state entry so
+its complete runtime draft can be captured repeatably.
 `STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips use Bevy animation graphs (currently the shipping

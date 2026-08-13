@@ -18,9 +18,12 @@ mistaken for production-ready systems.
   The runtime imports the legacy `SettingsData.json` once when present, writes
   validated RON atomically with backup recovery, applies display mode,
   resolution, VSync/FPS limiting, MSAA, shadows, shadow-map size, SSAO,
-  brightness/gamma, master/SFX volume, and camera sensitivities, and performs
-  autosaves at Unity's 0/5/10/30/60-minute intervals. The tools application has
-  a dedicated settings editor, reset, validation, and save workflow.
+  brightness/gamma, independent master/music/ambience/SFX volume, and camera
+  controls/sensitivities, and performs autosaves at Unity's
+  0/5/10/30/60-minute intervals. The keyboard-driven Main Menu and in-game
+  Escape panel expose every persisted setting through an apply/default/cancel
+  draft workflow plus new/load/save/credits/quit actions. The tools application
+  has the same dedicated settings editor, reset, validation, and save workflow.
 - Unity's name-display index semantics now drive camera-projected player labels,
   including the privileged-user-only mode and the original game-master,
   broadcaster, moderator, subscriber, and normal-user colors. Twitch privilege
@@ -456,8 +459,10 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining reachable WGSL shader ports, VFX, UI parity, post-processing,
-  rare action/UI sound cues, and accessibility.
+- Remaining reachable WGSL shader ports, VFX, detailed HUD/menu art parity,
+  post-processing, rare action/UI sound cues, and screen-reader/accessibility
+  verification. The functional Main Menu, in-game menu, save/load actions, and
+  complete persisted-settings workflow are live.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph
@@ -519,7 +524,8 @@ persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
 storage, stat, and building-age effects, production command wording, saved
-player settings, and camera-projected player/building overlays. It is still
+player settings, a complete runtime settings/menu workflow, and
+camera-projected player/building overlays. It is still
 missing rare/non-gameplay action emitters, remaining chunked LOD work,
 particle fields, remaining custom-shader parity, and the recorded
 reference-machine GPU measurement required to close the milestone.
