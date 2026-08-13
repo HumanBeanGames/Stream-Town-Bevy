@@ -376,6 +376,10 @@ its exact `MainMaterial` binding. The typed material retains Unity's
 vertex-colour neck/head masks, non-normalized rotation-axis math, textured PBR
 surface, and Bevy skinning path. Live equipped pets now receive the same exact
 prefab/model material overrides as the diagnostic scene.
+`STREAM_TOWN_SMOKE_PLACEMENT=1` frames valid and blocked House placement bounds
+at once. The live placer uses a typed port of Unity's transparent lit
+`BoundsVisualiser` material, the serialized success/failure colours from
+`BuildingPlacer.prefab`, and the authored `_Alpha` value.
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
 the image-backed selection window can be captured without pointer automation.
 `STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the

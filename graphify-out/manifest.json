@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786602614.721553,
-    "ast_hash": "d93334938c77391d5779b5db30cdc9ac",
+    "mtime": 1786603622.9516292,
+    "ast_hash": "ab4b2730d462a79dbe309d4d0a9e04d5",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786602259.880612,
-    "ast_hash": "8dce32c45156f5d8cdc3ecce3dc4433b",
+    "mtime": 1786603191.0489352,
+    "ast_hash": "bc34c8732112a41f1aa4d16710f2175b",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -4377,6 +4377,11 @@
   "graphify-out/memory/query_20260813_061417_what_reachable_unity_custom_shaders_and_vfx_still.md": {
     "mtime": 1786601657.6452818,
     "ast_hash": "9fd60cdc260bf062c6c1460690121d46",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_063130_shader_material_giraffe_pet_skinning_prefab_reacha.md": {
+    "mtime": 1786602690.9147205,
+    "ast_hash": "99fec7a50eb6840e7a5840896a694ede",
     "semantic_hash": ""
   }
 }

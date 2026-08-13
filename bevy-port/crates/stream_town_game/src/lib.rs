@@ -61,6 +61,8 @@ const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
+const BUILDING_PLACEMENT_SUCCESS_COLOR: [f32; 3] = [0.242_250_26, 0.896_226_4, 0.054_957_304];
+const BUILDING_PLACEMENT_FAIL_COLOR: [f32; 3] = [0.933_962_3, 0.0, 0.0];
 const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
 const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.mat";
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
@@ -73,6 +75,8 @@ const GODRAY_SHADER_ASSET_PATH: &str = "shaders/godray_material.wgsl";
 const GODRAY_MATERIAL_PATH: &str = "Assets/Materials/VFX/VFX_Godrays.mat";
 const GIRAFFE_SHADER_ASSET_PATH: &str = "shaders/giraffe_material.wgsl";
 const GIRAFFE_MATERIAL_PATH: &str = "Assets/Materials/Character/Giraffe.mat";
+const BOUNDS_SHADER_ASSET_PATH: &str = "shaders/bounds_material.wgsl";
+const BOUNDS_MATERIAL_PATH: &str = "Assets/Materials/BoundsVisualizer.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
@@ -621,6 +625,31 @@ impl MaterialExtension for GiraffeMaterialExtension {
 type GiraffeMaterial = ExtendedMaterial<StandardMaterial, GiraffeMaterialExtension>;
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct BoundsMaterialUniform {
+    color_alpha: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct BoundsMaterialExtension {
+    #[uniform(100)]
+    parameters: BoundsMaterialUniform,
+}
+
+impl MaterialExtension for BoundsMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        BOUNDS_SHADER_ASSET_PATH.into()
+    }
+}
+
+type BoundsMaterial = ExtendedMaterial<StandardMaterial, BoundsMaterialExtension>;
+
+#[derive(SystemParam)]
+struct SpecialtyMaterialAssets<'w> {
+    giraffe: Option<ResMut<'w, Assets<GiraffeMaterial>>>,
+    bounds: Option<ResMut<'w, Assets<BoundsMaterial>>>,
+}
+
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
 struct TreeMaterialUniform {
     wind_direction_smoothness: Vec4,
     wind_controls: Vec4,
@@ -747,6 +776,7 @@ enum ResolvedMaterialHandle {
     Cloud(Handle<CloudMaterial>),
     Godray(Handle<GodrayMaterial>),
     Giraffe(Handle<GiraffeMaterial>),
+    Bounds(Handle<BoundsMaterial>),
     Tree(Handle<TreeMaterial>),
     Grass(Handle<GrassMaterial>),
     Critter(Handle<CritterMaterial>),
@@ -767,8 +797,8 @@ struct RenderAssets {
     food: Handle<StandardMaterial>,
     building: Handle<StandardMaterial>,
     construction: Handle<StandardMaterial>,
-    placement_valid: Handle<StandardMaterial>,
-    placement_invalid: Handle<StandardMaterial>,
+    placement_valid: Handle<BoundsMaterial>,
+    placement_invalid: Handle<BoundsMaterial>,
     enemy_idle: Handle<StandardMaterial>,
     enemy_moving: Handle<StandardMaterial>,
     player_idle: Handle<StandardMaterial>,
@@ -1733,6 +1763,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
         .add_plugins(MaterialPlugin::<GodrayMaterial>::default())
         .add_plugins(MaterialPlugin::<GiraffeMaterial>::default())
+        .add_plugins(MaterialPlugin::<BoundsMaterial>::default())
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         .add_plugins(MaterialPlugin::<CritterMaterial>::default())
@@ -1870,7 +1901,7 @@ fn setup_rendering(
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
     godray_materials: Option<ResMut<Assets<GodrayMaterial>>>,
-    giraffe_materials: Option<ResMut<Assets<GiraffeMaterial>>>,
+    specialty_materials: SpecialtyMaterialAssets,
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
     critter_materials: Option<ResMut<Assets<CritterMaterial>>>,
@@ -1884,7 +1915,10 @@ fn setup_rendering(
         Some(mut building_materials),
         Some(mut cloud_materials),
         Some(mut godray_materials),
-        Some(mut giraffe_materials),
+        SpecialtyMaterialAssets {
+            giraffe: Some(mut giraffe_materials),
+            bounds: Some(mut bounds_materials),
+        },
         Some(mut tree_materials),
         Some(mut grass_materials),
         Some(mut critter_materials),
@@ -1897,7 +1931,7 @@ fn setup_rendering(
         building_materials,
         cloud_materials,
         godray_materials,
-        giraffe_materials,
+        specialty_materials,
         tree_materials,
         grass_materials,
         critter_materials,
@@ -1920,6 +1954,7 @@ fn setup_rendering(
     let flag_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some();
     let godray_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some();
     let giraffe_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some();
+    let placement_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1952,6 +1987,8 @@ fn setup_rendering(
                     86.0
                 } else if giraffe_closeup {
                     42.0
+                } else if placement_closeup {
+                    52.0
                 } else {
                     520.0
                 },
@@ -1986,6 +2023,15 @@ fn setup_rendering(
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
     let godrays = godray_materials.add(godray_material(&presentation.0));
     let giraffe = giraffe_materials.add(giraffe_material(&presentation.0, asset_server.as_deref()));
+    let authored_bounds = bounds_materials.add(bounds_material(&presentation.0, None));
+    let placement_valid = bounds_materials.add(bounds_material(
+        &presentation.0,
+        Some(BUILDING_PLACEMENT_SUCCESS_COLOR),
+    ));
+    let placement_invalid = bounds_materials.add(bounds_material(
+        &presentation.0,
+        Some(BUILDING_PLACEMENT_FAIL_COLOR),
+    ));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
@@ -2052,6 +2098,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Godray(godrays.clone())
             } else if material.source_path == GIRAFFE_MATERIAL_PATH {
                 ResolvedMaterialHandle::Giraffe(giraffe.clone())
+            } else if material.source_path == BOUNDS_MATERIAL_PATH {
+                ResolvedMaterialHandle::Bounds(authored_bounds.clone())
             } else if material.source_path == TREE_MATERIAL_PATH {
                 ResolvedMaterialHandle::Tree(tree.clone())
             } else if material.source_path == GRASS_MATERIAL_PATH {
@@ -2095,20 +2143,8 @@ fn setup_rendering(
             perceptual_roughness: 0.88,
             ..default()
         }),
-        placement_valid: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.18, 0.9, 0.34, 0.46),
-            emissive: LinearRgba::new(0.06, 0.8, 0.12, 1.0),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        }),
-        placement_invalid: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.95, 0.12, 0.08, 0.54),
-            emissive: LinearRgba::new(1.0, 0.03, 0.01, 1.0),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        }),
+        placement_valid,
+        placement_invalid,
         enemy_idle: materials.add(Color::srgb(0.72, 0.12, 0.12)),
         enemy_moving: materials.add(Color::srgb(1.0, 0.28, 0.22)),
         player_idle: materials.add(Color::srgb(0.35, 0.72, 0.95)),
@@ -3280,6 +3316,39 @@ fn giraffe_material(
                 ),
             },
             main_texture,
+        },
+    }
+}
+
+fn bounds_material(
+    presentation: &PresentationCatalog,
+    color_override: Option<[f32; 3]>,
+) -> BoundsMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == BOUNDS_MATERIAL_PATH);
+    let authored_color = authored
+        .and_then(|material| material.custom_vectors.get("_boundsVisColor"))
+        .copied()
+        .unwrap_or([0.498_615_2, 1.0, 0.202_830_2, 1.0]);
+    let color = color_override.unwrap_or([authored_color[0], authored_color[1], authored_color[2]]);
+    let alpha = authored
+        .and_then(|material| material.custom_properties.get("_Alpha"))
+        .copied()
+        .unwrap_or(0.5);
+    BoundsMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            alpha_mode: AlphaMode::Blend,
+            metallic: 0.0,
+            perceptual_roughness: 0.5,
+            ..default()
+        },
+        extension: BoundsMaterialExtension {
+            parameters: BoundsMaterialUniform {
+                color_alpha: Vec4::new(color[0], color[1], color[2], alpha),
+            },
         },
     }
 }
@@ -5049,6 +5118,7 @@ fn generate_and_spawn_world(
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
     mut bottom_bar: ResMut<BottomBarRuntime>,
+    mut placers: ResMut<BuildingPlacers>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
@@ -5132,6 +5202,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_translation(focus + Vec3::new(24.0, 24.0, 24.0))
                 .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some() {
+            let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
+            Transform::from_translation(focus + Vec3::new(32.0, 38.0, 32.0))
+                .looking_at(focus, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
@@ -5149,6 +5223,40 @@ fn generate_and_spawn_world(
         .navigation
         .set_blocked(town_hall_region, true)
         .expect("the configured Town Hall footprint updates navigation");
+
+    if std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some() {
+        let building = StableId::new("building:house").expect("static building ID");
+        if let Some(definition) = content.0.buildings.get(&building)
+            && let Some(valid_position) = find_building_site(
+                &generated,
+                GridPos {
+                    x: town_hall_placement
+                        .x
+                        .saturating_add(town_hall_definition.footprint[0] + 2)
+                        .min(generated.navigation.width() - 1),
+                    z: town_hall_placement.z.saturating_sub(6),
+                },
+                definition.footprint,
+            )
+        {
+            placers.0.insert(
+                StableId::new("actor:smoke_placement_valid").expect("static actor ID"),
+                BuildingPlacement {
+                    building: building.clone(),
+                    position: valid_position,
+                    rotation_quarter_turns: 0,
+                },
+            );
+            placers.0.insert(
+                StableId::new("actor:smoke_placement_blocked").expect("static actor ID"),
+                BuildingPlacement {
+                    building,
+                    position: town_hall_placement,
+                    rotation_quarter_turns: 1,
+                },
+            );
+        }
+    }
 
     let world_size = Vec2::new(
         f32::from(config.0.world.width) * config.0.world.cell_size,
@@ -5837,6 +5945,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Giraffe(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Bounds(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
             ResolvedMaterialHandle::Tree(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
@@ -5957,7 +6068,8 @@ fn spawn_foliage_visual(
         Some(
             ResolvedMaterialHandle::Cloud(_)
             | ResolvedMaterialHandle::Godray(_)
-            | ResolvedMaterialHandle::Giraffe(_),
+            | ResolvedMaterialHandle::Giraffe(_)
+            | ResolvedMaterialHandle::Bounds(_),
         )
         | None => {
             entity.insert(MeshMaterial3d(render.food.clone()));
@@ -11444,6 +11556,12 @@ fn apply_material_overrides(
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
+                        ResolvedMaterialHandle::Bounds(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
                         ResolvedMaterialHandle::Tree(authored) => {
                             commands
                                 .entity(entity)
@@ -11965,7 +12083,7 @@ fn sync_building_placers(
         Entity,
         &BuildingPlacementVisual,
         &mut Transform,
-        &mut MeshMaterial3d<StandardMaterial>,
+        &mut MeshMaterial3d<BoundsMaterial>,
     )>,
 ) {
     for (entity, visual, mut transform, mut material) in &mut visuals {
@@ -12027,7 +12145,7 @@ fn update_placer_visual(
     placement: &BuildingPlacement,
     definition: &BuildingDef,
     transform: &mut Transform,
-    material: &mut MeshMaterial3d<StandardMaterial>,
+    material: &mut MeshMaterial3d<BoundsMaterial>,
 ) {
     let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
     let centre = GridPos {
@@ -12036,7 +12154,7 @@ fn update_placer_visual(
     };
     let size = Vec3::new(
         f32::from(definition.footprint[0]) * config.world.cell_size * 0.9,
-        config.world.cell_size * 0.3,
+        config.world.cell_size * 0.02,
         f32::from(definition.footprint[1]) * config.world.cell_size * 0.9,
     );
     transform.translation =
@@ -20166,6 +20284,108 @@ mod tests {
     }
 
     #[test]
+    fn building_bounds_material_preserves_unity_placement_contract() {
+        let presentation = embedded_presentation();
+        let authored = bounds_material(&presentation, None);
+        assert_eq!(
+            authored.extension.parameters.color_alpha,
+            Vec4::new(0.0, 0.867_924_5, 0.137_292_03, 0.568)
+        );
+        assert_eq!(authored.base.alpha_mode, AlphaMode::Blend);
+        let valid = bounds_material(&presentation, Some(BUILDING_PLACEMENT_SUCCESS_COLOR));
+        let blocked = bounds_material(&presentation, Some(BUILDING_PLACEMENT_FAIL_COLOR));
+        assert_eq!(
+            valid.extension.parameters.color_alpha,
+            Vec4::new(0.242_250_26, 0.896_226_4, 0.054_957_304, 0.568)
+        );
+        assert_eq!(
+            blocked.extension.parameters.color_alpha,
+            Vec4::new(0.933_962_3, 0.0, 0.0, 0.568)
+        );
+        let shader = include_str!("../../../assets/shaders/bounds_material.wgsl");
+        assert!(shader.contains("bounds_material.color_alpha"));
+        assert!(shader.contains("apply_pbr_lighting"));
+
+        let content = embedded_content();
+        let placer = content
+            .archetypes
+            .values()
+            .find(|archetype| {
+                archetype
+                    .source_path
+                    .ends_with("Prefabs/BuildingPlacer.prefab")
+            })
+            .unwrap();
+        let bounds_id = StableId::new("material:b837afe89d932d14cba0f2178703e9fd").unwrap();
+        assert!(presentation.prefab_materials[&placer.source_guid].contains(&bounds_id));
+        assert!(
+            presentation.prefab_renderer_materials[&placer.source_guid]
+                .iter()
+                .any(|binding| binding.target_path == "VisualBounds"
+                    && binding.materials["BoundsVisualizer"] == bounds_id)
+        );
+    }
+
+    #[test]
+    fn placement_visual_switches_typed_bounds_material_for_collision_state() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let building_id = StableId::new("building:house").unwrap();
+        let definition = &content.buildings[&building_id];
+        let valid_position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            definition.footprint,
+        )
+        .unwrap();
+        let mut bounds_materials = Assets::<BoundsMaterial>::default();
+        let valid_handle = bounds_materials.add(bounds_material(&embedded_presentation(), None));
+        let invalid_handle = bounds_materials.add(bounds_material(&embedded_presentation(), None));
+        let render = RenderAssets {
+            placement_valid: valid_handle.clone(),
+            placement_invalid: invalid_handle.clone(),
+            ..default()
+        };
+        let mut transform = Transform::default();
+        let mut material = MeshMaterial3d(valid_handle.clone());
+        let mut placement = BuildingPlacement {
+            building: building_id,
+            position: valid_position,
+            rotation_quarter_turns: 0,
+        };
+        update_placer_visual(
+            &config,
+            &world,
+            &render,
+            &placement,
+            definition,
+            &mut transform,
+            &mut material,
+        );
+        assert_eq!(material.0.id(), valid_handle.id());
+        assert!((transform.scale.y - config.world.cell_size * 0.02).abs() <= f32::EPSILON);
+
+        placement.position = GridPos {
+            x: config.world.width - 1,
+            z: config.world.height - 1,
+        };
+        update_placer_visual(
+            &config,
+            &world,
+            &render,
+            &placement,
+            definition,
+            &mut transform,
+            &mut material,
+        );
+        assert_eq!(material.0.id(), invalid_handle.id());
+    }
+
+    #[test]
     fn live_giraffe_pet_resolves_typed_material_and_converted_vertex_masks() {
         let content = embedded_content();
         let presentation = embedded_presentation();
@@ -20818,6 +21038,8 @@ mod tests {
         let godray = godray_materials.add(godray_material(&embedded_presentation()));
         let mut giraffe_materials = Assets::<GiraffeMaterial>::default();
         let giraffe = giraffe_materials.add(giraffe_material(&embedded_presentation(), None));
+        let mut bounds_materials = Assets::<BoundsMaterial>::default();
+        let bounds = bounds_materials.add(bounds_material(&embedded_presentation(), None));
         let spec = MaterialOverrideSpec {
             fallback: Some(ResolvedMaterialHandle::Standard(fallback.clone())),
             model_materials: BTreeMap::from([
@@ -20844,6 +21066,10 @@ mod tests {
                 (
                     "MainMaterial".into(),
                     ResolvedMaterialHandle::Giraffe(giraffe.clone()),
+                ),
+                (
+                    "BoundsVisualizer".into(),
+                    ResolvedMaterialHandle::Bounds(bounds.clone()),
                 ),
             ]),
             renderer_materials: vec![
@@ -20946,6 +21172,18 @@ mod tests {
         assert!(matches!(
             typed_giraffe,
             ResolvedMaterialHandle::Giraffe(material) if material.id() == giraffe.id()
+        ));
+
+        let typed_bounds = resolved_renderer_material(
+            &spec,
+            "Scene/VisualBounds/VisualBounds.BoundsVisualizer",
+            Some("VisualBounds"),
+            Some("BoundsVisualizer"),
+        )
+        .unwrap();
+        assert!(matches!(
+            typed_bounds,
+            ResolvedMaterialHandle::Bounds(material) if material.id() == bounds.id()
         ));
 
         let final_fallback =
