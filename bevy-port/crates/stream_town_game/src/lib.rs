@@ -6355,6 +6355,26 @@ fn nearest_walkable(world: &GeneratedWorld, desired: GridPos) -> Option<GridPos>
     None
 }
 
+fn restored_actor_position(
+    world: &GeneratedWorld,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    kind: &ActorKind,
+    desired: GridPos,
+) -> Option<GridPos> {
+    let desired = GridPos {
+        x: desired.x.min(world.navigation.width() - 1),
+        z: desired.z.min(world.navigation.height() - 1),
+    };
+    if *kind == ActorKind::Player
+        && completed_player_gate_cells(content, simulation).contains(&desired)
+    {
+        Some(desired)
+    } else {
+        nearest_walkable(world, desired)
+    }
+}
+
 fn initial_actor_position(
     world: &GeneratedWorld,
     excluded: GridPos,
@@ -14444,8 +14464,17 @@ fn load_input(
             ecs.entity(entity).despawn();
             continue;
         };
-        let position =
-            nearest_walkable(&world.generated, saved.grid_position).unwrap_or(saved.grid_position);
+        let position = restored_actor_position(
+            &world.generated,
+            &content.0,
+            &snapshot.simulation,
+            &saved.kind,
+            saved.grid_position,
+        )
+        .unwrap_or(saved.grid_position);
+        if let Some(actor) = snapshot.simulation.actors.get_mut(&saved.id) {
+            actor.position = position;
+        }
         let mut world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
         if !animation.native {
             world_position.y += animation.base_scale.y * 0.5;
@@ -14468,8 +14497,17 @@ fn load_input(
         if restored_ids.contains(&saved.id) {
             continue;
         }
-        let position =
-            nearest_walkable(&world.generated, saved.grid_position).unwrap_or(saved.grid_position);
+        let position = restored_actor_position(
+            &world.generated,
+            &content.0,
+            &snapshot.simulation,
+            &saved.kind,
+            saved.grid_position,
+        )
+        .unwrap_or(saved.grid_position);
+        if let Some(actor) = snapshot.simulation.actors.get_mut(&saved.id) {
+            actor.position = position;
+        }
         let world_position = grid_to_world_on_surface(position, &config.0, &world.generated);
         let base_scale = Vec3::new(
             config.0.world.cell_size * 0.3,
@@ -20677,6 +20715,53 @@ mod tests {
     }
 
     #[test]
+    fn save_restore_keeps_players_on_completed_gate_cells_only() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let gate_id = StableId::new("building:gate").unwrap();
+        let gate = &content.buildings[&gate_id];
+        let position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            gate.footprint,
+        )
+        .unwrap();
+        let region = building_region(position, gate.footprint, &world).unwrap();
+        world.navigation.set_blocked(region, true).unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.buildings.insert(
+            StableId::new("building:gate_restore_test").unwrap(),
+            BuildingState {
+                id: StableId::new("building:gate_restore_test").unwrap(),
+                archetype: gate.archetype.clone(),
+                position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+
+        assert_eq!(
+            restored_actor_position(&world, &content, &simulation, &ActorKind::Player, position,),
+            Some(position)
+        );
+        assert_ne!(
+            restored_actor_position(&world, &content, &simulation, &ActorKind::Enemy, position,),
+            Some(position)
+        );
+        simulation.buildings.values_mut().next().unwrap().complete = false;
+        assert_ne!(
+            restored_actor_position(&world, &content, &simulation, &ActorKind::Player, position,),
+            Some(position)
+        );
+    }
+
+    #[test]
     fn technology_effects_authoritatively_gate_buildings() {
         let content = embedded_content();
         let mut simulation = WorldSimulation::new(42);
@@ -22829,6 +22914,14 @@ mod tests {
             .get_mut(&town_hall_id)
             .unwrap()
             .position = saved_position;
+        let relocated_actor_id = snapshot.actors[0].id.clone();
+        snapshot.actors[0].grid_position = saved_position;
+        snapshot
+            .simulation
+            .actors
+            .get_mut(&relocated_actor_id)
+            .unwrap()
+            .position = saved_position;
         store.write(&snapshot).unwrap();
 
         app.world_mut().resource_mut::<MenuIoRequest>().load = true;
@@ -22856,6 +22949,18 @@ mod tests {
         assert_eq!(
             app.world().resource::<SimulationRuntime>().0.buildings[&town_hall_id].position,
             saved_position
+        );
+        let relocated_ecs_position = app
+            .world_mut()
+            .query::<(&Agent, &GridLocation)>()
+            .iter(app.world())
+            .find(|(agent, _)| agent.id == relocated_actor_id)
+            .map(|(_, location)| location.0)
+            .unwrap();
+        assert_ne!(relocated_ecs_position, saved_position);
+        assert_eq!(
+            app.world().resource::<SimulationRuntime>().0.actors[&relocated_actor_id].position,
+            relocated_ecs_position
         );
         let region = building_region(
             saved_position,

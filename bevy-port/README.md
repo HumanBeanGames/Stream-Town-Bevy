@@ -282,6 +282,9 @@ Native load also repositions the persistent Town Hall ECS root, presentation
 origin, rotation, and lower-left grid location from the saved footprint. Its
 rendered position therefore stays aligned with navigation occupancy, worker
 stations, selection, combat targeting, and legacy-imported transforms.
+Actor restore uses the same player-only completed-gate exception as live pathing.
+When a saved actor must otherwise move off a blocked cell, the relocated grid
+position is written to both the ECS agent and authoritative simulation state.
 The shipping Fish God event is also live: its exact Unity channel-point reward
 ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten
 summon chance, 20-praise requirement, 300-second timeout, 1,000-food reward, and

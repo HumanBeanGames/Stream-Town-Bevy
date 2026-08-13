@@ -261,6 +261,9 @@ mistaken for production-ready systems.
   persistent Town Hall visual, presentation origin, rotation, and lower-left
   grid location now move to its saved footprint during load, keeping rendering,
   navigation, selection, stations, and combat on the same authoritative state.
+  Restored players may remain on completed gate cells just as live player paths
+  can; every other blocked-cell relocation updates both ECS and simulation actor
+  positions so the first post-load tick cannot observe split state.
 - A one-time legacy importer for JSON and the exact Unity binary field order in
   schemas 1-3, including container/compression/bounds/trailer validation, named
   backup recovery, schema-1 mesh retention, seed-based Bevy regeneration,
