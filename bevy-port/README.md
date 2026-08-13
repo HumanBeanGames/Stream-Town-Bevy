@@ -365,6 +365,9 @@ land/water boundary for a repeatable depth-blend and edge-foam capture.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while
 temporarily forcing all player-name and building-health overlays visible; it
 does not modify the saved player settings.
+`STREAM_TOWN_SMOKE_FLAG=1` spawns and frames the converted Age 2 Castle so every
+authored `Flag` renderer binding and the custom wind/color material can be
+validated together.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -435,8 +438,11 @@ vertex-color wind mask, scrolling main/noise textures, authored color blending,
 and exact seasonal color/tint endpoints. `Critters` also has a dedicated
 vertex-stage WGSL port: seagull and fish geometry samples the authored texture
 mask through UV2 and applies the source speed/synchronization/stretch wave while
-Bevy retains the textured PBR surface. The remaining reachable WGSL shader ports
-remain presentation work. Property curves
+Bevy retains the textured PBR surface. The Age 2 Castle's `Flags` material also
+uses a dedicated vertex/fragment WGSL port: vertex alpha anchors the cloth while
+the authored scrolling noise and time-rotated displacement animate it; vertex
+red blends yellow-to-red color and reduces the metallic/smoothness edge. The
+remaining reachable WGSL shader ports remain presentation work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.

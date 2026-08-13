@@ -74,6 +74,8 @@ const GRASS_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Grass.mat";
 const CRITTER_SHADER_ASSET_PATH: &str = "shaders/critter_material.wgsl";
 const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
 const CRITTER_MATERIAL_ID: &str = "material:56cfb478fa4b9e8469bcbbf9cf077701";
+const FLAG_SHADER_ASSET_PATH: &str = "shaders/flag_material.wgsl";
+const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -583,6 +585,35 @@ impl MaterialExtension for CritterMaterialExtension {
 
 type CritterMaterial = ExtendedMaterial<StandardMaterial, CritterMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct FlagMaterialUniform {
+    colour_1: Vec4,
+    colour_2: Vec4,
+    controls: Vec4,
+    noise_scale_offset: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct FlagMaterialExtension {
+    #[uniform(100)]
+    parameters: FlagMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    noise_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for FlagMaterialExtension {
+    fn vertex_shader() -> ShaderRef {
+        FLAG_SHADER_ASSET_PATH.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        FLAG_SHADER_ASSET_PATH.into()
+    }
+}
+
+type FlagMaterial = ExtendedMaterial<StandardMaterial, FlagMaterialExtension>;
+
 #[derive(Clone)]
 enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
@@ -591,6 +622,7 @@ enum ResolvedMaterialHandle {
     Tree(Handle<TreeMaterial>),
     Grass(Handle<GrassMaterial>),
     Critter(Handle<CritterMaterial>),
+    Flag(Handle<FlagMaterial>),
 }
 
 #[derive(Resource, Default)]
@@ -1422,6 +1454,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         .add_plugins(MaterialPlugin::<CritterMaterial>::default())
+        .add_plugins(MaterialPlugin::<FlagMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -1557,6 +1590,7 @@ fn setup_rendering(
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
     critter_materials: Option<ResMut<Assets<CritterMaterial>>>,
+    flag_materials: Option<ResMut<Assets<FlagMaterial>>>,
 ) {
     let (
         Some(mut meshes),
@@ -1568,6 +1602,7 @@ fn setup_rendering(
         Some(mut tree_materials),
         Some(mut grass_materials),
         Some(mut critter_materials),
+        Some(mut flag_materials),
     ) = (
         meshes,
         materials,
@@ -1578,6 +1613,7 @@ fn setup_rendering(
         tree_materials,
         grass_materials,
         critter_materials,
+        flag_materials,
     )
     else {
         commands.insert_resource(RenderAssets::default());
@@ -1593,6 +1629,7 @@ fn setup_rendering(
     let shoreline_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some();
     let overlay_closeup = std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some();
     let seagull_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some();
+    let flag_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1619,6 +1656,8 @@ fn setup_rendering(
                     105.0
                 } else if seagull_closeup {
                     80.0
+                } else if flag_closeup {
+                    52.0
                 } else {
                     520.0
                 },
@@ -1654,6 +1693,7 @@ fn setup_rendering(
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
+    let flag = flag_materials.add(flag_material(&presentation.0, asset_server.as_deref()));
     let presentation_materials = presentation
         .0
         .materials
@@ -1669,6 +1709,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Grass(grass.clone())
             } else if material.source_path == CRITTER_MATERIAL_PATH {
                 ResolvedMaterialHandle::Critter(critter.clone())
+            } else if material.source_path == FLAG_MATERIAL_PATH {
+                ResolvedMaterialHandle::Flag(flag.clone())
             } else {
                 ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
@@ -2092,6 +2134,40 @@ fn standalone_material_override(
         model_materials: BTreeMap::new(),
         renderer_materials: Vec::new(),
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_flag_smoke_castle(
+    commands: &mut Commands,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+    position: Vec3,
+    cell_size: f32,
+) {
+    let archetype_id = StableId::new("archetype:building:castle").expect("static archetype ID");
+    let Some(archetype) = content.archetypes.get(&archetype_id) else {
+        return;
+    };
+    let Some(scene) = archetype.scenes.iter().find(|scene| scene.age == Some(2)) else {
+        return;
+    };
+    if !converted_asset_exists(asset_root, &scene.asset_path) {
+        return;
+    }
+    let mut castle = commands.spawn((
+        Name::new("Flag material smoke castle"),
+        WorldEntity,
+        WorldAssetRoot(
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+        ),
+        Transform::from_translation(position).with_scale(Vec3::splat(cell_size / 2.0)),
+    ));
+    if let Some(materials) = prefab_material_spec(archetype, scene, presentation, render) {
+        castle.insert(materials);
+    }
 }
 
 fn drive_seagull_flight(
@@ -2913,6 +2989,70 @@ fn critter_material(
     }
 }
 
+fn flag_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> FlagMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == FLAG_MATERIAL_PATH);
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let noise_texture = authored.and_then(|material| {
+        asset_server.and_then(|asset_server| {
+            material
+                .textures
+                .get("_Misc_Noises_Texture_01")
+                .and_then(|id| presentation.textures.get(id))
+                .map(|texture| asset_server.load(texture.asset_path.clone()))
+        })
+    });
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_Misc_Noises_Texture_01"))
+        .copied()
+        .unwrap_or_default();
+    FlagMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.3,
+            ..default()
+        },
+        extension: FlagMaterialExtension {
+            parameters: FlagMaterialUniform {
+                colour_1: Vec4::from_array(vector("_Colour1", [1.0, 0.835_294_1, 0.0, 0.0])),
+                colour_2: Vec4::from_array(vector(
+                    "_Colour2",
+                    [1.0, 0.023_529_41, 0.023_529_41, 0.0],
+                )),
+                controls: Vec4::new(
+                    scalar("_NoiseTextureScale", 0.49),
+                    scalar("_RotationStrength", 0.27),
+                    scalar("_strength", 0.14),
+                    scalar("_Metaledge", 0.7),
+                ),
+                noise_scale_offset: Vec4::new(
+                    transform.scale[0],
+                    transform.scale[1],
+                    transform.offset[0],
+                    transform.offset[1],
+                ),
+            },
+            noise_texture,
+        },
+    }
+}
+
 fn primary_material_texture_entry<'a>(
     material: &'a MaterialDef,
     presentation: &'a PresentationCatalog,
@@ -3620,6 +3760,10 @@ fn generate_and_spawn_world(
             let focus = start.lerp(end, 0.1);
             Transform::from_translation(focus + Vec3::new(42.0, 32.0, 42.0))
                 .looking_at(focus, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_translation(focus + Vec3::new(30.0, 34.0, 30.0))
+                .looking_at(focus + Vec3::Y * 7.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
@@ -4084,6 +4228,21 @@ fn generate_and_spawn_world(
         let focus = grid_to_world_on_surface(centre, &config.0, &generated);
         spawn_building_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
     }
+    if std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some()
+        && let Some(asset_server) = asset_server.as_deref()
+    {
+        let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+        spawn_flag_smoke_castle(
+            &mut commands,
+            &content.0,
+            &presentation.0,
+            &render,
+            asset_server,
+            &asset_root.0,
+            focus,
+            config.0.world.cell_size,
+        );
+    }
     spawn_seagull(
         &mut commands,
         &render,
@@ -4222,6 +4381,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Critter(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Flag(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
         }
         return;
     }
@@ -4322,6 +4484,9 @@ fn spawn_foliage_visual(
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Critter(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Flag(material)) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Cloud(_)) | None => {
@@ -9810,6 +9975,12 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Critter(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                        ResolvedMaterialHandle::Flag(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -17247,6 +17418,33 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.base.base_color_texture.is_none());
+    }
+
+    #[test]
+    fn flag_material_preserves_authored_wind_colour_and_metal_contract() {
+        let material = flag_material(&embedded_presentation(), None);
+        assert_eq!(
+            material.extension.parameters.colour_1,
+            Vec4::new(1.0, 0.835_294_1, 0.0, 0.0)
+        );
+        assert_eq!(
+            material.extension.parameters.colour_2,
+            Vec4::new(1.0, 0.023_529_41, 0.023_529_41, 0.0)
+        );
+        assert_eq!(
+            material.extension.parameters.controls,
+            Vec4::new(0.49, 0.27, 0.14, 0.7)
+        );
+        assert_eq!(
+            material.extension.parameters.noise_scale_offset,
+            Vec4::new(1.0, 1.0, 0.0, 0.0)
+        );
+        assert!(material.extension.noise_texture.is_none());
+
+        let shader = include_str!("../../../assets/shaders/flag_material.wgsl");
+        assert!(shader.contains("(1.0 - vertex_color.a)"));
+        assert!(shader.contains("flag_material.colour_2"));
+        assert!(shader.contains("pbr_input.material.metallic = metal_edge"));
     }
 
     #[test]

@@ -343,6 +343,11 @@ mistaken for production-ready systems.
   cloud material ports its two world-space animated noise layers, alpha cutoff,
   tint, surface exponent, and packaged noise texture; a DirectX 12 menu capture
   verifies the transparent layer field and authored `_CloudTint=200` value.
+- The Age 2 Castle's base and seven individual flag renderer bindings now use a
+  typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
+  authored scrolling-noise and time-rotated displacement, vertex-red
+  yellow-to-red color blending, and vertex-red metallic/smoothness falloff. A
+  DirectX 12 castle close-up exercises every converted flag slot.
 - Priest heals now drive a purpose-built ECS replacement for the reachable
   `VFX_healing` and `VFX_Healing_Channeling` graphs. The target receives the
   Unity-authored 1.2-second green/gold healed burst, while the healer emits the
@@ -542,7 +547,9 @@ storage, stat, and building-age effects, production command wording, saved
 player settings, a complete runtime settings/menu workflow, and
 camera-projected player/building overlays. The shipping town seagull also flies
 its authored 32-second boundary route using the converted model and emits three
-generated ambience calls at the source's random cadence and rolloff. It is still
+generated ambience calls at the source's random cadence and rolloff. The
+shipping grass, critter, and castle-flag custom materials now have typed WGSL
+ports backed by converted renderer bindings. It is still
 missing remaining chunked LOD work, particle fields, remaining custom-shader
 parity, and the recorded
 reference-machine GPU measurement required to close the milestone.
