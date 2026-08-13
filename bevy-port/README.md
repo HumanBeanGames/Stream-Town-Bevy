@@ -6,7 +6,8 @@ here.
 
 ## Binaries
 
-- `stream_town_game`: shipping Bevy application and the 300-agent vertical slice.
+- `stream_town_game`: shipping Bevy application and an explicit 300-agent
+  vertical-slice benchmark.
 - `stream_town_tools`: focused content, migration, world-generation, navigation,
   Twitch, validation, and runtime tooling. Its catalog browser, validated
   technology editor with undo/redo, occupancy/path lab, prefab/archetype browser,
@@ -210,8 +211,10 @@ and `!save` enforce ruler-or-staff access, while `!rulervote` and forced `!event
 remain broadcaster/moderator commands. Recruiting creates stable NPC entities,
 consumes the House-backed recruit capacity, and persists normally.
 
-The Unity starting NPC roster is present as stable Defender, Logger, Miner,
-Gatherer, and Builder actors. Resource roles select their authored resource and
+New towns start with exactly Unity's stable five-NPC roster: Defender, Logger,
+Miner, Gatherer, and Builder. The 300-agent crowd is confined to explicit tests
+and benchmark mode, and no bootstrap Goblin is invented. Resource roles select
+their authored resource and
 the nearest matching generated node and exact target mask: trees, ore, bushes,
 and reachable shoreline fish no longer collapse into interchangeable resource
 targets. Farmers harvest the completed Farm's authored unlimited food holder,
@@ -364,8 +367,9 @@ For repeatable rendering diagnostics,
 health value so its per-building damage material can be captured repeatably.
 `STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP=1` focuses on the nearest wood node;
 `STREAM_TOWN_SMOKE_RESOURCE_KIND=resource:ore` or `resource:food` selects
-another production resource. `STREAM_TOWN_DEBUG_INITIAL_AGENTS=<n>` reduces
-diagnostic actor clutter without changing the validated production default.
+another production resource. `STREAM_TOWN_DEBUG_INITIAL_AGENTS=<n>` sets the
+diagnostic actor count (up to 5,000) without changing the validated five-NPC
+production default.
 `STREAM_TOWN_SMOKE_HEALING_VFX=1` frames deterministic channel, healed-burst,
 and revival cues together for a repeatable gameplay-VFX capture.
 `STREAM_TOWN_SMOKE_COMBAT_VFX=1` retriggers the four typed impact/trail styles
@@ -443,7 +447,8 @@ save state. `STREAM_TOWN_ACTOR_SCENE_BUDGET` and
 recruits, runtime enemies, and save-restored actors automatically promote from
 the lightweight representation whenever detail capacity is available.
 
-`STREAM_TOWN_REPORT_FRAME_TIME=1` enables the explicit 300-agent GPU benchmark,
+`STREAM_TOWN_REPORT_FRAME_TIME=1` raises startup to at least 300 agents and
+enables the explicit GPU benchmark,
 uses an unsynchronized present mode for meaningful capacity measurements, and
 reports average and 95th-percentile frame time after a warmup. The optional
 `STREAM_TOWN_FRAME_TIME_WARMUP` and

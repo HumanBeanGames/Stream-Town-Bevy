@@ -23,7 +23,7 @@
         max_building_emission_milli: 5000,
     ),
     gameplay: (
-        initial_agents: 300,
+        initial_agents: 5,
         agent_speed_cells_per_second: 4.0,
         repath_interval_seconds: 1.0,
         starting_town_resources: {

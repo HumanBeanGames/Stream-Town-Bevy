@@ -46,7 +46,7 @@ mistaken for production-ready systems.
 - Deterministic island height generation, occupancy, A* routing, dirty regions,
   grounding data, repeatable world hashes, and a 4,225-vertex/8,192-triangle
   Bevy terrain surface generated directly from that navigation height field.
-- A runnable 300-agent ECS simulation with one enemy, dynamic obstacles, path
+- A runnable explicit 300-agent ECS benchmark, dynamic obstacles, path
   following, a town hall, resources, a status HUD, orthographic 3D pan/zoom
   camera controls, collider-backed surface picking, screenshot capture,
   directional lighting, converted representative GLB scenes with primitive
@@ -55,8 +55,10 @@ mistaken for production-ready systems.
   level, an Avian trimesh collider mirrors the visible surface, and actors,
   resources, buildings, save restores, joins, paths, and selection markers are
   grounded to deterministic centimetre heights.
-- Unity's five-member starting NPC roster (Defender, Logger, Miner, Gatherer,
-  Builder) is restored. Resource workers choose role-matched stable nodes,
+- Normal new towns now contain exactly Unity's five-member starting NPC roster
+  (Defender, Logger, Miner, Gatherer, Builder), with no invented bootstrap enemy;
+  the 300-agent workload is isolated to tests and explicit benchmark mode.
+  Resource workers choose role-matched stable nodes,
   path to them, gather/deplete their authored `BaseActionAmount`, carry the
   authored `BaseMaxResource` (10 for the shipping resource roles), return to a
   walkable assigned-station approach, and deposit into the authoritative town

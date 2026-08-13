@@ -5075,10 +5075,15 @@ fn debug_building_health(max_health: i32) -> Option<i32> {
         .map(|health: i32| health.clamp(0, max_health))
 }
 
-fn debug_initial_agents(configured: u16) -> u16 {
+fn runtime_initial_agents(configured: u16) -> u16 {
+    let configured = if std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some() {
+        configured.max(300)
+    } else {
+        configured
+    };
     std::env::var_os("STREAM_TOWN_DEBUG_INITIAL_AGENTS")
         .and_then(|value| value.to_str().and_then(|value| value.parse().ok()))
-        .map_or(configured, |agents: u16| agents.clamp(1, configured))
+        .map_or(configured, |agents: u16| agents.clamp(1, 5_000))
 }
 
 fn debug_smoke_pet() -> Option<StableId> {
@@ -5120,12 +5125,11 @@ fn parse_weather(value: &str) -> Option<Weather> {
 
 fn initial_actor_identity(index: u16) -> (String, Option<&'static str>) {
     match index {
-        0 => ("actor:enemy_0000".to_owned(), Some("role:enemy")),
-        1 => ("npc:starting_defender".to_owned(), Some("role:defender")),
-        2 => ("npc:starting_logger".to_owned(), Some("role:logger")),
-        3 => ("npc:starting_miner".to_owned(), Some("role:miner")),
-        4 => ("npc:starting_gatherer".to_owned(), Some("role:gatherer")),
-        5 => ("npc:starting_builder".to_owned(), Some("role:builder")),
+        0 => ("npc:starting_defender".to_owned(), Some("role:defender")),
+        1 => ("npc:starting_logger".to_owned(), Some("role:logger")),
+        2 => ("npc:starting_miner".to_owned(), Some("role:miner")),
+        3 => ("npc:starting_gatherer".to_owned(), Some("role:gatherer")),
+        4 => ("npc:starting_builder".to_owned(), Some("role:builder")),
         _ => (format!("actor:viewer_{index:04}"), None),
     }
 }
@@ -5551,7 +5555,7 @@ fn generate_and_spawn_world(
     {
         simulation.unlocked_technology.insert(technology.clone());
     }
-    let initial_agents = debug_initial_agents(config.0.gameplay.initial_agents);
+    let initial_agents = runtime_initial_agents(config.0.gameplay.initial_agents);
     let smoke_pet = debug_smoke_pet();
     let spawn_positions =
         connected_actor_positions(&generated, centre, town_hall_position, initial_agents);
@@ -5566,11 +5570,7 @@ fn generate_and_spawn_world(
         let world_position = grid_to_world_on_surface(position, &config.0, &generated);
         let (actor_id, initial_role) = initial_actor_identity(spawned);
         let actor_id = StableId::new(actor_id).expect("generated ID");
-        let kind = if spawned == 0 {
-            ActorKind::Enemy
-        } else {
-            ActorKind::Player
-        };
+        let kind = ActorKind::Player;
         simulation.join_player(actor_id.clone(), position);
         if let Some(role) = initial_role {
             let _ = simulation.assign_role(
@@ -5578,14 +5578,11 @@ fn generate_and_spawn_world(
                 StableId::new(role).expect("starting role IDs are valid"),
             );
         }
-        let authored_archetype = if spawned == 0 {
-            archetype_id_by_source(&content.0, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
-        } else {
-            archetype_id_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab")
-        };
+        let authored_archetype =
+            archetype_id_by_source(&content.0, ArchetypeKind::Player, "Player_Character.prefab");
         if let Some(actor) = simulation.actors.get_mut(&actor_id) {
             actor.archetype.clone_from(&authored_archetype);
-            if spawned == 1
+            if spawned == 0
                 && let Some(pet) = &smoke_pet
             {
                 actor.unlocked_pets.insert(pet.clone());
@@ -21835,11 +21832,31 @@ mod tests {
     }
 
     #[test]
-    fn embedded_config_supports_vertical_slice_scale() {
+    fn embedded_config_matches_shipping_starting_roster() {
         let config = GameConfig::default();
-        assert!(config.gameplay.initial_agents >= 300);
+        assert_eq!(config.gameplay.initial_agents, 5);
         let world = generate_world(&config.world);
         assert_eq!(world.navigation.width(), config.world.width);
+    }
+
+    #[test]
+    fn initial_actor_identities_match_unity_starting_npc_roles() {
+        let expected = [
+            ("npc:starting_defender", Some("role:defender")),
+            ("npc:starting_logger", Some("role:logger")),
+            ("npc:starting_miner", Some("role:miner")),
+            ("npc:starting_gatherer", Some("role:gatherer")),
+            ("npc:starting_builder", Some("role:builder")),
+        ];
+        for (index, (expected_id, expected_role)) in expected.into_iter().enumerate() {
+            let (id, role) = initial_actor_identity(u16::try_from(index).unwrap());
+            assert_eq!(id, expected_id);
+            assert_eq!(role, expected_role);
+        }
+        assert_eq!(
+            initial_actor_identity(5),
+            ("actor:viewer_0005".to_owned(), None)
+        );
     }
 
     #[test]
@@ -22666,8 +22683,77 @@ mod tests {
     }
 
     #[test]
-    fn headless_vertical_slice_spawns_three_hundred_agents() {
+    fn headless_new_town_matches_shipping_starting_roster() {
         let config = GameConfig::default();
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("shipping-start.stbevy");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(config))
+        .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(&save_path),
+        });
+
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::WorldLoading);
+        app.update();
+        app.update();
+
+        {
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            assert_eq!(simulation.actors.len(), 5);
+            assert!(simulation.enemy_camps.is_empty());
+            assert!(
+                simulation
+                    .actors
+                    .values()
+                    .all(|actor| actor.role.as_str() != "role:enemy")
+            );
+            assert_eq!(recruited_actor_ids(simulation).len(), 5);
+            for (index, (expected_id, expected_role)) in [
+                ("npc:starting_defender", "role:defender"),
+                ("npc:starting_logger", "role:logger"),
+                ("npc:starting_miner", "role:miner"),
+                ("npc:starting_gatherer", "role:gatherer"),
+                ("npc:starting_builder", "role:builder"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let actor_id = StableId::new(expected_id).unwrap();
+                assert_eq!(
+                    simulation
+                        .actors
+                        .get(&actor_id)
+                        .map(|actor| actor.role.as_str()),
+                    Some(expected_role),
+                    "starting actor {index}"
+                );
+            }
+        }
+
+        let agents: Vec<_> = app
+            .world_mut()
+            .query::<&Agent>()
+            .iter(app.world())
+            .map(|agent| (agent.id.clone(), agent.kind.clone()))
+            .collect();
+        assert_eq!(agents.len(), 5);
+        assert!(agents.iter().all(|(_, kind)| *kind == ActorKind::Player));
+    }
+
+    #[test]
+    fn headless_vertical_slice_spawns_three_hundred_agents() {
+        let mut config = GameConfig::default();
+        config.gameplay.initial_agents = 300;
         let expected = usize::from(config.gameplay.initial_agents);
         let save_directory = tempfile::tempdir().unwrap();
         let save_path = save_directory.path().join("command-save.stbevy");
@@ -22705,7 +22791,7 @@ mod tests {
             .iter(app.world())
             .filter(|agent| agent.kind == ActorKind::Enemy)
             .count();
-        assert_eq!(enemies, 1);
+        assert_eq!(enemies, 0);
         assert!(
             app.world()
                 .resource::<SimulationRuntime>()
