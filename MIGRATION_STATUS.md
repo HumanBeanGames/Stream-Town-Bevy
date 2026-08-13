@@ -343,6 +343,8 @@ mistaken for production-ready systems.
   cloud material ports its two world-space animated noise layers, alpha cutoff,
   tint, surface exponent, and packaged noise texture; a DirectX 12 menu capture
   verifies the transparent layer field and authored `_CloudTint=200` value.
+  Both scenes render the shipping 2048x1227 `Game_Logo_DropShadow` sprite with
+  its source aspect ratio while preserving a text fallback for assetless tests.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red

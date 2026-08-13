@@ -76,6 +76,8 @@ const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
 const CRITTER_MATERIAL_ID: &str = "material:56cfb478fa4b9e8469bcbbf9cf077701";
 const FLAG_SHADER_ASSET_PATH: &str = "shaders/flag_material.wgsl";
 const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
+const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_DropShadow.png";
+const GAME_LOGO_ASPECT_RATIO: f32 = 2_048.0 / 1_227.0;
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -662,6 +664,7 @@ struct RenderAssets {
     clouds: Handle<CloudMaterial>,
     tree: Handle<TreeMaterial>,
     grass: Handle<GrassMaterial>,
+    game_logo: Option<Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -1694,6 +1697,11 @@ fn setup_rendering(
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
     let flag = flag_materials.add(flag_material(&presentation.0, asset_server.as_deref()));
+    let game_logo = presentation_texture_handle(
+        &presentation.0,
+        asset_server.as_deref(),
+        GAME_LOGO_TEXTURE_PATH,
+    );
     let presentation_materials = presentation
         .0
         .materials
@@ -1853,6 +1861,7 @@ fn setup_rendering(
         clouds,
         tree,
         grass,
+        game_logo,
         presentation_materials,
     });
 }
@@ -3079,6 +3088,20 @@ fn primary_material_texture_entry<'a>(
         })
 }
 
+fn presentation_texture_handle(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    source_path: &str,
+) -> Option<Handle<Image>> {
+    let asset_path = presentation
+        .textures
+        .values()
+        .find(|texture| texture.source_path == source_path)?
+        .asset_path
+        .clone();
+    Some(asset_server?.load(asset_path))
+}
+
 fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
     info!("Stream Town boot validation complete");
     if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
@@ -3092,19 +3115,52 @@ fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
 
 fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
     spawn_cloud_field(&mut commands, &render, 72.0);
+    if let Some(game_logo) = &render.game_logo {
+        commands.spawn((
+            StateEntity,
+            Name::new("GameLogo (Unity parity)"),
+            ImageNode::new(game_logo.clone()),
+            GlobalZIndex(10),
+            Node {
+                position_type: PositionType::Absolute,
+                top: percent(10.0),
+                left: percent(27.0),
+                width: percent(46.0),
+                aspect_ratio: Some(GAME_LOGO_ASPECT_RATIO),
+                ..default()
+            },
+        ));
+    } else {
+        commands.spawn((
+            StateEntity,
+            Text::new("STREAM TOWN"),
+            TextFont {
+                font_size: FontSize::Px(64.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::srgb(0.86, 0.95, 0.84)),
+            Node {
+                position_type: PositionType::Absolute,
+                top: percent(18.0),
+                left: percent(36.0),
+                ..default()
+            },
+        ));
+    }
     commands.spawn((
         StateEntity,
-        Text::new("STREAM TOWN\n\nENTER  Generate Town\nS  Menu & Settings\nC  Credits\nESC  Quit"),
+        Text::new("ENTER  Generate Town\nS  Menu & Settings\nC  Credits\nESC  Quit"),
         TextFont {
-            font_size: FontSize::Px(48.0),
+            font_size: FontSize::Px(36.0),
             ..default()
         },
         TextLayout::justify(Justify::Center),
         TextColor(Color::srgb(0.86, 0.95, 0.84)),
         Node {
             position_type: PositionType::Absolute,
-            top: percent(28.0),
-            left: percent(32.0),
+            top: percent(62.0),
+            left: percent(36.0),
             ..default()
         },
     ));
@@ -14468,23 +14524,40 @@ fn snapshot_world(
 fn spawn_credits(mut commands: Commands, render: Res<RenderAssets>) {
     commands.insert_resource(CreditsTimeline::default());
     spawn_cloud_field(&mut commands, &render, 55.0);
-    commands.spawn((
-        StateEntity,
-        Text::new("STREAM TOWN"),
-        TextFont {
-            font_size: FontSize::Px(54.0),
-            ..default()
-        },
-        TextLayout::justify(Justify::Center),
-        TextColor(Color::srgb(0.86, 0.95, 0.84)),
-        GlobalZIndex(10),
-        Node {
-            position_type: PositionType::Absolute,
-            top: percent(12.0),
-            left: percent(37.0),
-            ..default()
-        },
-    ));
+    if let Some(game_logo) = &render.game_logo {
+        commands.spawn((
+            StateEntity,
+            Name::new("Credits logo"),
+            ImageNode::new(game_logo.clone()),
+            GlobalZIndex(10),
+            Node {
+                position_type: PositionType::Absolute,
+                top: percent(4.0),
+                left: percent(37.5),
+                width: percent(25.0),
+                aspect_ratio: Some(GAME_LOGO_ASPECT_RATIO),
+                ..default()
+            },
+        ));
+    } else {
+        commands.spawn((
+            StateEntity,
+            Text::new("STREAM TOWN"),
+            TextFont {
+                font_size: FontSize::Px(54.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(Color::srgb(0.86, 0.95, 0.84)),
+            GlobalZIndex(10),
+            Node {
+                position_type: PositionType::Absolute,
+                top: percent(12.0),
+                left: percent(37.0),
+                ..default()
+            },
+        ));
+    }
     for (target_path, text) in [
         ("CreatedBy_Canvas", "Created By\nHuman Bean Games"),
         ("ProjectLead_Canvas", "Project Lead\nJayden Hunter"),
@@ -17445,6 +17518,22 @@ mod tests {
         assert!(shader.contains("(1.0 - vertex_color.a)"));
         assert!(shader.contains("flag_material.colour_2"));
         assert!(shader.contains("pbr_input.material.metallic = metal_edge"));
+    }
+
+    #[test]
+    fn main_menu_logo_resolves_the_shipping_drop_shadow_sprite() {
+        let presentation = embedded_presentation();
+        let logo = presentation
+            .textures
+            .values()
+            .find(|texture| texture.source_path == GAME_LOGO_TEXTURE_PATH)
+            .expect("shipping main-menu logo is packaged");
+        assert_eq!(
+            logo.asset_path,
+            "migrated/textures/Sprites/Miscellaneous/Game_Logo_DropShadow.png"
+        );
+        assert!((GAME_LOGO_ASPECT_RATIO - 1.669_111_7).abs() < 0.000_001);
+        assert!(presentation_texture_handle(&presentation, None, GAME_LOGO_TEXTURE_PATH).is_none());
     }
 
     #[test]
