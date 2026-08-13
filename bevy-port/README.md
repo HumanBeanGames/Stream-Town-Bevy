@@ -495,6 +495,9 @@ state deterministically.
 specific point for repeatable property-curve smoke captures.
 `STREAM_TOWN_AUTOSTART_SETTINGS=1` opens the settings overlay on state entry so
 its complete runtime draft can be captured repeatably.
+`STREAM_TOWN_AUTOSTART_GAME_MENU=1` opens the shipping in-game menu after world
+loading so its Save, Load, Settings, Exit Game, Close, and Idle Mode controls
+can be captured without pointer or keyboard automation.
 `STREAM_TOWN_EXIT_AFTER_SCREENSHOT=1` exits one second after an automatic frame
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips and translated standalone clips share Bevy

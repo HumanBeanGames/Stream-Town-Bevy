@@ -130,6 +130,11 @@ const MAIN_MENU_TEXTURE_PATHS: [&str; 4] = [
     "Assets/Sprites/Buttons/UI_Button_Disabled.png",
     "Assets/Sprites/Objectives/UI_Objectives_Background.png",
 ];
+const GAME_MENU_TEXTURE_PATHS: [&str; 3] = [
+    "Assets/Sprites/VotingMenu/UI_VotingMenu_Background.png",
+    "Assets/Sprites/Miscellaneous/UI_Cross.png",
+    "Assets/Sprites/Miscellaneous/UI_Checkmark.png",
+];
 const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_Background.png",
     "Assets/Sprites/TopBar/UI_TopBar_Resources_Food.png",
@@ -410,6 +415,9 @@ struct MenuIoRequest {
     save: bool,
     load: bool,
 }
+
+#[derive(Resource, Default)]
+struct CameraIdleMode(bool);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BottomBarContext {
@@ -944,6 +952,24 @@ enum MainMenuAction {
     Quit,
 }
 
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum GameMenuAction {
+    SaveGame,
+    LoadGame,
+    Settings,
+    ExitGame,
+    Close,
+}
+
+#[derive(Component)]
+struct GameMenuRoot;
+
+#[derive(Component)]
+struct GameMenuIdleToggle;
+
+#[derive(Component)]
+struct GameMenuIdleCheckmark;
+
 #[derive(Component)]
 struct LoadingScreenEntity;
 
@@ -1301,6 +1327,14 @@ type TechnologyVoteCastInteractionQuery<'w, 's> = Query<
     ),
     (Changed<Interaction>, With<TechnologyVoteCastButton>),
 >;
+type GameMenuIdleToggleQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static mut BackgroundColor),
+    (With<GameMenuIdleToggle>, Without<GameMenuAction>),
+>;
+type MenuOverlayEntityQuery<'w, 's> =
+    Query<'w, 's, Entity, Or<(With<MenuOverlay>, With<GameMenuRoot>)>>;
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1865,6 +1899,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
             .init_resource::<MenuIoRequest>()
+            .init_resource::<CameraIdleMode>()
             .init_resource::<BottomBarRuntime>()
             .init_resource::<RuntimeConsoleRuntime>()
             .init_resource::<RuntimeCaptureRequest>()
@@ -2101,7 +2136,13 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                (menu_input, update_menu_overlay)
+                (
+                    menu_input,
+                    game_menu_buttons,
+                    game_menu_idle_toggle,
+                    update_game_menu_controls,
+                    update_menu_overlay,
+                )
                     .chain()
                     .after(game_input)
                     .run_if(in_state(GameState::InGame)),
@@ -2528,6 +2569,7 @@ fn setup_rendering(
     );
     let main_menu_textures = MAIN_MENU_TEXTURE_PATHS
         .iter()
+        .chain(GAME_MENU_TEXTURE_PATHS.iter())
         .filter_map(|source_path| {
             presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
                 .map(|handle| ((*source_path).to_owned(), handle))
@@ -5742,12 +5784,153 @@ fn update_main_menu_buttons(
     }
 }
 
+const fn game_menu_action_label(action: GameMenuAction) -> &'static str {
+    match action {
+        GameMenuAction::SaveGame => "Save Game",
+        GameMenuAction::LoadGame => "Load Game",
+        GameMenuAction::Settings => "Settings",
+        GameMenuAction::ExitGame => "Exit Game",
+        GameMenuAction::Close => "Close",
+    }
+}
+
+fn game_menu_action_enabled(action: GameMenuAction, has_save: bool) -> bool {
+    action != GameMenuAction::LoadGame || has_save
+}
+
+const fn game_menu_action_index(action: GameMenuAction) -> usize {
+    match action {
+        GameMenuAction::SaveGame => 0,
+        GameMenuAction::LoadGame => 1,
+        GameMenuAction::Settings => 2,
+        GameMenuAction::ExitGame => 3,
+        GameMenuAction::Close => 5,
+    }
+}
+
+fn game_menu_buttons(
+    save: Res<SaveRuntime>,
+    settings: Res<RuntimePlayerSettings>,
+    mut menu: ResMut<MenuRuntime>,
+    mut io: ResMut<MenuIoRequest>,
+    buttons: Query<(&Interaction, &GameMenuAction), Changed<Interaction>>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    if menu.page != MenuPage::Game {
+        return;
+    }
+    let has_save = save.store.path().is_file();
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed || !game_menu_action_enabled(*action, has_save) {
+            continue;
+        }
+        match action {
+            GameMenuAction::SaveGame => {
+                io.save = true;
+                menu.page = MenuPage::Closed;
+            }
+            GameMenuAction::LoadGame => {
+                io.load = true;
+                menu.page = MenuPage::Closed;
+            }
+            GameMenuAction::Settings => {
+                open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
+            }
+            GameMenuAction::ExitGame => {
+                menu.page = MenuPage::Closed;
+                next_state.set(GameState::MainMenu);
+            }
+            GameMenuAction::Close => {
+                menu.page = MenuPage::Closed;
+            }
+        }
+    }
+}
+
+fn game_menu_idle_toggle(
+    menu: Res<MenuRuntime>,
+    mut idle: ResMut<CameraIdleMode>,
+    toggles: Query<&Interaction, (Changed<Interaction>, With<GameMenuIdleToggle>)>,
+) {
+    if menu.page != MenuPage::Game {
+        return;
+    }
+    if toggles
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        idle.0 = !idle.0;
+    }
+}
+
+fn update_game_menu_controls(
+    save: Res<SaveRuntime>,
+    menu: Res<MenuRuntime>,
+    idle: Res<CameraIdleMode>,
+    render: Res<RenderAssets>,
+    mut buttons: Query<(&Interaction, &GameMenuAction, &mut ImageNode)>,
+    mut idle_toggle: GameMenuIdleToggleQuery,
+    mut checkmarks: Query<&mut Visibility, With<GameMenuIdleCheckmark>>,
+) {
+    let has_save = save.store.path().is_file();
+    for (interaction, action, mut image) in &mut buttons {
+        let enabled = menu.page == MenuPage::Game && game_menu_action_enabled(*action, has_save);
+        let selected =
+            menu.page == MenuPage::Game && menu.selected == game_menu_action_index(*action);
+        let source_path = if !enabled {
+            MAIN_MENU_TEXTURE_PATHS[2]
+        } else if selected
+            || *interaction == Interaction::Hovered
+            || *interaction == Interaction::Pressed
+        {
+            MAIN_MENU_TEXTURE_PATHS[1]
+        } else {
+            MAIN_MENU_TEXTURE_PATHS[0]
+        };
+        image.image = main_menu_texture(&render, source_path);
+        image.color = if enabled {
+            Color::WHITE
+        } else {
+            Color::srgba(0.78, 0.78, 0.78, 0.5)
+        };
+    }
+    if let Ok((interaction, mut background)) = idle_toggle.single_mut() {
+        background.0 = if menu.page == MenuPage::Game
+            && (menu.selected == 4
+                || *interaction == Interaction::Hovered
+                || *interaction == Interaction::Pressed)
+        {
+            Color::srgba(0.62, 0.55, 0.31, 0.24)
+        } else {
+            Color::NONE
+        };
+    }
+    for mut visibility in &mut checkmarks {
+        *visibility = if idle.0 {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
 fn spawn_menu_overlay(
     mut commands: Commands,
+    state: Res<State<GameState>>,
     mut menu: ResMut<MenuRuntime>,
     settings: Res<RuntimePlayerSettings>,
+    mut idle: ResMut<CameraIdleMode>,
+    render: Res<RenderAssets>,
 ) {
-    if std::env::var_os("STREAM_TOWN_AUTOSTART_SETTINGS").is_some() {
+    idle.0 = false;
+    if std::env::var_os("STREAM_TOWN_AUTOSTART_GAME_MENU").is_some()
+        && *state.get() == GameState::InGame
+    {
+        menu.page = MenuPage::Game;
+        menu.return_page = MenuPage::Closed;
+        menu.selected = 0;
+        menu.feedback.clear();
+    } else if std::env::var_os("STREAM_TOWN_AUTOSTART_SETTINGS").is_some() {
         open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
     }
     commands.spawn((
@@ -5774,6 +5957,178 @@ fn spawn_menu_overlay(
         BackgroundColor(Color::srgba(0.025, 0.045, 0.04, 0.97)),
         BorderColor::all(Color::srgb(0.42, 0.76, 0.52)),
     ));
+    commands
+        .spawn((
+            StateEntity,
+            GameMenuRoot,
+            Name::new("Shipping in-game menu"),
+            Visibility::Hidden,
+            GlobalZIndex(100),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(37.5),
+                top: percent(25.0),
+                width: percent(25.0),
+                height: percent(50.0),
+                ..default()
+            },
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Name::new("Game menu background"),
+                ImageNode::new(main_menu_texture(&render, GAME_MENU_TEXTURE_PATHS[0])).with_mode(
+                    NodeImageMode::Sliced(TextureSlicer {
+                        border: BorderRect::all(34.0),
+                        center_scale_mode: default(),
+                        sides_scale_mode: default(),
+                        max_corner_scale: 1.0,
+                    }),
+                ),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(20.35),
+                    top: percent(17.08),
+                    width: percent(59.45),
+                    height: percent(61.62),
+                    ..default()
+                },
+            ));
+            root.spawn((
+                Name::new("Game menu controls"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(29.05),
+                    top: percent(22.7),
+                    width: percent(42.05),
+                    height: percent(50.1),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: percent(2.4),
+                    ..default()
+                },
+            ))
+            .with_children(|controls| {
+                for action in [
+                    GameMenuAction::SaveGame,
+                    GameMenuAction::LoadGame,
+                    GameMenuAction::Settings,
+                    GameMenuAction::ExitGame,
+                ] {
+                    controls
+                        .spawn((
+                            action,
+                            Button,
+                            ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
+                                .with_mode(NodeImageMode::Sliced(TextureSlicer {
+                                    border: BorderRect::all(15.0),
+                                    center_scale_mode: default(),
+                                    sides_scale_mode: default(),
+                                    max_corner_scale: 1.0,
+                                })),
+                            Node {
+                                width: percent(100.0),
+                                flex_grow: 1.0,
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|button| {
+                            button.spawn((
+                                Text::new(game_menu_action_label(action)),
+                                TextFont {
+                                    font_size: FontSize::Px(18.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                }
+                controls
+                    .spawn((
+                        GameMenuIdleToggle,
+                        Button,
+                        BackgroundColor(Color::NONE),
+                        Node {
+                            width: percent(100.0),
+                            flex_grow: 0.75,
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::horizontal(percent(4.0)),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|toggle| {
+                        toggle.spawn((
+                            Text::new("Idle Mode"),
+                            TextFont {
+                                font_size: FontSize::Px(17.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                            Pickable::IGNORE,
+                        ));
+                        toggle
+                            .spawn((
+                                ImageNode::new(main_menu_texture(
+                                    &render,
+                                    MAIN_MENU_TEXTURE_PATHS[1],
+                                )),
+                                Pickable::IGNORE,
+                                Node {
+                                    width: px(28),
+                                    height: px(28),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|box_node| {
+                                box_node.spawn((
+                                    GameMenuIdleCheckmark,
+                                    ImageNode::new(main_menu_texture(
+                                        &render,
+                                        GAME_MENU_TEXTURE_PATHS[2],
+                                    )),
+                                    Pickable::IGNORE,
+                                    Visibility::Hidden,
+                                    Node {
+                                        width: percent(72.0),
+                                        height: percent(72.0),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                    });
+            });
+            root.spawn((
+                GameMenuAction::Close,
+                Button,
+                Name::new("Game menu close"),
+                ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[1])),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(69.1),
+                    top: percent(15.2),
+                    width: percent(12.62),
+                    height: percent(11.28),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ))
+            .with_children(|close| {
+                close.spawn((
+                    ImageNode::new(main_menu_texture(&render, GAME_MENU_TEXTURE_PATHS[1])),
+                    Pickable::IGNORE,
+                    Node {
+                        width: percent(45.0),
+                        height: percent(45.0),
+                        ..default()
+                    },
+                ));
+            });
+        });
 }
 
 fn update_menu_overlay(
@@ -5781,11 +6136,20 @@ fn update_menu_overlay(
     menu: Res<MenuRuntime>,
     save: Res<SaveRuntime>,
     mut overlay: Query<(&mut Text, &mut Visibility), With<MenuOverlay>>,
+    mut game_menu: Query<&mut Visibility, (With<GameMenuRoot>, Without<MenuOverlay>)>,
 ) {
     let Ok((mut text, mut visibility)) = overlay.single_mut() else {
         return;
     };
-    if menu.page == MenuPage::Closed {
+    let image_game_menu_visible = menu.page == MenuPage::Game && *state.get() == GameState::InGame;
+    if let Ok(mut game_menu_visibility) = game_menu.single_mut() {
+        *game_menu_visibility = if image_game_menu_visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if menu.page == MenuPage::Closed || image_game_menu_visible {
         *visibility = Visibility::Hidden;
         return;
     }
@@ -5802,11 +6166,11 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
 
     let items: &[(&str, bool)] = if state == GameState::InGame {
         &[
-            ("Resume", true),
-            ("Save game", true),
-            ("Load game", has_save),
+            ("Save Game", true),
+            ("Load Game", has_save),
             ("Settings", true),
-            ("Main menu", true),
+            ("Exit Game", true),
+            ("Idle Mode", true),
         ]
     } else {
         &[
@@ -5924,6 +6288,7 @@ fn menu_input(
     save: Res<SaveRuntime>,
     mut menu: ResMut<MenuRuntime>,
     mut io: ResMut<MenuIoRequest>,
+    mut idle: ResMut<CameraIdleMode>,
     mut player_settings: ResMut<RuntimePlayerSettings>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
@@ -6016,20 +6381,28 @@ fn menu_input(
     }
     if *state.get() == GameState::InGame {
         match menu.selected {
-            0 => menu.page = MenuPage::Closed,
-            1 => {
+            0 => {
                 io.save = true;
                 "Save requested".clone_into(&mut menu.feedback);
                 menu.page = MenuPage::Closed;
             }
-            2 if save.store.path().is_file() => {
+            1 if save.store.path().is_file() => {
                 io.load = true;
                 menu.page = MenuPage::Closed;
             }
-            3 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
-            4 => {
+            2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
+            3 => {
                 menu.page = MenuPage::Closed;
                 next_state.set(GameState::MainMenu);
+            }
+            4 => {
+                idle.0 = !idle.0;
+                if idle.0 {
+                    "Idle Mode enabled"
+                } else {
+                    "Idle Mode disabled"
+                }
+                .clone_into(&mut menu.feedback);
             }
             _ => "No native save exists yet".clone_into(&mut menu.feedback),
         }
@@ -14696,6 +15069,7 @@ fn camera_controls(
     mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
     menu: Res<MenuRuntime>,
+    idle: Res<CameraIdleMode>,
     settings: Res<RuntimePlayerSettings>,
     mut requests: ResMut<CameraCommandQueue>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -14708,19 +15082,20 @@ fn camera_controls(
         return;
     };
     let mut direction = Vec2::ZERO;
-    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyA) {
+    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyA) {
         direction.x -= 1.0;
     }
-    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyD) {
+    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyD) {
         direction.x += 1.0;
     }
-    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyS) {
+    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyS) {
         direction.y -= 1.0;
     }
-    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyW) {
+    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyW) {
         direction.y += 1.0;
     }
-    if settings.0.camera.mouse_controls
+    if !idle.0
+        && settings.0.camera.mouse_controls
         && settings.0.camera.edge_scrolling
         && let Ok(window) = windows.single()
         && let Some(cursor) = window.cursor_position()
@@ -14742,7 +15117,7 @@ fn camera_controls(
         let direction = direction.normalize();
         transform.translation += Vec3::new(direction.x, 0.0, direction.y) * speed;
     }
-    if settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle) {
+    if !idle.0 && settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle) {
         let pan = mouse_motion.delta * settings.0.camera.pan_sensitivity * 0.12;
         transform.translation += Vec3::new(pan.y, 0.0, -pan.x);
     }
@@ -22233,7 +22608,7 @@ fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntit
     commands.insert_resource(BuildingCommandQueue::default());
 }
 
-fn cleanup_menu_overlay(mut commands: Commands, overlays: Query<Entity, With<MenuOverlay>>) {
+fn cleanup_menu_overlay(mut commands: Commands, overlays: MenuOverlayEntityQuery) {
     for entity in &overlays {
         commands.entity(entity).despawn();
     }
@@ -23113,14 +23488,102 @@ mod tests {
     fn game_menu_exposes_state_appropriate_actions_and_save_availability() {
         let in_game = game_menu_text(GameState::InGame, 2, false);
         assert!(in_game.contains("STREAM TOWN MENU"));
-        assert!(in_game.contains("> Load game  [No save]"));
-        assert!(in_game.contains("Main menu"));
+        assert!(in_game.contains("Load Game  [No save]"));
+        assert!(in_game.contains("> Settings"));
+        assert!(in_game.contains("Exit Game"));
+        assert!(in_game.contains("Idle Mode"));
 
         let main_menu = game_menu_text(GameState::MainMenu, 1, true);
         assert!(main_menu.contains("New town"));
         assert!(main_menu.contains("> Load game\n"));
         assert!(main_menu.contains("Credits"));
         assert!(main_menu.contains("Quit"));
+    }
+
+    #[test]
+    fn shipping_game_menu_preserves_art_actions_and_idle_control() {
+        let presentation = embedded_presentation();
+        for source_path in GAME_MENU_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing Game Menu texture {source_path}"
+            );
+        }
+        let actions = [
+            GameMenuAction::SaveGame,
+            GameMenuAction::LoadGame,
+            GameMenuAction::Settings,
+            GameMenuAction::ExitGame,
+            GameMenuAction::Close,
+        ];
+        assert_eq!(
+            actions.map(game_menu_action_label),
+            ["Save Game", "Load Game", "Settings", "Exit Game", "Close"]
+        );
+        assert!(!game_menu_action_enabled(GameMenuAction::LoadGame, false));
+        assert!(game_menu_action_enabled(GameMenuAction::LoadGame, true));
+        assert!(game_menu_action_enabled(GameMenuAction::Close, false));
+    }
+
+    #[test]
+    fn game_menu_mouse_actions_use_authoritative_requests_and_settings() {
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("game-menu-actions.stbevy");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<GameState>()
+            .insert_resource(MenuRuntime {
+                page: MenuPage::Game,
+                ..default()
+            })
+            .init_resource::<MenuIoRequest>()
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(SaveRuntime {
+                store: NativeSaveStore::new(&save_path),
+            })
+            .add_systems(Update, game_menu_buttons);
+        app.world_mut()
+            .spawn((Interaction::Pressed, GameMenuAction::SaveGame));
+
+        app.update();
+
+        assert!(app.world().resource::<MenuIoRequest>().save);
+        assert_eq!(app.world().resource::<MenuRuntime>().page, MenuPage::Closed);
+
+        app.world_mut().resource_mut::<MenuIoRequest>().save = false;
+        app.world_mut().resource_mut::<MenuRuntime>().page = MenuPage::Game;
+        app.world_mut()
+            .spawn((Interaction::Pressed, GameMenuAction::Settings));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MenuRuntime>().page,
+            MenuPage::Settings
+        );
+        assert_eq!(
+            app.world().resource::<MenuRuntime>().return_page,
+            MenuPage::Game
+        );
+    }
+
+    #[test]
+    fn game_menu_idle_toggle_changes_camera_mode() {
+        let mut app = App::new();
+        app.insert_resource(MenuRuntime {
+            page: MenuPage::Game,
+            ..default()
+        })
+        .init_resource::<CameraIdleMode>()
+        .add_systems(Update, game_menu_idle_toggle);
+        app.world_mut()
+            .spawn((Interaction::Pressed, GameMenuIdleToggle));
+
+        app.update();
+
+        assert!(app.world().resource::<CameraIdleMode>().0);
     }
 
     #[test]
@@ -23233,11 +23696,13 @@ mod tests {
         let mut app = App::new();
         app.add_systems(Update, cleanup_menu_overlay);
         let overlay = app.world_mut().spawn(MenuOverlay).id();
+        let game_menu = app.world_mut().spawn(GameMenuRoot).id();
         let world_entity = app.world_mut().spawn(WorldEntity).id();
 
         app.update();
 
         assert!(app.world().get_entity(overlay).is_err());
+        assert!(app.world().get_entity(game_menu).is_err());
         assert!(app.world().get_entity(world_entity).is_ok());
     }
 
