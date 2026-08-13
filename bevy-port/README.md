@@ -82,7 +82,8 @@ level curves, health, defense, movement, carry, resource-affinity, station/targe
   shooter, the Marketplace's authored level-scaled passive gold generator, all
   nine authored enemy kill rewards, all 42 reachable construction/upgrade model
 handlers, all six storage-fill model handlers, and 422 typed objectives from the production
-technology graph plus both authored Windmill blade rotors in content schema 26, and follows nested prefabs to
+technology graph, both authored Windmill blade rotors, and the heal-burst prefab's
+authored self-disable lifetime in content schema 27, and follows nested prefabs to
 their source FBX models. Those effects comprise 28 building unlocks, 177 level
 caps, 104 role/global stat boosts, 80 building-cost reductions, 12 storage
 boosts, and 12 building-age upgrades.

@@ -1,5 +1,5 @@
 (
-    schema_version: 3,
+    schema_version: 4,
     source_schema_version: 1,
     source_unity_version: "6000.5.6f1",
     source_sha256: "5076f058bc198a27b906e4e2ade71de9f5bd8da8dc43f6c5e1fc4253655b3151",
@@ -8,6 +8,7 @@
     missing_main_objects: 61,
     archetypes: 215,
     archetype_scenes: 288,
+    disable_after_time_prefabs: 1,
     foliage_layers: 4,
     foliage_variants: 21,
     buildings: 26,

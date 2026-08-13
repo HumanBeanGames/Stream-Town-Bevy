@@ -161,8 +161,8 @@ const CURRENT_EVENT_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Filled.png",
 ];
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
-const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
+const HEALED_BURST_PREFAB_SUFFIX: &str = "VFX/Player/VFX_healing.prefab";
 const CHARACTER_HIT_SECONDS: f32 = 0.25;
 const TOWER_TRAIL_SECONDS: f32 = 2.0;
 const TOWER_TRAIL_WIDTH: f32 = 0.1;
@@ -1351,6 +1351,7 @@ struct HealingRingEffect {
     kind: HealingEffectKind,
     origin: Vec3,
     elapsed_seconds: f32,
+    duration_seconds: f32,
     base_scale: f32,
 }
 
@@ -1359,6 +1360,7 @@ struct HealingMoteEffect {
     kind: HealingEffectKind,
     origin: Vec3,
     elapsed_seconds: f32,
+    duration_seconds: f32,
     angle_radians: f32,
     phase: f32,
     base_scale: Vec3,
@@ -6109,6 +6111,7 @@ fn generate_and_spawn_world(
         let spacing = config.0.world.cell_size * 3.2;
         spawn_healing_effect(
             &mut commands,
+            &content.0,
             &render,
             focus - Vec3::X * spacing,
             HealingEffectKind::Channel,
@@ -6116,6 +6119,7 @@ fn generate_and_spawn_world(
         );
         spawn_healing_effect(
             &mut commands,
+            &content.0,
             &render,
             focus,
             HealingEffectKind::Burst,
@@ -6123,6 +6127,7 @@ fn generate_and_spawn_world(
         );
         spawn_healing_effect(
             &mut commands,
+            &content.0,
             &render,
             focus + Vec3::X * spacing,
             HealingEffectKind::Revive,
@@ -9006,15 +9011,25 @@ fn repeat_building_smoke(
     *cooldown_seconds = 0.82;
 }
 
-fn healing_effect_duration(kind: HealingEffectKind) -> f32 {
+fn healing_effect_duration(content: &ContentCatalog, kind: HealingEffectKind) -> f32 {
     match kind {
         HealingEffectKind::Channel => HEALING_CHANNEL_SECONDS,
-        HealingEffectKind::Burst | HealingEffectKind::Revive => HEALED_BURST_SECONDS,
+        HealingEffectKind::Burst | HealingEffectKind::Revive => content
+            .archetypes
+            .values()
+            .find(|archetype| archetype.source_path.ends_with(HEALED_BURST_PREFAB_SUFFIX))
+            .and_then(|archetype| archetype.disable_after_milliseconds)
+            .map(milli_units_as_f32)
+            .expect("validated content contains the authored heal-burst lifetime"),
     }
 }
 
-fn healing_effect_sample(kind: HealingEffectKind, elapsed_seconds: f32) -> HealingEffectSample {
-    let duration = healing_effect_duration(kind);
+fn healing_effect_sample(
+    kind: HealingEffectKind,
+    elapsed_seconds: f32,
+    duration_seconds: f32,
+) -> HealingEffectSample {
+    let duration = duration_seconds.max(f32::EPSILON);
     let progress = (elapsed_seconds / duration).clamp(0.0, 1.0);
     let envelope = (std::f32::consts::PI * progress).sin().max(0.0);
     let channel_size = if elapsed_seconds <= 1.5 {
@@ -9051,11 +9066,13 @@ fn healing_effect_sample(kind: HealingEffectKind, elapsed_seconds: f32) -> Heali
 
 fn spawn_healing_effect(
     commands: &mut Commands,
+    content: &ContentCatalog,
     render: &RenderAssets,
     origin: Vec3,
     kind: HealingEffectKind,
     cell_size: f32,
 ) {
+    let duration_seconds = healing_effect_duration(content, kind);
     let material = if kind == HealingEffectKind::Revive {
         render.healing_gold.clone()
     } else {
@@ -9071,6 +9088,7 @@ fn spawn_healing_effect(
             kind,
             origin,
             elapsed_seconds: 0.0,
+            duration_seconds,
             base_scale,
         },
         Mesh3d(render.healing_ring.clone()),
@@ -9096,6 +9114,7 @@ fn spawn_healing_effect(
                     kind,
                     origin,
                     elapsed_seconds: -phase * 0.22,
+                    duration_seconds,
                     angle_radians,
                     phase,
                     base_scale,
@@ -9117,22 +9136,27 @@ fn animate_healing_effects(
 ) {
     for (entity, mut effect, mut transform) in &mut rings {
         effect.elapsed_seconds += time.delta_secs();
-        if effect.elapsed_seconds >= healing_effect_duration(effect.kind) {
+        if effect.elapsed_seconds >= effect.duration_seconds {
             commands.entity(entity).despawn();
             continue;
         }
-        let sample = healing_effect_sample(effect.kind, effect.elapsed_seconds);
+        let sample =
+            healing_effect_sample(effect.kind, effect.elapsed_seconds, effect.duration_seconds);
         transform.translation = effect.origin + Vec3::Y * 0.08;
         transform.rotation = Quat::from_rotation_y(sample.rotation_radians * 0.2);
         transform.scale = Vec3::splat(effect.base_scale * sample.ring_scale);
     }
     for (entity, mut effect, mut transform) in &mut motes {
         effect.elapsed_seconds += time.delta_secs();
-        if effect.elapsed_seconds >= healing_effect_duration(effect.kind) {
+        if effect.elapsed_seconds >= effect.duration_seconds {
             commands.entity(entity).despawn();
             continue;
         }
-        let sample = healing_effect_sample(effect.kind, effect.elapsed_seconds.max(0.0));
+        let sample = healing_effect_sample(
+            effect.kind,
+            effect.elapsed_seconds.max(0.0),
+            effect.duration_seconds,
+        );
         let angle =
             effect.angle_radians + sample.rotation_radians + effect.phase * std::f32::consts::PI;
         let radius = sample.radial_distance * effect.distance_scale;
@@ -10032,6 +10056,7 @@ fn move_agents(
             agent.action_cooldown_seconds = 0.0;
             spawn_healing_effect(
                 &mut commands,
+                &content.0,
                 &render,
                 grid_to_world_on_surface(spawn, &config.0, &world.generated),
                 HealingEffectKind::Revive,
@@ -10088,6 +10113,7 @@ fn move_agents(
                                     grid_to_world_on_surface(target, &config.0, &world.generated);
                                 spawn_healing_effect(
                                     &mut commands,
+                                    &content.0,
                                     &render,
                                     source,
                                     HealingEffectKind::Channel,
@@ -10095,6 +10121,7 @@ fn move_agents(
                                 );
                                 spawn_healing_effect(
                                     &mut commands,
+                                    &content.0,
                                     &render,
                                     target,
                                     HealingEffectKind::Burst,
@@ -19686,6 +19713,7 @@ fn process_injected_commands(
                 });
                 spawn_healing_effect(
                     &mut ecs,
+                    &content.0,
                     &render,
                     grid_to_world_on_surface(spawn, &config.0, &world.generated),
                     HealingEffectKind::Revive,
@@ -19960,6 +19988,7 @@ fn process_injected_commands(
                         .map_err(|error| error.to_string())?;
                     spawn_healing_effect(
                         &mut ecs,
+                        &content.0,
                         &render,
                         grid_to_world_on_surface(spawn, &config.0, &world.generated),
                         HealingEffectKind::Revive,
@@ -23305,21 +23334,34 @@ mod tests {
 
     #[test]
     fn healing_effect_curves_preserve_authored_lifetimes_and_channel_keys() {
-        assert!((healing_effect_duration(HealingEffectKind::Burst) - 1.2).abs() < f32::EPSILON);
-        assert!((healing_effect_duration(HealingEffectKind::Channel) - 5.0).abs() < f32::EPSILON);
-        assert!((healing_effect_duration(HealingEffectKind::Revive) - 1.2).abs() < f32::EPSILON);
+        let content = embedded_content();
+        let burst_duration = healing_effect_duration(&content, HealingEffectKind::Burst);
+        let channel_duration = healing_effect_duration(&content, HealingEffectKind::Channel);
+        let revive_duration = healing_effect_duration(&content, HealingEffectKind::Revive);
+        assert!((burst_duration - 1.2).abs() < f32::EPSILON);
+        assert!((channel_duration - 5.0).abs() < f32::EPSILON);
+        assert!((revive_duration - 1.2).abs() < f32::EPSILON);
+        let prefab = content
+            .archetypes
+            .values()
+            .find(|archetype| archetype.source_path.ends_with(HEALED_BURST_PREFAB_SUFFIX))
+            .unwrap();
+        assert_eq!(prefab.disable_after_milliseconds, Some(1_200));
 
-        let channel_start = healing_effect_sample(HealingEffectKind::Channel, 0.0);
-        let channel_first_key = healing_effect_sample(HealingEffectKind::Channel, 1.5);
-        let channel_peak = healing_effect_sample(HealingEffectKind::Channel, 3.0);
-        let channel_end = healing_effect_sample(HealingEffectKind::Channel, 5.0);
+        let channel_start =
+            healing_effect_sample(HealingEffectKind::Channel, 0.0, channel_duration);
+        let channel_first_key =
+            healing_effect_sample(HealingEffectKind::Channel, 1.5, channel_duration);
+        let channel_peak = healing_effect_sample(HealingEffectKind::Channel, 3.0, channel_duration);
+        let channel_end = healing_effect_sample(HealingEffectKind::Channel, 5.0, channel_duration);
         assert!(channel_start.ring_scale.abs() < f32::EPSILON);
         assert!((channel_first_key.ring_scale - 0.289).abs() < f32::EPSILON);
         assert!((channel_peak.ring_scale - 1.0).abs() < f32::EPSILON);
         assert!(channel_end.ring_scale.abs() < f32::EPSILON);
 
-        let burst_midpoint = healing_effect_sample(HealingEffectKind::Burst, 0.6);
-        let revive_midpoint = healing_effect_sample(HealingEffectKind::Revive, 0.6);
+        let burst_midpoint = healing_effect_sample(HealingEffectKind::Burst, 0.6, burst_duration);
+        let revive_midpoint =
+            healing_effect_sample(HealingEffectKind::Revive, 0.6, revive_duration);
         assert!(burst_midpoint.ring_scale > 0.0);
         assert!(burst_midpoint.mote_scale > 0.0);
         assert!(revive_midpoint.ring_scale > burst_midpoint.ring_scale);

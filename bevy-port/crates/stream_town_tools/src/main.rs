@@ -387,6 +387,12 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.collapsing("Prefab archetypes", |ui| {
             for (id, archetype) in &state.catalog.archetypes {
                 ui.collapsing(format!("{}  ({id})", archetype.display_name), |ui| {
+                    if let Some(milliseconds) = archetype.disable_after_milliseconds {
+                        ui.monospace(format!(
+                            "disables after {:.3}s",
+                            f64::from(milliseconds) / 1_000.0
+                        ));
+                    }
                     ui.label(format!("Kind: {:?}", archetype.kind));
                     ui.monospace(format!("Unity prefab: {}", archetype.source_path));
                     ui.label(format!(

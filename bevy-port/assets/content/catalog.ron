@@ -1,5 +1,5 @@
 (
-    schema_version: 26,
+    schema_version: 27,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -2300,6 +2300,7 @@
                 "UnityEngine.VFX.VisualEffect",
                 "Utils.SimpleDisableAfterTime",
             ],
+            disable_after_milliseconds: Some(1200),
         ),
         "archetype:prefab:29791aa877b22af4db5180ed677aab1a": (
             display_name: "UI_Roles",

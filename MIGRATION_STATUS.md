@@ -494,6 +494,11 @@ mistaken for production-ready systems.
   degrees/second and only while the matching completed age model is active.
   Repository validation proves both typed node names survive in their packaged
   GLBs, and the focused content tool exposes their axes and rates.
+- Content schema 27 promotes the sole shipping `SimpleDisableAfterTime` record
+  from `VFX_healing`: the converter and validator preserve its 1.2-second
+  lifetime, the focused content tool exposes it, and Bevy's heal-burst and
+  revival presentation now use that typed value instead of a duplicated runtime
+  constant.
 - Completed gates now preserve Unity's asymmetric traversal rule: player A* may
   cross their occupied cells while enemies still see the same cells as blocked.
   Gates under construction remain blocked for everyone, and the exception is

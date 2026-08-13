@@ -44,6 +44,7 @@ pub struct ContentConversionReport {
     pub missing_main_objects: usize,
     pub archetypes: usize,
     pub archetype_scenes: usize,
+    pub disable_after_time_prefabs: usize,
     pub foliage_layers: usize,
     pub foliage_variants: usize,
     pub buildings: usize,
@@ -508,7 +509,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 3,
+        schema_version: 4,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -525,6 +526,11 @@ fn convert_export(
             .values()
             .map(|archetype| archetype.scenes.len())
             .sum(),
+        disable_after_time_prefabs: catalog
+            .archetypes
+            .values()
+            .filter(|archetype| archetype.disable_after_milliseconds.is_some())
+            .count(),
         foliage_layers: catalog.foliage.len(),
         foliage_variants: catalog
             .foliage
@@ -1419,6 +1425,7 @@ fn convert_archetypes(
             footprint,
             scenes,
             component_types,
+            disable_after_milliseconds: disable_after_milliseconds(asset)?,
             target_size_milli_cells: targetable_size_milli_cells(asset)?,
             health: health_definition(asset)?,
             enemy: enemy_definition(asset, pools)?,
@@ -1452,6 +1459,32 @@ fn prefab_building_type(asset: &UnityAsset) -> Option<&str> {
         .find(|component| component_type(component) == "Buildings.BuildingBase")
         .and_then(|component| component_field_value(component, "_buildingType"))
         .and_then(enum_name)
+}
+
+fn disable_after_milliseconds(asset: &UnityAsset) -> Result<Option<u32>> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Utils.SimpleDisableAfterTime")
+        .collect::<Vec<_>>();
+    let Some(component) = components.first() else {
+        return Ok(None);
+    };
+    if components.len() != 1 {
+        bail!("{} has multiple disable-after-time components", asset.path);
+    }
+    let seconds = component_field_value(component, "_lifeTime")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .with_context(|| format!("{} has invalid disable-after lifetime", asset.path))?;
+    let milliseconds = (seconds * 1_000.0)
+        .round()
+        .to_string()
+        .parse::<u32>()
+        .with_context(|| format!("{} disable-after lifetime is out of range", asset.path))?;
+    Ok(Some(milliseconds))
 }
 
 fn storage_contributions(asset: &UnityAsset) -> Result<Vec<StorageContribution>> {
@@ -2725,6 +2758,25 @@ mod tests {
     }
 
     #[test]
+    fn converts_disable_after_time_lifetime() {
+        let mut healing = asset(
+            "healing",
+            "Assets/Prefabs/VFX/Player/VFX_healing.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        healing.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Utils.SimpleDisableAfterTime, Assembly-CSharp",
+                vec![field("_lifeTime", Value::from(1.2))],
+            )],
+        });
+        assert_eq!(disable_after_milliseconds(&healing).unwrap(), Some(1_200));
+        healing.game_object.as_mut().unwrap().components[0].fields[0].value = Value::from(0.0);
+        assert!(disable_after_milliseconds(&healing).is_err());
+    }
+
+    #[test]
     fn converts_targetable_custom_and_root_collider_sizes() {
         let mut custom = asset("farm", "farm.prefab", "UnityEngine.GameObject", vec![]);
         custom.game_object = Some(UnityGameObject {
@@ -3518,6 +3570,7 @@ mod tests {
         assert_eq!(report.source_assets, 13);
         assert_eq!(report.archetypes, 3);
         assert_eq!(report.archetype_scenes, 1);
+        assert_eq!(report.disable_after_time_prefabs, 0);
         assert_eq!(report.foliage_layers, 2);
         assert_eq!(report.foliage_variants, 2);
         assert_eq!(report.buildings, 1);

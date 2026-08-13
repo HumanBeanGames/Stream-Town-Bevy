@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 26;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 27;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -72,6 +72,9 @@ pub struct ArchetypeDef {
     pub footprint: [u16; 2],
     pub scenes: Vec<ArchetypeScene>,
     pub component_types: Vec<String>,
+    /// Unity `SimpleDisableAfterTime` lifetime for self-disabling pooled prefabs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_after_milliseconds: Option<u32>,
     /// Unity `Targetable.SizeSqr` expressed as its unsquared logical-cell size.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub target_size_milli_cells: u32,
@@ -529,6 +532,8 @@ pub enum ContentError {
     InvalidFoliage(StableId),
     #[error("archetype {0} has invalid enemy-spawner values")]
     InvalidEnemySpawner(StableId),
+    #[error("archetype {0} has invalid disable-after-time data")]
+    InvalidDisableAfterTime(StableId),
     #[error("enemy spawner {spawner} references invalid enemy archetype {enemy}")]
     InvalidSpawnedEnemy { spawner: StableId, enemy: StableId },
     #[error("role {role} equipment contains an empty renderer node for {slot}")]
@@ -633,6 +638,15 @@ impl ContentCatalog {
                 && archetype.target_size_milli_cells == 0
             {
                 return Err(ContentError::InvalidTargetSize(id.clone()));
+            }
+            let has_disable_component = archetype
+                .component_types
+                .iter()
+                .any(|component| component == "Utils.SimpleDisableAfterTime");
+            if has_disable_component != archetype.disable_after_milliseconds.is_some()
+                || archetype.disable_after_milliseconds == Some(0)
+            {
+                return Err(ContentError::InvalidDisableAfterTime(id.clone()));
             }
             for scene in &archetype.scenes {
                 if !scene.asset_path.starts_with("migrated/models/")
