@@ -267,6 +267,34 @@ struct LoadRenderParams<'w, 's> {
     terrain_surfaces: Query<'w, 's, Entity, With<TerrainSurface>>,
 }
 
+#[derive(SystemParam)]
+struct LoadWorldEntities<'w, 's> {
+    agents: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static mut Agent,
+            &'static mut GridLocation,
+            &'static AgentAnimation,
+            &'static mut Transform,
+        ),
+        Without<TownHall>,
+    >,
+    runtime_buildings: Query<'w, 's, (Entity, &'static RuntimeBuilding), Without<TownHall>>,
+    town_halls: Query<
+        'w,
+        's,
+        (
+            &'static mut GridLocation,
+            &'static mut BuildingPresentation,
+            &'static mut Transform,
+        ),
+        With<TownHall>,
+    >,
+    enemy_camps: Query<'w, 's, (Entity, &'static EnemyCamp)>,
+}
+
 #[derive(Resource)]
 struct SimulationRuntime(WorldSimulation);
 
@@ -5378,7 +5406,7 @@ fn generate_and_spawn_world(
         RuntimeBuilding {
             id: town_hall_id.clone(),
         },
-        GridLocation(town_hall_position),
+        GridLocation(town_hall_placement),
         Transform::from_translation(hall),
     ));
     let town_hall = content
@@ -14182,15 +14210,7 @@ fn load_input(
     mut placers: ResMut<BuildingPlacers>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
-    mut agents: Query<(
-        Entity,
-        &mut Agent,
-        &mut GridLocation,
-        &AgentAnimation,
-        &mut Transform,
-    )>,
-    runtime_buildings: Query<(Entity, &RuntimeBuilding), Without<TownHall>>,
-    enemy_camps: Query<(Entity, &EnemyCamp)>,
+    mut entities: LoadWorldEntities,
     mut automatic_complete: Local<bool>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
@@ -14291,11 +14311,11 @@ fn load_input(
         .simulation
         .upgrade_time_schema(config.0.time.seconds_per_day);
     normalize_building_health(&content.0, &mut snapshot.simulation);
-    for (entity, building) in &runtime_buildings {
+    for (entity, building) in &entities.runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
         ecs.entity(entity).despawn();
     }
-    for (entity, camp) in &enemy_camps {
+    for (entity, camp) in &entities.enemy_camps {
         debug!(camp = %camp.id, "despawning enemy camp before native load");
         ecs.entity(entity).despawn();
     }
@@ -14381,6 +14401,28 @@ fn load_input(
             RigidBody::Static,
         ));
     }
+    let town_hall_id = StableId::new("building:townhall").expect("static ID");
+    let saved_town_hall = &snapshot.simulation.buildings[&town_hall_id];
+    let town_hall_definition = &content.0.buildings[&town_hall_id];
+    let town_hall_footprint = rotated_footprint(
+        town_hall_definition.footprint,
+        saved_town_hall.rotation_quarter_turns,
+    );
+    let town_hall_centre = GridPos {
+        x: saved_town_hall.position.x + town_hall_footprint[0] / 2,
+        z: saved_town_hall.position.z + town_hall_footprint[1] / 2,
+    };
+    let town_hall_surface = grid_to_world_on_surface(town_hall_centre, &config.0, &restored_world);
+    if let Ok((mut location, mut presentation, mut transform)) = entities.town_halls.single_mut() {
+        location.0 = saved_town_hall.position;
+        presentation.base_translation =
+            town_hall_surface + Vec3::Y * presentation.base_height_offset;
+        transform.translation = presentation.base_translation;
+        transform.rotation = quarter_turn_rotation(saved_town_hall.rotation_quarter_turns);
+    } else {
+        error!("the persistent Town Hall visual is unavailable during native load");
+        return;
+    }
     world.generated = restored_world;
     world
         .legacy_terrain_mesh
@@ -14397,7 +14439,7 @@ fn load_input(
         .map(|actor| (actor.id.clone(), actor))
         .collect();
     let mut restored_ids = BTreeSet::new();
-    for (entity, mut agent, mut location, animation, mut transform) in &mut agents {
+    for (entity, mut agent, mut location, animation, mut transform) in &mut entities.agents {
         let Some(saved) = saved_by_id.get(&agent.id) else {
             ecs.entity(entity).despawn();
             continue;
@@ -22748,6 +22790,90 @@ mod tests {
             .collect();
         assert_eq!(agents.len(), 5);
         assert!(agents.iter().all(|(_, kind)| *kind == ActorKind::Player));
+    }
+
+    #[test]
+    fn native_load_moves_town_hall_visual_to_saved_footprint() {
+        let config = GameConfig::default();
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("moved-town-hall.stbevy");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(config.clone()))
+        .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(&save_path),
+        });
+
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::WorldLoading);
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<MenuIoRequest>().save = true;
+        app.update();
+
+        let store = NativeSaveStore::new(&save_path);
+        let mut snapshot = store.load().unwrap();
+        let town_hall_id = StableId::new("building:townhall").unwrap();
+        let saved_position = GridPos { x: 6, z: 8 };
+        snapshot
+            .simulation
+            .buildings
+            .get_mut(&town_hall_id)
+            .unwrap()
+            .position = saved_position;
+        store.write(&snapshot).unwrap();
+
+        app.world_mut().resource_mut::<MenuIoRequest>().load = true;
+        app.update();
+
+        let content = &app.world().resource::<RuntimeContent>().0;
+        let footprint = content.buildings[&town_hall_id].footprint;
+        let centre = GridPos {
+            x: saved_position.x + footprint[0] / 2,
+            z: saved_position.z + footprint[1] / 2,
+        };
+        let expected_surface = grid_to_world_on_surface(
+            centre,
+            &config,
+            &app.world().resource::<WorldRuntime>().generated,
+        );
+        let (location, presentation, transform) = app
+            .world_mut()
+            .query_filtered::<(&GridLocation, &BuildingPresentation, &Transform), With<TownHall>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(location.0, saved_position);
+        assert_eq!(transform.translation.xz(), expected_surface.xz());
+        assert_eq!(transform.translation, presentation.base_translation);
+        assert_eq!(
+            app.world().resource::<SimulationRuntime>().0.buildings[&town_hall_id].position,
+            saved_position
+        );
+        let region = building_region(
+            saved_position,
+            footprint,
+            &app.world().resource::<WorldRuntime>().generated,
+        )
+        .unwrap();
+        for z in region.min.z..=region.max.z {
+            for x in region.min.x..=region.max.x {
+                assert!(
+                    !app.world()
+                        .resource::<WorldRuntime>()
+                        .generated
+                        .navigation
+                        .is_walkable(GridPos { x, z })
+                );
+            }
+        }
     }
 
     #[test]

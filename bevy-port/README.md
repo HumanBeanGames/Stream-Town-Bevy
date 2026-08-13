@@ -278,6 +278,10 @@ at least 1,000 and otherwise scales by 50 per player. Enemy archetype, camp
 timers and members, wave progress, tracked enemies, and the next stable enemy ID
 survive native saves; legacy enemy and camp names resolve back to catalog
 archetypes.
+Native load also repositions the persistent Town Hall ECS root, presentation
+origin, rotation, and lower-left grid location from the saved footprint. Its
+rendered position therefore stays aligned with navigation occupancy, worker
+stations, selection, combat targeting, and legacy-imported transforms.
 The shipping Fish God event is also live: its exact Unity channel-point reward
 ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten
 summon chance, 20-praise requirement, 300-second timeout, 1,000-food reward, and

@@ -257,7 +257,10 @@ mistaken for production-ready systems.
   in-game F5/F9 save/load that restores stable actors, constructed buildings,
   dynamic navigation occupancy, town resources, per-node depletion, carried
   inventories, votes, events, and simulation state. Empty depletion maps are
-  omitted so native format-1 checksum serialization remains compatible.
+  omitted so native format-1 checksum serialization remains compatible. The
+  persistent Town Hall visual, presentation origin, rotation, and lower-left
+  grid location now move to its saved footprint during load, keeping rendering,
+  navigation, selection, stations, and combat on the same authoritative state.
 - A one-time legacy importer for JSON and the exact Unity binary field order in
   schemas 1-3, including container/compression/bounds/trailer validation, named
   backup recovery, schema-1 mesh retention, seed-based Bevy regeneration,
