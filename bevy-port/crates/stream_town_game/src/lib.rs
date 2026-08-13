@@ -14248,7 +14248,6 @@ fn load_input(
             return;
         }
     };
-    placers.0.clear();
     let mut restored_config = config.0.clone();
     restored_config.world.seed = snapshot.world_seed;
     let mut restored_world = generate_world_with_content(&restored_config.world, &content.0);
@@ -14259,6 +14258,10 @@ fn load_input(
         &restored_world,
     );
     if compatibility.is_none() {
+        runtime_console.last_result = format!(
+            "Load failed: saved world {} does not match generator {}",
+            snapshot.world_hash, restored_world.deterministic_hash
+        );
         error!(
             saved_seed = snapshot.world_seed,
             runtime_seed = world.generated.seed,
@@ -14305,11 +14308,98 @@ fn load_input(
             );
         }
     }
+    ensure_town_hall_state(&content.0, &restored_config, &mut snapshot.simulation);
+    snapshot
+        .simulation
+        .upgrade_time_schema(restored_config.time.seconds_per_day);
+    normalize_building_health(&content.0, &mut snapshot.simulation);
+    if entities.town_halls.single_mut().is_err() {
+        "Load failed: the persistent Town Hall visual is unavailable"
+            .clone_into(&mut runtime_console.last_result);
+        error!("the persistent Town Hall visual is unavailable during native load preflight");
+        return;
+    }
+    for saved in snapshot.simulation.buildings.values() {
+        let Some((building_id, building)) = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, building)| building.archetype == saved.archetype)
+        else {
+            runtime_console.last_result = format!(
+                "Load failed: building {} references unknown archetype {}",
+                saved.id, saved.archetype
+            );
+            error!(
+                building = %saved.id,
+                archetype = %saved.archetype,
+                "native save references an unknown building archetype"
+            );
+            return;
+        };
+        if !content.0.archetypes.contains_key(&building.archetype) {
+            runtime_console.last_result = format!(
+                "Load failed: building definition {} references unknown prefab archetype {}",
+                building_id, building.archetype
+            );
+            error!(
+                building = %saved.id,
+                definition = %building_id,
+                archetype = %building.archetype,
+                "native save building definition references an unknown prefab archetype"
+            );
+            return;
+        }
+        let footprint = rotated_footprint(building.footprint, saved.rotation_quarter_turns);
+        let Some(region) = building_region(saved.position, footprint, &restored_world) else {
+            runtime_console.last_result =
+                format!("Load failed: building {} lies outside the world", saved.id);
+            error!(building = %saved.id, "native save building lies outside the world");
+            return;
+        };
+        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
+            runtime_console.last_result = format!(
+                "Load failed: building {} cannot update navigation",
+                saved.id
+            );
+            error!(building = %saved.id, %error, "native save building could not update navigation");
+            return;
+        }
+    }
+    for camp in snapshot.simulation.enemy_camps.values() {
+        let Some(archetype) = content.0.archetypes.get(&camp.archetype) else {
+            runtime_console.last_result = format!(
+                "Load failed: enemy camp {} references unknown archetype {}",
+                camp.id, camp.archetype
+            );
+            error!(camp = %camp.id, archetype = %camp.archetype, "native save references an unknown enemy camp");
+            return;
+        };
+        let Some(region) = building_region(camp.position, archetype.footprint, &restored_world)
+        else {
+            runtime_console.last_result =
+                format!("Load failed: enemy camp {} lies outside the world", camp.id);
+            error!(camp = %camp.id, "native save enemy camp lies outside the world");
+            return;
+        };
+        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
+            runtime_console.last_result = format!(
+                "Load failed: enemy camp {} cannot update navigation",
+                camp.id
+            );
+            error!(camp = %camp.id, %error, "native save enemy camp could not update navigation");
+            return;
+        }
+    }
+
     let terrain_replacement = if let Some(meshes) = load_render.meshes.as_mut() {
         let mesh = match snapshot.legacy_terrain_mesh.as_ref() {
             Some(saved) => match retained_terrain_mesh(saved) {
                 Ok(mesh) => mesh,
                 Err(error) => {
+                    runtime_console.last_result = format!(
+                        "Load failed: retained terrain could not be reconstructed: {error}"
+                    );
                     error!(%error, "native save retained terrain could not be reconstructed");
                     return;
                 }
@@ -14317,22 +14407,23 @@ fn load_input(
             None => generated_terrain_mesh(&restored_world, &restored_config),
         };
         let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
+            "Load failed: saved terrain does not produce a valid collider"
+                .clone_into(&mut runtime_console.last_result);
             error!("native save terrain does not produce a valid triangle collider");
             return;
         };
         Some((meshes.add(mesh), collider))
     } else {
         if snapshot.legacy_terrain_mesh.is_some() {
+            "Load failed: retained terrain requires rendering assets"
+                .clone_into(&mut runtime_console.last_result);
             error!("native save contains retained terrain but rendering assets are unavailable");
             return;
         }
         None
     };
-    ensure_town_hall_state(&content.0, &restored_config, &mut snapshot.simulation);
-    snapshot
-        .simulation
-        .upgrade_time_schema(restored_config.time.seconds_per_day);
-    normalize_building_health(&content.0, &mut snapshot.simulation);
+
+    placers.0.clear();
     for (entity, building) in &entities.runtime_buildings {
         debug!(building = %building.id, "despawning runtime building before native load");
         ecs.entity(entity).despawn();
@@ -14342,28 +14433,12 @@ fn load_input(
         ecs.entity(entity).despawn();
     }
     for saved in snapshot.simulation.buildings.values() {
-        let Some((building_id, building)) = content
+        let (building_id, building) = content
             .0
             .buildings
             .iter()
             .find(|(_, building)| building.archetype == saved.archetype)
-        else {
-            error!(
-                building = %saved.id,
-                archetype = %saved.archetype,
-                "native save references an unknown building archetype"
-            );
-            return;
-        };
-        let footprint = rotated_footprint(building.footprint, saved.rotation_quarter_turns);
-        let Some(region) = building_region(saved.position, footprint, &restored_world) else {
-            error!(building = %saved.id, "native save building lies outside the world");
-            return;
-        };
-        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
-            error!(building = %saved.id, %error, "native save building could not update navigation");
-            return;
-        }
+            .expect("building references were checked during native load preflight");
         if saved.id.as_str() == "building:townhall" {
             continue;
         }
@@ -14377,26 +14452,22 @@ fn load_input(
             &load_render.render,
             saved,
             building,
-            &content.0.archetypes[&building.archetype],
+            content
+                .0
+                .archetypes
+                .get(&building.archetype)
+                .expect("building prefab was checked during native load preflight"),
             saved.position,
             building.footprint,
             building_age(&content.0, &snapshot.simulation, building_id),
         );
     }
     for camp in snapshot.simulation.enemy_camps.values() {
-        let Some(archetype) = content.0.archetypes.get(&camp.archetype) else {
-            error!(camp = %camp.id, archetype = %camp.archetype, "native save references an unknown enemy camp");
-            return;
-        };
-        let Some(region) = building_region(camp.position, archetype.footprint, &restored_world)
-        else {
-            error!(camp = %camp.id, "native save enemy camp lies outside the world");
-            return;
-        };
-        if let Err(error) = restored_world.navigation.set_blocked(region, true) {
-            error!(camp = %camp.id, %error, "native save enemy camp could not update navigation");
-            return;
-        }
+        let archetype = content
+            .0
+            .archetypes
+            .get(&camp.archetype)
+            .expect("enemy camp archetype was checked during native load preflight");
         spawn_enemy_camp(
             &mut ecs,
             &restored_config,
@@ -23047,6 +23118,116 @@ mod tests {
         assert_eq!(
             app.world().resource::<RuntimeConsoleRuntime>().last_result,
             format!("Loaded {}", save_path.display())
+        );
+    }
+
+    #[test]
+    fn native_load_preflight_preserves_live_town_on_invalid_building() {
+        let config = GameConfig::default();
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("invalid-building.stbevy");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(config))
+        .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(&save_path),
+        });
+
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::WorldLoading);
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<MenuIoRequest>().save = true;
+        app.update();
+
+        let store = NativeSaveStore::new(&save_path);
+        let mut snapshot = store.load().unwrap();
+        let invalid_id = StableId::new("building:invalid_save_fixture").unwrap();
+        snapshot.simulation.buildings.insert(
+            invalid_id.clone(),
+            BuildingState {
+                id: invalid_id,
+                archetype: StableId::new("archetype:building:missing").unwrap(),
+                position: GridPos { x: 2, z: 2 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 100,
+                complete: true,
+            },
+        );
+        store.write(&snapshot).unwrap();
+
+        let live_wood = 73;
+        app.world_mut()
+            .resource_mut::<SimulationRuntime>()
+            .0
+            .town_resources
+            .insert(StableId::new("resource:wood").unwrap(), live_wood);
+        let placer_owner = StableId::new("debug:preflight_owner").unwrap();
+        app.world_mut().resource_mut::<BuildingPlacers>().0.insert(
+            placer_owner.clone(),
+            BuildingPlacement {
+                building: StableId::new("building:wall").unwrap(),
+                position: GridPos { x: 3, z: 3 },
+                rotation_quarter_turns: 0,
+            },
+        );
+        let live_actor_ids = app
+            .world_mut()
+            .query::<&Agent>()
+            .iter(app.world())
+            .map(|agent| agent.id.clone())
+            .collect::<BTreeSet<_>>();
+        let live_world_hash = app
+            .world()
+            .resource::<WorldRuntime>()
+            .generated
+            .deterministic_hash
+            .clone();
+
+        app.world_mut().resource_mut::<MenuIoRequest>().load = true;
+        app.update();
+
+        let actor_ids_after = app
+            .world_mut()
+            .query::<&Agent>()
+            .iter(app.world())
+            .map(|agent| agent.id.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actor_ids_after, live_actor_ids);
+        assert_eq!(
+            app.world()
+                .resource::<WorldRuntime>()
+                .generated
+                .deterministic_hash,
+            live_world_hash
+        );
+        assert_eq!(
+            town_resource_amount(
+                &app.world().resource::<SimulationRuntime>().0,
+                "resource:wood"
+            ),
+            live_wood
+        );
+        assert!(
+            app.world()
+                .resource::<BuildingPlacers>()
+                .0
+                .contains_key(&placer_owner)
+        );
+        assert!(
+            app.world()
+                .resource::<RuntimeConsoleRuntime>()
+                .last_result
+                .contains("references unknown archetype")
         );
     }
 
