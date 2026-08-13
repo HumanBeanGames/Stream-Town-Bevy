@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786589993.7973745,
-    "ast_hash": "b086f61224999832434f794184f6f4ec",
+    "mtime": 1786590377.6505127,
+    "ast_hash": "95ce4e0e07dad05e12debb9761ad86bd",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {

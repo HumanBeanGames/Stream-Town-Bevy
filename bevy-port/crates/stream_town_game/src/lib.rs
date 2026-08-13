@@ -73,6 +73,7 @@ const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
 const GRASS_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Grass.mat";
 const CRITTER_SHADER_ASSET_PATH: &str = "shaders/critter_material.wgsl";
 const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
+const CRITTER_MATERIAL_ID: &str = "material:56cfb478fa4b9e8469bcbbf9cf077701";
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -2032,6 +2033,7 @@ fn spawn_seagull(
     world_seed: u64,
 ) {
     let (start, end) = deterministic_seagull_leg(world_seed, 0);
+    let critter_material = standalone_material_override(render, CRITTER_MATERIAL_ID);
     let mut flight = commands.spawn((
         Name::new("SeagulSpawner (Unity parity)"),
         WorldEntity,
@@ -2055,7 +2057,7 @@ fn spawn_seagull(
         if let Some(asset_server) = asset_server
             && converted_asset_exists(asset_root, SEAGULL_MODEL_PATH)
         {
-            parent.spawn((
+            let mut visual = parent.spawn((
                 Name::new("Critter_Seagull_01"),
                 WorldAssetRoot(
                     asset_server
@@ -2063,6 +2065,9 @@ fn spawn_seagull(
                 ),
                 model_transform,
             ));
+            if let Some(critter_material) = &critter_material {
+                visual.insert(critter_material.clone());
+            }
         } else {
             parent.spawn((
                 Name::new("Seagull fallback"),
@@ -2072,6 +2077,21 @@ fn spawn_seagull(
             ));
         }
     });
+}
+
+fn standalone_material_override(
+    render: &RenderAssets,
+    material_id: &str,
+) -> Option<MaterialOverrideSpec> {
+    let material = StableId::new(material_id)
+        .ok()
+        .and_then(|id| render.presentation_materials.get(&id))?
+        .clone();
+    Some(MaterialOverrideSpec {
+        fallback: Some(material),
+        model_materials: BTreeMap::new(),
+        renderer_materials: Vec::new(),
+    })
 }
 
 fn drive_seagull_flight(
@@ -17227,6 +17247,25 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.base.base_color_texture.is_none());
+    }
+
+    #[test]
+    fn standalone_seagull_resolves_the_authored_critter_material() {
+        let id = StableId::new(CRITTER_MATERIAL_ID).expect("critter material id is valid");
+        let authored = Handle::<CritterMaterial>::default();
+        let mut render = RenderAssets::default();
+        render
+            .presentation_materials
+            .insert(id, ResolvedMaterialHandle::Critter(authored.clone()));
+
+        let resolved = standalone_material_override(&render, CRITTER_MATERIAL_ID)
+            .expect("standalone converted scene should resolve its material");
+        assert!(resolved.model_materials.is_empty());
+        assert!(resolved.renderer_materials.is_empty());
+        let Some(ResolvedMaterialHandle::Critter(handle)) = resolved.fallback else {
+            panic!("standalone seagull must receive a critter material override");
+        };
+        assert_eq!(handle, authored);
     }
 
     #[test]
