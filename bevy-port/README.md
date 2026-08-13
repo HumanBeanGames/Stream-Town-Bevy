@@ -139,7 +139,10 @@ backup. On first launch, the Windows game imports Unity's
 `STREAM_TOWN_PLAYER_SETTINGS_PATH` or `STREAM_TOWN_UNITY_SETTINGS_PATH` to use
 explicit paths. The Settings tab in `stream_town_tools` and the shipping Main
 Menu/in-game Escape panel edit and validate the native file. The runtime panel
-uses a draft workflow with apply/save, restore-defaults, and cancel actions.
+recreates Unity's authored four-tab Video, Audio, Gameplay, and Connection shell
+with pointer controls, Apply, Defaults, Back, and the unsaved-draft confirmation.
+The Connection tab reports runtime Twitch status while OAuth and secret storage
+remain in the focused tools application.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
 all camera controls/sensitivities, name/building-health overlays, and the Unity
@@ -162,8 +165,11 @@ local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to open the game menu. Use
-arrow keys and Enter to select Resume, Save, Load, Settings, or Main Menu. The
-Main Menu's `S` shortcut opens the same keyboard-driven settings workflow. The
+arrow keys and Enter to select Save Game, Load Game, Settings, Exit Game, or
+Idle Mode. Settings retain keyboard control: Tab/Shift+Tab changes category,
+arrow keys select or change values, Enter confirms, and Escape invokes the same
+unsaved-change prompt as Back. The Main Menu's `S` shortcut opens its keyboard
+menu, from which Settings uses the same workflow. The
 stable chat grammar executes the player query, role/station/target selection,
 cosmetic/pet, building/catalog, recruit administration, ruler economy, camera,
 governance, moderation, save, and event commands documented by `!help` with
@@ -493,8 +499,9 @@ state deterministically.
 `STREAM_TOWN_AUTOSTART_CREDITS=1` opens the Credits state directly, and
 `STREAM_TOWN_DEBUG_CREDITS_TIME=<seconds>` starts its authored timeline at a
 specific point for repeatable property-curve smoke captures.
-`STREAM_TOWN_AUTOSTART_SETTINGS=1` opens the settings overlay on state entry so
-its complete runtime draft can be captured repeatably.
+`STREAM_TOWN_AUTOSTART_SETTINGS=1` opens the authored settings shell on state
+entry so all four categories and the complete runtime draft can be captured
+repeatably.
 `STREAM_TOWN_AUTOSTART_GAME_MENU=1` opens the shipping in-game menu after world
 loading so its Save, Load, Settings, Exit Game, Close, and Idle Mode controls
 can be captured without pointer or keyboard automation.

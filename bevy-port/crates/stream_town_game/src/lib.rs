@@ -135,6 +135,7 @@ const GAME_MENU_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/Miscellaneous/UI_Cross.png",
     "Assets/Sprites/Miscellaneous/UI_Checkmark.png",
 ];
+const SETTINGS_BACKGROUND_TEXTURE_PATH: &str = "Assets/Sprites/Settings/UI_Settings_Background.png";
 const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_Background.png",
     "Assets/Sprites/TopBar/UI_TopBar_Resources_Food.png",
@@ -389,11 +390,22 @@ enum MenuPage {
     Settings,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SettingsTab {
+    #[default]
+    Video,
+    Audio,
+    Gameplay,
+    Connection,
+}
+
 #[derive(Resource)]
 struct MenuRuntime {
     page: MenuPage,
     return_page: MenuPage,
     selected: usize,
+    settings_tab: SettingsTab,
+    confirm_settings_close: bool,
     draft: PlayerSettings,
     feedback: String,
 }
@@ -404,10 +416,17 @@ impl Default for MenuRuntime {
             page: MenuPage::Closed,
             return_page: MenuPage::Closed,
             selected: 0,
+            settings_tab: SettingsTab::Video,
+            confirm_settings_close: false,
             draft: PlayerSettings::default(),
             feedback: String::new(),
         }
     }
+}
+
+#[derive(Resource, Default)]
+struct SettingsUiCache {
+    signature: String,
 }
 
 #[derive(Resource, Default)]
@@ -961,6 +980,36 @@ enum GameMenuAction {
     Close,
 }
 
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum SettingsAction {
+    Apply,
+    Defaults,
+    Back,
+    ConfirmApply,
+    ConfirmDiscard,
+}
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+struct SettingsTabButton(SettingsTab);
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+struct SettingsValueButton {
+    index: usize,
+    direction: i8,
+}
+
+#[derive(Component)]
+struct SettingsRoot;
+
+#[derive(Component)]
+struct SettingsRows;
+
+#[derive(Component)]
+struct SettingsConfirmModal;
+
+#[derive(Component)]
+struct SettingsFeedbackText;
+
 #[derive(Component)]
 struct GameMenuRoot;
 
@@ -1334,7 +1383,7 @@ type GameMenuIdleToggleQuery<'w, 's> = Query<
     (With<GameMenuIdleToggle>, Without<GameMenuAction>),
 >;
 type MenuOverlayEntityQuery<'w, 's> =
-    Query<'w, 's, Entity, Or<(With<MenuOverlay>, With<GameMenuRoot>)>>;
+    Query<'w, 's, Entity, Or<(With<MenuOverlay>, With<GameMenuRoot>, With<SettingsRoot>)>>;
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1898,6 +1947,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
+            .init_resource::<SettingsUiCache>()
             .init_resource::<MenuIoRequest>()
             .init_resource::<CameraIdleMode>()
             .init_resource::<BottomBarRuntime>()
@@ -1967,6 +2017,11 @@ impl Plugin for StreamTownGamePlugin {
                     main_menu_buttons,
                     update_main_menu_buttons,
                     menu_input,
+                    settings_tab_buttons,
+                    settings_value_buttons,
+                    settings_action_buttons,
+                    rebuild_settings_rows,
+                    update_settings_controls,
                     update_menu_overlay,
                 )
                     .chain()
@@ -2141,6 +2196,11 @@ impl Plugin for StreamTownGamePlugin {
                     game_menu_buttons,
                     game_menu_idle_toggle,
                     update_game_menu_controls,
+                    settings_tab_buttons,
+                    settings_value_buttons,
+                    settings_action_buttons,
+                    rebuild_settings_rows,
+                    update_settings_controls,
                     update_menu_overlay,
                 )
                     .chain()
@@ -2570,6 +2630,7 @@ fn setup_rendering(
     let main_menu_textures = MAIN_MENU_TEXTURE_PATHS
         .iter()
         .chain(GAME_MENU_TEXTURE_PATHS.iter())
+        .chain(std::iter::once(&SETTINGS_BACKGROUND_TEXTURE_PATH))
         .filter_map(|source_path| {
             presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
                 .map(|handle| ((*source_path).to_owned(), handle))
@@ -5914,6 +5975,507 @@ fn update_game_menu_controls(
     }
 }
 
+const SETTINGS_TABS: [SettingsTab; 4] = [
+    SettingsTab::Video,
+    SettingsTab::Audio,
+    SettingsTab::Gameplay,
+    SettingsTab::Connection,
+];
+
+const fn settings_tab_label(tab: SettingsTab) -> &'static str {
+    match tab {
+        SettingsTab::Video => "Video",
+        SettingsTab::Audio => "Audio",
+        SettingsTab::Gameplay => "Gameplay",
+        SettingsTab::Connection => "Connection",
+    }
+}
+
+fn settings_tab_indices(tab: SettingsTab) -> &'static [usize] {
+    match tab {
+        SettingsTab::Video => &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        SettingsTab::Audio => &[11, 12, 13, 14],
+        SettingsTab::Gameplay => &[15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        SettingsTab::Connection => &[],
+    }
+}
+
+const fn settings_tab_for_index(index: usize) -> Option<SettingsTab> {
+    match index {
+        0..=10 => Some(SettingsTab::Video),
+        11..=14 => Some(SettingsTab::Audio),
+        15..=25 => Some(SettingsTab::Gameplay),
+        _ => None,
+    }
+}
+
+fn cycle_settings_tab(tab: SettingsTab, forward: bool) -> SettingsTab {
+    let index = SETTINGS_TABS
+        .iter()
+        .position(|candidate| *candidate == tab)
+        .expect("the active settings tab is part of the shipping tab order");
+    let next = if forward {
+        (index + 1) % SETTINGS_TABS.len()
+    } else {
+        index.checked_sub(1).unwrap_or(SETTINGS_TABS.len() - 1)
+    };
+    SETTINGS_TABS[next]
+}
+
+fn settings_value_label(settings: &PlayerSettings, index: usize) -> (&'static str, String) {
+    let video = &settings.video;
+    let camera = &settings.camera;
+    let interface = &settings.interface;
+    match index {
+        0 => ("Display Mode", format!("{:?}", video.display_mode)),
+        1 => ("Resolution", format!("{} x {}", video.width, video.height)),
+        2 => ("VSync", on_off(video.vsync).to_owned()),
+        3 => (
+            "FPS Limiter",
+            video
+                .fps_limit
+                .map_or("Unlimited".to_owned(), |value| value.to_string()),
+        ),
+        4 => ("Shadows", on_off(video.shadows_enabled).to_owned()),
+        5 => ("Shadow Quality", video.shadow_map_resolution.to_string()),
+        6 => (
+            "Ambient Occlusion",
+            on_off(video.ambient_occlusion).to_owned(),
+        ),
+        7 => ("MSAA", format!("x{}", video.msaa_samples)),
+        8 => ("FXAA / SMAA", format!("{:?}", video.post_process_aa)),
+        9 => ("Brightness", format!("{:.1}", video.brightness_ev)),
+        10 => ("Gamma", format!("{:.1}", video.gamma)),
+        11 => (
+            "Master",
+            format!("{}%", volume_percent(settings.audio.master)),
+        ),
+        12 => (
+            "Music",
+            format!("{}%", volume_percent(settings.audio.music)),
+        ),
+        13 => (
+            "Sound Effects",
+            format!("{}%", volume_percent(settings.audio.sound_effects)),
+        ),
+        14 => (
+            "Ambience",
+            format!("{}%", volume_percent(settings.audio.ambience)),
+        ),
+        15 => (
+            "Keyboard (WASD)",
+            on_off(camera.keyboard_movement).to_owned(),
+        ),
+        16 => ("Mouse Controls", on_off(camera.mouse_controls).to_owned()),
+        17 => ("Edge Scrolling", on_off(camera.edge_scrolling).to_owned()),
+        18 => ("Pan Sensitivity", format!("{:.0}", camera.pan_sensitivity)),
+        19 => (
+            "Zoom Sensitivity",
+            format!("{:.0}", camera.zoom_sensitivity),
+        ),
+        20 => (
+            "Keyboard Sensitivity",
+            format!("{:.0}", camera.keyboard_pan_sensitivity),
+        ),
+        21 => (
+            "Edge Sensitivity",
+            format!("{:.0}", camera.edge_scroll_sensitivity),
+        ),
+        22 => ("Field of View", camera.field_of_view_degrees.to_string()),
+        23 => ("Username Display", format!("{:?}", interface.display_names)),
+        24 => (
+            "Building Health Display",
+            format!("{:?}", interface.display_building_health),
+        ),
+        25 => (
+            "Autosave Time",
+            if settings.autosave_minutes == 0 {
+                "Disabled".to_owned()
+            } else {
+                format!("{} Minutes", settings.autosave_minutes)
+            },
+        ),
+        _ => ("Unknown", String::new()),
+    }
+}
+
+fn spawn_settings_button(
+    parent: &mut ChildSpawnerCommands,
+    action: SettingsAction,
+    label: &'static str,
+    render: &RenderAssets,
+) {
+    parent
+        .spawn((
+            action,
+            Button,
+            ImageNode::new(main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0])).with_mode(
+                NodeImageMode::Sliced(TextureSlicer {
+                    border: BorderRect::all(15.0),
+                    center_scale_mode: default(),
+                    sides_scale_mode: default(),
+                    max_corner_scale: 1.0,
+                }),
+            ),
+            Node {
+                flex_grow: 1.0,
+                height: px(44),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|button| {
+            button.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                Pickable::IGNORE,
+            ));
+        });
+}
+
+fn settings_tab_buttons(
+    mut menu: ResMut<MenuRuntime>,
+    buttons: Query<(&Interaction, &SettingsTabButton), Changed<Interaction>>,
+) {
+    if menu.page != MenuPage::Settings || menu.confirm_settings_close {
+        return;
+    }
+    for (interaction, tab) in &buttons {
+        if *interaction == Interaction::Pressed {
+            menu.settings_tab = tab.0;
+            menu.selected = settings_tab_indices(tab.0).first().copied().unwrap_or(26);
+            menu.feedback.clear();
+        }
+    }
+}
+
+fn settings_value_buttons(
+    mut menu: ResMut<MenuRuntime>,
+    buttons: Query<(&Interaction, &SettingsValueButton), Changed<Interaction>>,
+) {
+    if menu.page != MenuPage::Settings || menu.confirm_settings_close {
+        return;
+    }
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            menu.selected = button.index;
+            adjust_settings_menu(&mut menu.draft, button.index, button.direction);
+            menu.feedback.clear();
+        }
+    }
+}
+
+fn apply_settings_draft(
+    menu: &mut MenuRuntime,
+    player_settings: &mut RuntimePlayerSettings,
+) -> bool {
+    if let Err(error) = menu.draft.validate() {
+        menu.feedback = format!("Settings are invalid: {error}");
+        return false;
+    }
+    match PlayerSettingsStore::new(player_settings_path()).write(&menu.draft) {
+        Ok(()) => {
+            player_settings.0 = menu.draft.clone();
+            "Applied and saved settings".clone_into(&mut menu.feedback);
+            true
+        }
+        Err(error) => {
+            menu.feedback = format!("Settings could not be saved: {error}");
+            false
+        }
+    }
+}
+
+fn close_settings_menu(menu: &mut MenuRuntime) {
+    let target = menu.return_page;
+    menu.page = target;
+    if target == MenuPage::Game {
+        menu.return_page = MenuPage::Closed;
+    }
+    menu.selected = 0;
+    menu.settings_tab = SettingsTab::Video;
+    menu.confirm_settings_close = false;
+    menu.feedback.clear();
+}
+
+fn request_settings_close(menu: &mut MenuRuntime, player_settings: &PlayerSettings) {
+    if menu.draft == *player_settings {
+        close_settings_menu(menu);
+    } else {
+        menu.confirm_settings_close = true;
+        menu.selected = 0;
+        menu.feedback.clear();
+    }
+}
+
+fn settings_action_buttons(
+    mut menu: ResMut<MenuRuntime>,
+    mut player_settings: ResMut<RuntimePlayerSettings>,
+    buttons: Query<(&Interaction, &SettingsAction), Changed<Interaction>>,
+) {
+    if menu.page != MenuPage::Settings {
+        return;
+    }
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            SettingsAction::Apply if !menu.confirm_settings_close => {
+                apply_settings_draft(&mut menu, &mut player_settings);
+            }
+            SettingsAction::Defaults if !menu.confirm_settings_close => {
+                menu.draft = PlayerSettings::default();
+                "Restored Unity defaults in this draft".clone_into(&mut menu.feedback);
+            }
+            SettingsAction::Back if !menu.confirm_settings_close => {
+                request_settings_close(&mut menu, &player_settings.0);
+            }
+            SettingsAction::ConfirmApply
+                if menu.confirm_settings_close
+                    && apply_settings_draft(&mut menu, &mut player_settings) =>
+            {
+                close_settings_menu(&mut menu);
+            }
+            SettingsAction::ConfirmDiscard if menu.confirm_settings_close => {
+                menu.draft = player_settings.0.clone();
+                close_settings_menu(&mut menu);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn rebuild_settings_rows(
+    mut commands: Commands,
+    menu: Res<MenuRuntime>,
+    twitch: Res<TwitchConnection>,
+    render: Res<RenderAssets>,
+    mut cache: ResMut<SettingsUiCache>,
+    rows: Query<Entity, With<SettingsRows>>,
+) {
+    let signature = format!(
+        "{:?}:{:?}:{}:{:?}:{}",
+        menu.page,
+        menu.settings_tab,
+        menu.selected,
+        menu.draft,
+        twitch_status_text(&twitch)
+    );
+    if cache.signature == signature {
+        return;
+    }
+    cache.signature = signature;
+    let Ok(rows) = rows.single() else {
+        return;
+    };
+    commands.entity(rows).despawn_children();
+    commands.entity(rows).with_children(|parent| {
+        if menu.settings_tab == SettingsTab::Connection {
+            parent.spawn((
+                Text::new(format!(
+                    "CONNECTION\n\nTwitch: {}\n\nOAuth setup and credential storage are managed in stream_town_tools.\nThe game reconnects automatically from the saved public configuration.",
+                    twitch_status_text(&twitch)
+                )),
+                TextFont {
+                    font_size: FontSize::Px(19.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::WHITE),
+                Node {
+                    width: percent(100.0),
+                    margin: UiRect::top(percent(8.0)),
+                    ..default()
+                },
+            ));
+            return;
+        }
+        for &index in settings_tab_indices(menu.settings_tab) {
+            let (label, value) = settings_value_label(&menu.draft, index);
+            parent
+                .spawn((
+                    BackgroundColor(if menu.selected == index {
+                        Color::srgba(0.211, 0.240, 0.358, 0.82)
+                    } else {
+                        Color::srgba(0.055, 0.071, 0.141, 0.72)
+                    }),
+                    Node {
+                        width: percent(48.0),
+                        height: px(44),
+                        padding: UiRect::horizontal(px(8)),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                ))
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new(label),
+                        TextFont {
+                            font_size: FontSize::Px(15.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.827, 0.745, 0.498)),
+                        Node {
+                            width: percent(48.0),
+                            ..default()
+                        },
+                    ));
+                    row.spawn((
+                        SettingsValueButton {
+                            index,
+                            direction: -1,
+                        },
+                        Button,
+                        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
+                            .with_mode(NodeImageMode::Sliced(TextureSlicer {
+                                border: BorderRect::all(15.0),
+                                center_scale_mode: default(),
+                                sides_scale_mode: default(),
+                                max_corner_scale: 1.0,
+                            })),
+                        Node {
+                            width: px(30),
+                            height: px(30),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|button| {
+                        button.spawn((Text::new("<"), Pickable::IGNORE));
+                    });
+                    row.spawn((
+                        Text::new(value),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(28.0),
+                            ..default()
+                        },
+                    ));
+                    row.spawn((
+                        SettingsValueButton {
+                            index,
+                            direction: 1,
+                        },
+                        Button,
+                        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
+                            .with_mode(NodeImageMode::Sliced(TextureSlicer {
+                                border: BorderRect::all(15.0),
+                                center_scale_mode: default(),
+                                sides_scale_mode: default(),
+                                max_corner_scale: 1.0,
+                            })),
+                        Node {
+                            width: px(30),
+                            height: px(30),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|button| {
+                        button.spawn((Text::new(">"), Pickable::IGNORE));
+                    });
+                });
+        }
+    });
+}
+
+fn update_settings_controls(
+    menu: Res<MenuRuntime>,
+    render: Res<RenderAssets>,
+    mut root: Query<&mut Visibility, (With<SettingsRoot>, Without<SettingsConfirmModal>)>,
+    mut modal: Query<&mut Visibility, (With<SettingsConfirmModal>, Without<SettingsRoot>)>,
+    mut tabs: Query<(&Interaction, &SettingsTabButton, &mut BackgroundColor)>,
+    mut actions: Query<
+        (&Interaction, &SettingsAction, &mut ImageNode),
+        Without<SettingsValueButton>,
+    >,
+    mut values: Query<
+        (&Interaction, &SettingsValueButton, &mut ImageNode),
+        Without<SettingsAction>,
+    >,
+    mut feedback: Query<&mut Text, With<SettingsFeedbackText>>,
+) {
+    if let Ok(mut visibility) = root.single_mut() {
+        *visibility = if menu.page == MenuPage::Settings {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut visibility) = modal.single_mut() {
+        *visibility = if menu.page == MenuPage::Settings && menu.confirm_settings_close {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (interaction, tab, mut background) in &mut tabs {
+        background.0 = if tab.0 == menu.settings_tab
+            || *interaction == Interaction::Hovered
+            || *interaction == Interaction::Pressed
+        {
+            Color::srgba(0.211, 0.240, 0.358, 0.95)
+        } else {
+            Color::srgba(0.055, 0.071, 0.141, 0.95)
+        };
+    }
+    for (interaction, action, mut image) in &mut actions {
+        let modal_action = matches!(
+            action,
+            SettingsAction::ConfirmApply | SettingsAction::ConfirmDiscard
+        );
+        let enabled =
+            menu.page == MenuPage::Settings && (modal_action == menu.confirm_settings_close);
+        let keyboard_selected = match action {
+            SettingsAction::Apply => menu.selected == 26,
+            SettingsAction::Defaults => menu.selected == 27,
+            SettingsAction::Back => menu.selected == 28,
+            SettingsAction::ConfirmApply => menu.confirm_settings_close && menu.selected == 0,
+            SettingsAction::ConfirmDiscard => menu.confirm_settings_close && menu.selected == 1,
+        };
+        let source_path = if !enabled {
+            MAIN_MENU_TEXTURE_PATHS[2]
+        } else if keyboard_selected
+            || *interaction == Interaction::Hovered
+            || *interaction == Interaction::Pressed
+        {
+            MAIN_MENU_TEXTURE_PATHS[1]
+        } else {
+            MAIN_MENU_TEXTURE_PATHS[0]
+        };
+        image.image = main_menu_texture(&render, source_path);
+    }
+    for (interaction, button, mut image) in &mut values {
+        let source_path = if menu.selected == button.index
+            || *interaction == Interaction::Hovered
+            || *interaction == Interaction::Pressed
+        {
+            MAIN_MENU_TEXTURE_PATHS[1]
+        } else {
+            MAIN_MENU_TEXTURE_PATHS[0]
+        };
+        image.image = main_menu_texture(&render, source_path);
+    }
+    if let Ok(mut text) = feedback.single_mut() {
+        (**text).clone_from(&menu.feedback);
+    }
+}
+
 fn spawn_menu_overlay(
     mut commands: Commands,
     state: Res<State<GameState>>,
@@ -5921,7 +6483,9 @@ fn spawn_menu_overlay(
     settings: Res<RuntimePlayerSettings>,
     mut idle: ResMut<CameraIdleMode>,
     render: Res<RenderAssets>,
+    mut settings_ui: ResMut<SettingsUiCache>,
 ) {
+    settings_ui.signature.clear();
     idle.0 = false;
     if std::env::var_os("STREAM_TOWN_AUTOSTART_GAME_MENU").is_some()
         && *state.get() == GameState::InGame
@@ -6129,6 +6693,181 @@ fn spawn_menu_overlay(
                 ));
             });
         });
+    commands
+        .spawn((
+            StateEntity,
+            SettingsRoot,
+            Name::new("Shipping settings menu"),
+            ImageNode::new(main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH))
+                .with_mode(NodeImageMode::Stretch),
+            Visibility::Hidden,
+            GlobalZIndex(110),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(9.0),
+                top: percent(7.0),
+                width: percent(82.0),
+                height: percent(86.0),
+                padding: UiRect::all(percent(2.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                ..default()
+            },
+        ))
+        .with_children(|settings_root| {
+            settings_root.spawn((
+                Text::new("SETTINGS"),
+                TextFont {
+                    font_size: FontSize::Px(34.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::WHITE),
+                Node {
+                    width: percent(100.0),
+                    height: px(46),
+                    ..default()
+                },
+            ));
+            settings_root
+                .spawn((
+                    Name::new("Settings tab buttons"),
+                    Node {
+                        width: percent(100.0),
+                        height: px(52),
+                        column_gap: px(10),
+                        ..default()
+                    },
+                ))
+                .with_children(|tabs| {
+                    for tab in SETTINGS_TABS {
+                        tabs.spawn((
+                            SettingsTabButton(tab),
+                            Button,
+                            BackgroundColor(Color::srgba(0.055, 0.071, 0.141, 0.95)),
+                            BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.75)),
+                            Node {
+                                flex_grow: 1.0,
+                                border: UiRect::bottom(px(2)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|button| {
+                            button.spawn((
+                                Text::new(settings_tab_label(tab)),
+                                TextFont {
+                                    font_size: FontSize::Px(19.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                    }
+                });
+            settings_root.spawn((
+                SettingsRows,
+                Name::new("Settings value rows"),
+                Node {
+                    width: percent(100.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    flex_wrap: FlexWrap::Wrap,
+                    align_content: AlignContent::FlexStart,
+                    row_gap: px(7),
+                    column_gap: percent(3.0),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ));
+            settings_root.spawn((
+                SettingsFeedbackText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.92, 0.97, 0.91)),
+                Node {
+                    width: percent(100.0),
+                    min_height: px(20),
+                    ..default()
+                },
+            ));
+            settings_root
+                .spawn((
+                    Name::new("Settings actions"),
+                    Node {
+                        width: percent(100.0),
+                        height: px(46),
+                        column_gap: px(14),
+                        ..default()
+                    },
+                ))
+                .with_children(|actions| {
+                    spawn_settings_button(actions, SettingsAction::Apply, "Apply", &render);
+                    spawn_settings_button(actions, SettingsAction::Defaults, "Defaults", &render);
+                    spawn_settings_button(actions, SettingsAction::Back, "Back", &render);
+                });
+            settings_root
+                .spawn((
+                    SettingsConfirmModal,
+                    Name::new("Confirm settings changes"),
+                    Visibility::Hidden,
+                    GlobalZIndex(120),
+                    ImageNode::new(main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH))
+                        .with_mode(NodeImageMode::Stretch),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: percent(25.0),
+                        top: percent(27.0),
+                        width: percent(50.0),
+                        height: percent(38.0),
+                        padding: UiRect::all(percent(5.0)),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                ))
+                .with_children(|modal| {
+                    modal.spawn((
+                        Text::new("CONFIRM CHANGES\n\nYou have unsaved changes.\nDo you want to apply these changes?"),
+                        TextFont {
+                            font_size: FontSize::Px(19.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                    ));
+                    modal
+                        .spawn((
+                            Node {
+                                width: percent(100.0),
+                                height: px(48),
+                                column_gap: px(18),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|buttons| {
+                            spawn_settings_button(
+                                buttons,
+                                SettingsAction::ConfirmApply,
+                                "Yes",
+                                &render,
+                            );
+                            spawn_settings_button(
+                                buttons,
+                                SettingsAction::ConfirmDiscard,
+                                "No",
+                                &render,
+                            );
+                        });
+                });
+        });
 }
 
 fn update_menu_overlay(
@@ -6149,7 +6888,7 @@ fn update_menu_overlay(
             Visibility::Hidden
         };
     }
-    if menu.page == MenuPage::Closed || image_game_menu_visible {
+    if menu.page == MenuPage::Closed || menu.page == MenuPage::Settings || image_game_menu_visible {
         *visibility = Visibility::Hidden;
         return;
     }
@@ -6310,13 +7049,45 @@ fn menu_input(
         return;
     }
     if keyboard.just_pressed(KeyCode::Escape) {
-        let target = menu.return_page;
-        menu.page = target;
-        if target == MenuPage::Game {
-            menu.return_page = MenuPage::Closed;
+        if menu.page == MenuPage::Settings {
+            if menu.confirm_settings_close {
+                menu.confirm_settings_close = false;
+                menu.selected = 28;
+            } else {
+                request_settings_close(&mut menu, &player_settings.0);
+                if menu.confirm_settings_close {
+                    menu.selected = 0;
+                }
+            }
+        } else {
+            let target = menu.return_page;
+            menu.page = target;
+            if target == MenuPage::Game {
+                menu.return_page = MenuPage::Closed;
+            }
+            menu.selected = 0;
+            menu.feedback.clear();
         }
-        menu.selected = 0;
-        menu.feedback.clear();
+        return;
+    }
+    if menu.page == MenuPage::Settings && menu.confirm_settings_close {
+        if keyboard.just_pressed(KeyCode::ArrowLeft)
+            || keyboard.just_pressed(KeyCode::ArrowRight)
+            || keyboard.just_pressed(KeyCode::ArrowUp)
+            || keyboard.just_pressed(KeyCode::ArrowDown)
+        {
+            menu.selected = usize::from(menu.selected == 0);
+        }
+        if keyboard.just_pressed(KeyCode::Enter) {
+            if menu.selected == 0 {
+                if apply_settings_draft(&mut menu, &mut player_settings) {
+                    close_settings_menu(&mut menu);
+                }
+            } else {
+                menu.draft = player_settings.0.clone();
+                close_settings_menu(&mut menu);
+            }
+        }
         return;
     }
     let item_count = if menu.page == MenuPage::Settings {
@@ -6330,9 +7101,23 @@ fn menu_input(
         menu.selected = (menu.selected + 1) % item_count;
     }
     if menu.page == MenuPage::Settings {
+        let previous_tab =
+            keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+        if keyboard.just_pressed(KeyCode::Tab) {
+            menu.settings_tab = cycle_settings_tab(menu.settings_tab, !previous_tab);
+            menu.selected = settings_tab_indices(menu.settings_tab)
+                .first()
+                .copied()
+                .unwrap_or(26);
+            menu.feedback.clear();
+            return;
+        }
+        if let Some(tab) = settings_tab_for_index(menu.selected) {
+            menu.settings_tab = tab;
+        }
         let adjustment = i8::from(keyboard.just_pressed(KeyCode::ArrowRight))
             - i8::from(keyboard.just_pressed(KeyCode::ArrowLeft));
-        if adjustment != 0 {
+        if adjustment != 0 && menu.selected < 26 {
             let selected = menu.selected;
             adjust_settings_menu(&mut menu.draft, selected, adjustment);
             menu.feedback.clear();
@@ -6342,32 +7127,17 @@ fn menu_input(
         }
         match menu.selected {
             26 => {
-                if let Err(error) = menu.draft.validate() {
-                    menu.feedback = format!("Settings are invalid: {error}");
-                } else {
-                    match PlayerSettingsStore::new(player_settings_path()).write(&menu.draft) {
-                        Ok(()) => {
-                            player_settings.0 = menu.draft.clone();
-                            "Applied and saved settings".clone_into(&mut menu.feedback);
-                        }
-                        Err(error) => {
-                            menu.feedback = format!("Settings could not be saved: {error}");
-                        }
-                    }
-                }
+                apply_settings_draft(&mut menu, &mut player_settings);
             }
             27 => {
                 menu.draft = PlayerSettings::default();
                 "Restored Unity defaults in this draft".clone_into(&mut menu.feedback);
             }
             28 => {
-                let target = menu.return_page;
-                menu.page = target;
-                if target == MenuPage::Game {
-                    menu.return_page = MenuPage::Closed;
+                request_settings_close(&mut menu, &player_settings.0);
+                if menu.confirm_settings_close {
+                    menu.selected = 0;
                 }
-                menu.selected = 0;
-                menu.feedback.clear();
             }
             _ => {
                 let selected = menu.selected;
@@ -6434,6 +7204,8 @@ fn open_settings_menu(menu: &mut MenuRuntime, return_page: MenuPage, settings: &
     menu.page = MenuPage::Settings;
     menu.return_page = return_page;
     menu.selected = 0;
+    menu.settings_tab = SettingsTab::Video;
+    menu.confirm_settings_close = false;
     menu.draft = settings.clone();
     menu.feedback.clear();
 }
@@ -23677,6 +24449,118 @@ mod tests {
         assert!(text.contains("> Cancel changes"));
         assert!(text.contains("Resolution: 2560 x 1440"));
         assert!(text.contains("draft feedback"));
+    }
+
+    #[test]
+    fn shipping_settings_menu_preserves_art_tabs_and_all_runtime_fields() {
+        let presentation = embedded_presentation();
+        assert!(
+            presentation
+                .textures
+                .values()
+                .any(|texture| texture.source_path == SETTINGS_BACKGROUND_TEXTURE_PATH),
+            "missing authored Settings background texture"
+        );
+        assert_eq!(
+            SETTINGS_TABS.map(settings_tab_label),
+            ["Video", "Audio", "Gameplay", "Connection"]
+        );
+        let editable = SETTINGS_TABS
+            .into_iter()
+            .flat_map(settings_tab_indices)
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(editable, (0..26).collect::<Vec<_>>());
+        for index in editable {
+            let (label, value) = settings_value_label(&PlayerSettings::default(), index);
+            assert!(!label.is_empty());
+            assert!(!value.is_empty());
+            assert_eq!(
+                settings_tab_for_index(index).unwrap(),
+                match index {
+                    0..=10 => SettingsTab::Video,
+                    11..=14 => SettingsTab::Audio,
+                    _ => SettingsTab::Gameplay,
+                }
+            );
+        }
+        assert_eq!(
+            cycle_settings_tab(SettingsTab::Connection, true),
+            SettingsTab::Video
+        );
+        assert_eq!(
+            cycle_settings_tab(SettingsTab::Video, false),
+            SettingsTab::Connection
+        );
+    }
+
+    #[test]
+    fn settings_pointer_controls_switch_tabs_and_adjust_values() {
+        let mut app = App::new();
+        app.insert_resource(MenuRuntime {
+            page: MenuPage::Settings,
+            ..default()
+        })
+        .add_systems(
+            Update,
+            (settings_tab_buttons, settings_value_buttons).chain(),
+        );
+        app.world_mut()
+            .spawn((Interaction::Pressed, SettingsTabButton(SettingsTab::Audio)));
+
+        app.update();
+
+        let menu = app.world().resource::<MenuRuntime>();
+        assert_eq!(menu.settings_tab, SettingsTab::Audio);
+        assert_eq!(menu.selected, 11);
+
+        app.world_mut().spawn((
+            Interaction::Pressed,
+            SettingsValueButton {
+                index: 11,
+                direction: -1,
+            },
+        ));
+        app.update();
+
+        let menu = app.world().resource::<MenuRuntime>();
+        assert!((menu.draft.audio.master - 0.95).abs() < f32::EPSILON);
+        assert_eq!(menu.selected, 11);
+    }
+
+    #[test]
+    fn settings_back_confirms_dirty_drafts_and_discard_restores_runtime() {
+        let runtime = PlayerSettings::default();
+        let mut menu = MenuRuntime {
+            page: MenuPage::Settings,
+            return_page: MenuPage::Game,
+            draft: runtime.clone(),
+            ..default()
+        };
+        request_settings_close(&mut menu, &runtime);
+        assert_eq!(menu.page, MenuPage::Game);
+        assert!(!menu.confirm_settings_close);
+
+        menu.page = MenuPage::Settings;
+        menu.return_page = MenuPage::Game;
+        menu.draft.audio.master = 0.25;
+        request_settings_close(&mut menu, &runtime);
+        assert_eq!(menu.page, MenuPage::Settings);
+        assert!(menu.confirm_settings_close);
+        assert_eq!(menu.selected, 0);
+
+        let mut app = App::new();
+        app.insert_resource(menu)
+            .insert_resource(RuntimePlayerSettings(runtime.clone()))
+            .add_systems(Update, settings_action_buttons);
+        app.world_mut()
+            .spawn((Interaction::Pressed, SettingsAction::ConfirmDiscard));
+        app.update();
+
+        let menu = app.world().resource::<MenuRuntime>();
+        assert_eq!(menu.page, MenuPage::Game);
+        assert_eq!(menu.draft, runtime);
+        assert!(!menu.confirm_settings_close);
     }
 
     #[test]
