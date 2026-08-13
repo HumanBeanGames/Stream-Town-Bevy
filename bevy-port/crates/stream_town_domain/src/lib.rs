@@ -59,7 +59,7 @@ pub use simulation::{
     ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState,
     FishGodState, MAX_ROLE_LEVEL, ObjectiveEvent, ObjectiveProgress, RULER_VOTE_DURATION_SECONDS,
     RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress, RulerVoteKind, RulerVoteState, Season,
-    SimulationError, TechVote, TownEvent, TownGoalState, Weather, WorldSimulation,
+    SimulationError, StreamUserType, TechVote, TownEvent, TownGoalState, Weather, WorldSimulation,
     required_role_experience,
 };
 pub use world::{

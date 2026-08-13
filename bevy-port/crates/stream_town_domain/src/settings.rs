@@ -29,8 +29,9 @@ pub enum PostProcessAntiAliasing {
 pub enum NameDisplayMode {
     #[default]
     None,
+    #[serde(alias = "ModeratorsAndSubscribers")]
+    StaffAndSubscribers,
     AllPlayers,
-    ModeratorsAndSubscribers,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -283,8 +284,8 @@ impl PlayerSettings {
             },
             interface: InterfaceSettings {
                 display_names: match legacy.display_names.unwrap_or(0).clamp(0, 2) {
-                    1 => NameDisplayMode::AllPlayers,
-                    2 => NameDisplayMode::ModeratorsAndSubscribers,
+                    1 => NameDisplayMode::StaffAndSubscribers,
+                    2 => NameDisplayMode::AllPlayers,
                     _ => NameDisplayMode::None,
                 },
                 display_building_health: match legacy
@@ -476,9 +477,18 @@ mod tests {
         assert_eq!(settings.autosave_minutes, 60);
         assert_eq!(
             settings.interface.display_names,
-            NameDisplayMode::ModeratorsAndSubscribers
+            NameDisplayMode::AllPlayers
         );
         settings.validate().unwrap();
+    }
+
+    #[test]
+    fn imports_unity_subscriber_name_display_index() {
+        let settings = PlayerSettings::from_unity_json(r#"{"displayNames":1}"#).unwrap();
+        assert_eq!(
+            settings.interface.display_names,
+            NameDisplayMode::StaffAndSubscribers
+        );
     }
 
     #[test]

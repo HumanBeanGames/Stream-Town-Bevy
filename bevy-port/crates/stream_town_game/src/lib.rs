@@ -44,13 +44,14 @@ use stream_town_domain::{
     AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
-    BuildingDirection, BuildingModelDef, BuildingState, CameraAction, CameraDirection, ChatCommand,
-    ContentCatalog, CustomizationKind, EnemyCampState, GameConfig, GeneratedFoliage,
-    GeneratedWorld, GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode,
-    MaterialDef, NativeSaveStore, ObjectiveEvent, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor,
-    SavedTerrainMesh, Season, StableId, StationDef, StorageModelDef, TownEvent, Weather,
-    WorldSimulation, WorldSnapshot, generate_world_with_content,
+    BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState, CameraAction,
+    CameraDirection, ChatCommand, ContentCatalog, CustomizationKind, EnemyCampState, GameConfig,
+    GeneratedFoliage, GeneratedWorld, GridPos, LegacyMigrationMetadata,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
+    ObjectiveEvent, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
+    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, SavedTerrainMesh, Season,
+    StableId, StationDef, StorageModelDef, StreamUserType, TownEvent, Weather, WorldSimulation,
+    WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -584,6 +585,19 @@ struct RuntimeBuilding {
 }
 
 #[derive(Component)]
+struct ActorNameOverlay {
+    actor: StableId,
+}
+
+#[derive(Component)]
+struct BuildingHealthOverlay {
+    building: StableId,
+}
+
+#[derive(Component)]
+struct BuildingHealthFill;
+
+#[derive(Component)]
 struct BuildingPlacementVisual {
     owner: StableId,
 }
@@ -1089,6 +1103,13 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                (sync_actor_name_overlays, sync_building_health_overlays)
+                    .chain()
+                    .after(move_agents)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 animate_healing_effects
                     .after(move_agents)
                     .run_if(in_state(GameState::InGame)),
@@ -1133,7 +1154,11 @@ impl Plugin for StreamTownGamePlugin {
     }
 }
 
-pub fn run(config: GameConfig, player_settings: PlayerSettings) {
+pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
+    if std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some() {
+        player_settings.interface.display_names = NameDisplayMode::AllPlayers;
+        player_settings.interface.display_building_health = BuildingHealthDisplayMode::Always;
+    }
     let content = embedded_content();
     let asset_root = locate_asset_root();
     let resolution = WindowResolution::new(config.window.width, config.window.height);
@@ -1345,6 +1370,7 @@ fn setup_rendering(
     let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some();
     let foliage_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some();
     let shoreline_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some();
+    let overlay_closeup = std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1366,6 +1392,8 @@ fn setup_rendering(
                     45.0
                 } else if shoreline_closeup {
                     80.0
+                } else if overlay_closeup {
+                    105.0
                 } else {
                     520.0
                 },
@@ -2237,6 +2265,10 @@ fn generate_and_spawn_world(
                 });
             Transform::from_xyz(focus.x + 110.0, 130.0, focus.z + 110.0)
                 .looking_at(Vec3::new(focus.x + 24.0, focus.y, focus.z + 24.0), Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some() {
+            let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
+            Transform::from_xyz(focus.x + 74.0, focus.y + 88.0, focus.z + 74.0)
+                .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
@@ -10425,6 +10457,27 @@ fn require_game_master(config: &GameConfig, pending: &PendingChatCommand) -> Res
     }
 }
 
+fn pending_stream_user_type(config: &GameConfig, pending: &PendingChatCommand) -> StreamUserType {
+    let raw_user_id = pending
+        .actor_id
+        .as_str()
+        .strip_prefix("twitch:")
+        .unwrap_or_else(|| pending.actor_id.as_str());
+    if pending.origin == CommandOrigin::LocalDebug
+        || config.twitch.game_master_ids.contains(raw_user_id)
+    {
+        StreamUserType::GameMaster
+    } else if pending.is_broadcaster {
+        StreamUserType::Broadcaster
+    } else if pending.is_moderator {
+        StreamUserType::Moderator
+    } else if pending.is_subscriber {
+        StreamUserType::Subscriber
+    } else {
+        StreamUserType::Normal
+    }
+}
+
 fn require_ruler_or_staff(
     simulation: &WorldSimulation,
     pending: &PendingChatCommand,
@@ -11006,10 +11059,15 @@ fn process_injected_commands(
     while let Some(pending) = queues.injected.0.pop_front() {
         let actor_id = pending.actor_id.clone();
         let command = pending.command.clone();
+        let user_type = pending_stream_user_type(&config.0, &pending);
         if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
             actor.display_name = Some(pending.display_name.clone());
             actor.login_name = Some(pending.login_name.clone());
-            if pending.is_subscriber {
+            actor.user_type = user_type;
+            if matches!(
+                user_type,
+                StreamUserType::Subscriber | StreamUserType::GameMaster
+            ) {
                 let red_panda = StableId::new("pet:red_panda").expect("static pet ID");
                 actor.unlocked_pets.insert(red_panda.clone());
                 actor.active_pet.get_or_insert(red_panda);
@@ -11049,7 +11107,11 @@ fn process_injected_commands(
                             actor.archetype = Some(player_archetype.clone());
                             actor.display_name = Some(pending.display_name.clone());
                             actor.login_name = Some(pending.login_name.clone());
-                            if pending.is_subscriber {
+                            actor.user_type = user_type;
+                            if matches!(
+                                user_type,
+                                StreamUserType::Subscriber | StreamUserType::GameMaster
+                            ) {
                                 let red_panda =
                                     StableId::new("pet:red_panda").expect("static pet ID");
                                 actor.unlocked_pets.insert(red_panda.clone());
@@ -12913,6 +12975,310 @@ fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntit
     commands.remove_resource::<SimulationRuntime>();
     commands.insert_resource(BuildingPlacers::default());
     commands.insert_resource(BuildingCommandQueue::default());
+}
+
+fn should_show_actor_name(mode: NameDisplayMode, user_type: StreamUserType) -> bool {
+    match mode {
+        NameDisplayMode::None => false,
+        NameDisplayMode::StaffAndSubscribers => user_type.is_staff_or_subscriber(),
+        NameDisplayMode::AllPlayers => true,
+    }
+}
+
+fn stream_user_color(user_type: StreamUserType) -> Color {
+    match user_type {
+        StreamUserType::GameMaster => Color::srgb(1.0, 0.22, 0.0),
+        StreamUserType::Broadcaster => Color::srgb(1.0, 0.12, 0.12),
+        StreamUserType::Moderator => Color::srgb(0.2, 1.0, 0.3),
+        StreamUserType::Subscriber => Color::srgb(0.48, 0.3, 0.78),
+        StreamUserType::Normal => Color::WHITE,
+    }
+}
+
+fn should_show_building_health(
+    mode: BuildingHealthDisplayMode,
+    health: i32,
+    max_health: i32,
+) -> bool {
+    match mode {
+        BuildingHealthDisplayMode::None => false,
+        BuildingHealthDisplayMode::DamagedOnly => health < max_health,
+        BuildingHealthDisplayMode::Always => true,
+    }
+}
+
+fn overlay_viewport_position(
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    world_position: Vec3,
+) -> Option<Vec2> {
+    let viewport = camera.logical_viewport_size()?;
+    camera
+        .world_to_viewport(camera_transform, world_position)
+        .ok()
+        .filter(|position| {
+            position.x >= 0.0
+                && position.y >= 0.0
+                && position.x <= viewport.x
+                && position.y <= viewport.y
+        })
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_actor_name_overlays(
+    mut commands: Commands,
+    settings: Res<RuntimePlayerSettings>,
+    config: Res<RuntimeConfig>,
+    simulation: Res<SimulationRuntime>,
+    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    agents: Query<(&Agent, &GlobalTransform)>,
+    mut overlays: Query<
+        (
+            Entity,
+            &ActorNameOverlay,
+            &mut Text,
+            &mut TextColor,
+            &mut Node,
+            &mut Visibility,
+        ),
+        Without<BuildingHealthOverlay>,
+    >,
+) {
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
+    let actor_positions: BTreeMap<_, _> = agents
+        .iter()
+        .filter(|(agent, _)| agent.kind == ActorKind::Player)
+        .map(|(agent, transform)| (agent.id.clone(), transform.translation()))
+        .collect();
+    let mut existing = BTreeSet::new();
+    for (entity, overlay, mut text, mut color, mut node, mut visibility) in &mut overlays {
+        existing.insert(overlay.actor.clone());
+        let Some(actor) = simulation.0.actors.get(&overlay.actor) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(position) = actor_positions.get(&overlay.actor) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let show = actor.alive
+            && should_show_actor_name(settings.0.interface.display_names, actor.user_type);
+        let screen = show.then(|| {
+            overlay_viewport_position(
+                camera,
+                camera_transform,
+                *position + Vec3::Y * config.0.world.cell_size * 0.9,
+            )
+        });
+        let Some(screen) = screen.flatten() else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        actor
+            .display_name
+            .as_deref()
+            .or(actor.login_name.as_deref())
+            .unwrap_or_else(|| overlay.actor.as_str())
+            .clone_into(&mut *text);
+        color.0 = stream_user_color(actor.user_type);
+        node.left = px(screen.x - 80.0);
+        node.top = px(screen.y - 32.0);
+        *visibility = Visibility::Visible;
+    }
+    for (actor_id, position) in actor_positions {
+        let Some(actor) = simulation.0.actors.get(&actor_id) else {
+            continue;
+        };
+        if existing.contains(&actor_id)
+            || !actor.alive
+            || !should_show_actor_name(settings.0.interface.display_names, actor.user_type)
+        {
+            continue;
+        }
+        let Some(screen) = overlay_viewport_position(
+            camera,
+            camera_transform,
+            position + Vec3::Y * config.0.world.cell_size * 0.9,
+        ) else {
+            continue;
+        };
+        commands.spawn((
+            WorldEntity,
+            ActorNameOverlay {
+                actor: actor_id.clone(),
+            },
+            Text::new(
+                actor
+                    .display_name
+                    .as_deref()
+                    .or(actor.login_name.as_deref())
+                    .unwrap_or_else(|| actor_id.as_str()),
+            ),
+            TextFont {
+                font_size: FontSize::Px(15.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            TextColor(stream_user_color(actor.user_type)),
+            GlobalZIndex(30),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(screen.x - 80.0),
+                top: px(screen.y - 32.0),
+                width: px(160),
+                ..default()
+            },
+        ));
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_building_health_overlays(
+    mut commands: Commands,
+    settings: Res<RuntimePlayerSettings>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    buildings: Query<(&RuntimeBuilding, &GlobalTransform)>,
+    mut overlays: Query<
+        (
+            Entity,
+            &BuildingHealthOverlay,
+            &Children,
+            &mut Node,
+            &mut Visibility,
+        ),
+        Without<ActorNameOverlay>,
+    >,
+    mut fills: Query<
+        (&mut Node, &mut BackgroundColor),
+        (
+            With<BuildingHealthFill>,
+            Without<ActorNameOverlay>,
+            Without<BuildingHealthOverlay>,
+        ),
+    >,
+) {
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
+    let building_positions: BTreeMap<_, _> = buildings
+        .iter()
+        .map(|(building, transform)| (building.id.clone(), transform.translation()))
+        .collect();
+    let mut existing = BTreeSet::new();
+    for (entity, overlay, children, mut node, mut visibility) in &mut overlays {
+        existing.insert(overlay.building.clone());
+        let Some(building) = simulation.0.buildings.get(&overlay.building) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(position) = building_positions.get(&overlay.building) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let max_health = building_max_health(&content.0, building).max(1);
+        let health_fraction = building_health_fraction(building.health, max_health);
+        let show = should_show_building_health(
+            settings.0.interface.display_building_health,
+            building.health,
+            max_health,
+        );
+        let screen = show.then(|| {
+            overlay_viewport_position(
+                camera,
+                camera_transform,
+                *position + Vec3::Y * config.0.world.cell_size * 1.45,
+            )
+        });
+        let Some(screen) = screen.flatten() else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        node.left = px(screen.x - 41.0);
+        node.top = px(screen.y - 5.0);
+        *visibility = Visibility::Visible;
+        for child in children.iter() {
+            if let Ok((mut fill, mut color)) = fills.get_mut(child) {
+                fill.width = percent(health_fraction * 100.0);
+                color.0 = building_health_color(health_fraction);
+            }
+        }
+    }
+    for (building_id, position) in building_positions {
+        let Some(building) = simulation.0.buildings.get(&building_id) else {
+            continue;
+        };
+        let max_health = building_max_health(&content.0, building).max(1);
+        if existing.contains(&building_id)
+            || !should_show_building_health(
+                settings.0.interface.display_building_health,
+                building.health,
+                max_health,
+            )
+        {
+            continue;
+        }
+        let Some(screen) = overlay_viewport_position(
+            camera,
+            camera_transform,
+            position + Vec3::Y * config.0.world.cell_size * 1.45,
+        ) else {
+            continue;
+        };
+        let health_fraction = building_health_fraction(building.health, max_health);
+        commands
+            .spawn((
+                WorldEntity,
+                BuildingHealthOverlay {
+                    building: building_id,
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(screen.x - 41.0),
+                    top: px(screen.y - 5.0),
+                    width: px(82),
+                    height: px(10),
+                    border: UiRect::all(px(1)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.02, 0.025, 0.03, 0.9)),
+                BorderColor::all(Color::srgba(0.8, 0.86, 0.82, 0.8)),
+                GlobalZIndex(29),
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    BuildingHealthFill,
+                    Node {
+                        width: percent(health_fraction * 100.0),
+                        height: percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(building_health_color(health_fraction)),
+                ));
+            });
+    }
+}
+
+fn building_health_fraction(health: i32, max_health: i32) -> f32 {
+    let thousandths = health
+        .max(0)
+        .saturating_mul(1_000)
+        .checked_div(max_health.max(1))
+        .unwrap_or_default()
+        .clamp(0, 1_000);
+    f32::from(u16::try_from(thousandths).expect("clamped health fraction fits u16")) / 1_000.0
+}
+
+fn building_health_color(health_fraction: f32) -> Color {
+    Color::srgb(
+        1.0 - health_fraction * 0.72,
+        0.18 + health_fraction * 0.68,
+        0.12,
+    )
 }
 
 fn grid_to_world(position: GridPos, config: &GameConfig) -> Vec3 {
@@ -15804,6 +16170,81 @@ mod tests {
         command.is_moderator = false;
         command.origin = CommandOrigin::LocalDebug;
         assert!(require_game_master(&config, &command).is_ok());
+    }
+
+    #[test]
+    fn unity_name_and_health_overlay_visibility_rules_are_preserved() {
+        assert!(!should_show_actor_name(
+            NameDisplayMode::None,
+            StreamUserType::GameMaster
+        ));
+        assert!(should_show_actor_name(
+            NameDisplayMode::StaffAndSubscribers,
+            StreamUserType::Subscriber
+        ));
+        assert!(should_show_actor_name(
+            NameDisplayMode::StaffAndSubscribers,
+            StreamUserType::Moderator
+        ));
+        assert!(!should_show_actor_name(
+            NameDisplayMode::StaffAndSubscribers,
+            StreamUserType::Normal
+        ));
+        assert!(should_show_actor_name(
+            NameDisplayMode::AllPlayers,
+            StreamUserType::Normal
+        ));
+
+        assert!(!should_show_building_health(
+            BuildingHealthDisplayMode::None,
+            25,
+            100
+        ));
+        assert!(!should_show_building_health(
+            BuildingHealthDisplayMode::DamagedOnly,
+            100,
+            100
+        ));
+        assert!(should_show_building_health(
+            BuildingHealthDisplayMode::DamagedOnly,
+            99,
+            100
+        ));
+        assert!(should_show_building_health(
+            BuildingHealthDisplayMode::Always,
+            100,
+            100
+        ));
+        assert!((building_health_fraction(25, 100) - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn twitch_user_type_uses_unity_privilege_priority() {
+        let mut config = GameConfig::default();
+        let mut command = PendingChatCommand {
+            actor_id: StableId::new("twitch:12345").unwrap(),
+            login_name: "staff".to_owned(),
+            display_name: "Staff".to_owned(),
+            command: ChatCommand::Join,
+            is_broadcaster: true,
+            is_moderator: true,
+            is_subscriber: true,
+            origin: CommandOrigin::Twitch,
+        };
+        assert_eq!(
+            pending_stream_user_type(&config, &command),
+            StreamUserType::Broadcaster
+        );
+        command.is_broadcaster = false;
+        assert_eq!(
+            pending_stream_user_type(&config, &command),
+            StreamUserType::Moderator
+        );
+        config.twitch.game_master_ids.insert("12345".to_owned());
+        assert_eq!(
+            pending_stream_user_type(&config, &command),
+            StreamUserType::GameMaster
+        );
     }
 
     #[test]

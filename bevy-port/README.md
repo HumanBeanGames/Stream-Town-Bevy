@@ -338,6 +338,9 @@ construction sites remain blocked to both sides.
 repeatable land/shoreline visual capture.
 `STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated
 land/water boundary for a repeatable depth-blend and edge-foam capture.
+`STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while
+temporarily forcing all player-name and building-health overlays visible; it
+does not modify the saved player settings.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger

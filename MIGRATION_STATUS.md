@@ -21,6 +21,12 @@ mistaken for production-ready systems.
   brightness/gamma, master/SFX volume, and camera sensitivities, and performs
   autosaves at Unity's 0/5/10/30/60-minute intervals. The tools application has
   a dedicated settings editor, reset, validation, and save workflow.
+- Unity's name-display index semantics now drive camera-projected player labels,
+  including the privileged-user-only mode and the original game-master,
+  broadcaster, moderator, subscriber, and normal-user colors. Twitch privilege
+  class is stable native actor state, survives save/reload, and is recovered
+  from both binary and JSON legacy saves. Building-health preferences now drive
+  continuously updated in-world bars using authored per-level maximum health.
 - Validated, versioned RON configuration (schema 5) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
@@ -506,9 +512,9 @@ presentation, and the live stable command grammar with constructed-building
 persistence, plus autonomous role-driven gathering/deposit and persistent node
 depletion, connected actor spawning, live combat/death/respawn, health-staged
 Builder construction, technology-gated upgrades, and typed technology discounts,
-storage, stat, and building-age effects. It is still missing rare/non-gameplay
-action emitters and remaining chunked LOD work,
-particle fields, remaining custom-shader parity, the
-exact production command wording, and the recorded reference-machine GPU
-measurement required to close the milestone.
+storage, stat, and building-age effects, production command wording, saved
+player settings, and camera-projected player/building overlays. It is still
+missing rare/non-gameplay action emitters, remaining chunked LOD work,
+particle fields, remaining custom-shader parity, and the recorded
+reference-machine GPU measurement required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.

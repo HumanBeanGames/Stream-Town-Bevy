@@ -1083,8 +1083,8 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             .show_ui(ui, |ui| {
                 for value in [
                     NameDisplayMode::None,
+                    NameDisplayMode::StaffAndSubscribers,
                     NameDisplayMode::AllPlayers,
-                    NameDisplayMode::ModeratorsAndSubscribers,
                 ] {
                     ui.selectable_value(
                         &mut state.player_settings.interface.display_names,

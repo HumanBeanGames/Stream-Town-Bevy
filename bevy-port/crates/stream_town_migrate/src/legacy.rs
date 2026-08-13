@@ -15,7 +15,8 @@ use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, BuildingState, ContentCatalog, EnemyCampState,
     GameConfig, GridPos, LegacyMigrationMetadata, MAX_ROLE_LEVEL, NativeSaveStore, ObjectiveDef,
     ObjectiveKind, ObjectiveProgress, RULER_VOTE_INTERVAL_SECONDS, RoleProgress, SavedActor,
-    SavedTerrainMesh, StableId, TownGoalState, WorldSimulation, WorldSnapshot, generate_world,
+    SavedTerrainMesh, StableId, StreamUserType, TownGoalState, WorldSimulation, WorldSnapshot,
+    generate_world,
 };
 
 const MAGIC: &[u8; 4] = b"STSV";
@@ -46,6 +47,7 @@ struct LegacyEntity {
     key: String,
     display_name: Option<String>,
     login_name: Option<String>,
+    user_type: StreamUserType,
     kind: ActorKind,
     archetype: String,
     position: [f32; 3],
@@ -374,6 +376,7 @@ impl<'a> BinaryParser<'a> {
                     key: format!("resource:{guid}:{group_index}:{instance_index}"),
                     display_name: None,
                     login_name: None,
+                    user_type: StreamUserType::Normal,
                     kind: ActorKind::Resource,
                     archetype: resource_type.clone(),
                     position,
@@ -448,6 +451,7 @@ impl<'a> BinaryParser<'a> {
             key: format!("foliage:{}:{key}", self.next_foliage_id),
             display_name: None,
             login_name: None,
+            user_type: StreamUserType::Normal,
             kind: ActorKind::Foliage,
             archetype,
             position,
@@ -477,6 +481,7 @@ impl<'a> BinaryParser<'a> {
                 key: format!("enemy_camp:{guid}:{index}"),
                 display_name: None,
                 login_name: None,
+                user_type: StreamUserType::Normal,
                 kind: ActorKind::EnemyCamp,
                 archetype: "enemy_camp".to_owned(),
                 position,
@@ -517,6 +522,7 @@ impl<'a> BinaryParser<'a> {
                 key: format!("building:{guid}:{index}"),
                 display_name: None,
                 login_name: None,
+                user_type: StreamUserType::Normal,
                 kind: ActorKind::Building,
                 archetype,
                 position,
@@ -553,6 +559,7 @@ impl<'a> BinaryParser<'a> {
                 key: format!("enemy:{guid}:{index}"),
                 display_name: None,
                 login_name: None,
+                user_type: StreamUserType::Normal,
                 kind: ActorKind::Enemy,
                 archetype,
                 position,
@@ -659,7 +666,7 @@ impl<'a> BinaryParser<'a> {
             let twitch_id = self.string()?.unwrap_or_default();
             let twitch_name = self.string()?.unwrap_or_default();
             let _twitch_user_type = self.i32()?;
-            let _game_user_type = self.i32()?;
+            let game_user_type = legacy_user_type(self.i32()?);
             let _is_broadcaster = self.boolean()?;
             if schema >= 3 {
                 let _is_user_player = self.boolean()?;
@@ -730,6 +737,7 @@ impl<'a> BinaryParser<'a> {
                 key: format!("player:{identity}"),
                 display_name: (!twitch_name.is_empty()).then_some(twitch_name.clone()),
                 login_name: (!twitch_name.is_empty()).then_some(twitch_name.to_ascii_lowercase()),
+                user_type: game_user_type,
                 kind: ActorKind::Player,
                 archetype: if twitch_name.is_empty() {
                     "viewer".to_owned()
@@ -1015,6 +1023,7 @@ fn json_resources(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Result
                 ),
                 display_name: None,
                 login_name: None,
+                user_type: StreamUserType::Normal,
                 kind: ActorKind::Resource,
                 archetype: archetype.clone(),
                 position: [
@@ -1061,6 +1070,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                         key: format!("foliage:{layer}:{group_index}:{index}"),
                         display_name: None,
                         login_name: None,
+                        user_type: StreamUserType::Normal,
                         kind: ActorKind::Foliage,
                         archetype: settings.clone(),
                         position: json_vec3(position)?,
@@ -1092,6 +1102,7 @@ fn json_foliage(world_gen: &Value, schema: u32, entities: &mut Vec<LegacyEntity>
                     key: format!("foliage:{layer}:{index}"),
                     display_name: None,
                     login_name: None,
+                    user_type: StreamUserType::Normal,
                     kind: ActorKind::Foliage,
                     archetype: json_string(instance, "SettingsId", "unknown"),
                     position: json_transform(instance.get("Transform").unwrap_or(&Value::Null))?,
@@ -1125,6 +1136,7 @@ fn json_enemy_camps(world_gen: &Value, entities: &mut Vec<LegacyEntity>) -> Resu
             key: format!("enemy_camp:{}:{index}", json_u32_default(camp, "GUID")),
             display_name: None,
             login_name: None,
+            user_type: StreamUserType::Normal,
             kind: ActorKind::EnemyCamp,
             archetype: "enemy_camp".to_owned(),
             position: json_transform(camp.get("Transform").unwrap_or(&Value::Null))?,
@@ -1156,6 +1168,7 @@ fn json_buildings(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> 
             key: format!("building:{}:{index}", json_u32_default(building, "GUID")),
             display_name: None,
             login_name: None,
+            user_type: StreamUserType::Normal,
             kind: ActorKind::Building,
             archetype: json_string(building, "BuildingType", "unknown"),
             position: json_transform(building.get("BuildingTranform").unwrap_or(&Value::Null))?,
@@ -1189,6 +1202,7 @@ fn json_enemies(game: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             key: format!("enemy:{}:{index}", json_u32_default(enemy, "GUID")),
             display_name: None,
             login_name: None,
+            user_type: StreamUserType::Normal,
             kind: ActorKind::Enemy,
             archetype: json_string(enemy, "EnemyType", "unknown"),
             position: json_transform(enemy.get("Transform").unwrap_or(&Value::Null))?,
@@ -1270,6 +1284,7 @@ fn json_players(root: &Value, entities: &mut Vec<LegacyEntity>) -> Result<()> {
             key: format!("player:{key}"),
             display_name: Some(json_string(player, "TwitchName", "viewer")),
             login_name: Some(json_string(player, "TwitchName", "viewer").to_ascii_lowercase()),
+            user_type: json_user_type(player),
             kind: ActorKind::Player,
             archetype: json_string(player, "TwitchName", "viewer"),
             position: json_transform(player.get("Transform").unwrap_or(&Value::Null))?,
@@ -1390,6 +1405,37 @@ fn json_i32_default(value: &Value, field: &str) -> i32 {
         .and_then(Value::as_i64)
         .and_then(|number| i32::try_from(number).ok())
         .unwrap_or_default()
+}
+
+fn legacy_user_type(value: i32) -> StreamUserType {
+    match value {
+        0 => StreamUserType::GameMaster,
+        1 => StreamUserType::Broadcaster,
+        2 => StreamUserType::Moderator,
+        3 => StreamUserType::Subscriber,
+        _ => StreamUserType::Normal,
+    }
+}
+
+fn json_user_type(player: &Value) -> StreamUserType {
+    player
+        .get("GameUserType")
+        .and_then(|value| {
+            value
+                .as_i64()
+                .and_then(|number| i32::try_from(number).ok())
+                .map(legacy_user_type)
+                .or_else(|| {
+                    value.as_str().map(|name| match name {
+                        "GameMaster" => StreamUserType::GameMaster,
+                        "Broadcaster" => StreamUserType::Broadcaster,
+                        "Moderator" => StreamUserType::Moderator,
+                        "Subscriber" => StreamUserType::Subscriber,
+                        _ => StreamUserType::Normal,
+                    })
+                })
+        })
+        .unwrap_or(StreamUserType::Normal)
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -1605,6 +1651,7 @@ fn convert(decoded: LegacyDecodedSave, config: &GameConfig) -> Result<(WorldSnap
                         id,
                         display_name: entity.display_name,
                         login_name: entity.login_name,
+                        user_type: entity.user_type,
                         role,
                         archetype: Some(archetype),
                         position,
@@ -2005,6 +2052,7 @@ mod tests {
                 key: "player:test".to_owned(),
                 display_name: Some("test".to_owned()),
                 login_name: Some("test".to_owned()),
+                user_type: StreamUserType::Normal,
                 kind: ActorKind::Player,
                 archetype: "viewer".to_owned(),
                 position: [f32::MAX, 0.0, f32::MAX],
@@ -2226,6 +2274,7 @@ mod tests {
         assert_eq!(actor.customization.hair_color, 5);
         assert_eq!(actor.customization.eye_color, 1);
         assert_eq!(actor.customization.body_type, 2);
+        assert_eq!(actor.user_type, StreamUserType::Normal);
         assert!(
             actor
                 .preferred_target

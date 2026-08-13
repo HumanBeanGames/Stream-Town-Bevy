@@ -53,6 +53,24 @@ pub enum TownEvent {
     FishGod,
 }
 
+/// The highest-priority Unity/Twitch privilege class retained for presentation and permissions.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum StreamUserType {
+    GameMaster,
+    Broadcaster,
+    Moderator,
+    Subscriber,
+    #[default]
+    Normal,
+}
+
+impl StreamUserType {
+    #[must_use]
+    pub const fn is_staff_or_subscriber(self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ActorState {
     pub id: StableId,
@@ -61,6 +79,8 @@ pub struct ActorState {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login_name: Option<String>,
+    #[serde(default)]
+    pub user_type: StreamUserType,
     pub role: StableId,
     /// Authored prefab archetype. Old native saves omit this field and use runtime fallbacks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,6 +381,7 @@ impl WorldSimulation {
                 id,
                 display_name: None,
                 login_name: None,
+                user_type: StreamUserType::Normal,
                 role: StableId::new("role:villager").expect("static stable ID"),
                 archetype: None,
                 position,
@@ -401,6 +422,7 @@ impl WorldSimulation {
                 id,
                 display_name: None,
                 login_name: None,
+                user_type: StreamUserType::Normal,
                 role: StableId::new("role:enemy").expect("static stable ID"),
                 archetype: Some(archetype),
                 position,
@@ -1544,6 +1566,25 @@ mod tests {
                 level: 2,
                 experience: 4,
             }
+        );
+    }
+
+    #[test]
+    fn twitch_user_type_is_persisted_and_defaults_for_old_saves() {
+        let actor = id("twitch:user_type");
+        let mut simulation = WorldSimulation::new(5);
+        assert!(simulation.join_player(actor.clone(), GridPos { x: 1, z: 1 }));
+        simulation.actors.get_mut(&actor).unwrap().user_type = StreamUserType::Subscriber;
+        let encoded = ron::to_string(&simulation).unwrap();
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&encoded).unwrap().actors[&actor].user_type,
+            StreamUserType::Subscriber
+        );
+
+        let old_actor = encoded.replace("user_type:Subscriber,", "");
+        assert_eq!(
+            ron::from_str::<WorldSimulation>(&old_actor).unwrap().actors[&actor].user_type,
+            StreamUserType::Normal
         );
     }
 
