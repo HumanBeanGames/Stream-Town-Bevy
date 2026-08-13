@@ -33,6 +33,7 @@ use bevy::{
     render::view::screenshot::{Screenshot, save_to_disk},
     render::view::{ColorGrading, Msaa},
     shader::ShaderRef,
+    sprite::{BorderRect, TextureSlicer},
     window::{
         MonitorSelection, PresentMode, PrimaryWindow, VideoModeSelection, WindowMode,
         WindowResolution,
@@ -94,6 +95,19 @@ const SELECTION_PANEL_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/SelectionWindow/UI_SelectionWindow_Slider_Unfilled.png",
     "Assets/Sprites/SelectionWindow/UI_SelectionWindow_GreenSlider_Filled.png",
     "Assets/Sprites/SelectionWindow/UI_SelectionWindow_RedSlider_Filled.png",
+];
+const BOTTOM_BAR_TEXTURE_PATHS: [&str; 11] = [
+    "Assets/Sprites/Buttons/UI_Button.png",
+    "Assets/Sprites/Buttons/UI_Button_Unpressed.png",
+    "Assets/Sprites/Buttons/UI_Button_Disabled.png",
+    "Assets/Sprites/Buttons/UI_Button_DropShadow.png",
+    "Assets/Sprites/Buttons/UI_Button_Keybind.png",
+    "Assets/Sprites/Buttons/UI_Icon_Build_Small.png",
+    "Assets/Sprites/Buttons/UI_Icon_Recruit_Small.png",
+    "Assets/Sprites/Buttons/UI_Icon_TechTree_Small.png",
+    "Assets/Sprites/BuildRecruitMenus/UI_BuildRecruit_Background.png",
+    "Assets/Sprites/BuildRecruitMenus/UI_Arrow.png",
+    "Assets/Resources/Icons/UI_Icon_BuildRecruit_Background.png",
 ];
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
@@ -244,6 +258,8 @@ enum CommandOrigin {
     Twitch,
     /// Local tool/keyboard injection mirrors Unity's debug bridge permission bypass.
     LocalDebug,
+    /// Local shipping UI reuses command dispatch without impersonating a Twitch identity.
+    LocalUi,
 }
 
 #[derive(Resource, Default)]
@@ -285,6 +301,21 @@ impl Default for MenuRuntime {
 struct MenuIoRequest {
     save: bool,
     load: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BottomBarContext {
+    Build,
+    Recruit,
+    Technology,
+}
+
+#[derive(Resource, Default)]
+struct BottomBarRuntime {
+    context: Option<BottomBarContext>,
+    scroll_index: usize,
+    rebuild: bool,
+    signature: String,
 }
 
 #[derive(Resource)]
@@ -684,6 +715,7 @@ struct RenderAssets {
     game_logo: Option<Handle<Image>>,
     top_bar_textures: BTreeMap<String, Handle<Image>>,
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
+    bottom_bar_textures: BTreeMap<String, Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -807,6 +839,31 @@ struct SelectionPanel;
 
 #[derive(Component)]
 struct SelectionPanelSlider;
+
+#[derive(Component)]
+struct BottomBarMain;
+
+#[derive(Component)]
+struct BottomBarContextPanel;
+
+#[derive(Component, Clone, Copy)]
+struct BottomBarMainButton(BottomBarContext);
+
+#[derive(Component)]
+struct BottomBarScrollButton {
+    direction: i8,
+    enabled: bool,
+}
+
+#[derive(Component, Clone, Debug)]
+enum BottomBarAction {
+    Build(StableId),
+    Recruit(StableId),
+    Technology(StableId),
+}
+
+#[derive(Component)]
+struct BottomBarActionEnabled(bool);
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1246,6 +1303,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
             .init_resource::<MenuIoRequest>()
+            .init_resource::<BottomBarRuntime>()
             .init_resource::<RuntimeConsoleRuntime>()
             .init_resource::<RuntimeCaptureRequest>()
             .init_resource::<CameraCommandQueue>()
@@ -1372,6 +1430,20 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 update_selection_panel.run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    bottom_bar_input,
+                    bottom_bar_main_buttons,
+                    bottom_bar_scroll_buttons,
+                    bottom_bar_action_buttons,
+                    rebuild_bottom_bar_context,
+                    update_bottom_bar_main_visuals,
+                )
+                    .chain()
+                    .after(game_input)
+                    .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
                 Update,
@@ -1759,6 +1831,13 @@ fn setup_rendering(
                 .map(|handle| ((*source_path).to_owned(), handle))
         })
         .collect();
+    let bottom_bar_textures = BOTTOM_BAR_TEXTURE_PATHS
+        .iter()
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
     let presentation_materials = presentation
         .0
         .materials
@@ -1921,6 +2000,7 @@ fn setup_rendering(
         game_logo,
         top_bar_textures,
         selection_panel_textures,
+        bottom_bar_textures,
         presentation_materials,
     });
 }
@@ -3241,6 +3321,77 @@ fn top_bar_texture(render: &RenderAssets, source_path: &str) -> Option<Handle<Im
     render.top_bar_textures.get(source_path).cloned()
 }
 
+fn bottom_bar_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
+    render
+        .bottom_bar_textures
+        .get(source_path)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn spawn_bottom_bar_button(
+    parent: &mut ChildSpawnerCommands,
+    render: &RenderAssets,
+    context: BottomBarContext,
+    icon_path: &str,
+    key: &str,
+) {
+    parent
+        .spawn((
+            BottomBarMainButton(context),
+            Button,
+            ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]))
+                .with_mode(NodeImageMode::Stretch),
+            Node {
+                width: px(88),
+                height: px(88),
+                margin: UiRect::horizontal(px(5)),
+                ..default()
+            },
+        ))
+        .with_children(|button| {
+            button.spawn((
+                ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[10])),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(10),
+                    top: px(10),
+                    width: px(68),
+                    height: px(68),
+                    ..default()
+                },
+            ));
+            button.spawn((
+                ImageNode::new(bottom_bar_texture(render, icon_path)),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(14),
+                    top: px(14),
+                    width: px(60),
+                    height: px(60),
+                    ..default()
+                },
+            ));
+            button.spawn((
+                Text::new(key),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.98, 0.88, 0.42)),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(7),
+                    top: px(4),
+                    ..default()
+                },
+            ));
+        });
+}
+
 fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_hash: &str) {
     let background = top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[0]);
     let complete_art = TOP_BAR_TEXTURE_PATHS
@@ -3366,6 +3517,7 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
             position_type: PositionType::Absolute,
             bottom: px(8),
             left: px(12),
+            width: px(750),
             ..default()
         },
     ));
@@ -3432,6 +3584,78 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
             ));
         });
     });
+
+    commands
+        .spawn((
+            WorldEntity,
+            BottomBarMain,
+            Name::new("Shipping bottom bar"),
+            GlobalZIndex(22),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(50.0),
+                bottom: px(8),
+                width: px(294),
+                height: px(98),
+                margin: UiRect::left(px(-147)),
+                flex_direction: FlexDirection::Row,
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            spawn_bottom_bar_button(
+                parent,
+                render,
+                BottomBarContext::Build,
+                BOTTOM_BAR_TEXTURE_PATHS[5],
+                "B",
+            );
+            spawn_bottom_bar_button(
+                parent,
+                render,
+                BottomBarContext::Recruit,
+                BOTTOM_BAR_TEXTURE_PATHS[6],
+                "R",
+            );
+            spawn_bottom_bar_button(
+                parent,
+                render,
+                BottomBarContext::Technology,
+                BOTTOM_BAR_TEXTURE_PATHS[7],
+                "T",
+            );
+        });
+    commands.spawn((
+        WorldEntity,
+        BottomBarContextPanel,
+        Name::new("Bottom bar context"),
+        ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[8])).with_mode(
+            NodeImageMode::Sliced(TextureSlicer {
+                border: BorderRect::all(72.0),
+                center_scale_mode: default(),
+                sides_scale_mode: default(),
+                max_corner_scale: 1.0,
+            }),
+        ),
+        GlobalZIndex(21),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(50.0),
+            bottom: px(108),
+            width: px(920),
+            height: px(112),
+            margin: UiRect::left(px(-460)),
+            padding: UiRect::all(px(10)),
+            border: UiRect::all(px(2)),
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.035, 0.065, 0.045, 0.35)),
+        BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
+    ));
 }
 
 fn main_menu_input(
@@ -4001,6 +4225,7 @@ fn generate_and_spawn_world(
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
+    mut bottom_bar: ResMut<BottomBarRuntime>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
@@ -4492,6 +4717,16 @@ fn generate_and_spawn_world(
         spawned,
         &generated.deterministic_hash,
     );
+    if let Some(value) = std::env::var_os("STREAM_TOWN_SMOKE_BOTTOM_BAR") {
+        bottom_bar.context = match value.to_string_lossy().to_ascii_lowercase().as_str() {
+            "build" => Some(BottomBarContext::Build),
+            "recruit" => Some(BottomBarContext::Recruit),
+            "technology" | "tech" => Some(BottomBarContext::Technology),
+            _ => None,
+        };
+        bottom_bar.scroll_index = 0;
+        bottom_bar.rebuild = true;
+    }
     if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
         let focus = grid_to_world_on_surface(centre, &config.0, &generated);
         let spacing = config.0.world.cell_size * 3.2;
@@ -10866,6 +11101,7 @@ fn update_placer_visual(
 
 fn select_grid_cell(
     mouse: Res<ButtonInput<MouseButton>>,
+    ui_buttons: Query<&Interaction, With<Button>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
     spatial: Option<SpatialQuery>,
@@ -10875,6 +11111,9 @@ fn select_grid_cell(
     mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if pointer_is_over_button(ui_buttons.iter()) {
         return;
     }
     let Some(spatial) = spatial else {
@@ -11046,6 +11285,518 @@ fn title_case(value: &str) -> String {
     characters.next().map_or_else(String::new, |first| {
         first.to_uppercase().collect::<String>() + characters.as_str()
     })
+}
+
+fn pointer_is_over_button<'a>(mut interactions: impl Iterator<Item = &'a Interaction>) -> bool {
+    interactions.any(|interaction| *interaction != Interaction::None)
+}
+
+fn bottom_bar_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    menu: Res<MenuRuntime>,
+    mut bottom_bar: ResMut<BottomBarRuntime>,
+) {
+    if menu.page != MenuPage::Closed {
+        return;
+    }
+    let requested = if keyboard.just_pressed(KeyCode::KeyB) {
+        Some(BottomBarContext::Build)
+    } else if keyboard.just_pressed(KeyCode::KeyR) {
+        Some(BottomBarContext::Recruit)
+    } else if keyboard.just_pressed(KeyCode::KeyT) {
+        Some(BottomBarContext::Technology)
+    } else {
+        None
+    };
+    if let Some(requested) = requested {
+        toggle_bottom_bar_context(&mut bottom_bar, requested);
+    }
+}
+
+fn toggle_bottom_bar_context(bottom_bar: &mut BottomBarRuntime, requested: BottomBarContext) {
+    bottom_bar.context = (bottom_bar.context != Some(requested)).then_some(requested);
+    bottom_bar.scroll_index = 0;
+    bottom_bar.rebuild = true;
+}
+
+fn bottom_bar_main_buttons(
+    mut bottom_bar: ResMut<BottomBarRuntime>,
+    buttons: Query<(&Interaction, &BottomBarMainButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            toggle_bottom_bar_context(&mut bottom_bar, button.0);
+        }
+    }
+}
+
+fn update_bottom_bar_main_visuals(
+    bottom_bar: Res<BottomBarRuntime>,
+    render: Res<RenderAssets>,
+    mut buttons: Query<(&Interaction, &BottomBarMainButton, &mut ImageNode)>,
+) {
+    for (interaction, button, mut image) in &mut buttons {
+        let active = bottom_bar.context == Some(button.0);
+        let source_path = if active || *interaction == Interaction::Pressed {
+            BOTTOM_BAR_TEXTURE_PATHS[1]
+        } else {
+            BOTTOM_BAR_TEXTURE_PATHS[0]
+        };
+        image.image = bottom_bar_texture(&render, source_path);
+        image.color = if *interaction == Interaction::Hovered {
+            Color::srgb(1.0, 0.92, 0.64)
+        } else {
+            Color::WHITE
+        };
+    }
+}
+
+fn bottom_bar_scroll_buttons(
+    mut bottom_bar: ResMut<BottomBarRuntime>,
+    buttons: Query<(&Interaction, &BottomBarScrollButton), Changed<Interaction>>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if !button.enabled {
+            continue;
+        }
+        bottom_bar.scroll_index = if button.direction < 0 {
+            bottom_bar.scroll_index.saturating_sub(1)
+        } else {
+            bottom_bar.scroll_index.saturating_add(1)
+        };
+        bottom_bar.rebuild = true;
+    }
+}
+
+fn bottom_bar_action_buttons(
+    mut bottom_bar: ResMut<BottomBarRuntime>,
+    mut injected: ResMut<InjectedCommands>,
+    buttons: Query<(&Interaction, &BottomBarAction, &BottomBarActionEnabled), Changed<Interaction>>,
+) {
+    for (interaction, action, enabled) in &buttons {
+        if *interaction != Interaction::Pressed || !enabled.0 {
+            continue;
+        }
+        let command = match action {
+            BottomBarAction::Build(building) => ChatCommand::Build(building.clone()),
+            BottomBarAction::Recruit(role) => ChatCommand::Recruit {
+                role: role.clone(),
+                amount: 1,
+            },
+            BottomBarAction::Technology(technology) => ChatCommand::Vote(technology.clone()),
+        };
+        injected.0.push_back(local_ui_command(command));
+        bottom_bar.context = None;
+        bottom_bar.rebuild = true;
+    }
+}
+
+fn local_ui_command(command: ChatCommand) -> PendingChatCommand {
+    PendingChatCommand {
+        actor_id: StableId::new("npc:starting_builder").expect("static local UI actor ID"),
+        login_name: "local_ui".to_owned(),
+        display_name: "Local UI".to_owned(),
+        command,
+        is_broadcaster: true,
+        is_moderator: true,
+        is_subscriber: false,
+        origin: CommandOrigin::LocalUi,
+    }
+}
+
+fn bottom_bar_entries(
+    active_context: BottomBarContext,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Vec<(BottomBarAction, String, String, bool)> {
+    let mut entries: Vec<_> = match active_context {
+        BottomBarContext::Build => content
+            .buildings
+            .iter()
+            .filter(|(id, building)| {
+                building.placeable && building_is_unlocked(content, simulation, id)
+            })
+            .map(|(id, building)| {
+                let cost = building_construction_cost(content, simulation, id, building);
+                (
+                    BottomBarAction::Build(id.clone()),
+                    building.display_name.clone(),
+                    building_icon_path(id),
+                    !simulation.building_costs_enabled || can_afford(simulation, &cost),
+                )
+            })
+            .collect(),
+        BottomBarContext::Recruit => content
+            .roles
+            .iter()
+            .filter(|(id, _)| {
+                !matches!(id.as_str(), "role:ruler" | "role:blacksmith" | "role:enemy")
+                    && role_capacity(content, simulation, id).is_none_or(|capacity| capacity > 0)
+            })
+            .map(|(id, role)| {
+                (
+                    BottomBarAction::Recruit(id.clone()),
+                    role.display_name.clone(),
+                    role_icon_path(id),
+                    role_is_available(content, simulation, id, None)
+                        && recruit_capacity_remaining(config, content, simulation) > 0,
+                )
+            })
+            .collect(),
+        BottomBarContext::Technology => eligible_technology_ids(content, simulation)
+            .into_iter()
+            .map(|id| {
+                let technology = &content.technology.nodes[&id];
+                (
+                    BottomBarAction::Technology(id),
+                    compact_technology_label(&technology.display_name),
+                    technology.icon_path.clone(),
+                    simulation.active_goals.len() < MAX_TOWN_GOALS
+                        && simulation.active_vote.is_none(),
+                )
+            })
+            .collect(),
+    };
+    entries.sort_by_key(|(action, _, _, _)| bottom_bar_authored_order(action));
+    entries
+}
+
+fn compact_technology_label(display_name: &str) -> String {
+    for (prefix, suffix) in [("Unlock", "Unlock"), ("Level", "Lv"), ("Upgrade", "Up")] {
+        let Some(remainder) = display_name.strip_prefix(prefix) else {
+            continue;
+        };
+        let digit_start = remainder
+            .find(|character: char| character.is_ascii_digit())
+            .unwrap_or(remainder.len());
+        let digit_end = remainder[digit_start..]
+            .find(|character: char| !character.is_ascii_digit())
+            .map_or(remainder.len(), |offset| digit_start + offset);
+        let amount = &remainder[digit_start..digit_end];
+        let subject = format_camel_words(&format!(
+            "{}{}",
+            &remainder[..digit_start],
+            &remainder[digit_end..]
+        ));
+        return if amount.is_empty() {
+            format!("{subject}\n{suffix}")
+        } else {
+            format!("{subject}\n{suffix} {amount}")
+        };
+    }
+    format_camel_words(display_name)
+}
+
+fn format_camel_words(value: &str) -> String {
+    let mut output = String::with_capacity(value.len() + 4);
+    for (index, character) in value.chars().enumerate() {
+        if index > 0 && character.is_ascii_uppercase() {
+            output.push(' ');
+        }
+        output.push(character);
+    }
+    output
+}
+
+fn bottom_bar_authored_order(action: &BottomBarAction) -> usize {
+    const BUILDINGS: [&str; 24] = [
+        "building:house",
+        "building:fishinghut",
+        "building:windmill",
+        "building:woodstorage",
+        "building:orestorage",
+        "building:farm",
+        "building:lumbermill",
+        "building:stonemason",
+        "building:foodstorage",
+        "building:tower",
+        "building:barracks",
+        "building:bowyard",
+        "building:wall",
+        "building:gate",
+        "building:fountain",
+        "building:statue_1",
+        "building:statue_2",
+        "building:forge",
+        "building:marketplace",
+        "building:monastery",
+        "building:necrotower",
+        "building:wizardtower",
+        "building:castle",
+        "building:statue_3",
+    ];
+    const ROLES: [&str; 13] = [
+        "role:logger",
+        "role:builder",
+        "role:defender",
+        "role:fisher",
+        "role:miner",
+        "role:ranger",
+        "role:farmer",
+        "role:soldier",
+        "role:gatherer",
+        "role:priest",
+        "role:wizard",
+        "role:necromancer",
+        "role:paladin",
+    ];
+    let (values, id) = match action {
+        BottomBarAction::Build(id) => (&BUILDINGS[..], id),
+        BottomBarAction::Recruit(id) => (&ROLES[..], id),
+        BottomBarAction::Technology(_) => return usize::MAX,
+    };
+    values
+        .iter()
+        .position(|value| *value == id.as_str())
+        .unwrap_or(usize::MAX)
+}
+
+fn recruit_capacity_remaining(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> u32 {
+    let resource = StableId::new("resource:recruit").expect("static ID");
+    let current = simulation
+        .town_resources
+        .get(&resource)
+        .copied()
+        .unwrap_or_default();
+    resource_storage_capacity(config, content, simulation, &resource).saturating_sub(current)
+}
+
+fn building_icon_path(id: &StableId) -> String {
+    let raw_name = id.as_str().trim_start_matches("building:");
+    let name = match raw_name {
+        "fishinghut" => "FishingHut",
+        "foodstorage" => "FoodStorage",
+        "lumbermill" => "LumberMill",
+        "orestorage" => "OreStorage",
+        "statue_1" => "Statue01",
+        "statue_2" => "Statue02",
+        "statue_3" => "Statue03",
+        "stonemason" => "Stonemason",
+        "townhall" => "TownHall",
+        "wizardtower" => "WizardTower",
+        "woodstorage" => "WoodStorage",
+        "necrotower" => "NecroTower",
+        value => {
+            return format!(
+                "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age02_{}.png",
+                title_case(value)
+            );
+        }
+    };
+    let age = if matches!(
+        raw_name,
+        "house"
+            | "windmill"
+            | "wall"
+            | "gate"
+            | "tower"
+            | "foodstorage"
+            | "orestorage"
+            | "woodstorage"
+            | "lumbermill"
+            | "stonemason"
+            | "townhall"
+    ) {
+        "Age01"
+    } else {
+        "Age02"
+    };
+    format!("Assets/Resources/Icons/Buildings/UI_Icon_Building_{age}_{name}.png")
+}
+
+fn role_icon_path(id: &StableId) -> String {
+    format!(
+        "Assets/Resources/Icons/Characters/UI_Icon_Character_{}.png",
+        title_case(id.as_str().trim_start_matches("role:"))
+    )
+}
+
+fn rebuild_bottom_bar_context(
+    mut commands: Commands,
+    mut bottom_bar: ResMut<BottomBarRuntime>,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    simulation: Res<SimulationRuntime>,
+    asset_server: Option<Res<AssetServer>>,
+    panels: Query<Entity, With<BottomBarContextPanel>>,
+) {
+    if !bottom_bar.rebuild && !simulation.is_changed() {
+        return;
+    }
+    let Ok(panel) = panels.single() else {
+        return;
+    };
+    let Some(active_context) = bottom_bar.context else {
+        if !bottom_bar.rebuild && bottom_bar.signature == "closed" {
+            return;
+        }
+        bottom_bar.rebuild = false;
+        "closed".clone_into(&mut bottom_bar.signature);
+        commands.entity(panel).despawn_children();
+        commands.entity(panel).insert(Visibility::Hidden);
+        return;
+    };
+    let entries = bottom_bar_entries(active_context, &config.0, &content.0, &simulation.0);
+    let maximum_start = entries.len().saturating_sub(10);
+    bottom_bar.scroll_index = bottom_bar.scroll_index.min(maximum_start);
+    let start = bottom_bar.scroll_index;
+    let signature = format!(
+        "{active_context:?}:{start}:{}",
+        entries
+            .iter()
+            .map(|(action, _, _, enabled)| format!("{action:?}={enabled}"))
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+    if !bottom_bar.rebuild && bottom_bar.signature == signature {
+        return;
+    }
+    bottom_bar.rebuild = false;
+    bottom_bar.signature = signature;
+    commands.entity(panel).despawn_children();
+    commands
+        .entity(panel)
+        .insert(Visibility::Visible)
+        .with_children(|parent| {
+            spawn_bottom_bar_scroll(
+                parent,
+                &presentation.0,
+                asset_server.as_deref(),
+                -1,
+                start > 0,
+            );
+            for (action, label, icon_path, enabled) in entries.iter().skip(start).take(10) {
+                spawn_bottom_bar_action(
+                    parent,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                    action.clone(),
+                    label,
+                    icon_path,
+                    *enabled,
+                );
+            }
+            spawn_bottom_bar_scroll(
+                parent,
+                &presentation.0,
+                asset_server.as_deref(),
+                1,
+                start + 10 < entries.len(),
+            );
+        });
+}
+
+fn spawn_bottom_bar_scroll(
+    parent: &mut ChildSpawnerCommands,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    direction: i8,
+    enabled: bool,
+) {
+    let mut image =
+        presentation_texture_handle(presentation, asset_server, BOTTOM_BAR_TEXTURE_PATHS[9])
+            .map_or_else(ImageNode::default, ImageNode::new)
+            .with_color(if enabled {
+                Color::WHITE
+            } else {
+                Color::srgb(0.25, 0.25, 0.25)
+            });
+    image.flip_x = direction > 0;
+    parent.spawn((
+        BottomBarScrollButton { direction, enabled },
+        Button,
+        image,
+        Node {
+            width: px(44),
+            height: px(60),
+            margin: UiRect::horizontal(px(6)),
+            ..default()
+        },
+    ));
+}
+
+fn spawn_bottom_bar_action(
+    parent: &mut ChildSpawnerCommands,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    action: BottomBarAction,
+    label: &str,
+    icon_path: &str,
+    enabled: bool,
+) {
+    let background_path = if enabled {
+        BOTTOM_BAR_TEXTURE_PATHS[0]
+    } else {
+        BOTTOM_BAR_TEXTURE_PATHS[2]
+    };
+    let background = presentation_texture_handle(presentation, asset_server, background_path)
+        .map_or_else(ImageNode::default, ImageNode::new)
+        .with_mode(NodeImageMode::Stretch);
+    parent
+        .spawn((
+            action,
+            BottomBarActionEnabled(enabled),
+            Button,
+            background,
+            Node {
+                width: px(72),
+                height: px(86),
+                margin: UiRect::horizontal(px(3)),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+        ))
+        .with_children(|button| {
+            let icon = presentation_texture_handle(presentation, asset_server, icon_path)
+                .map_or_else(ImageNode::default, ImageNode::new)
+                .with_color(if enabled {
+                    Color::WHITE
+                } else {
+                    Color::srgb(0.4, 0.4, 0.4)
+                });
+            button.spawn((
+                icon,
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(11),
+                    top: px(7),
+                    width: px(50),
+                    height: px(50),
+                    ..default()
+                },
+            ));
+            button.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: FontSize::Px(9.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(if enabled {
+                    Color::WHITE
+                } else {
+                    Color::srgb(0.48, 0.48, 0.48)
+                }),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(2),
+                    right: px(2),
+                    bottom: px(5),
+                    ..default()
+                },
+            ));
+        });
 }
 
 fn game_input(
@@ -12696,6 +13447,10 @@ fn pending_stream_user_type(config: &GameConfig, pending: &PendingChatCommand) -
     }
 }
 
+fn should_apply_pending_identity(pending: &PendingChatCommand) -> bool {
+    pending.origin != CommandOrigin::LocalUi
+}
+
 fn require_ruler_or_staff(
     simulation: &WorldSimulation,
     pending: &PendingChatCommand,
@@ -13278,7 +14033,9 @@ fn process_injected_commands(
         let actor_id = pending.actor_id.clone();
         let command = pending.command.clone();
         let user_type = pending_stream_user_type(&config.0, &pending);
-        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+        if should_apply_pending_identity(&pending)
+            && let Some(actor) = simulation.0.actors.get_mut(&actor_id)
+        {
             actor.display_name = Some(pending.display_name.clone());
             actor.login_name = Some(pending.login_name.clone());
             actor.user_type = user_type;
@@ -13321,7 +14078,9 @@ fn process_injected_commands(
                         .unwrap_or_else(|| {
                             StableId::new("archetype:viewer").expect("static ID")
                         });
-                        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+                        if should_apply_pending_identity(&pending)
+                            && let Some(actor) = simulation.0.actors.get_mut(&actor_id)
+                        {
                             actor.archetype = Some(player_archetype.clone());
                             actor.display_name = Some(pending.display_name.clone());
                             actor.login_name = Some(pending.login_name.clone());
@@ -14652,7 +15411,9 @@ fn process_injected_commands(
             Err(error) => format!("command rejected: {error}"),
         };
         feedback.0 = format!("{}: {message}", pending.display_name);
-        send_command_feedback(&connection, &pending.display_name, &message);
+        if pending.origin != CommandOrigin::LocalUi {
+            send_command_feedback(&connection, &pending.display_name, &message);
+        }
         info!(user = %pending.display_name, ?command, result = %message, "processed Twitch command");
         stats.commands_processed += 1;
     }
@@ -17956,6 +18717,135 @@ mod tests {
         assert!(hud_season_meter_percent(0).abs() <= f32::EPSILON);
         assert!((hud_season_meter_percent(7) - 24.0).abs() <= f32::EPSILON);
         assert!(hud_season_meter_percent(28).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn shipping_bottom_bar_preserves_authored_assets_order_and_live_availability() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        for source_path in BOTTOM_BAR_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing bottom-bar texture {source_path}"
+            );
+        }
+        let mut simulation = WorldSimulation::new(17);
+        simulation.town_resources = config.gameplay.starting_town_resources.clone();
+        simulation.unlocked_technology.extend(
+            content
+                .technology
+                .nodes
+                .iter()
+                .filter(|(_, technology)| technology.initially_unlocked)
+                .map(|(id, _)| id.clone()),
+        );
+        let builds = bottom_bar_entries(BottomBarContext::Build, &config, &content, &simulation);
+        let first_build = builds.first().expect("an initial building is unlocked");
+        assert!(matches!(first_build.0, BottomBarAction::Build(_)));
+        assert!(bottom_bar_authored_order(&first_build.0) < usize::MAX);
+        assert!(
+            Path::new(&first_build.2)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        );
+        assert!(first_build.3);
+        for (action, _, icon_path, _) in &builds {
+            let BottomBarAction::Build(id) = action else {
+                unreachable!("build context only emits build actions");
+            };
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == *icon_path),
+                "missing resolved building icon for {id}: {icon_path}"
+            );
+        }
+
+        let recruits =
+            bottom_bar_entries(BottomBarContext::Recruit, &config, &content, &simulation);
+        let recruit_ids = recruits
+            .iter()
+            .filter_map(|(action, _, _, _)| match action {
+                BottomBarAction::Recruit(role) => Some(role.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(recruit_ids.first(), Some(&"role:logger"));
+        assert!(!recruit_ids.contains(&"role:ruler"));
+        assert!(!recruit_ids.contains(&"role:blacksmith"));
+        assert!(recruits.iter().all(|(_, _, _, enabled)| *enabled));
+        for (action, _, icon_path, _) in &recruits {
+            let BottomBarAction::Recruit(id) = action else {
+                unreachable!("recruit context only emits recruit actions");
+            };
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == *icon_path),
+                "missing resolved role icon for {id}: {icon_path}"
+            );
+        }
+
+        let active_vote = eligible_technology_ids(&content, &simulation)
+            .into_iter()
+            .next()
+            .expect("an initial technology is eligible");
+        simulation
+            .start_technology_vote(active_vote, 30.0)
+            .expect("test vote starts");
+        let technologies =
+            bottom_bar_entries(BottomBarContext::Technology, &config, &content, &simulation);
+        assert!(
+            technologies
+                .iter()
+                .all(|(_, _, icon, enabled)| { !icon.is_empty() && !enabled })
+        );
+        assert_eq!(
+            compact_technology_label("UnlockWallsAndGates"),
+            "Walls And Gates\nUnlock"
+        );
+        assert_eq!(
+            compact_technology_label("Level13Marketplace"),
+            "Marketplace\nLv 13"
+        );
+        assert_eq!(compact_technology_label("Upgrade5Ranger"), "Ranger\nUp 5");
+        let local = local_ui_command(ChatCommand::Build(
+            StableId::new("building:house").expect("test ID"),
+        ));
+        assert_eq!(local.actor_id.as_str(), "npc:starting_builder");
+        assert_eq!(local.origin, CommandOrigin::LocalUi);
+        assert!(!should_apply_pending_identity(&local));
+    }
+
+    #[test]
+    fn bottom_bar_button_dispatches_through_the_typed_command_queue() {
+        let building = StableId::new("building:house").expect("test ID");
+        let mut app = App::new();
+        app.init_resource::<BottomBarRuntime>()
+            .init_resource::<InjectedCommands>()
+            .add_systems(Update, bottom_bar_action_buttons);
+        app.world_mut().spawn((
+            Interaction::Pressed,
+            BottomBarAction::Build(building.clone()),
+            BottomBarActionEnabled(true),
+        ));
+
+        app.update();
+
+        let queue = app.world().resource::<InjectedCommands>();
+        let command = queue.0.front().expect("button dispatches one command");
+        assert_eq!(command.actor_id.as_str(), "npc:starting_builder");
+        assert_eq!(command.command, ChatCommand::Build(building));
+        assert!(app.world().resource::<BottomBarRuntime>().context.is_none());
+        assert!(!pointer_is_over_button([Interaction::None].iter()));
+        assert!(pointer_is_over_button([Interaction::Hovered].iter()));
+        assert!(pointer_is_over_button([Interaction::Pressed].iter()));
     }
 
     #[test]

@@ -370,6 +370,8 @@ authored `Flag` renderer binding and the custom wind/color material can be
 validated together.
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
 the image-backed selection window can be captured without pointer automation.
+`STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the
+corresponding shipping bottom-bar context for repeatable UI captures.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -469,6 +471,13 @@ Actors, resource nodes, and every cell in a building footprint resolve against
 authoritative runtime state; the packaged unfilled, green, and red slider art
 shows live health or remaining resources. Selecting empty terrain keeps the
 window hidden.
+
+The permanent bottom bar reconstructs Unity's Build, Recruit, and Technology
+buttons from packaged nine-slice, keybind, arrow, and icon artwork. Mouse clicks
+or the original B/R/T shortcuts open a ten-item paged context. Entries preserve
+Unity's serialized ordering and live enabled state, and dispatch through the
+same typed building-placement, NPC recruitment, and technology-vote command
+path used by Twitch rather than duplicating gameplay rules.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

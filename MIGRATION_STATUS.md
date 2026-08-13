@@ -355,6 +355,12 @@ mistaken for production-ready systems.
   construction/level state, health, and remaining resources from authoritative
   simulation data, while the three packaged selection-slider sprites provide
   live green/red progress and an assetless fallback remains functional.
+- The shipping bottom bar now provides functional Build, Recruit, and Technology
+  contexts using converted button, keybind, background, arrow, building, role,
+  and technology artwork. Mouse input and Unity's B/R/T shortcuts preserve the
+  serialized item ordering, ten-item paging, and live affordability/role-slot/
+  storage/vote disabled states; actions reuse the authoritative typed command
+  path for placement, recruitment, and voting.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red
