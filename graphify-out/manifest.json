@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786613004.96717,
-    "ast_hash": "92f4b806e804bf6320bd98fe46c74477",
+    "mtime": 1786613743.803063,
+    "ast_hash": "b04f6dfd532353810423b203c0abd1cc",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -4442,6 +4442,11 @@
   "graphify-out/memory/query_20260813_090431_nativesavestore_validate_snapshot_load_input_build.md": {
     "mtime": 1786611871.8225918,
     "ast_hash": "954fd1900b6650e4eb9dfb5af5ba2a8e",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_092627_worldsnapshot_validate_snapshot_stable_id_duplicat.md": {
+    "mtime": 1786613187.6947303,
+    "ast_hash": "dce5aef5b65165e3d849ceb27337dad8",
     "semantic_hash": ""
   }
 }

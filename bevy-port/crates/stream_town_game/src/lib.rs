@@ -6798,18 +6798,18 @@ fn station_candidate<'a>(
     config: &GameConfig,
     station_id: &'a StableId,
 ) -> Option<StationCandidate<'a>> {
-    if station_id.as_str() == "building:townhall" {
+    let Some(state) = simulation.buildings.get(station_id) else {
+        if station_id.as_str() != "building:townhall" {
+            return None;
+        }
         let building = content.buildings.get(station_id)?;
         return Some(StationCandidate {
             id: station_id,
             position: town_hall_grid_position(config),
             definition: building.station.as_ref()?,
         });
-    }
-    let state = simulation
-        .buildings
-        .get(station_id)
-        .filter(|state| state.complete)?;
+    };
+    let state = state.complete.then_some(state)?;
     let building = building_def_for_archetype(content, &state.archetype)?;
     let footprint = rotated_footprint(building.footprint, state.rotation_quarter_turns);
     Some(StationCandidate {
@@ -6833,37 +6833,15 @@ fn best_station_id(
     if role.station_kinds.is_empty() {
         return None;
     }
-    let town_hall_id = StableId::new("building:townhall").expect("static building ID is valid");
-    let town_hall = content.buildings.get(&town_hall_id).and_then(|building| {
-        building
-            .station
-            .as_ref()
-            .map(|definition| StationCandidate {
-                id: &town_hall_id,
-                position: town_hall_grid_position(config),
-                definition,
-            })
-    });
-    town_hall
-        .into_iter()
-        .chain(simulation.buildings.values().filter_map(|state| {
-            if state.id.as_str() == "building:townhall" {
-                return None;
-            }
-            if !state.complete {
-                return None;
-            }
-            let building = building_def_for_archetype(content, &state.archetype)?;
-            let footprint = rotated_footprint(building.footprint, state.rotation_quarter_turns);
-            Some(StationCandidate {
-                id: &state.id,
-                position: GridPos {
-                    x: state.position.x.saturating_add(footprint[0] / 2),
-                    z: state.position.z.saturating_add(footprint[1] / 2),
-                },
-                definition: building.station.as_ref()?,
-            })
-        }))
+    let town_hall = StableId::new("building:townhall").expect("static building ID is valid");
+    std::iter::once(&town_hall)
+        .chain(
+            simulation
+                .buildings
+                .keys()
+                .filter(|id| id.as_str() != "building:townhall"),
+        )
+        .filter_map(|id| station_candidate(content, simulation, config, id))
         .filter(|station| {
             station_matches_role(station.definition, role)
                 && station_supports_role_targets(station.definition, role)
@@ -6875,6 +6853,18 @@ fn best_station_id(
             )
         })
         .map(|station| station.id.clone())
+}
+
+fn restored_town_hall_position(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    config: &GameConfig,
+) -> GridPos {
+    let town_hall = StableId::new("building:townhall").expect("static building ID is valid");
+    station_candidate(content, simulation, config, &town_hall).map_or_else(
+        || town_hall_grid_position(config),
+        |station| station.position,
+    )
 }
 
 fn assigned_station<'a>(
@@ -7451,7 +7441,7 @@ fn next_agent_goal_with_reservations(
     }
     if actor_remaining_carry_capacity(content, simulation, actor) == 0 {
         let destination = station.map_or_else(
-            || town_hall_grid_position(config),
+            || restored_town_hall_position(content, simulation, config),
             |station| station.position,
         );
         let target = nearest_walkable(world, destination).unwrap_or(current);
@@ -17040,7 +17030,9 @@ fn process_injected_commands(
                 }
             }
             ChatCommand::Unstuck => {
-                let spawn = nearest_walkable(&world.generated, town_hall_grid_position(&config.0))
+                let town_hall =
+                    restored_town_hall_position(&content.0, &simulation.0, &config.0);
+                let spawn = nearest_walkable(&world.generated, town_hall)
                     .ok_or_else(|| "the Town Hall has no walkable spawn cell".to_owned())?;
                 let actor = simulation
                     .0
@@ -23041,6 +23033,23 @@ mod tests {
             app.world().resource::<SimulationRuntime>().0.buildings[&town_hall_id].position,
             saved_position
         );
+        let restored_station = station_candidate(
+            &app.world().resource::<RuntimeContent>().0,
+            &app.world().resource::<SimulationRuntime>().0,
+            &config,
+            &town_hall_id,
+        )
+        .unwrap();
+        assert_eq!(restored_station.position, centre);
+        assert_eq!(
+            restored_town_hall_position(
+                &app.world().resource::<RuntimeContent>().0,
+                &app.world().resource::<SimulationRuntime>().0,
+                &config,
+            ),
+            centre
+        );
+        assert_ne!(centre, town_hall_grid_position(&config));
         let relocated_ecs_position = app
             .world_mut()
             .query::<(&Agent, &GridLocation)>()
