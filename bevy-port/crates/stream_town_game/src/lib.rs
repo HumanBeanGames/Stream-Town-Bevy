@@ -16,7 +16,7 @@ use bevy::{
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
-    audio::{AudioSink, AudioSinkPlayback, AudioSource, Pitch, Volume},
+    audio::{AudioSink, AudioSinkPlayback, AudioSource, Pitch, SpatialScale, Volume},
     camera::ScalingMode,
     color::LinearRgba,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -86,6 +86,11 @@ const MUSIC_FADE_OUT_SECONDS: f32 = 10.0;
 const SETTINGS_MENU_ITEM_COUNT: usize = 29;
 const MUSIC_GAIN: f32 = 0.22;
 const AMBIENCE_GAIN: f32 = 0.16;
+const SEAGULL_GAIN: f32 = 0.28;
+const SEAGULL_FLIGHT_SECONDS: f32 = 32.0;
+const SEAGULL_HEIGHT: f32 = 15.0;
+const SEAGULL_MAX_AUDIO_DISTANCE: f32 = 50.0;
+const SEAGULL_MODEL_PATH: &str = "migrated/models/Models/Critters/Critter_Seagull_01.glb";
 const PROCEDURAL_AUDIO_SAMPLE_RATE: u32 = 16_000;
 const BUILDING_HIT_SMOKE_SIZE: f32 = 0.5;
 const BUILDING_HIT_SPARK_SIZE: f32 = 0.25;
@@ -602,6 +607,18 @@ struct LevelUpPresentation {
 struct WorldEntity;
 
 #[derive(Component)]
+struct SeagullFlight {
+    start: Vec3,
+    end: Vec3,
+    elapsed_seconds: f32,
+    leg_serial: u64,
+    call_elapsed_seconds: f32,
+    call_wait_seconds: f32,
+    call_serial: u64,
+    world_seed: u64,
+}
+
+#[derive(Component)]
 struct TerrainSurface;
 
 #[derive(Component)]
@@ -950,6 +967,7 @@ struct AmbienceAudio;
 struct JukeboxRuntime {
     ambience: Option<Handle<AudioSource>>,
     seasonal_music: BTreeMap<u8, Handle<AudioSource>>,
+    seagull_calls: Vec<Handle<AudioSource>>,
     active_music: Option<Entity>,
     active_season: Option<Season>,
     active_daytime: Option<bool>,
@@ -1212,8 +1230,10 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                drive_procedural_jukebox
-                    .after(update_environment_presentation)
+                (
+                    drive_procedural_jukebox.after(update_environment_presentation),
+                    drive_seagull_flight.after(drive_procedural_jukebox),
+                )
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -1497,9 +1517,11 @@ fn setup_rendering(
     let foliage_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some();
     let shoreline_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some();
     let overlay_closeup = std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some();
+    let seagull_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
+        SpatialListener::new(0.2),
         Projection::from(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
                 viewport_height: if material_closeup {
@@ -1520,6 +1542,8 @@ fn setup_rendering(
                     80.0
                 } else if overlay_closeup {
                     105.0
+                } else if seagull_closeup {
+                    80.0
                 } else {
                     520.0
                 },
@@ -1819,6 +1843,13 @@ fn setup_procedural_jukebox(
             seasonal_music.insert(music_key(season, daytime), source);
         }
     }
+    let seagull_calls = (0_u8..3)
+        .map(|variant| {
+            audio_sources.add(AudioSource {
+                bytes: procedural_seagull_call_wav(variant, PROCEDURAL_AUDIO_SAMPLE_RATE).into(),
+            })
+        })
+        .collect();
     commands.spawn((
         Name::new("Procedural seasonal ambience"),
         AmbienceAudio,
@@ -1829,6 +1860,7 @@ fn setup_procedural_jukebox(
     ));
     jukebox.ambience = Some(ambience);
     jukebox.seasonal_music = seasonal_music;
+    jukebox.seagull_calls = seagull_calls;
     jukebox.cooldown_seconds = 0.0;
 }
 
@@ -1911,6 +1943,198 @@ fn drive_procedural_jukebox(
     jukebox.track_serial = jukebox.track_serial.saturating_add(1);
 }
 
+fn spawn_seagull(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+    world_seed: u64,
+) {
+    let (start, end) = deterministic_seagull_leg(world_seed, 0);
+    let mut flight = commands.spawn((
+        Name::new("SeagulSpawner (Unity parity)"),
+        WorldEntity,
+        SeagullFlight {
+            start,
+            end,
+            elapsed_seconds: 0.0,
+            leg_serial: 0,
+            call_elapsed_seconds: 0.0,
+            call_wait_seconds: 0.0,
+            call_serial: 0,
+            world_seed,
+        },
+        Visibility::default(),
+        seagull_flight_transform(start, end),
+    ));
+    flight.with_children(|parent| {
+        let model_transform =
+            Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::splat(5.0));
+        if let Some(asset_server) = asset_server
+            && converted_asset_exists(asset_root, SEAGULL_MODEL_PATH)
+        {
+            parent.spawn((
+                Name::new("Critter_Seagull_01"),
+                WorldAssetRoot(
+                    asset_server
+                        .load(GltfAssetLabel::Scene(0).from_asset(SEAGULL_MODEL_PATH.to_owned())),
+                ),
+                model_transform,
+            ));
+        } else {
+            parent.spawn((
+                Name::new("Seagull fallback"),
+                Mesh3d(render.cube.clone()),
+                MeshMaterial3d(render.food.clone()),
+                model_transform.with_scale(Vec3::new(3.0, 0.35, 1.3)),
+            ));
+        }
+    });
+}
+
+fn drive_seagull_flight(
+    mut commands: Commands,
+    time: Res<Time>,
+    settings: Res<RuntimePlayerSettings>,
+    jukebox: Res<JukeboxRuntime>,
+    camera: Query<&GlobalTransform, With<TownCamera>>,
+    mut flights: Query<(&mut SeagullFlight, &mut Transform)>,
+) {
+    let camera_position = camera.single().ok().map(GlobalTransform::translation);
+    for (mut flight, mut transform) in &mut flights {
+        let delta = time.delta_secs();
+        flight.elapsed_seconds += delta;
+        if flight.elapsed_seconds >= SEAGULL_FLIGHT_SECONDS {
+            flight.leg_serial = flight.leg_serial.saturating_add(1);
+            (flight.start, flight.end) =
+                deterministic_seagull_leg(flight.world_seed, flight.leg_serial);
+            flight.elapsed_seconds = 0.0;
+        }
+        let progress = (flight.elapsed_seconds / SEAGULL_FLIGHT_SECONDS).clamp(0.0, 1.0);
+        let position = flight.start.lerp(flight.end, progress);
+        *transform = seagull_flight_transform(position, flight.end);
+
+        flight.call_elapsed_seconds += delta;
+        if flight.call_elapsed_seconds <= flight.call_wait_seconds {
+            continue;
+        }
+        let call_serial = flight.call_serial;
+        flight.call_serial = flight.call_serial.saturating_add(1);
+        flight.call_elapsed_seconds = 0.0;
+        flight.call_wait_seconds = deterministic_seagull_call_wait(flight.world_seed, call_serial);
+        if jukebox.seagull_calls.is_empty() {
+            continue;
+        }
+        let variant = deterministic_seagull_call_variant(flight.world_seed, call_serial);
+        let source = jukebox.seagull_calls[variant].clone();
+        let distance = camera_position.map_or(0.0, |camera| camera.distance(position));
+        let gain = SEAGULL_GAIN
+            * settings.0.audio.master
+            * settings.0.audio.ambience
+            * unity_seagull_rolloff(distance);
+        commands.spawn((
+            Name::new(format!("Seagull call {}", variant + 1)),
+            WorldEntity,
+            AudioPlayer(source),
+            PlaybackSettings::DESPAWN
+                .with_volume(Volume::Linear(gain))
+                .with_spatial(true)
+                .with_spatial_scale(SpatialScale::new(1.0 / SEAGULL_MAX_AUDIO_DISTANCE)),
+            Transform::from_translation(position),
+        ));
+    }
+}
+
+fn seagull_flight_transform(position: Vec3, target: Vec3) -> Transform {
+    let direction = (target - position).normalize_or_zero();
+    let rotation = if direction == Vec3::ZERO {
+        Quat::IDENTITY
+    } else {
+        Quat::from_rotation_arc(Vec3::Z, direction)
+    };
+    Transform::from_translation(position).with_rotation(rotation)
+}
+
+fn deterministic_seagull_leg(seed: u64, serial: u64) -> (Vec3, Vec3) {
+    const CENTRES: [Vec2; 4] = [
+        Vec2::new(200.0, 0.0),
+        Vec2::new(-200.0, 0.0),
+        Vec2::new(0.0, -200.0),
+        Vec2::new(0.0, 200.0),
+    ];
+    const AREAS: [Vec2; 4] = [
+        Vec2::new(5.0, 400.0),
+        Vec2::new(5.0, 400.0),
+        Vec2::new(400.0, 5.0),
+        Vec2::new(400.0, 5.0),
+    ];
+    let mut area =
+        usize::try_from(seagull_hash(seed, serial, 0) % 4).expect("seagull area index fits usize");
+    // The Unity component never updates `_currentArea`, so an initial area-zero
+    // roll is always advanced to area one. Preserve that shipping behaviour.
+    if area == 0 {
+        area = 1;
+    }
+    let offset = Vec2::new(
+        seagull_signed_unit(seed, serial, 1) * AREAS[area].x * 0.5,
+        seagull_signed_unit(seed, serial, 2) * AREAS[area].y * 0.5,
+    );
+    let horizontal = CENTRES[area] + offset;
+    let start = Vec3::new(horizontal.x, SEAGULL_HEIGHT, horizontal.y);
+    let end = Vec3::new(-horizontal.x, SEAGULL_HEIGHT, -horizontal.y);
+    (start, end)
+}
+
+fn deterministic_seagull_call_wait(seed: u64, serial: u64) -> f32 {
+    1.0 + seagull_unit(seed, serial, 3) * 4.0
+}
+
+fn deterministic_seagull_call_variant(seed: u64, serial: u64) -> usize {
+    usize::try_from(seagull_hash(seed, serial, 4) % 3).expect("seagull call variant fits usize")
+}
+
+fn seagull_signed_unit(seed: u64, serial: u64, salt: u64) -> f32 {
+    seagull_unit(seed, serial, salt) * 2.0 - 1.0
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn seagull_unit(seed: u64, serial: u64, salt: u64) -> f32 {
+    let value = seagull_hash(seed, serial, salt) >> 40;
+    value as f32 / 16_777_215.0
+}
+
+fn seagull_hash(seed: u64, serial: u64, salt: u64) -> u64 {
+    let mut mixed = seed
+        .wrapping_add(serial.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+        .wrapping_add(salt.wrapping_mul(0xd1b5_4a32_d192_ed03));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^ (mixed >> 31)
+}
+
+fn unity_seagull_rolloff(distance: f32) -> f32 {
+    const CURVE: [(f32, f32); 7] = [
+        (0.0, 1.0),
+        (0.05, 1.0),
+        (0.1, 0.5),
+        (0.2, 0.25),
+        (0.4, 0.125),
+        (0.766_247_6, 0.037_643_433),
+        (1.0, 0.0),
+    ];
+    let normalized = (distance / SEAGULL_MAX_AUDIO_DISTANCE).clamp(0.0, 1.0);
+    for segment in CURVE.windows(2) {
+        let (start_time, start_value) = segment[0];
+        let (end_time, end_value) = segment[1];
+        if normalized <= end_time {
+            let progress = ((normalized - start_time) / (end_time - start_time)).clamp(0.0, 1.0);
+            return start_value + (end_value - start_value) * progress;
+        }
+    }
+    0.0
+}
+
 fn season_index(season: Season) -> u8 {
     match season {
         Season::Spring => 0,
@@ -1943,12 +2167,24 @@ fn procedural_ambience_wav(sample_rate: u32, seconds: f32) -> Vec<u8> {
         let wind = (time * std::f32::consts::TAU * 0.075).sin() * 0.32
             + (time * std::f32::consts::TAU * 0.13).sin() * 0.18;
         let noise = pseudo_noise(sample) * (0.18 + wind.abs() * 0.2);
-        let birds = if sample % (sample_rate.saturating_mul(7)).max(1) < sample_rate / 3 {
-            (time * std::f32::consts::TAU * 1_260.0).sin() * 0.08
-        } else {
-            0.0
-        };
-        (wind * 0.09 + noise * 0.12 + birds).clamp(-0.25, 0.25)
+        (wind * 0.09 + noise * 0.12).clamp(-0.25, 0.25)
+    })
+}
+
+fn procedural_seagull_call_wav(variant: u8, sample_rate: u32) -> Vec<u8> {
+    let (duration, start_frequency, frequency_sweep) = match variant % 3 {
+        0 => (0.62, 1_080.0, 420.0),
+        1 => (0.78, 920.0, 610.0),
+        _ => (0.55, 1_240.0, -260.0),
+    };
+    synthesize_wav(sample_rate, duration, move |time, _| {
+        let phase = (time / duration).clamp(0.0, 1.0);
+        let envelope = (phase * std::f32::consts::PI).sin().powf(0.65);
+        let pulse = (phase * std::f32::consts::TAU * (2.0 + f32::from(variant))).sin() * 0.08;
+        let frequency = start_frequency + frequency_sweep * phase + pulse * start_frequency;
+        let carrier = (time * std::f32::consts::TAU * frequency).sin();
+        let harmonic = (time * std::f32::consts::TAU * frequency * 1.97).sin() * 0.28;
+        (carrier + harmonic) * envelope * 0.22
     })
 }
 
@@ -3131,6 +3367,11 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 74.0, focus.y + 88.0, focus.z + 74.0)
                 .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some() {
+            let (start, end) = deterministic_seagull_leg(generated.seed, 0);
+            let focus = start.lerp(end, 0.1);
+            Transform::from_translation(focus + Vec3::new(42.0, 32.0, 42.0))
+                .looking_at(focus, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
@@ -3595,6 +3836,13 @@ fn generate_and_spawn_world(
         let focus = grid_to_world_on_surface(centre, &config.0, &generated);
         spawn_building_smoke_field(&mut commands, &render, focus, config.0.world.cell_size);
     }
+    spawn_seagull(
+        &mut commands,
+        &render,
+        asset_server.as_deref(),
+        &asset_root.0,
+        generated.seed,
+    );
     commands.insert_resource(WorldRuntime {
         generated,
         legacy_terrain_mesh: None,
@@ -15163,6 +15411,51 @@ mod tests {
         assert_eq!(music_key(Season::Spring, true), 0);
         assert_eq!(music_key(Season::Spring, false), 1);
         assert_eq!(music_key(Season::Winter, false), 7);
+    }
+
+    #[test]
+    fn seagull_flight_preserves_shipping_prefab_bounds_and_is_deterministic() {
+        for serial in 0..64 {
+            let (start, end) = deterministic_seagull_leg(0x5eed_2026, serial);
+            assert_eq!(start.y.to_bits(), SEAGULL_HEIGHT.to_bits());
+            assert_eq!(end.y.to_bits(), SEAGULL_HEIGHT.to_bits());
+            assert_eq!(start.x.to_bits(), (-end.x).to_bits());
+            assert_eq!(start.z.to_bits(), (-end.z).to_bits());
+            assert!(start.x.abs() <= 202.5);
+            assert!(start.z.abs() <= 202.5);
+            assert_eq!((start, end), deterministic_seagull_leg(0x5eed_2026, serial));
+        }
+    }
+
+    #[test]
+    fn seagull_calls_preserve_unity_cadence_variants_and_rolloff() {
+        let mut variants = BTreeSet::new();
+        for serial in 0..64 {
+            let wait = deterministic_seagull_call_wait(17, serial);
+            assert!((1.0..=5.0).contains(&wait));
+            assert_eq!(
+                wait.to_bits(),
+                deterministic_seagull_call_wait(17, serial).to_bits()
+            );
+            variants.insert(deterministic_seagull_call_variant(17, serial));
+        }
+        assert_eq!(variants, BTreeSet::from([0, 1, 2]));
+        assert_eq!(unity_seagull_rolloff(0.0).to_bits(), 1.0_f32.to_bits());
+        assert_eq!(unity_seagull_rolloff(5.0).to_bits(), 0.5_f32.to_bits());
+        assert_eq!(unity_seagull_rolloff(50.0).to_bits(), 0.0_f32.to_bits());
+        assert_eq!(unity_seagull_rolloff(500.0).to_bits(), 0.0_f32.to_bits());
+    }
+
+    #[test]
+    fn procedural_seagull_calls_are_valid_distinct_wav_sources() {
+        let calls: Vec<_> = (0..3)
+            .map(|variant| procedural_seagull_call_wav(variant, 8_000))
+            .collect();
+        assert!(calls.iter().all(|call| &call[0..4] == b"RIFF"));
+        assert!(calls.iter().all(|call| &call[8..12] == b"WAVE"));
+        assert_ne!(calls[0], calls[1]);
+        assert_ne!(calls[1], calls[2]);
+        assert_eq!(calls[0], procedural_seagull_call_wav(0, 8_000));
     }
 
     #[test]
