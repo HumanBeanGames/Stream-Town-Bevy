@@ -643,6 +643,13 @@ completed-wave progress (not merely the spawned-wave index). Both rebuild from
 native saved event state. `STREAM_TOWN_SMOKE_EVENT=fish|raid` opens deterministic
 real-runtime fixtures for visual acceptance.
 
+The automated headless acceptance path now traverses `Boot` -> `MainMenu` ->
+`WorldLoading` -> `InGame`, joins a Twitch viewer through the production command
+queue, saves and reloads the generated town, then enters and exits `Credits`
+after its authored fireworks activation. It also guards state cleanup; this
+found and fixed a stale Credits timeline resource that previously survived a
+return to the Main Menu.
+
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
 remaining work.

@@ -2145,7 +2145,10 @@ impl Plugin for StreamTownGamePlugin {
                     .chain()
                     .run_if(in_state(GameState::Credits)),
             )
-            .add_systems(OnExit(GameState::Credits), cleanup_state_entities);
+            .add_systems(
+                OnExit(GameState::Credits),
+                (cleanup_state_entities, cleanup_credits),
+            );
     }
 }
 
@@ -21979,6 +21982,10 @@ fn cleanup_state_entities(mut commands: Commands, entities: Query<Entity, With<S
     }
 }
 
+fn cleanup_credits(mut commands: Commands) {
+    commands.remove_resource::<CreditsTimeline>();
+}
+
 fn cleanup_loading_screen(
     mut commands: Commands,
     entities: Query<Entity, With<LoadingScreenEntity>>,
@@ -28319,6 +28326,148 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::InGame
+        );
+    }
+
+    #[test]
+    fn headless_launch_through_credits_round_trip_covers_shipping_states() {
+        let config = GameConfig::default();
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("launch-through-credits.stbevy");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(config))
+        .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(&save_path),
+        });
+
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Boot
+        );
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<StateEntity>>()
+                .iter(app.world())
+                .count()
+                > 0
+        );
+
+        enter_headless_world(&mut app);
+        let viewer = StableId::new("twitch:acceptance_viewer").unwrap();
+        app.world_mut()
+            .resource_mut::<InjectedCommands>()
+            .0
+            .push_back(PendingChatCommand {
+                actor_id: viewer.clone(),
+                login_name: "acceptance_viewer".to_owned(),
+                display_name: "Acceptance Viewer".to_owned(),
+                command: ChatCommand::Join,
+                is_broadcaster: false,
+                is_moderator: false,
+                is_subscriber: true,
+                origin: CommandOrigin::LocalDebug,
+            });
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .actors
+                .contains_key(&viewer)
+        );
+
+        app.world_mut().resource_mut::<MenuIoRequest>().save = true;
+        app.update();
+        let saved = NativeSaveStore::new(&save_path).load().unwrap();
+        assert!(saved.simulation.actors.contains_key(&viewer));
+
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::MainMenu);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+        assert!(!app.world().contains_resource::<WorldRuntime>());
+        assert!(!app.world().contains_resource::<SimulationRuntime>());
+
+        app.world_mut().resource_mut::<MenuIoRequest>().load = true;
+        enter_headless_world(&mut app);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SimulationRuntime>()
+                .0
+                .actors
+                .contains_key(&viewer)
+        );
+        assert!(
+            app.world()
+                .resource::<RuntimeConsoleRuntime>()
+                .last_result
+                .starts_with("Loaded ")
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::MainMenu);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Credits);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Credits
+        );
+        assert!(app.world().contains_resource::<CreditsTimeline>());
+        assert!(
+            app.world_mut()
+                .query::<&AuthoredCreditsElement>()
+                .iter(app.world())
+                .count()
+                > 0
+        );
+
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_mins(1),
+        ));
+        app.update();
+        assert!(
+            app.world_mut()
+                .query::<&CreditsFireworksEmitter>()
+                .iter(app.world())
+                .count()
+                >= 2
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::MainMenu);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+        assert!(!app.world().contains_resource::<CreditsTimeline>());
+        assert_eq!(
+            app.world_mut()
+                .query::<&AuthoredCreditsElement>()
+                .iter(app.world())
+                .count(),
+            0
         );
     }
 

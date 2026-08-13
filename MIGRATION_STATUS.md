@@ -12,7 +12,11 @@ mistaken for production-ready systems.
 - A Bevy 0.19/Rust 1.95 workspace split into domain, game, tools, migration, and
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
-  states, with state-scoped entity cleanup.
+  states, with state-scoped entity cleanup. A headless launch-through-credits
+  acceptance test now traverses the complete shipping state sequence, generates
+  a town, joins a Twitch viewer through the live command path, writes and reloads
+  a native save, enters the authored Credits timeline/fireworks, and verifies
+  world and Credits resources are released on exit.
 - Versioned player settings reproduce Unity's defaults and its saved video,
   audio, camera/input, autosave, name-display, and building-health preferences.
   The runtime imports the legacy `SettingsData.json` once when present, writes
@@ -640,9 +644,9 @@ mistaken for production-ready systems.
   capture, stable command injection, and rolling profiling controls are
   implemented; deeper ECS mutation remains intentionally outside the tool
   protocol.
-- Curated screenshot baselines, a launch-through-credits gameplay acceptance
-  suite, signed/notarized distribution, and a hosted Windows release. The
-  unsigned CI/local Windows archive and measured reference-machine 60 FPS gate
+- Curated screenshot baselines, signed/notarized distribution, and a hosted
+  Windows release. The headless launch-through-credits acceptance suite,
+  unsigned CI/local Windows archive, and measured reference-machine 60 FPS gate
   are now implemented.
 
 ## Validation
