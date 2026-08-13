@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786615653.8368015,
-    "ast_hash": "1427f7ac2f5951ecf4cb5e67e1d5a190",
+    "mtime": 1786617651.0096688,
+    "ast_hash": "cdb779efdc59af25434c6173a3c0bec1",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786616099.3813899,
-    "ast_hash": "169416fc1d54845dc0645bad228bcbce",
+    "mtime": 1786617912.6798415,
+    "ast_hash": "5cecceac5aa0f7f90aaea409caa72c7a",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2810,8 +2810,8 @@
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786616546.783408,
-    "ast_hash": "d299de5ea49bffb298d62bf7d21ec62f",
+    "mtime": 1786617698.7582748,
+    "ast_hash": "d216a1d86755b6bdb2d72407e49a7de3",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -3630,8 +3630,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
-    "mtime": 1786615684.9272509,
-    "ast_hash": "ca0acf4c97b3b71acc57bd80fb3b2936",
+    "mtime": 1786617710.2194257,
+    "ast_hash": "f65bc867d8e0278f3c0092f9ab3a3468",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/models.rs": {
@@ -4457,6 +4457,11 @@
   "graphify-out/memory/query_20260813_100155_unity_station_targetsensor_distance_range_generate.md": {
     "mtime": 1786615315.108449,
     "ast_hash": "05eea36fb32058b4d0cd3d36323a1f4e",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_102417_how_does_the_bevy_migration_reproduce_unity_target.md": {
+    "mtime": 1786616657.937158,
+    "ast_hash": "fc9204c9f82321ed84b4db7ac05171a3",
     "semantic_hash": ""
   }
 }

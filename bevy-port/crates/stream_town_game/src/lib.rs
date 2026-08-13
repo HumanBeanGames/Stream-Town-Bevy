@@ -6608,19 +6608,37 @@ fn effective_role_stats(
     })
 }
 
-fn role_action_range_cells(
+fn role_action_range_milli_cells(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     actor: &ActorState,
-) -> u16 {
+) -> u32 {
     if let Some(enemy) =
         actor_archetype(content, actor).and_then(|archetype| archetype.enemy.as_ref())
     {
-        return u16::try_from(enemy.action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX);
+        return enemy.action_range_milli_cells;
     }
-    effective_role_stats(content, simulation, actor).map_or(1, |stats| {
-        u16::try_from(stats.action_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
-    })
+    effective_role_stats(content, simulation, actor)
+        .map_or(1_000, |stats| stats.action_range_milli_cells)
+}
+
+fn within_milli_cell_range(left: GridPos, right: GridPos, range_milli_cells: u32) -> bool {
+    u128::from(grid_distance_squared(left, right)).saturating_mul(1_000_000)
+        <= u128::from(range_milli_cells).saturating_mul(u128::from(range_milli_cells))
+}
+
+fn within_actor_action_range(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &ActorState,
+    left: GridPos,
+    right: GridPos,
+) -> bool {
+    within_milli_cell_range(
+        left,
+        right,
+        role_action_range_milli_cells(content, simulation, actor),
+    )
 }
 
 fn is_combat_role(role: &StableId) -> bool {
@@ -7176,11 +7194,9 @@ fn next_agent_goal_with_reservations(
             .filter(|target| target.alive && target.role.as_str() == "role:enemy")
             .filter(|_| is_combat_role(&actor.role))
         {
-            let distance =
-                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
             return (
                 AgentGoal::Attack(target.id.clone()),
-                if distance <= role_action_range_cells(content, simulation, actor) {
+                if within_actor_action_range(content, simulation, actor, current, target.position) {
                     current
                 } else {
                     target.position
@@ -7197,11 +7213,9 @@ fn next_agent_goal_with_reservations(
             })
             .filter(|_| is_healer_role(&actor.role))
         {
-            let distance =
-                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
             return (
                 AgentGoal::Heal(target.id.clone()),
-                if distance <= role_action_range_cells(content, simulation, actor) {
+                if within_actor_action_range(content, simulation, actor, current, target.position) {
                     current
                 } else {
                     target.position
@@ -7277,11 +7291,9 @@ fn next_agent_goal_with_reservations(
                 target.id.clone(),
             )
         }) {
-            let distance =
-                target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
             return (
                 AgentGoal::Heal(target.id.clone()),
-                if distance <= role_action_range_cells(content, simulation, actor) {
+                if within_actor_action_range(content, simulation, actor, current, target.position) {
                     current
                 } else {
                     target.position
@@ -7298,8 +7310,7 @@ fn next_agent_goal_with_reservations(
                     .filter(|target| target.alive && target.role.as_str() != "role:enemy")
                     .map(|target| {
                         (
-                            target.position.x.abs_diff(current.x)
-                                + target.position.z.abs_diff(current.z),
+                            grid_distance_squared(target.position, current),
                             target.id.clone(),
                             target.position,
                         )
@@ -7325,7 +7336,7 @@ fn next_agent_goal_with_reservations(
                             current,
                         )?;
                         Some((
-                            approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
+                            grid_distance_squared(building_visual_grid(content, building), current),
                             building.id.clone(),
                             approach,
                         ))
@@ -7333,34 +7344,33 @@ fn next_agent_goal_with_reservations(
                     .min_by_key(|(distance, id, _)| (*distance, id.clone()))
             })
             .flatten();
-        let action_range = role_action_range_cells(content, simulation, actor);
         match (player_target, building_target) {
             (Some((player_distance, player, position)), Some((building_distance, _, _)))
                 if player_distance <= building_distance =>
             {
                 return (
                     AgentGoal::Attack(player),
-                    if player_distance <= action_range {
+                    if within_actor_action_range(content, simulation, actor, current, position) {
                         current
                     } else {
                         position
                     },
                 );
             }
-            (_, Some((distance, building, approach))) => {
+            (_, Some((_, building, approach))) => {
                 return (
                     AgentGoal::AttackBuilding(building),
-                    if distance <= action_range {
+                    if within_actor_action_range(content, simulation, actor, current, approach) {
                         current
                     } else {
                         approach
                     },
                 );
             }
-            (Some((distance, player, position)), None) => {
+            (Some((_, player, position)), None) => {
                 return (
                     AgentGoal::Attack(player),
-                    if distance <= action_range {
+                    if within_actor_action_range(content, simulation, actor, current, position) {
                         current
                     } else {
                         position
@@ -7386,13 +7396,12 @@ fn next_agent_goal_with_reservations(
         None
     };
     if let Some(target) = combat_target {
-        let distance =
-            target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z);
-        let destination = if distance <= role_action_range_cells(content, simulation, actor) {
-            current
-        } else {
-            target.position
-        };
+        let destination =
+            if within_actor_action_range(content, simulation, actor, current, target.position) {
+                current
+            } else {
+                target.position
+            };
         return (AgentGoal::Attack(target.id.clone()), destination);
     }
     if actor.role.as_str() == "role:builder" {
@@ -7716,8 +7725,13 @@ fn complete_agent_goal(
             let target_position = target.position;
             if !attacker.alive
                 || !target.alive
-                || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
-                    > role_action_range_cells(content, simulation, attacker)
+                || !within_actor_action_range(
+                    content,
+                    simulation,
+                    attacker,
+                    current,
+                    target.position,
+                )
             {
                 return None;
             }
@@ -7810,8 +7824,7 @@ fn complete_agent_goal(
                 || !target.alive
                 || target.role.as_str() == "role:enemy"
                 || target.health >= target.max_health
-                || target.position.x.abs_diff(current.x) + target.position.z.abs_diff(current.z)
-                    > role_action_range_cells(content, simulation, healer)
+                || !within_actor_action_range(content, simulation, healer, current, target.position)
             {
                 return None;
             }
@@ -9056,6 +9069,24 @@ fn animate_falling_fish(time: Res<Time>, mut fish: Query<(&FallingFish, &mut Tra
     }
 }
 
+fn best_tower_target(
+    simulation: &WorldSimulation,
+    centre: GridPos,
+    range_milli_cells: u32,
+) -> Option<&ActorState> {
+    simulation
+        .actors
+        .values()
+        .filter(|actor| actor.alive && actor.role.as_str() == "role:enemy")
+        .filter(|actor| within_milli_cell_range(actor.position, centre, range_milli_cells))
+        .min_by_key(|actor| {
+            (
+                grid_distance_squared(actor.position, centre),
+                actor.id.clone(),
+            )
+        })
+}
+
 fn update_tower_shooters(
     mut commands: Commands,
     time: Res<Time>,
@@ -9088,23 +9119,7 @@ fn update_tower_shooters(
             x: state.position.x.saturating_add(footprint[0] / 2),
             z: state.position.z.saturating_add(footprint[1] / 2),
         };
-        let range_cells = shooter.range_milli_cells.div_ceil(1_000);
-        let Some(target) = simulation
-            .0
-            .actors
-            .values()
-            .filter(|actor| actor.alive && actor.role.as_str() == "role:enemy")
-            .filter(|actor| {
-                u32::from(actor.position.x.abs_diff(centre.x))
-                    + u32::from(actor.position.z.abs_diff(centre.z))
-                    <= range_cells
-            })
-            .min_by_key(|actor| {
-                (
-                    actor.position.x.abs_diff(centre.x) + actor.position.z.abs_diff(centre.z),
-                    actor.id.clone(),
-                )
-            })
+        let Some(target) = best_tower_target(&simulation.0, centre, shooter.range_milli_cells)
         else {
             continue;
         };
@@ -19192,6 +19207,30 @@ mod tests {
     }
 
     #[test]
+    fn action_ranges_and_tower_acquisition_are_euclidean() {
+        let centre = GridPos { x: 20, z: 20 };
+        let diagonal = GridPos { x: 23, z: 24 };
+        assert!(within_milli_cell_range(diagonal, centre, 5_000));
+        assert!(!within_milli_cell_range(diagonal, centre, 4_999));
+
+        let axis_id = StableId::new("actor:tower_axis_enemy").unwrap();
+        let diagonal_id = StableId::new("actor:tower_diagonal_enemy").unwrap();
+        let mut simulation = WorldSimulation::new(1);
+        assert!(simulation.join_player(axis_id.clone(), GridPos { x: 26, z: 20 }));
+        assert!(simulation.join_player(diagonal_id.clone(), GridPos { x: 24, z: 24 }));
+        for actor in [&axis_id, &diagonal_id] {
+            simulation
+                .assign_role(actor, StableId::new("role:enemy").unwrap())
+                .unwrap();
+        }
+        assert_eq!(
+            best_tower_target(&simulation, centre, 10_000).map(|actor| &actor.id),
+            Some(&diagonal_id),
+        );
+        assert!(best_tower_target(&simulation, centre, 5_000).is_none());
+    }
+
+    #[test]
     fn combat_and_healing_bypass_station_target_caches() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -20445,12 +20484,14 @@ mod tests {
         let blargul = blargul.as_ref().unwrap();
         assert_eq!(blargul.action_amount, 5);
         assert_eq!(blargul.action_milliseconds, 3_000);
-        assert_eq!(blargul.action_range_milli_cells, 10_000);
+        assert_eq!(blargul.action_range_milli_cells, 5_000);
 
         let enemy_id = StableId::new("actor:enemy_authored_test").unwrap();
         let player_id = StableId::new("actor:player_authored_test").unwrap();
         let enemy_position = GridPos { x: 30, z: 30 };
-        let player_position = GridPos { x: 38, z: 30 };
+        // Blargul's authored 10-world-unit reach is five logical terrain
+        // cells after conversion, so keep the action fixture inside it.
+        let player_position = GridPos { x: 34, z: 30 };
         let mut simulation = WorldSimulation::new(world.seed);
         let gold = StableId::new("resource:gold").unwrap();
         simulation.town_resources.insert(gold.clone(), 0);
@@ -22397,7 +22438,7 @@ mod tests {
             Some("resource:wood")
         );
         let ranger = &content.roles[&StableId::new("role:ranger").unwrap()];
-        assert_eq!(ranger.base_action_range_milli_cells, 12_000);
+        assert_eq!(ranger.base_action_range_milli_cells, 6_000);
     }
 
     #[test]
@@ -22427,7 +22468,7 @@ mod tests {
         assert_eq!(stats.experience, 7);
         assert_eq!(stats.action_amount, 2);
         assert_eq!(stats.action_milliseconds, 980);
-        assert_eq!(stats.movement_speed_milli_cells_per_second, 3_200);
+        assert_eq!(stats.movement_speed_milli_cells_per_second, 1_600);
         assert_eq!(stats.carry_capacity, 18);
     }
 

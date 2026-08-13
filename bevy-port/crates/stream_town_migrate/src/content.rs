@@ -364,8 +364,11 @@ fn convert_export(
                     asset,
                     "ActionSpeedPerLevel",
                 )?,
-                base_action_range_milli_cells: required_milli(asset, "BaseActionRange")?,
-                action_range_milli_cells_per_level: required_milli(asset, "ActionRangePerLevel")?,
+                base_action_range_milli_cells: required_milli_cells(asset, "BaseActionRange")?,
+                action_range_milli_cells_per_level: required_milli_cells(
+                    asset,
+                    "ActionRangePerLevel",
+                )?,
                 base_health: required_u32(asset, "BaseHealth")?,
                 health_per_level_milli: required_milli(asset, "HealthPerLevel")?,
                 base_health_regen_per_second: required_i32(asset, "BaseHealthRegen")?,
@@ -378,11 +381,11 @@ fn convert_export(
                     asset,
                     "DamageReductionPerLevel",
                 )?,
-                base_movement_speed_milli_cells_per_second: required_milli(
+                base_movement_speed_milli_cells_per_second: required_milli_cells(
                     asset,
                     "BaseMovementSpeed",
                 )?,
-                movement_speed_milli_cells_per_second_per_level: required_milli(
+                movement_speed_milli_cells_per_second_per_level: required_milli_cells(
                     asset,
                     "MovementSpeedPerLevel",
                 )?,
@@ -853,17 +856,18 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
             .and_then(Value::as_f64)
             .with_context(|| format!("{} enemy field {path} is invalid", asset.path))
     };
-    let positive_milli = |component: &UnityComponent, path: &str| -> Result<u32> {
-        let value = number(component, path)?;
-        if !value.is_finite() || value <= 0.0 {
-            bail!("{} enemy field {path} must be positive", asset.path);
-        }
-        (value * 1_000.0)
-            .round()
-            .to_string()
-            .parse()
-            .with_context(|| format!("{} enemy field {path} is out of range", asset.path))
-    };
+    let positive_scaled_milli =
+        |component: &UnityComponent, path: &str, scale: f64| -> Result<u32> {
+            let value = number(component, path)?;
+            if !value.is_finite() || value <= 0.0 {
+                bail!("{} enemy field {path} must be positive", asset.path);
+            }
+            (value * scale)
+                .round()
+                .to_string()
+                .parse()
+                .with_context(|| format!("{} enemy field {path} is out of range", asset.path))
+        };
     let enemy_type = component_field_value(enemy, "_enemyType")
         .and_then(enum_name)
         .with_context(|| format!("{} enemy has no enemy type", asset.path))?;
@@ -899,10 +903,14 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
     Ok(Some(EnemyDef {
         enemy_type: stable_id("enemy", &slug(enemy_type))?,
         pool,
-        additional_health_milli_per_player: positive_milli(enemy, "_additionalHealthPerPlayer")?,
+        additional_health_milli_per_player: positive_scaled_milli(
+            enemy,
+            "_additionalHealthPerPlayer",
+            1_000.0,
+        )?,
         action_amount,
-        action_milliseconds: positive_milli(action, "_actionRate")?,
-        action_range_milli_cells: positive_milli(action, "_actionRange")?,
+        action_milliseconds: positive_scaled_milli(action, "_actionRate", 1_000.0)?,
+        action_range_milli_cells: positive_scaled_milli(action, "_actionRange", 500.0)?,
         kill_reward: ResourceReward {
             resource: stable_id("resource", &slug(reward_resource))?,
             amount: reward_amount,
@@ -2001,6 +2009,16 @@ fn required_f32(asset: &UnityAsset, path: &str) -> Result<f32> {
 }
 
 fn required_milli(asset: &UnityAsset, path: &str) -> Result<u32> {
+    required_scaled_milli(asset, path, 1_000.0)
+}
+
+fn required_milli_cells(asset: &UnityAsset, path: &str) -> Result<u32> {
+    // The shipping Unity terrain grid uses two world units per logical cell.
+    // Role ranges and movement speeds are authored in those world units.
+    required_scaled_milli(asset, path, 500.0)
+}
+
+fn required_scaled_milli(asset: &UnityAsset, path: &str, scale: f64) -> Result<u32> {
     let value = required_f64(asset, path)?;
     if !value.is_finite() || value < 0.0 {
         bail!(
@@ -2008,7 +2026,7 @@ fn required_milli(asset: &UnityAsset, path: &str) -> Result<u32> {
             asset.path
         );
     }
-    (value * 1000.0)
+    (value * scale)
         .round()
         .to_string()
         .parse()
@@ -2653,6 +2671,7 @@ mod tests {
         assert_eq!(converted.enemy_type.as_str(), "enemy:goblin");
         assert_eq!(converted.additional_health_milli_per_player, 200);
         assert_eq!(converted.action_milliseconds, 1_000);
+        assert_eq!(converted.action_range_milli_cells, 1_000);
         assert_eq!(
             converted.kill_reward,
             ResourceReward {
@@ -3223,12 +3242,13 @@ mod tests {
         assert_eq!(catalog.roles[&builder].action_amount_per_level_milli, 250);
         assert_eq!(
             catalog.roles[&builder].movement_speed_milli_cells_per_second_per_level,
-            50
+            25
         );
         assert_eq!(
             catalog.roles[&builder].base_movement_speed_milli_cells_per_second,
-            3_000
+            1_500
         );
+        assert_eq!(catalog.roles[&builder].base_action_range_milli_cells, 500);
         let town_hall = StableId::new("building:townhall").unwrap();
         assert_eq!(catalog.buildings[&town_hall].footprint, [4, 2]);
         assert!(catalog.buildings[&town_hall].can_level);
