@@ -16,7 +16,7 @@ use stream_town_domain::{
     AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef,
     PostProcessBloomDef, PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef,
     PostProcessProfileDef, PostProcessTonemapping, PostProcessVignetteDef,
-    PrefabChimneyEmitterBinding, PrefabPresentationBinding, PresentationCatalog,
+    PrefabChimneyEmitterBinding, PrefabPresentationBinding, PresentationCatalog, RainingFishVfxDef,
     RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding, StableId, TextureDef,
     TextureTransform,
 };
@@ -67,6 +67,7 @@ pub struct PresentationConversionReport {
     pub scene_fireworks_bindings: usize,
     pub chimney_smoke_effects: usize,
     pub prefab_chimney_emitters: usize,
+    pub raining_fish_effects: usize,
     pub outputs: Vec<String>,
 }
 
@@ -231,6 +232,7 @@ pub fn convert(
     let (post_process_profiles, scene_post_process) = convert_post_process(&export, &root)?;
     let (fireworks_effects, scene_fireworks) = convert_fireworks(&export, &root)?;
     let (chimney_smoke_effects, prefab_chimney_emitters) = convert_chimney_smoke(&export, &root)?;
+    let raining_fish_effects = convert_raining_fish(&export, &root)?;
     let mut clips = convert_clips(&export, &root)?;
     let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
@@ -245,7 +247,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 16,
+        schema_version: 17,
         textures,
         materials,
         clips,
@@ -261,6 +263,7 @@ pub fn convert(
         scene_fireworks,
         chimney_smoke_effects,
         prefab_chimney_emitters,
+        raining_fish_effects,
     };
     catalog
         .validate()
@@ -271,7 +274,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 16,
+        schema_version: 17,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -390,6 +393,7 @@ pub fn convert(
         scene_fireworks_bindings: catalog.scene_fireworks.values().map(Vec::len).sum(),
         chimney_smoke_effects: catalog.chimney_smoke_effects.len(),
         prefab_chimney_emitters: catalog.prefab_chimney_emitters.values().map(Vec::len).sum(),
+        raining_fish_effects: catalog.raining_fish_effects.len(),
         outputs: vec![
             normalized_path(&catalog_path),
             normalized_path(&report_path),
@@ -757,6 +761,134 @@ fn convert_chimney_smoke(
     Ok((effects, prefab_bindings))
 }
 
+fn convert_raining_fish(
+    export: &UnityExport,
+    unity_root: &Path,
+) -> Result<BTreeMap<StableId, RainingFishVfxDef>> {
+    const EFFECT_PATH: &str = "Assets/Prefabs/VFX/Environment/VFX_RainingFish.prefab";
+    let mut effects = BTreeMap::new();
+    let Some(asset) = export.assets.iter().find(|asset| asset.path == EFFECT_PATH) else {
+        return Ok(effects);
+    };
+    let source = unity_root.join(EFFECT_PATH);
+    let contents = fs::read_to_string(&source)
+        .with_context(|| format!("failed to read raining-fish prefab {}", source.display()))?;
+    let documents = parse_yaml_documents(&contents)?;
+    let particle = documents
+        .iter()
+        .find(|document| document.class_id == 198)
+        .context("raining-fish prefab has no ParticleSystem")?;
+    let transform = documents
+        .iter()
+        .find(|document| document.class_id == 4)
+        .context("raining-fish prefab has no Transform")?;
+    let renderer = documents
+        .iter()
+        .find(|document| document.class_id == 199)
+        .context("raining-fish prefab has no ParticleSystemRenderer")?;
+    let initial = yaml_section(&particle.lines, "InitialModule:")?;
+    let lifetime = yaml_section(initial, "startLifetime:")?;
+    let size = yaml_section(initial, "startSize:")?;
+    let gravity = yaml_section(initial, "gravityModifier:")?;
+    let shape = yaml_section(&particle.lines, "ShapeModule:")?;
+    let emission = yaml_section(&particle.lines, "EmissionModule:")?;
+    let rate = yaml_section(emission, "rateOverTime:")?;
+    let size_module = yaml_section(&particle.lines, "SizeModule:")?;
+    let size_curve = yaml_section(size_module, "curve:")?;
+    let size_max_curve = yaml_section(size_curve, "maxCurve:")?;
+    let noise = yaml_section(&particle.lines, "NoiseModule:")?;
+    let noise_strength = yaml_section(noise, "strength:")?;
+    let noise_strength_y = yaml_section(noise, "strengthY:")?;
+    let noise_strength_z = yaml_section(noise, "strengthZ:")?;
+    let noise_scroll = yaml_section(noise, "scrollSpeed:")?;
+    let collision = yaml_section(&particle.lines, "CollisionModule:")?;
+    let bounce = yaml_section(collision, "m_Bounce:")?;
+    let lifetime_loss = yaml_section(collision, "m_EnergyLossOnCollision:")?;
+    let material_guid = renderer
+        .lines
+        .iter()
+        .take_while(|line| !line.trim_start().starts_with("m_Mesh:"))
+        .find_map(|line| reference_guid(line))
+        .context("raining-fish renderer has no material GUID")?;
+    let model_guid = renderer
+        .lines
+        .iter()
+        .find(|line| line.trim_start().starts_with("m_Mesh:"))
+        .and_then(|line| reference_guid(line))
+        .context("raining-fish renderer has no mesh GUID")?;
+    let model_source = export
+        .assets
+        .iter()
+        .find(|candidate| candidate.guid == model_guid)
+        .map(|candidate| candidate.path.clone())
+        .with_context(|| format!("raining-fish mesh GUID {model_guid} is missing from export"))?;
+    let effect_id = particle_effect_id(&asset.guid)?;
+    effects.insert(
+        effect_id,
+        RainingFishVfxDef {
+            display_name: asset.name.clone(),
+            source_guid: asset.guid.clone(),
+            source_path: asset.path.clone(),
+            model_asset_path: glb_asset_path(&model_source),
+            model_source,
+            material: material_id(material_guid)?,
+            duration_seconds: required_particle_scalar_f32(
+                &particle.lines,
+                "lengthInSec:",
+                "duration",
+            )?,
+            emission_rate_per_second: required_particle_scalar_f32(
+                rate,
+                "scalar:",
+                "emission rate",
+            )?,
+            lifetime_seconds: required_particle_scalar_f32(lifetime, "scalar:", "lifetime")?,
+            start_size: [
+                required_particle_scalar_f32(size, "minScalar:", "minimum start size")?,
+                required_particle_scalar_f32(size, "scalar:", "maximum start size")?,
+            ],
+            gravity: required_particle_scalar_f32(gravity, "scalar:", "gravity")?,
+            max_particles: scalar(initial, "maxNumParticles:")
+                .and_then(|value| value.parse().ok())
+                .context("raining-fish particle has no maximum count")?,
+            emitter_position: inline_vec3(
+                scalar(&transform.lines, "m_LocalPosition:")
+                    .context("raining-fish transform has no local position")?,
+                [0.0; 3],
+            ),
+            shape_scale: inline_vec3(
+                scalar(shape, "m_Scale:").context("raining-fish shape has no scale")?,
+                [1.0; 3],
+            ),
+            shape_rotation_degrees: inline_vec3(
+                scalar(shape, "m_Rotation:").context("raining-fish shape has no rotation")?,
+                [0.0; 3],
+            ),
+            size_over_lifetime: yaml_float_keyframes(size_max_curve)?,
+            noise_strength: [
+                required_particle_scalar_f32(noise_strength, "scalar:", "noise strength X")?,
+                required_particle_scalar_f32(noise_strength_y, "scalar:", "noise strength Y")?,
+                required_particle_scalar_f32(noise_strength_z, "scalar:", "noise strength Z")?,
+            ],
+            noise_frequency: required_particle_scalar_f32(noise, "frequency:", "noise frequency")?,
+            noise_scroll_speed: required_particle_scalar_f32(
+                noise_scroll,
+                "scalar:",
+                "noise scroll speed",
+            )?,
+            collision_bounce: required_particle_scalar_f32(bounce, "scalar:", "collision bounce")?,
+            collision_lifetime_loss: required_particle_scalar_f32(
+                lifetime_loss,
+                "scalar:",
+                "collision lifetime loss",
+            )?,
+            world_space: scalar(&particle.lines, "moveWithTransform:") == Some("1"),
+            prewarm: scalar(&particle.lines, "prewarm:") == Some("1"),
+        },
+    );
+    Ok(effects)
+}
+
 fn yaml_section<'a>(lines: &'a [String], key: &str) -> Result<&'a [String]> {
     let start = lines
         .iter()
@@ -776,12 +908,60 @@ fn required_scalar_f32(lines: &[String], key: &str, field: &str) -> Result<f32> 
     scalar_f32(lines, key).with_context(|| format!("chimney particle has no {field}"))
 }
 
+fn required_particle_scalar_f32(lines: &[String], key: &str, field: &str) -> Result<f32> {
+    scalar_f32(lines, key).with_context(|| format!("particle has no {field}"))
+}
+
 fn yaml_keyframe_values(lines: &[String]) -> Vec<f32> {
     lines
         .iter()
         .filter_map(|line| line.trim().strip_prefix("value: "))
         .filter_map(|value| value.parse().ok())
         .collect()
+}
+
+fn yaml_float_keyframes(lines: &[String]) -> Result<Vec<AnimationFloatKeyframe>> {
+    let mut keys = Vec::new();
+    let mut pending = None;
+    let finish = |keys: &mut Vec<AnimationFloatKeyframe>, pending: &mut Option<_>| {
+        if let Some(key) = pending.take() {
+            keys.push(key);
+        }
+    };
+    for line in lines {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("time: ") {
+            finish(&mut keys, &mut pending);
+            pending = Some(AnimationFloatKeyframe {
+                time: value.parse()?,
+                value: 0.0,
+                in_slope: AnimationTangent::Finite(0.0),
+                out_slope: AnimationTangent::Finite(0.0),
+                tangent_mode: 0,
+                weighted_mode: 0,
+                in_weight: 0.0,
+                out_weight: 0.0,
+            });
+        } else if let Some(key) = pending.as_mut() {
+            if let Some(value) = trimmed.strip_prefix("value: ") {
+                key.value = value.parse()?;
+            } else if let Some(value) = trimmed.strip_prefix("inSlope: ") {
+                key.in_slope = parse_tangent(value)?;
+            } else if let Some(value) = trimmed.strip_prefix("outSlope: ") {
+                key.out_slope = parse_tangent(value)?;
+            } else if let Some(value) = trimmed.strip_prefix("tangentMode: ") {
+                key.tangent_mode = value.parse()?;
+            } else if let Some(value) = trimmed.strip_prefix("weightedMode: ") {
+                key.weighted_mode = value.parse()?;
+            } else if let Some(value) = trimmed.strip_prefix("inWeight: ") {
+                key.in_weight = value.parse()?;
+            } else if let Some(value) = trimmed.strip_prefix("outWeight: ") {
+                key.out_weight = value.parse()?;
+            }
+        }
+    }
+    finish(&mut keys, &mut pending);
+    Ok(keys)
 }
 
 fn hierarchy_age(path: &str) -> Result<u8> {
@@ -991,6 +1171,14 @@ fn inline_vec2(value: &str, fallback: [f32; 2]) -> [f32; 2] {
     [
         inline_component(value, "x").unwrap_or(fallback[0]),
         inline_component(value, "y").unwrap_or(fallback[1]),
+    ]
+}
+
+fn inline_vec3(value: &str, fallback: [f32; 3]) -> [f32; 3] {
+    [
+        inline_component(value, "x").unwrap_or(fallback[0]),
+        inline_component(value, "y").unwrap_or(fallback[1]),
+        inline_component(value, "z").unwrap_or(fallback[2]),
     ]
 }
 
@@ -3319,6 +3507,46 @@ MonoBehaviour:
             hierarchy_age("Age02_Forge/Base/VFX_Chimney_Smoke").unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn parses_authored_raining_fish_particle_sections() {
+        let contents = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../Assets/Prefabs/VFX/Environment/VFX_RainingFish.prefab"),
+        )
+        .unwrap();
+        let documents = parse_yaml_documents(&contents).unwrap();
+        let particle = documents
+            .iter()
+            .find(|document| document.class_id == 198)
+            .unwrap();
+        let initial = yaml_section(&particle.lines, "InitialModule:").unwrap();
+        let lifetime = yaml_section(initial, "startLifetime:").unwrap();
+        let size = yaml_section(initial, "startSize:").unwrap();
+        let shape = yaml_section(&particle.lines, "ShapeModule:").unwrap();
+        let emission = yaml_section(&particle.lines, "EmissionModule:").unwrap();
+        let rate = yaml_section(emission, "rateOverTime:").unwrap();
+        let size_module = yaml_section(&particle.lines, "SizeModule:").unwrap();
+        let curve = yaml_section(size_module, "curve:").unwrap();
+        let max_curve = yaml_section(curve, "maxCurve:").unwrap();
+        let keys = yaml_float_keyframes(max_curve).unwrap();
+        assert_eq!(scalar_f32(&particle.lines, "lengthInSec:"), Some(15.0));
+        assert_eq!(scalar_f32(lifetime, "scalar:"), Some(15.0));
+        assert_eq!(scalar_f32(size, "minScalar:"), Some(0.2));
+        assert_eq!(scalar_f32(size, "scalar:"), Some(1.0));
+        assert_eq!(scalar_f32(rate, "scalar:"), Some(500.0));
+        assert_eq!(scalar_f32(initial, "maxNumParticles:"), Some(5_000.0));
+        assert!(
+            inline_vec3(scalar(shape, "m_Scale:").unwrap(), [0.0; 3])
+                .into_iter()
+                .zip([300.0, 300.0, 5.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert_eq!(keys.len(), 3);
+        assert!((keys[1].time - 0.876_676_3).abs() < f32::EPSILON);
+        assert!((keys[1].value - 0.860_819_2).abs() < f32::EPSILON);
+        assert_eq!(keys.last().map(|key| key.value), Some(0.0));
     }
 
     #[test]

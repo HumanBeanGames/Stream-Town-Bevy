@@ -597,12 +597,20 @@ launches rockets, delayed flashes, and radial sparks instead of displaying the
 earlier text-glyph placeholder. The scene's authored bottom-right `SKIP` button
 uses the packaged sliced `UI_Button` art and returns to the Main Menu through the
 same state transition and cleanup path as Escape.
-Presentation schema 16 also converts the reachable `VFX_Chimney_Smoke`
+Presentation schema 17 also converts the reachable `VFX_Chimney_Smoke`
 particle prefab and all seven authored placements across House, Forge,
 Stonemason, Barracks, and Fishing Hut models. Completed buildings emit
 deterministic local-space smoke from the exact age-specific chimney locations,
 using Unity's five-particles-per-second rate, five-second lifetime, cone, size,
 color, and fade settings; incomplete or destroyed buildings do not emit.
+The Fish God event's `VFX_RainingFish` built-in mesh particle system is also
+converted rather than approximated by cubes: the catalog retains its Fish3
+model and Critters material, 500-per-second authored emission, 15-second
+lifetime, 0.2-1.0 size range and size curve, 300x300x5 box, gravity, noise,
+bounce, collision lifetime loss, prewarm, and 5,000-particle ceiling. The Bevy
+renderer deterministically samples that logical effect into a 320-fish visual
+budget, preserving the authored coverage and timing while keeping the 300-agent
+performance gate bounded.
 Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
 stacked built-in planes directly in Bevy. A typed WGSL material consumes its
 authored texture and exact dual world-space time offsets, cutoff, tint, and

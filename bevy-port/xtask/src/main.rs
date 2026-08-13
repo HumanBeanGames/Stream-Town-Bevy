@@ -520,7 +520,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (16, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
+    ) != (17, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || embedded_animation_clips != 122
         || (blend_states, inferred_parameters) != (11, 2)
@@ -551,6 +551,7 @@ fn validate() -> Result<()> {
             .map(Vec::len)
             .sum::<usize>()
             != 7
+        || presentation.raining_fish_effects.len() != 1
         || presentation
             .avatar_masks
             .values()

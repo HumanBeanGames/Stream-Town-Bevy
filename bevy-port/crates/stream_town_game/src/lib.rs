@@ -60,7 +60,7 @@ use stream_town_domain::{
     GeneratedWorld, GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode,
     MaterialDef, NameDisplayMode, NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings,
     PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
-    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
+    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
     RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
     StationDef, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, Weather,
     WorldSimulation, WorldSnapshot, generate_world_with_content,
@@ -80,6 +80,8 @@ const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98f
 const PING_POINTER_MODEL_MIN_Y: f32 = 851.829_35;
 const PING_POINTER_MODEL_HEIGHT: f32 = 314.468_26;
 const FISH_GOD_EXIT_DELAY_SECONDS: f32 = 2.5;
+const RAINING_FISH_PREFAB_SUFFIX: &str = "VFX/Environment/VFX_RainingFish.prefab";
+const RAINING_FISH_RENDER_BUDGET: usize = 320;
 const SELECTION_MASK_MATERIAL_ID: &str = "material:631afbf4de8b7ad4eabc5e30e0b2c778";
 #[cfg(test)]
 const SELECTION_MASK_TEXTURE_PATH: &str = "Assets/Textures/SelectionMask.png";
@@ -1478,9 +1480,21 @@ struct FishGodExitTriggerSent;
 
 #[derive(Component)]
 struct FallingFish {
-    floor_height: f32,
-    top_height: f32,
-    fall_speed: f32,
+    effect: StableId,
+    sequence: u32,
+    velocity: Vec3,
+    angular_velocity: Vec3,
+    age_seconds: f32,
+    lifetime_seconds: f32,
+    base_scale: f32,
+    collision_count: u8,
+}
+
+#[derive(Component)]
+struct FallingFishEmitter {
+    effect: StableId,
+    emission_remainder: f32,
+    sequence: u32,
 }
 
 #[derive(Component)]
@@ -2083,7 +2097,8 @@ impl Plugin for StreamTownGamePlugin {
                     sync_fish_god_presentation
                         .after(update_enemy_encounters)
                         .after(process_injected_commands),
-                    animate_falling_fish.after(sync_fish_god_presentation),
+                    emit_falling_fish.after(sync_fish_god_presentation),
+                    animate_falling_fish.after(emit_falling_fish),
                     drive_fish_god_exit
                         .after(sync_fish_god_presentation)
                         .before(drive_converted_animations),
@@ -11565,45 +11580,284 @@ fn sync_fish_god_presentation(
                 .with_scale(Vec3::splat(scale)),
         ));
     }
-    for index in 0..48_u32 {
-        let x = f32::from(u16::try_from(index % 8).unwrap_or(0)) - 3.5;
-        let z = f32::from(u16::try_from(index / 8).unwrap_or(0)) - 2.5;
-        let top_height = position.y
-            + config.0.world.cell_size * (3.0 + f32::from(u16::try_from(index % 5).unwrap_or(0)));
-        let floor_height = position.y + config.0.world.cell_size * 0.15;
+    if let Some((effect, _)) = raining_fish_effect(&presentation.0) {
         commands.spawn((
+            Name::new("VFX_RainingFish (Unity parity)"),
             WorldEntity,
             FishGodPresentation,
-            FallingFish {
-                floor_height,
-                top_height,
-                fall_speed: config.0.world.cell_size
-                    * (2.0 + f32::from(u16::try_from(index % 3).unwrap_or(0)) * 0.4),
+            FallingFishEmitter {
+                effect: effect.clone(),
+                emission_remainder: 0.0,
+                sequence: 0,
             },
-            Mesh3d(render.cube.clone()),
-            MeshMaterial3d(render.food.clone()),
-            Transform::from_xyz(
-                position.x + x * config.0.world.cell_size * 1.4,
-                top_height,
-                position.z + z * config.0.world.cell_size * 1.4,
-            )
-            .with_scale(Vec3::new(
-                config.0.world.cell_size * 0.25,
-                config.0.world.cell_size * 0.12,
-                config.0.world.cell_size * 0.5,
-            )),
+            Transform::default(),
         ));
     }
 }
 
-fn animate_falling_fish(time: Res<Time>, mut fish: Query<(&FallingFish, &mut Transform)>) {
-    for (fish, mut transform) in &mut fish {
-        transform.translation.y -= fish.fall_speed * time.delta_secs();
-        if transform.translation.y <= fish.floor_height {
-            transform.translation.y = fish.top_height;
+fn raining_fish_effect(
+    presentation: &PresentationCatalog,
+) -> Option<(&StableId, &RainingFishVfxDef)> {
+    presentation
+        .raining_fish_effects
+        .iter()
+        .find(|(_, effect)| effect.source_path.ends_with(RAINING_FISH_PREFAB_SUFFIX))
+}
+
+fn emit_falling_fish(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    world: Res<WorldRuntime>,
+    mut emitters: Query<&mut FallingFishEmitter>,
+    existing: Query<(), With<FallingFish>>,
+) {
+    let mut visible_count = existing.iter().count();
+    for mut emitter in &mut emitters {
+        let Some(effect) = presentation.0.raining_fish_effects.get(&emitter.effect) else {
+            continue;
+        };
+        let available = RAINING_FISH_RENDER_BUDGET.saturating_sub(visible_count);
+        if available == 0 {
+            continue;
         }
-        transform.rotate_y(time.delta_secs() * 2.5);
+        let prewarm_count = if emitter.sequence == 0 && effect.prewarm {
+            available
+        } else {
+            0
+        };
+        let render_budget =
+            u16::try_from(RAINING_FISH_RENDER_BUDGET).expect("raining-fish render budget fits u16");
+        let representative_rate = effect.emission_rate_per_second * f32::from(render_budget)
+            / f32::from(effect.max_particles);
+        emitter.emission_remainder += representative_rate * time.delta_secs();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let emitted = emitter.emission_remainder.floor() as usize;
+        emitter.emission_remainder -=
+            f32::from(u16::try_from(emitted).expect("bounded raining-fish emission fits u16"));
+        let spawn_count = prewarm_count.max(emitted.min(available));
+        for index in 0..spawn_count {
+            let sequence = emitter.sequence;
+            emitter.sequence = emitter.sequence.wrapping_add(1);
+            let initial_age = if prewarm_count > 0 {
+                effect.lifetime_seconds
+                    * f32::from(u16::try_from(index).expect("render budget index fits u16"))
+                    / f32::from(
+                        u16::try_from(prewarm_count).expect("raining-fish render budget fits u16"),
+                    )
+            } else {
+                0.0
+            };
+            spawn_falling_fish(
+                &mut commands,
+                effect,
+                sequence,
+                world.generated.seed,
+                initial_age,
+                &config.0,
+                &world.generated,
+                &render,
+                asset_server.as_deref(),
+                &asset_root.0,
+            );
+        }
+        visible_count += spawn_count;
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_falling_fish(
+    commands: &mut Commands,
+    effect: &RainingFishVfxDef,
+    sequence: u32,
+    world_seed: u64,
+    initial_age: f32,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    render: &RenderAssets,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+) {
+    let seed = falling_fish_seed(world_seed, sequence, 0);
+    let local_offset = Vec3::new(
+        (deterministic_unit(falling_fish_seed(world_seed, sequence, 1)) - 0.5)
+            * effect.shape_scale[0],
+        (deterministic_unit(falling_fish_seed(world_seed, sequence, 2)) - 0.5)
+            * effect.shape_scale[1],
+        (deterministic_unit(falling_fish_seed(world_seed, sequence, 3)) - 0.5)
+            * effect.shape_scale[2],
+    );
+    let shape_rotation = Quat::from_euler(
+        EulerRot::XYZ,
+        effect.shape_rotation_degrees[0].to_radians(),
+        effect.shape_rotation_degrees[1].to_radians(),
+        effect.shape_rotation_degrees[2].to_radians(),
+    );
+    let offset = shape_rotation * local_offset;
+    let size = deterministic_f32_range(
+        effect.start_size,
+        falling_fish_seed(world_seed, sequence, 4),
+    );
+    let mut particle = FallingFish {
+        effect: StableId::new(format!("particle_effect:{}", effect.source_guid))
+            .expect("converted effect GUID forms a stable ID"),
+        sequence,
+        velocity: Vec3::ZERO,
+        angular_velocity: Vec3::new(
+            1.2 + deterministic_unit(seed.rotate_left(7)) * 2.8,
+            0.8 + deterministic_unit(seed.rotate_left(13)) * 2.2,
+            1.0 + deterministic_unit(seed.rotate_left(19)) * 2.4,
+        ),
+        age_seconds: 0.0,
+        lifetime_seconds: effect.lifetime_seconds,
+        base_scale: size * 0.01,
+        collision_count: 0,
+    };
+    let mut transform =
+        Transform::from_translation(Vec3::from_array(effect.emitter_position) + offset)
+            .with_rotation(Quat::from_euler(
+                EulerRot::XYZ,
+                deterministic_unit(seed.rotate_left(3)) * std::f32::consts::TAU,
+                deterministic_unit(seed.rotate_left(11)) * std::f32::consts::TAU,
+                deterministic_unit(seed.rotate_left(23)) * std::f32::consts::TAU,
+            ))
+            .with_scale(Vec3::splat(particle.base_scale));
+    if initial_age > f32::EPSILON {
+        let mut remaining = initial_age;
+        while remaining > f32::EPSILON && particle.age_seconds < particle.lifetime_seconds {
+            let step = remaining.min(0.05);
+            advance_falling_fish(
+                effect,
+                &mut particle,
+                &mut transform,
+                world_seed,
+                sequence,
+                config,
+                world,
+                step,
+            );
+            remaining -= step;
+        }
+    }
+    let mut entity = commands.spawn((
+        Name::new("Raining fish"),
+        WorldEntity,
+        FishGodPresentation,
+        particle,
+        transform,
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
+    ));
+    let authored =
+        asset_server.filter(|_| converted_asset_exists(asset_root, &effect.model_asset_path));
+    let critter = render
+        .presentation_materials
+        .get(&effect.material)
+        .and_then(|material| match material {
+            ResolvedMaterialHandle::Critter(material) => Some(material.clone()),
+            _ => None,
+        });
+    if let (Some(server), Some(material)) = (authored, critter) {
+        entity.insert((
+            Mesh3d(
+                server.load(
+                    GltfAssetLabel::Primitive {
+                        mesh: 0,
+                        primitive: 0,
+                    }
+                    .from_asset(effect.model_asset_path.clone()),
+                ),
+            ),
+            MeshMaterial3d(material),
+        ));
+    } else {
+        entity.insert((
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.food.clone()),
+        ));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_falling_fish(
+    effect: &RainingFishVfxDef,
+    fish: &mut FallingFish,
+    transform: &mut Transform,
+    world_seed: u64,
+    sequence: u32,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    delta_seconds: f32,
+) {
+    fish.age_seconds += delta_seconds;
+    let phase = fish.age_seconds * effect.noise_scroll_speed * std::f32::consts::TAU;
+    let x_phase = phase
+        + deterministic_unit(falling_fish_seed(world_seed, sequence, 5)) * std::f32::consts::TAU;
+    let z_phase = phase
+        + deterministic_unit(falling_fish_seed(world_seed, sequence, 6)) * std::f32::consts::TAU;
+    fish.velocity.x +=
+        (x_phase * effect.noise_frequency).sin() * effect.noise_strength[0] * delta_seconds;
+    fish.velocity.z +=
+        (z_phase * effect.noise_frequency).cos() * effect.noise_strength[2] * delta_seconds;
+    fish.velocity.y +=
+        (x_phase * effect.noise_frequency).cos() * effect.noise_strength[1] * delta_seconds;
+    fish.velocity.y -= effect.gravity * 9.81 * delta_seconds;
+    transform.translation += fish.velocity * delta_seconds;
+    transform.rotate_local_x(fish.angular_velocity.x * delta_seconds);
+    transform.rotate_local_y(fish.angular_velocity.y * delta_seconds);
+    transform.rotate_local_z(fish.angular_velocity.z * delta_seconds);
+    if let Some(cell) = world_to_grid(transform.translation, config) {
+        let floor = terrain_height(world, cell);
+        if transform.translation.y <= floor && fish.velocity.y < 0.0 {
+            transform.translation.y = floor;
+            fish.velocity.y = -fish.velocity.y * effect.collision_bounce;
+            fish.age_seconds += fish.lifetime_seconds * effect.collision_lifetime_loss;
+            fish.collision_count = fish.collision_count.saturating_add(1);
+        }
+    }
+    let life = (fish.age_seconds / fish.lifetime_seconds).clamp(0.0, 1.0);
+    let scale = effect.size_multiplier(life).unwrap_or(1.0) * fish.base_scale;
+    transform.scale = Vec3::splat(scale.max(0.0));
+}
+
+fn animate_falling_fish(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    presentation: Res<RuntimePresentation>,
+    world: Res<WorldRuntime>,
+    mut fish: Query<(Entity, &mut FallingFish, &mut Transform)>,
+) {
+    for (entity, mut fish, mut transform) in &mut fish {
+        let Some(effect) = presentation.0.raining_fish_effects.get(&fish.effect) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let sequence = fish.sequence;
+        advance_falling_fish(
+            effect,
+            &mut fish,
+            &mut transform,
+            world.generated.seed,
+            sequence,
+            &config.0,
+            &world.generated,
+            time.delta_secs(),
+        );
+        if fish.age_seconds >= fish.lifetime_seconds {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn falling_fish_seed(world_seed: u64, sequence: u32, salt: u32) -> u32 {
+    let low = u32::try_from(world_seed & u64::from(u32::MAX)).expect("masked seed fits u32");
+    low.wrapping_add(sequence.wrapping_mul(0x9E37_79B9))
+        .wrapping_add(salt.wrapping_mul(0x85EB_CA6B))
 }
 
 fn drive_fish_god_exit(
@@ -27252,6 +27506,103 @@ mod tests {
     }
 
     #[test]
+    fn fish_god_rain_uses_converted_authored_mesh_particle_contract() {
+        let presentation = embedded_presentation();
+        let (id, effect) = raining_fish_effect(&presentation).unwrap();
+        assert_eq!(
+            id.as_str(),
+            "particle_effect:220b9325efc3ade41a3298ab568345ef"
+        );
+        assert_eq!(
+            effect.model_asset_path,
+            "migrated/models/Models/Critters/Critter_Fish3.glb"
+        );
+        assert_eq!(effect.material.as_str(), CRITTER_MATERIAL_ID);
+        assert!((effect.emission_rate_per_second - 500.0).abs() < f32::EPSILON);
+        assert!((effect.lifetime_seconds - 15.0).abs() < f32::EPSILON);
+        assert_eq!(effect.max_particles, 5_000);
+        assert!(
+            effect
+                .emitter_position
+                .into_iter()
+                .zip([0.0, 46.2, 0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            effect
+                .shape_scale
+                .into_iter()
+                .zip([300.0, 300.0, 5.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!((effect.collision_bounce - 0.5).abs() < f32::EPSILON);
+        assert!((effect.collision_lifetime_loss - 0.25).abs() < f32::EPSILON);
+        assert!(effect.prewarm && effect.world_space);
+        assert!(RAINING_FISH_RENDER_BUDGET < usize::from(effect.max_particles));
+        assert_eq!(effect.size_multiplier(1.0), Some(0.0));
+    }
+
+    #[test]
+    fn falling_fish_sampling_is_repeatable_and_sequence_sensitive() {
+        let first = (0..64)
+            .map(|sequence| falling_fish_seed(42, sequence, 3))
+            .collect::<Vec<_>>();
+        let repeated = (0..64)
+            .map(|sequence| falling_fish_seed(42, sequence, 3))
+            .collect::<Vec<_>>();
+        assert_eq!(first, repeated);
+        assert_eq!(first.iter().copied().collect::<BTreeSet<_>>().len(), 64);
+        assert_ne!(falling_fish_seed(42, 7, 3), falling_fish_seed(43, 7, 3));
+        assert_ne!(falling_fish_seed(42, 7, 3), falling_fish_seed(42, 7, 4));
+    }
+
+    #[test]
+    fn falling_fish_uses_authored_gravity_terrain_bounce_and_lifetime_loss() {
+        let config = GameConfig::default();
+        let world = generate_world(&config.world);
+        let presentation = embedded_presentation();
+        let (_, effect) = raining_fish_effect(&presentation).unwrap();
+        let cell = GridPos {
+            x: config.world.width / 2,
+            z: config.world.height / 2,
+        };
+        let floor = terrain_height(&world, cell);
+        let mut fish = FallingFish {
+            effect: StableId::new("particle_effect:test").unwrap(),
+            sequence: 7,
+            velocity: Vec3::new(0.0, -12.0, 0.0),
+            angular_velocity: Vec3::ZERO,
+            age_seconds: 2.0,
+            lifetime_seconds: effect.lifetime_seconds,
+            base_scale: 0.01,
+            collision_count: 0,
+        };
+        let mut transform = Transform::from_translation(
+            grid_to_world_on_surface(cell, &config, &world) + Vec3::Y * 0.01,
+        );
+        advance_falling_fish(
+            effect,
+            &mut fish,
+            &mut transform,
+            world.seed,
+            7,
+            &config,
+            &world,
+            0.05,
+        );
+        assert!((transform.translation.y - floor).abs() < f32::EPSILON);
+        assert!(fish.velocity.y > 0.0);
+        assert_eq!(fish.collision_count, 1);
+        let expected_age = 2.05 + effect.lifetime_seconds * effect.collision_lifetime_loss;
+        assert!((fish.age_seconds - expected_age).abs() < 0.000_01);
+        let expected_scale = effect
+            .size_multiplier(fish.age_seconds / fish.lifetime_seconds)
+            .unwrap()
+            * fish.base_scale;
+        assert!((transform.scale.x - expected_scale).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn save_restore_keeps_players_on_completed_gate_cells_only() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -29251,7 +29602,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 16);
+        assert_eq!(presentation.schema_version, 17);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.post_process_profiles.len(), 2);

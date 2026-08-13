@@ -374,7 +374,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters)",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters) / {} raining-fish effects",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state
@@ -408,7 +408,8 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 .prefab_chimney_emitters
                 .values()
                 .map(Vec::len)
-                .sum::<usize>()
+                .sum::<usize>(),
+            state.presentation.raining_fish_effects.len()
         ));
     });
     ui.separator();

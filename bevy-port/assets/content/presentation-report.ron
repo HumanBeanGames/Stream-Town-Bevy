@@ -1,5 +1,5 @@
 (
-    schema_version: 16,
+    schema_version: 17,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -36,6 +36,7 @@
     scene_fireworks_bindings: 2,
     chimney_smoke_effects: 1,
     prefab_chimney_emitters: 7,
+    raining_fish_effects: 1,
     outputs: [
         "assets/content/presentation.ron",
         "assets/content/presentation-report.ron",

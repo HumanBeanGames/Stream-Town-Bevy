@@ -47,8 +47,8 @@ pub use presentation::{
     PostProcessBloomDef, PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef,
     PostProcessProfileDef, PostProcessTonemapping, PostProcessVignetteDef,
     PrefabChimneyEmitterBinding, PrefabPresentationBinding, PresentationCatalog, PresentationError,
-    RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding, TextureDef,
-    TextureTransform,
+    RainingFishVfxDef, RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding,
+    TextureDef, TextureTransform,
 };
 pub use runtime_console::{
     CURRENT_RUNTIME_CONSOLE_SCHEMA, RuntimeConsoleAction, RuntimeConsoleRequest,

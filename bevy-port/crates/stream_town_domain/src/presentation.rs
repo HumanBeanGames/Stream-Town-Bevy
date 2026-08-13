@@ -47,6 +47,9 @@ pub struct PresentationCatalog {
     /// Chimney emitters keyed by the source building-prefab GUID.
     #[serde(default)]
     pub prefab_chimney_emitters: BTreeMap<String, Vec<PrefabChimneyEmitterBinding>>,
+    /// Reachable Fish God mesh-particle effect converted from Unity's built-in particle system.
+    #[serde(default)]
+    pub raining_fish_effects: BTreeMap<StableId, RainingFishVfxDef>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -103,6 +106,41 @@ pub struct PrefabChimneyEmitterBinding {
     pub effect: StableId,
     pub age: u8,
     pub local_position: [f32; 3],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RainingFishVfxDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub model_source: String,
+    pub model_asset_path: String,
+    pub material: StableId,
+    pub duration_seconds: f32,
+    pub emission_rate_per_second: f32,
+    pub lifetime_seconds: f32,
+    pub start_size: [f32; 2],
+    pub gravity: f32,
+    pub max_particles: u16,
+    pub emitter_position: [f32; 3],
+    pub shape_scale: [f32; 3],
+    pub shape_rotation_degrees: [f32; 3],
+    pub size_over_lifetime: Vec<AnimationFloatKeyframe>,
+    pub noise_strength: [f32; 3],
+    pub noise_frequency: f32,
+    pub noise_scroll_speed: f32,
+    pub collision_bounce: f32,
+    pub collision_lifetime_loss: f32,
+    pub world_space: bool,
+    pub prewarm: bool,
+}
+
+impl RainingFishVfxDef {
+    /// Samples the authored Unity size-over-lifetime curve at normalized particle age.
+    #[must_use]
+    pub fn size_multiplier(&self, normalized_age: f32) -> Option<f32> {
+        sample_float_keys(&self.size_over_lifetime, normalized_age.clamp(0.0, 1.0))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -295,60 +333,63 @@ impl AnimationPropertyCurve {
     /// Samples Unity's constant, unweighted Hermite, and weighted Bezier semantics.
     #[must_use]
     pub fn sample(&self, time: f32) -> Option<f32> {
-        let first = self.keys.first()?;
-        if time <= first.time {
-            return Some(first.value);
-        }
-        let last = self.keys.last()?;
-        if time >= last.time {
-            return Some(last.value);
-        }
-        let pair = self
-            .keys
-            .windows(2)
-            .find(|pair| time >= pair[0].time && time < pair[1].time)?;
-        let left = &pair[0];
-        let right = &pair[1];
-        if !left.out_slope.is_finite() || !right.in_slope.is_finite() {
-            return Some(left.value);
-        }
-        let duration = right.time - left.time;
-        if duration <= f32::EPSILON {
-            return Some(right.value);
-        }
-        let t = (time - left.time) / duration;
-        let out_weight = if left.weighted_mode & 2 != 0 {
-            left.out_weight
-        } else {
-            1.0 / 3.0
-        };
-        let in_weight = if right.weighted_mode & 1 != 0 {
-            right.in_weight
-        } else {
-            1.0 / 3.0
-        };
-        if left.weighted_mode & 2 != 0 || right.weighted_mode & 1 != 0 {
-            if out_weight <= f32::EPSILON && in_weight <= f32::EPSILON {
-                return Some(left.value + (right.value - left.value) * t);
-            }
-            let parameter = solve_weighted_curve_parameter(t, out_weight, in_weight);
-            return Some(cubic_bezier(
-                left.value,
-                left.value + left.out_slope.finite_value() * duration * out_weight,
-                right.value - right.in_slope.finite_value() * duration * in_weight,
-                right.value,
-                parameter,
-            ));
-        }
-        let t2 = t * t;
-        let t3 = t2 * t;
-        Some(
-            (2.0 * t3 - 3.0 * t2 + 1.0) * left.value
-                + (t3 - 2.0 * t2 + t) * duration * left.out_slope.finite_value()
-                + (-2.0 * t3 + 3.0 * t2) * right.value
-                + (t3 - t2) * duration * right.in_slope.finite_value(),
-        )
+        sample_float_keys(&self.keys, time)
     }
+}
+
+fn sample_float_keys(keys: &[AnimationFloatKeyframe], time: f32) -> Option<f32> {
+    let first = keys.first()?;
+    if time <= first.time {
+        return Some(first.value);
+    }
+    let last = keys.last()?;
+    if time >= last.time {
+        return Some(last.value);
+    }
+    let pair = keys
+        .windows(2)
+        .find(|pair| time >= pair[0].time && time < pair[1].time)?;
+    let left = &pair[0];
+    let right = &pair[1];
+    if !left.out_slope.is_finite() || !right.in_slope.is_finite() {
+        return Some(left.value);
+    }
+    let duration = right.time - left.time;
+    if duration <= f32::EPSILON {
+        return Some(right.value);
+    }
+    let t = (time - left.time) / duration;
+    let out_weight = if left.weighted_mode & 2 != 0 {
+        left.out_weight
+    } else {
+        1.0 / 3.0
+    };
+    let in_weight = if right.weighted_mode & 1 != 0 {
+        right.in_weight
+    } else {
+        1.0 / 3.0
+    };
+    if left.weighted_mode & 2 != 0 || right.weighted_mode & 1 != 0 {
+        if out_weight <= f32::EPSILON && in_weight <= f32::EPSILON {
+            return Some(left.value + (right.value - left.value) * t);
+        }
+        let parameter = solve_weighted_curve_parameter(t, out_weight, in_weight);
+        return Some(cubic_bezier(
+            left.value,
+            left.value + left.out_slope.finite_value() * duration * out_weight,
+            right.value - right.in_slope.finite_value() * duration * in_weight,
+            right.value,
+            parameter,
+        ));
+    }
+    let t2 = t * t;
+    let t3 = t2 * t;
+    Some(
+        (2.0 * t3 - 3.0 * t2 + 1.0) * left.value
+            + (t3 - 2.0 * t2 + t) * duration * left.out_slope.finite_value()
+            + (-2.0 * t3 + 3.0 * t2) * right.value
+            + (t3 - t2) * duration * right.in_slope.finite_value(),
+    )
 }
 
 fn solve_weighted_curve_parameter(time: f32, out_weight: f32, in_weight: f32) -> f32 {
@@ -781,10 +822,82 @@ pub enum PresentationError {
         hierarchy_path: String,
         reason: String,
     },
+    #[error("raining-fish effect {effect} is invalid: {reason}")]
+    InvalidRainingFishEffect { effect: StableId, reason: String },
+    #[error("raining-fish effect {effect} references missing material {material}")]
+    MissingRainingFishMaterial {
+        effect: StableId,
+        material: StableId,
+    },
 }
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (id, effect) in &self.raining_fish_effects {
+            if !self.materials.contains_key(&effect.material) {
+                return Err(PresentationError::MissingRainingFishMaterial {
+                    effect: id.clone(),
+                    material: effect.material.clone(),
+                });
+            }
+            let portable_path = |path: &str| {
+                !path.contains('\\') && !path.split('/').any(|component| component == "..")
+            };
+            let source_valid = effect.source_guid.len() == 32
+                && effect
+                    .source_guid
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                && effect.source_path.starts_with("Assets/")
+                && effect.model_source.starts_with("Assets/")
+                && effect.model_asset_path.starts_with("migrated/models/")
+                && portable_path(&effect.source_path)
+                && portable_path(&effect.model_source)
+                && portable_path(&effect.model_asset_path);
+            let finite_positive = |value: f32| value.is_finite() && value > 0.0;
+            let curve_valid = !effect.size_over_lifetime.is_empty()
+                && effect
+                    .size_over_lifetime
+                    .windows(2)
+                    .all(|pair| pair[1].time > pair[0].time)
+                && effect.size_over_lifetime.iter().all(|key| {
+                    key.time.is_finite()
+                        && key.value.is_finite()
+                        && key.value >= 0.0
+                        && key.in_slope.is_finite()
+                        && key.out_slope.is_finite()
+                        && key.in_weight.is_finite()
+                        && key.out_weight.is_finite()
+                });
+            let values_valid = finite_positive(effect.duration_seconds)
+                && finite_positive(effect.emission_rate_per_second)
+                && finite_positive(effect.lifetime_seconds)
+                && effect.start_size.into_iter().all(finite_positive)
+                && effect.start_size[1] >= effect.start_size[0]
+                && finite_positive(effect.gravity)
+                && effect.max_particles > 0
+                && effect
+                    .emitter_position
+                    .into_iter()
+                    .chain(effect.shape_rotation_degrees)
+                    .chain(effect.noise_strength)
+                    .all(f32::is_finite)
+                && effect.shape_scale.into_iter().all(finite_positive)
+                && finite_positive(effect.noise_frequency)
+                && effect.noise_scroll_speed.is_finite()
+                && effect.noise_scroll_speed >= 0.0
+                && effect.collision_bounce.is_finite()
+                && (0.0..=1.0).contains(&effect.collision_bounce)
+                && effect.collision_lifetime_loss.is_finite()
+                && (0.0..=1.0).contains(&effect.collision_lifetime_loss)
+                && curve_valid;
+            if !source_valid || !values_valid {
+                return Err(PresentationError::InvalidRainingFishEffect {
+                    effect: id.clone(),
+                    reason: "source metadata, mesh particle parameters, curve, noise, and collision must be portable and valid".into(),
+                });
+            }
+        }
         for (id, effect) in &self.chimney_smoke_effects {
             let source_valid = effect.source_guid.len() == 32
                 && effect
@@ -1830,6 +1943,84 @@ mod tests {
             dangling.validate(),
             Err(PresentationError::MissingChimneySmokeEffect { .. })
         ));
+    }
+
+    #[test]
+    fn validates_raining_fish_effect_and_samples_authored_size_curve() {
+        let material = StableId::new("material:fish").unwrap();
+        let effect_id = StableId::new("particle_effect:fish").unwrap();
+        let effect = RainingFishVfxDef {
+            display_name: "VFX_RainingFish".into(),
+            source_guid: "a".repeat(32),
+            source_path: "Assets/Prefabs/VFX/Environment/VFX_RainingFish.prefab".into(),
+            model_source: "Assets/Models/Critters/Critter_Fish3.fbx".into(),
+            model_asset_path: "migrated/models/Models/Critters/Critter_Fish3.glb".into(),
+            material: material.clone(),
+            duration_seconds: 15.0,
+            emission_rate_per_second: 500.0,
+            lifetime_seconds: 15.0,
+            start_size: [0.2, 1.0],
+            gravity: 9.8,
+            max_particles: 5_000,
+            emitter_position: [0.0, 46.2, 0.0],
+            shape_scale: [300.0, 300.0, 5.0],
+            shape_rotation_degrees: [-90.0, 0.0, 0.0],
+            size_over_lifetime: vec![
+                AnimationFloatKeyframe {
+                    time: 0.0,
+                    value: 1.0,
+                    in_slope: AnimationTangent::Finite(0.0),
+                    out_slope: AnimationTangent::Finite(0.0),
+                    tangent_mode: 0,
+                    weighted_mode: 0,
+                    in_weight: 0.0,
+                    out_weight: 0.0,
+                },
+                AnimationFloatKeyframe {
+                    time: 1.0,
+                    value: 0.0,
+                    in_slope: AnimationTangent::Finite(-2.0),
+                    out_slope: AnimationTangent::Finite(-2.0),
+                    tangent_mode: 0,
+                    weighted_mode: 0,
+                    in_weight: 0.0,
+                    out_weight: 0.0,
+                },
+            ],
+            noise_strength: [1.0, 0.02, 1.0],
+            noise_frequency: 0.13,
+            noise_scroll_speed: 0.15,
+            collision_bounce: 0.5,
+            collision_lifetime_loss: 0.25,
+            world_space: true,
+            prewarm: true,
+        };
+        let catalog = PresentationCatalog {
+            schema_version: 17,
+            materials: BTreeMap::from([(
+                material,
+                MaterialDef {
+                    display_name: "Fish".into(),
+                    source_guid: "b".repeat(32),
+                    source_path: "Assets/Materials/Fish.mat".into(),
+                    shader_source: None,
+                    base_color: [1.0; 4],
+                    emissive: [0.0; 4],
+                    metallic: 0.0,
+                    perceptual_roughness: 1.0,
+                    alpha_mode: MaterialAlphaMode::Opaque,
+                    textures: BTreeMap::new(),
+                    texture_transforms: BTreeMap::new(),
+                    custom_properties: BTreeMap::new(),
+                    custom_vectors: BTreeMap::new(),
+                },
+            )]),
+            raining_fish_effects: BTreeMap::from([(effect_id, effect.clone())]),
+            ..PresentationCatalog::default()
+        };
+        assert_eq!(catalog.validate(), Ok(()));
+        assert_eq!(effect.size_multiplier(0.0), Some(1.0));
+        assert_eq!(effect.size_multiplier(1.0), Some(0.0));
     }
 
     #[test]
