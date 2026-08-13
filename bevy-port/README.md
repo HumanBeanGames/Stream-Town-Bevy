@@ -309,6 +309,10 @@ trigger, and retains the Jump exit for the authored 2.5-second removal delay.
 Initial actors are
 placed by a deterministic flood fill from the connected town centre so combat
 and work targets are reachable rather than stranded on isolated land cells.
+Their visible roots also reproduce the reachable `RotationHandler` contract:
+movement turns smoothly at the authored five-radians-per-second rate, action
+states face their actor, resource, or building target, and gathering keeps
+Unity's explicit immediate snap toward the resource.
 
 The vertical slice renders the deterministic navigation height field as a colored
 4,225-vertex terrain mesh, a water surface at the authored level, an Avian

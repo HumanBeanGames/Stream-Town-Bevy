@@ -195,6 +195,7 @@ const PET_CLOSEST_DISTANCE: f32 = 1.0;
 const PET_MAX_DISTANCE: f32 = 5.0;
 const PET_MAX_MOVE_SPEED: f32 = 10.0;
 const PET_ROTATION_SPEED: f32 = 5.0;
+const AGENT_ROTATION_SPEED: f32 = 5.0;
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -9747,6 +9748,53 @@ fn agent_path(
     path.unwrap_or_else(|_| vec![start])
 }
 
+fn agent_action_facing_grid(
+    goal: &AgentGoal,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+) -> Option<GridPos> {
+    match goal {
+        AgentGoal::Gather(resource) => world
+            .resources
+            .iter()
+            .find(|candidate| candidate.id == *resource && candidate.amount > 0)
+            .map(|resource| resource.position),
+        AgentGoal::HarvestFarm(building)
+        | AgentGoal::AttackBuilding(building)
+        | AgentGoal::Construct(building) => simulation
+            .buildings
+            .get(building)
+            .map(|building| building_visual_grid(content, building)),
+        AgentGoal::Attack(actor) | AgentGoal::Heal(actor) => {
+            simulation.actors.get(actor).map(|actor| actor.position)
+        }
+        AgentGoal::Deposit | AgentGoal::Wander => None,
+    }
+}
+
+fn rotate_agent_toward(transform: &mut Transform, target: Vec3, delta_seconds: f32, snap: bool) {
+    let direction = Vec3::new(
+        target.x - transform.translation.x,
+        0.0,
+        target.z - transform.translation.z,
+    );
+    if direction.length_squared() <= f32::EPSILON {
+        return;
+    }
+    let target_rotation = Transform::default()
+        .looking_to(direction.normalize(), Vec3::Y)
+        .rotation;
+    transform.rotation = if snap {
+        target_rotation
+    } else {
+        transform.rotation.slerp(
+            target_rotation,
+            (delta_seconds * AGENT_ROTATION_SPEED).clamp(0.0, 1.0),
+        )
+    };
+}
+
 fn move_agents(
     mut commands: Commands,
     time: Res<Time>,
@@ -10144,6 +10192,21 @@ fn move_agents(
             }
         } else {
             transform.translation += distance.normalize_or_zero() * step;
+        }
+        let action_target = (!agent_is_moving(&agent))
+            .then(|| {
+                agent_action_facing_grid(&agent.goal, &content.0, &simulation.0, &world.generated)
+            })
+            .flatten();
+        let facing_grid = action_target.or_else(|| agent.path.get(agent.path_index).copied());
+        if let Some(facing_grid) = facing_grid {
+            let facing_target = grid_to_world_on_surface(facing_grid, &config.0, &world.generated);
+            rotate_agent_toward(
+                &mut transform,
+                facing_target,
+                time.delta_secs(),
+                action_target.is_some_and(|_| matches!(agent.goal, AgentGoal::Gather(_))),
+            );
         }
     }
 }
@@ -24864,6 +24927,46 @@ mod tests {
         // Unity's Quaternion.Slerp uses delta * rotation speed, so a 100 ms
         // update rotates halfway toward the owner rather than snapping.
         assert!(far.forward().dot(Vec3::X) > 0.7);
+    }
+
+    #[test]
+    fn agent_facing_matches_unity_rotation_and_action_targets() {
+        let mut smooth = Transform::default();
+        rotate_agent_toward(&mut smooth, Vec3::X * 4.0, 0.1, false);
+        assert!(smooth.forward().dot(Vec3::X) > 0.7);
+        assert!(smooth.forward().dot(Vec3::X) < 0.999);
+
+        let mut snapped = Transform::default();
+        rotate_agent_toward(&mut snapped, Vec3::X * 4.0, 0.1, true);
+        assert!(snapped.forward().dot(Vec3::X) > 0.999);
+
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let mut simulation = WorldSimulation::new(world.seed);
+        let actor_id = StableId::new("npc:facing_actor").unwrap();
+        let target_id = StableId::new("npc:facing_target").unwrap();
+        assert!(simulation.join_player(actor_id, GridPos { x: 4, z: 4 }));
+        assert!(simulation.join_player(target_id.clone(), GridPos { x: 9, z: 7 }));
+        assert_eq!(
+            agent_action_facing_grid(&AgentGoal::Heal(target_id), &content, &simulation, &world,),
+            Some(GridPos { x: 9, z: 7 })
+        );
+
+        let resource = world
+            .resources
+            .iter()
+            .find(|resource| resource.amount > 0)
+            .unwrap();
+        assert_eq!(
+            agent_action_facing_grid(
+                &AgentGoal::Gather(resource.id.clone()),
+                &content,
+                &simulation,
+                &world,
+            ),
+            Some(resource.position)
+        );
     }
 
     #[test]

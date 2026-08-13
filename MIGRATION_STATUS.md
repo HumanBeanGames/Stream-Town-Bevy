@@ -549,6 +549,11 @@ mistaken for production-ready systems.
   514 post-warmup frames with 457 generated foliage instances and the
   depth-aware 81×81 water surface on the documented
   reference machine.
+- Reachable unit facing now follows Unity's `RotationHandler`: agents slerp
+  toward travel or actor/building action targets at the prefab's authored five
+  radians per second, while gathering preserves its explicit immediate snap to
+  the resource. Facing remains presentation-only and does not enter stable save
+  state or deterministic navigation hashes.
 - Live pets now reproduce the shipping `Pet.Update` follow behavior with the
   authored distance-squared speed remap, 10-unit cap, and five-radians-per-
   second smoothed facing. Red Panda, Giraffe, Duck, and Butterfly resolve their
