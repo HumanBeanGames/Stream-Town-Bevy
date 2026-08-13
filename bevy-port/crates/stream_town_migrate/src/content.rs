@@ -302,7 +302,6 @@ fn convert_export(
                 role_slots: role_slot_contributions(prefab)?,
                 model_handlers: building_model_definitions(prefab)?,
                 storage_models: storage_model_definitions(prefab)?,
-                rotating_nodes: rotating_node_definitions(prefab)?,
                 passive_resources: passive_resource_contributions(prefab)?,
                 station: station_definition(prefab)?,
                 targeting: targeting_score_definition(prefab)?,
@@ -509,7 +508,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 4,
+        schema_version: 5,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -550,9 +549,9 @@ fn convert_export(
             .map(|building| building.storage_models.len())
             .sum(),
         rotating_nodes: catalog
-            .buildings
+            .archetypes
             .values()
-            .map(|building| building.rotating_nodes.len())
+            .map(|archetype| archetype.rotating_nodes.len())
             .sum(),
         passive_resource_generators: catalog
             .buildings
@@ -1426,6 +1425,7 @@ fn convert_archetypes(
             scenes,
             component_types,
             disable_after_milliseconds: disable_after_milliseconds(asset)?,
+            rotating_nodes: rotating_node_definitions(asset)?,
             target_size_milli_cells: targetable_size_milli_cells(asset)?,
             health: health_definition(asset)?,
             enemy: enemy_definition(asset, pools)?,
@@ -1785,7 +1785,14 @@ fn rotating_node_definitions(asset: &UnityAsset) -> Result<Vec<RotatingNodeDef>>
             .with_context(|| format!("{} rotating node {node} has invalid speed", asset.path))?;
         #[allow(clippy::cast_possible_truncation)]
         nodes.push(RotatingNodeDef {
-            age: building_node_age(asset, &node)?,
+            hierarchy_path: component.hierarchy_path.clone(),
+            age: if node.contains("Age01") {
+                Some(1)
+            } else if node.contains("Age02") {
+                Some(2)
+            } else {
+                None
+            },
             node,
             axis: [axis[0] as f32, axis[1] as f32, axis[2] as f32],
             degrees_per_second: degrees_per_second as f32,
@@ -3652,10 +3659,12 @@ mod tests {
                 full_model: "Age01_TownHall_Full".to_owned(),
             }]
         );
+        let town_hall_archetype = &catalog.archetypes[&catalog.buildings[&town_hall].archetype];
         assert_eq!(
-            catalog.buildings[&town_hall].rotating_nodes,
+            town_hall_archetype.rotating_nodes,
             vec![RotatingNodeDef {
-                age: 1,
+                hierarchy_path: "Age01_TownHall/Age01_TownHall_Base/Age01_TownHall_Sign".to_owned(),
+                age: Some(1),
                 node: "Age01_TownHall_Sign".to_owned(),
                 axis: [0.0, 1.0, 0.0],
                 degrees_per_second: 35.0,

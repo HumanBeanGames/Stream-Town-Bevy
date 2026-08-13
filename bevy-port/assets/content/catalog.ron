@@ -1,5 +1,5 @@
 (
-    schema_version: 27,
+    schema_version: 28,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -47,6 +47,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 3000,
             health: Some((
                 max_health: 150,
@@ -98,6 +99,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 3000,
             health: Some((
                 max_health: 150,
@@ -150,6 +152,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 5000,
             health: Some((
                 max_health: 300,
@@ -202,6 +205,7 @@
                 "Utils.SelectionBase",
                 "Utils.SimpleLookAtCamera",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 20,
@@ -257,6 +261,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 4000,
             health: Some((
                 max_health: 100,
@@ -316,6 +321,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 25,
@@ -370,6 +376,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 300,
@@ -420,6 +427,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 3000,
             health: Some((
                 max_health: 500,
@@ -480,6 +488,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 20,
@@ -540,6 +549,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 50,
@@ -599,6 +609,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 25,
@@ -651,6 +662,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 4000,
             health: Some((
                 max_health: 300,
@@ -703,6 +715,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 3000,
             health: Some((
                 max_health: 300,
@@ -755,6 +768,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 300,
@@ -814,6 +828,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 25,
@@ -864,6 +879,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 300,
@@ -914,6 +930,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 300,
@@ -964,6 +981,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 300,
@@ -1025,6 +1043,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 25,
@@ -1064,6 +1083,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 10,
@@ -1126,6 +1146,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 150,
@@ -1185,6 +1206,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 4000,
             health: Some((
                 max_health: 250,
@@ -1279,6 +1301,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 25,
@@ -1339,6 +1362,22 @@
                 "Utils.SimpleRotateOnAxis",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [
+                (
+                    hierarchy_path: "Age01_Windmill/Age01_Windmill_Base/Age01_Windmill_Blades",
+                    age: Some(1),
+                    node: "Age01_Windmill_Blades",
+                    axis: (0.0, 0.0, 1.0),
+                    degrees_per_second: 35.0,
+                ),
+                (
+                    hierarchy_path: "Age02_Windmill/Age02_Windmill_Base/Age02_Windmill_Blades",
+                    age: Some(2),
+                    node: "Age02_Windmill_Blades",
+                    axis: (0.0, 1.0, 0.0),
+                    degrees_per_second: 35.0,
+                ),
+            ],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 25,
@@ -1391,6 +1430,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 2000,
             health: Some((
                 max_health: 300,
@@ -1450,6 +1490,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 25,
@@ -1484,6 +1525,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:069132044d55147408fa22e24220f300": (
             display_name: "UI_TechTree",
@@ -1511,6 +1553,7 @@
                 "UnityEngine.UI.Scrollbar",
                 "UnityEngine.UI.VerticalLayoutGroup",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:06ca3d60559e7944e9c59b17639b4b6b": (
             display_name: "VFX_Weather",
@@ -1529,6 +1572,7 @@
                 "UnityEngine.VFX.VisualEffect",
                 "VFX.VfxParticlePosition",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:0c08acf87e5a78641a7e7eedcce03a7e": (
             display_name: "VFX_Fireball",
@@ -1546,6 +1590,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:0d6bb00b33cca3240902609ae178ef84": (
             display_name: "UI_TwitchChannelName_Panel",
@@ -1569,6 +1614,7 @@
                 "UnityEngine.UI.LayoutElement",
                 "UnityEngine.UI.RectMask2D",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:0f8873895d351bd45bb1ac625cc138b9": (
             display_name: "MainMenu_Settings",
@@ -1621,6 +1667,7 @@
                 "ScriptablesProcessorInfrastructure.AllSeasonsSettingsInstaller",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:0f887bf402456934ca3c05f68c6460d0": (
             display_name: "Enemy_Fence_2",
@@ -1648,6 +1695,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:0fdd8eef430847043be381ebd7cde251": (
             display_name: "Enemy_Goblin_Boss",
@@ -1692,6 +1740,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1475,
             health: Some((
                 max_health: 50,
@@ -1765,6 +1814,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:1248ec17b06809d46a82f7ea5fafdcc7": (
             display_name: "Env_Tree",
@@ -1791,6 +1841,7 @@
                 "Utils.Pooling.PoolableObject",
                 "Utils.SimpleRandomModelEnabled",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:13582da8f2bc9dc48a3fd01ca5ce1d7e": (
             display_name: "VFX_Wizard_Channeling",
@@ -1808,6 +1859,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:160851a54bca1d14c8b04f8242950cf3": (
             display_name: "Env_Necrolands_Debris_13",
@@ -1832,6 +1884,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:173d3042884a24f48bd0a9f72f801860": (
             display_name: "VFX_Rain",
@@ -1850,6 +1903,7 @@
                 "UnityEngine.VFX.VisualEffect",
                 "VFX.VfxParticlePosition",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:17c5e6526a0f2484b9e966ea670fb63f": (
             display_name: "Env_Necrolands_Debris_15_02",
@@ -1874,6 +1928,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:188af666b69357747ae8bc6d6494d6b4": (
             display_name: "VFX_NecromancerChannel",
@@ -1891,6 +1946,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:1a154c422795d7c4fa5c92d42992dcc6": (
             display_name: "WindController",
@@ -1907,6 +1963,7 @@
                 "Environment.WindController",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:1b0d7d9e46328644887c0c4570055a65": (
             display_name: "Env_Necrolands_Vines_02",
@@ -1931,6 +1988,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:1b5ad1492187ef04ba7f976cc643222f": (
             display_name: "Enemy_Stakes_2",
@@ -1958,6 +2016,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:1cf59ddd9184b8c49b8fd5577c8f683b": (
             display_name: "Enemy_NecroSlasher",
@@ -2001,6 +2060,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 10,
@@ -2086,6 +2146,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 750,
             health: Some((
                 max_health: 25,
@@ -2163,6 +2224,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [
                     "Enemy_Goblin1",
@@ -2225,6 +2287,7 @@
                 "UnityEngine.ParticleSystemRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:23449bd972bb4414d9f5bfd77123d84e": (
             display_name: "SelectableObject",
@@ -2241,6 +2304,7 @@
                 "UnityEngine.Transform",
                 "Utils.SelectableObject",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:2372f70763ad7564d9bcd6dcee6f801b": (
             display_name: "Env_Necrolands_Bridge_01",
@@ -2265,6 +2329,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:2510a1f6a65a35d4ba430fac9141d45b": (
             display_name: "UITechnologyTreeEdge",
@@ -2282,6 +2347,7 @@
                 "UnityEngine.RectTransform",
                 "UserInterface.UILineRenderer",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:2892806f5ebeaa24aaf56c9ffa0feb22": (
             display_name: "VFX_healing",
@@ -2301,6 +2367,7 @@
                 "Utils.SimpleDisableAfterTime",
             ],
             disable_after_milliseconds: Some(1200),
+            rotating_nodes: [],
         ),
         "archetype:prefab:29791aa877b22af4db5180ed677aab1a": (
             display_name: "UI_Roles",
@@ -2322,6 +2389,7 @@
                 "UnityEngine.UI.VerticalLayoutGroup",
                 "UserInterface.UIRoleDisplay",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:29fec4ab4b4e0004d8615dfd807538f4": (
             display_name: "VFX_HitCharacter",
@@ -2339,6 +2407,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:2ca701ab738c0438abb504903deaa2e1": (
             display_name: "UI_LoadingScreen",
@@ -2363,6 +2432,15 @@
                 "UserInterface.Menus.StatusBar",
                 "Utils.SimpleRotateOnAxis",
             ],
+            rotating_nodes: [
+                (
+                    hierarchy_path: "LoadingScreen/LoadingIcon/Anchor/Image",
+                    age: None,
+                    node: "Image",
+                    axis: (0.0, 0.0, 1.0),
+                    degrees_per_second: 500.0,
+                ),
+            ],
         ),
         "archetype:prefab:2dbb70b8aef45488bb0a05f1bd1f5b7f": (
             display_name: "UI_VotingMenuOption",
@@ -2385,6 +2463,7 @@
                 "UnityEngine.UI.VerticalLayoutGroup",
                 "UserInterface.UI_TechOption",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:34590dfb0cca38a4da0a81ba32b47104": (
             display_name: "Lighting",
@@ -2401,6 +2480,7 @@
                 "UnityEngine.Light",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:351213d99426ee94abdd467356cb0687": (
             display_name: "UI_BuildRecruitMenu",
@@ -2420,6 +2500,7 @@
                 "UnityEngine.UI.HorizontalLayoutGroup",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:35345dd8cc4df3444adaa78bff2c0640": (
             display_name: "Model_Blargul",
@@ -2446,6 +2527,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [
                     "Blargul1",
@@ -2473,6 +2555,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:361d4e37ebf537d45a9f873be8dc3279": (
             display_name: "VotingMenuOption_Objective",
@@ -2491,6 +2574,7 @@
                 "UnityEngine.RectTransform",
                 "UserInterface.UI_VoteObjectiveRow",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:367c37dd8d5d2ea4ea017412b0289858": (
             display_name: "UI_BottomBarSelectionButton",
@@ -2509,6 +2593,7 @@
                 "UnityEngine.UI.Button",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3934bb254cb808a4f9f465f5a1f3ca48": (
             display_name: "VFX_PointerArrow",
@@ -2534,6 +2619,7 @@
                 "UnityEngine.Transform",
                 "VFX.VFXArrowPointer",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3b0173114f88256469ae7a7757bac4b1": (
             display_name: "Building_Gate_Stone",
@@ -2569,6 +2655,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 10,
@@ -2616,6 +2703,7 @@
             component_types: [
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3cf4ace926725d9458f7a0c08fee772e": (
             display_name: "Enemy_NecroStalker",
@@ -2659,6 +2747,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 10,
@@ -2713,6 +2802,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3d814135b6a8e3f4d806ba37840862f3": (
             display_name: "UI_Main",
@@ -2768,6 +2858,7 @@
                 "UserInterface.UserInterface_TownVote",
                 "Utils.FPSDisplay",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3f201ba25d9717e4aac5cf4f15bcad9e": (
             display_name: "ResourceSelectionContext",
@@ -2789,6 +2880,7 @@
                 "UnityEngine.UI.CanvasScaler",
                 "UnityEngine.UI.GraphicRaycaster",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3f6075282ef7d43ef9ee7596e4528cf8": (
             display_name: "Env_Necrolands_Bones_Wings_02",
@@ -2813,6 +2905,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:3fff7f8eb93187b488f1a9168b06566f": (
             display_name: "Env_Necrolands_SpikeWall_01",
@@ -2837,6 +2930,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:423bfbdcc1fe247a786b094e90638284": (
             display_name: "UI_MainMenu",
@@ -2860,6 +2954,7 @@
                 "UnityEngine.UI.Image",
                 "UnityEngine.UI.VerticalLayoutGroup",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:440d7b6b8564c284988225d587495f15": (
             display_name: "BuildingPlacer",
@@ -3203,6 +3298,7 @@
                 "Utils.SimpleLookAtCamera",
                 "Utils.SnapToGridMouseMovement",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:4553f0bc9df3c0d43888689bb7396229": (
             display_name: "Resource_Bush_Base",
@@ -3236,6 +3332,7 @@
                 "Utils.SimpleRandomModelEnabled",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
         ),
         "archetype:prefab:459c06be78f904549b82c1708c478a77": (
@@ -3258,6 +3355,7 @@
                 "UnityEngine.UI.Image",
                 "UnityEngine.UI.Slider",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:4a7c740b394ae4b54a17b9fb298fee24": (
             display_name: "Env_Necrolands_Statue",
@@ -3282,6 +3380,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:4d2126bb399d94c46aaa82040f7e444f": (
             display_name: "UI_Objectives",
@@ -3303,6 +3402,7 @@
                 "UnityEngine.UI.VerticalLayoutGroup",
                 "UserInterface.UI_Objective",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:4d25e56c2fb35774490571f2c7e8dab4": (
             display_name: "Env_Necrolands_Ruins_05",
@@ -3333,6 +3433,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:4d85413b26230d74291ac346f27da68a": (
             display_name: "ProjectileShooter",
@@ -3351,6 +3452,7 @@
                 "Sensors.TargetSensor",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:4eb0cd80309abb44085af0e501acb129": (
             display_name: "Env_Necrolands_Debris_06",
@@ -3375,6 +3477,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:50c9ed64e54d42f4382924c277205d81": (
             display_name: "Enemy_Fence_1",
@@ -3402,6 +3505,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:516bedf624576ac47b05c749d96dc9de": (
             display_name: "Env_Necrolands_Debris_04",
@@ -3426,6 +3530,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:51e5862862a03b043a1f670b1a9e1666": (
             display_name: "Env_Necrolands_Debris_10",
@@ -3450,6 +3555,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:52575945117c04449a326f76aede4c3c": (
             display_name: "PlayerSelectedContext",
@@ -3477,6 +3583,7 @@
                 "UnityEngine.UI.Scrollbar",
                 "UnityEngine.UI.Toggle",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:55cf99c9ab2cd6d48828d34c218e21d6": (
             display_name: "Env_Necrolands_Ruins_07",
@@ -3507,6 +3614,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:57f8a401e903d944689f1c3bf4e601ad": (
             display_name: "Env_Necrolands_SpikeWall_02",
@@ -3547,6 +3655,7 @@
             component_types: [
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:5a4b1b25b551d4f4ab27728210558ffc": (
             display_name: "UI_TopBar",
@@ -3568,6 +3677,7 @@
                 "UnityEngine.UI.Image",
                 "UnityEngine.UI.Slider",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:5bddb4c872f307b4b9d7c08eb9855f91": (
             display_name: "Env_Necrolands_Gravestone_02",
@@ -3592,6 +3702,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:5d78556a4d686e947b9136fbbd718271": (
             display_name: "BuildingsSelectionContext",
@@ -3613,6 +3724,7 @@
                 "UnityEngine.UI.CanvasScaler",
                 "UnityEngine.UI.GraphicRaycaster",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:5d8e25c05f68e3548a4e8836c9219aa0": (
             display_name: "TowerProjectile",
@@ -3639,6 +3751,7 @@
                 "UnityEngine.TrailRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:5da224c65febef94f981e732939c32e3": (
             display_name: "Env_Necrolands_Bones_Human",
@@ -3675,6 +3788,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:5f2c08c5c6ded4f1e8dd372468b59895": (
             display_name: "Resource_Tree_Necrolands",
@@ -3705,6 +3819,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 620,
         ),
         "archetype:prefab:5f753c0d355073144b99a91850cfb50d": (
@@ -3730,6 +3845,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:63a0863e30c59844e8910e1ff65375bf": (
             display_name: "Env_Necrolands_Ruins_06",
@@ -3785,6 +3901,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:64850f190eb182740845585c6d85982b": (
             display_name: "VFX_Level_Up",
@@ -3807,6 +3924,7 @@
                 "UnityEngine.VFX.VisualEffect",
                 "Utils.SimpleLookAtCamera",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:64f8b388f5914d640999d7005cf43500": (
             display_name: "VFX_FireWorks",
@@ -3824,6 +3942,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:665ac571398bf944eb718cd65c27f46c": (
             display_name: "VFX_BuildingHitSparks",
@@ -3841,6 +3960,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:66e3675374ba3ef44b66cd29fc7b9ca1": (
             display_name: "Building_Station_Tower_Stone",
@@ -3876,6 +3996,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 10,
@@ -3907,6 +4028,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:69fa004cee679ef49856bfd7476fe31d": (
             display_name: "Model_Minotaur",
@@ -3933,6 +4055,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [
                     "Enemy_Minotaur1",
@@ -3975,6 +4098,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:6b29333e295d87649847047f7311a05f": (
             display_name: "Env_Necrolands_Debris_03",
@@ -3999,6 +4123,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:6b7124ddb1a194170ac9a54a95ed74ae": (
             display_name: "Env_Necrolands_Road_02",
@@ -4023,6 +4148,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:6c5d9e6509e5fc246a24e6711ecf50b3": (
             display_name: "Resource_Ore_Necrolands",
@@ -4052,6 +4178,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
         ),
         "archetype:prefab:6c872bdb83272ea4298459dc33e0c586": (
@@ -4086,6 +4213,7 @@
                 "Utils.SimpleRandomModelEnabled",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
         ),
         "archetype:prefab:7181bd41c6ddb394891b591b839db047": (
@@ -4247,6 +4375,7 @@
             component_types: [
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7254c88085621fe4e9eb640ea7b86ebb": (
             display_name: "Enemy_Skeleton",
@@ -4292,6 +4421,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 10,
@@ -4402,6 +4532,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:748f932d9c2961a4ebef254f29adb0d5": (
             display_name: "Enemy_Camp_Prefab_1",
@@ -4478,6 +4609,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             health: Some((
                 max_health: 1000,
                 health_gain_per_level: 25,
@@ -4534,6 +4666,7 @@
                 "UnityEngine.Transform",
                 "Utils.Pooling.PoolableObject",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7729791b6afa9a94d8cf2a6f415485a6": (
             display_name: "Env_Necrolands_Debris_07",
@@ -4558,6 +4691,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:78282405f2ca7fa48bbb52c2df461f66": (
             display_name: "Enemy_Goblin_Skull_Torch_2",
@@ -4583,6 +4717,7 @@
                 "UnityEngine.Transform",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:794ef02ce1451414e825b03b88e24750": (
             display_name: "Enemy_Campfire",
@@ -4610,6 +4745,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:79da627a56c0c3240a54666e17f56a0b": (
             display_name: "Env_Necrolands_Debris_05",
@@ -4634,6 +4770,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:79f87cf88889b584eab38d0082b011ff": (
             display_name: "UI_QuitGame",
@@ -4653,6 +4790,7 @@
                 "UnityEngine.UI.Button",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7ae1b33bfb28414449ebbe3131df7c42": (
             display_name: "UI_DebugMenu",
@@ -4682,6 +4820,7 @@
                 "UnityEngine.UI.Toggle",
                 "UnityEngine.UI.VerticalLayoutGroup",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7b25fd40a7888544ab339ad67b8706a1": (
             display_name: "Env_Necrolands_Ruins_09",
@@ -4719,6 +4858,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7de8218af6e6c334ebdce126c4bcc033": (
             display_name: "Env_Necrolands_Debris_08",
@@ -4743,6 +4883,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7e31b567175f7c04da20318e4a1a3a84": (
             display_name: "Env_Necrolands_Debris_09",
@@ -4767,6 +4908,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:7ed219b06f57f01428f3c4962d56fd4d": (
             display_name: "Env_Necrolands_Road_01",
@@ -4791,6 +4933,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:801614919a3e84f4daaea7f274d8802e": (
             display_name: "Enemy_Camp_Goblin",
@@ -4822,6 +4965,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             health: Some((
                 max_health: 1000,
                 health_gain_per_level: 25,
@@ -4855,6 +4999,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:86b3585e775c64743b5c7e8f692b2cfe": (
             display_name: "VFX_Snow",
@@ -4872,6 +5017,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:86f8456a9c3d65449aef07e0182c7fdc": (
             display_name: "Generation_Main_Menu",
@@ -4891,6 +5037,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:87408126c7d21c046ae7350088432fa1": (
             display_name: "Resource_Fish_Base",
@@ -4916,6 +5063,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
         ),
         "archetype:prefab:88c1db1eb51347e4f99f27a8fe96bf56": (
@@ -4941,6 +5089,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:8d0e40d7b157f794c9680e253b02309e": (
             display_name: "SeasonProcessor",
@@ -4957,6 +5106,7 @@
                 "Processors.SeasonProcessor",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:8d4edac213e0377419a8ca182d02b5de": (
             display_name: "Env_Necrolands_Ruins_11",
@@ -4999,6 +5149,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:8d536a3c1e196a54d980787c79392956": (
             display_name: "Env_Necrolands_Debris_15_01",
@@ -5023,6 +5174,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:8d6bf50ef58fa8c4694dabb140b143eb": (
             display_name: "Env_Necrolands_Bones_Human_03",
@@ -5047,6 +5199,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:8e0545f132450b749a93fa10fc82a23a": (
             display_name: "UI_BottomButtons",
@@ -5068,6 +5221,7 @@
                 "UnityEngine.UI.Image",
                 "UserInterface.BottomBarMenu.BottomBarButton",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:8e7798ab791bf5545afcd75424f68b02": (
             display_name: "Env_Necrolands_Bones_Human_01",
@@ -5092,6 +5246,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:9056312d78c15914a8512621204add23": (
             display_name: "Env_Necrolands_Debris_14",
@@ -5116,6 +5271,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:928af165eee95214581242827c240494": (
             display_name: "UI_BuildingHealthBar",
@@ -5139,6 +5295,7 @@
                 "UserInterface.UserInterface_BuildingHealthBar",
                 "Utils.SimpleLookAtCamera",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:935afb2aaef9d3f47a713537c3e1eda3": (
             display_name: "Enemy_Goblin_Skull_Torch_1",
@@ -5164,6 +5321,7 @@
                 "UnityEngine.Transform",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:94077c782709c4c4baa13e00e2d67849": (
             display_name: "Enemy_MinotaurBoss",
@@ -5213,6 +5371,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 750,
             health: Some((
                 max_health: 1000,
@@ -5289,6 +5448,7 @@
                 "UnityEngine.Transform",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:94dbfdf72b6633d4b9dd4230d4899830": (
             display_name: "PersistentUI",
@@ -5367,6 +5527,7 @@
                 "UnityEngine.UI.Toggle",
                 "UnityEngine.UI.VerticalLayoutGroup",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:951895e7b498ee1488d4edfd62aca70e": (
             display_name: "VFX_Godrays_01",
@@ -5391,6 +5552,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:95aff54d91d5bd84f81efd689a9acb4b": (
             display_name: "VFX_BuildingHitNoSparks",
@@ -5408,6 +5570,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:9764a7f01f6e34746a2a39f148da13a8": (
             display_name: "Player_Character",
@@ -5473,6 +5636,7 @@
                 "Utils.SelectionBase",
                 "Utils.SimpleLookAtCamera",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 750,
             health: Some((
                 max_health: 100,
@@ -5500,6 +5664,7 @@
                 "UnityEngine.UI.Image",
                 "UnityEngine.UI.Slider",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:98458249e3c24e142bbf613e1d3887ac": (
             display_name: "Env_Necrolands_Ruins_04",
@@ -5578,6 +5743,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:9dcb42317eb65db4c86b7831a67780f0": (
             display_name: "Env_Necrolands_Debris_11_02",
@@ -5602,6 +5768,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a17eb20596224446ebada04f8b701783": (
             display_name: "Env_Necrolands_Bones_Skull_01",
@@ -5626,6 +5793,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a2480de5db802cc4d88746047a568429": (
             display_name: "Model_NecroStalker",
@@ -5652,6 +5820,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [
                     "ReaperGhoul",
@@ -5685,6 +5854,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a44e42ef1bde2914db12a591512b397e": (
             display_name: "ProjectCamera",
@@ -5705,6 +5875,7 @@
                 "UnityEngine.Rendering.Universal.UniversalAdditionalCameraData",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a5beac4cc267c5f4b8b9c395cfa8e62a": (
             display_name: "Env_Necrolands_Gravestone_03",
@@ -5729,6 +5900,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a6dddc730d5a10147abc288fbc6b7ab7": (
             display_name: "Env_Necrolands_Debris_01",
@@ -5753,6 +5925,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a702a858967d40b49ae825e0645c5040": (
             display_name: "LoadStatus",
@@ -5772,6 +5945,7 @@
                 "UnityEngine.UI.Image",
                 "UserInterface.Menus.StatusBar",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a7330a63bb7149e4ea810fd344bca2fc": (
             display_name: "ProjectScope",
@@ -5900,6 +6074,7 @@
                 "UnityEngine.UI.VerticalLayoutGroup",
                 "VideoSettingsPresetsInstaller",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:a73930ff78de39a4ab4bd51026f69d78": (
             display_name: "Env_Necrolands_Vines_01",
@@ -5924,6 +6099,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:aaf46686d53f450448b69a68c0617ce6": (
             display_name: "Model_NecroSlasher",
@@ -5950,6 +6126,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [
                     "Enemy_NecroSlasher",
@@ -5977,6 +6154,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ad22b9b7b3426464c8f1434fa47025f5": (
             display_name: "Enemy_Goblin_Skull_Stick",
@@ -6002,6 +6180,7 @@
                 "UnityEngine.Transform",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ad73287b1702a35439dbf03453634acc": (
             display_name: "vfx_meteor",
@@ -6019,6 +6198,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ae28f5483c855484b98bebc2c3bc6712": (
             display_name: "UI_GameMenu",
@@ -6041,6 +6221,7 @@
                 "UnityEngine.UI.VerticalLayoutGroup",
                 "UserInterface.UserInterface_GameMenu",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:af8854ceaa9f5ef40a865e90d3fdebb9": (
             display_name: "A_",
@@ -6056,6 +6237,7 @@
             component_types: [
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b1f05976e7fc902489fa967999411322": (
             display_name: "UI_SelectedObjectInformationPanel",
@@ -6074,6 +6256,7 @@
                 "UnityEngine.RectTransform",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b2e5d7013b66b794daaf2165065e4381": (
             display_name: "Enemy_Blargul",
@@ -6123,6 +6306,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 5,
@@ -6186,6 +6370,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [
                     "Enemy_GoblinBoss",
@@ -6232,6 +6417,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b66c80a4fe095d44fa4dee0095ae2485": (
             display_name: "Env_Necrolands_Ruins_10",
@@ -6262,6 +6448,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b70f961d0ea6531488f250ecd7032b30": (
             display_name: "Spawner_Goblin",
@@ -6280,6 +6467,7 @@
                 "UnityEngine.Transform",
                 "Utils.DisableOnAwake",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b7204f7fa9f66f34582c2bf0a630b23d": (
             display_name: "Env_Necrolands_Bridge_03",
@@ -6304,6 +6492,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b799cce3d02afab4cb6065c08243d285": (
             display_name: "Env_Bush",
@@ -6329,6 +6518,7 @@
                 "UnityEngine.Transform",
                 "Utils.Pooling.PoolableObject",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:b7b7a3f100b98344cb116a1e1dbf2e08": (
             display_name: "Env_Necrolands_Bones_Dragon_01",
@@ -6377,6 +6567,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:bb4e5c2429e223343b18975ac68f8168": (
             display_name: "Enemy_Goblin",
@@ -6420,6 +6611,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 15,
@@ -6502,6 +6694,7 @@
                 "UnityEngine.ParticleSystemRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:bd5cac94f88999d4aa64db704484c4d4": (
             display_name: "VFX_Bugs",
@@ -6519,6 +6712,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:c0108747895434630b338dc11bd89346": (
             display_name: "Env_Necrolands_Bones_Tail_01",
@@ -6543,6 +6737,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:c357a5274dad80a40a68de4201e539f5": (
             display_name: "PathingProbes",
@@ -6562,6 +6757,7 @@
                 "UnityEngine.Transform",
                 "World.PathProbe",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:c42ac9a94d8790a4586d3dfb41609ed3": (
             display_name: "Fish",
@@ -6586,6 +6782,7 @@
                 "UnityEngine.ParticleSystemRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:c50cf9033e893ce44a1cd8564fffba9d": (
             display_name: "Env_Necrolands_Bridge_02",
@@ -6610,6 +6807,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:cae1f353d3129d54c99f50f62ab0c9f5": (
             display_name: "VFX_Tower_Projectile",
@@ -6627,6 +6825,7 @@
                 "UnityEngine.ParticleSystemRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:caefbf72f206ecd45b6820264d3afe96": (
             display_name: "SeagulSpawner",
@@ -6653,6 +6852,7 @@
                 "UnityEngine.Transform",
                 "VFX.VfxSeagullSpawner",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:cb8bb755dfce83141a958d547f5a0b3f": (
             display_name: "VFX_Explosion",
@@ -6670,6 +6870,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:cf2c9e41b0a843248a51090e6e03217e": (
             display_name: "Enemy_Camp_Goblin",
@@ -6701,6 +6902,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             health: Some((
                 max_health: 1000,
                 health_gain_per_level: 25,
@@ -6743,6 +6945,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:d00d3177367e0654f9537d93ffa98649": (
             display_name: "Pet",
@@ -6796,6 +6999,7 @@
                 "UnityEngine.Transform",
                 "Utils.Pooling.PoolableObject",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:d08a8abfdfdb65841beed4395f9d9f57": (
             display_name: "GraphicsProcessor",
@@ -6814,6 +7018,7 @@
                 "UnityEngine.Rendering.Volume",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:d3b3369b2654d7442a57e4b4f1a3e400": (
             display_name: "UI_SettingsProcessor",
@@ -6889,6 +7094,7 @@
                 "UnityEngine.UI.Toggle",
                 "UnityEngine.UI.VerticalLayoutGroup",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:d4fa335138d749942a45f2755676d5c1": (
             display_name: "UI_Close_Button",
@@ -6907,6 +7113,7 @@
                 "UnityEngine.UI.Button",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:d670ba1481369a54ea1a1833914c1d47": (
             display_name: "Unit Display Text",
@@ -6927,6 +7134,7 @@
                 "Utils.Pooling.PoolableObject",
                 "Utils.SimpleLookAtCamera",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:d9c4d248950aef64e8c8050ec81b351c": (
             display_name: "VFX_BuildingDamaged",
@@ -6944,6 +7152,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:db462f34ba5ccb34988610a7c6234b38": (
             display_name: "CoordinatorMAYBEJUNK",
@@ -6966,6 +7175,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:dc4b7ba8f71592443a592d2f8b20fbf7": (
             display_name: "VFX_Leaves",
@@ -6983,6 +7193,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:dd8ac152a1b8e1346b425fff70d24abd": (
             display_name: "Post_Processing",
@@ -6999,6 +7210,7 @@
                 "UnityEngine.Rendering.Volume",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:dede23c150d094e588811e46c4ae4a3b": (
             display_name: "UI_TechObjective",
@@ -7019,6 +7231,7 @@
                 "UnityEngine.UI.Slider",
                 "UserInterface.UI_Objective",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e1378b9ea96a0364f804b994c0d45b20": (
             display_name: "Building_Wall_Stone",
@@ -7072,6 +7285,7 @@
                 "Utils.SelectionBase",
                 "Utils.UpdateGraphBounds",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 1000,
             health: Some((
                 max_health: 10,
@@ -7097,6 +7311,7 @@
                 "UnityEngine.RectTransform",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e2bd47773e555b7499c49b1854fc7091": (
             display_name: "Env_Necrolands_Armour_01",
@@ -7121,6 +7336,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e48eeefe11ac348f491aa6379eb9c5cd": (
             display_name: "UI_Role",
@@ -7141,6 +7357,7 @@
                 "UnityEngine.UI.Image",
                 "UserInterface.UIRoleDisplay",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e492f6c4b90b744529e1c408da8a77c2": (
             display_name: "UI_RecruitMenu_Tooltip",
@@ -7159,6 +7376,7 @@
                 "UnityEngine.RectTransform",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e54be9f2c69dea046bc278c8fbd06d4a": (
             display_name: "UI_Confim_Panel",
@@ -7178,6 +7396,7 @@
                 "UnityEngine.UI.Button",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e588570ef1efe2c449191e92edb3c562": (
             display_name: "Model_Skeleton",
@@ -7206,6 +7425,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
             enemy_models: Some((
                 base_models: [],
                 permanent_models: [
@@ -7295,6 +7515,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:e8446605cd5bdd34c99c667242d67efc": (
             display_name: "Selection Outline",
@@ -7313,6 +7534,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ea363d8fb1557464badb2bc99837c35d": (
             display_name: "VFX_BuildingLevelUp",
@@ -7330,6 +7552,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ea9d24efd10f1ca43a0e7b700fd9699d": (
             display_name: "UITechnologyTreeNode",
@@ -7349,6 +7572,7 @@
                 "UnityEngine.UI.Button",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:eabc5abd1b940ff46a63196a184d541a": (
             display_name: "PlacementProbes",
@@ -7369,6 +7593,7 @@
                 "UnityEngine.Transform",
                 "Utils.SimpleHideRendererOnAwake",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:eb4fc2d01373f445fb315c2be382f2f9": (
             display_name: "UI_RulerVotingMenuOption",
@@ -7388,6 +7613,7 @@
                 "UnityEngine.UI.Image",
                 "UserInterface.UI_RulerOption",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ec82c9c4ba18b764aa07eafba7c6f5eb": (
             display_name: "Env_Necrolands_Gravestone_01",
@@ -7412,6 +7638,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:eceffb70b239b824184d5c5e7facb8c1": (
             display_name: "Enemy_Goblin_BatteringRam",
@@ -7461,6 +7688,7 @@
                 "Utils.SelectableObject",
                 "Utils.SelectionBase",
             ],
+            rotating_nodes: [],
             target_size_milli_cells: 500,
             health: Some((
                 max_health: 50,
@@ -7522,6 +7750,7 @@
                 "UnityEngine.UI.Button",
                 "UnityEngine.UI.Image",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:ef0f5ec9cad759143b2afced3e1a8ba0": (
             display_name: "Event_FishGod",
@@ -7546,6 +7775,7 @@
                 "UnityEngine.SkinnedMeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:efd14e9e5b26d274fab044a765ac87fb": (
             display_name: "UI_RulerVotingMenu",
@@ -7567,6 +7797,7 @@
                 "UnityEngine.UI.VerticalLayoutGroup",
                 "UserInterface.UI_RulerOption",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:f18cc29199bf643e6826ffd1da4ee9d2": (
             display_name: "Env_Necrolands_Bones_Wings_01",
@@ -7591,6 +7822,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:f3be214764cc350418385bd5e78d0343": (
             display_name: "Env_Necrolands_Bones_Human_02",
@@ -7615,6 +7847,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:f50ea1cd6029b694fbfdcb740ad46899": (
             display_name: "VFX_Healing_Channeling",
@@ -7632,6 +7865,7 @@
                 "UnityEngine.VFX.VFXRenderer",
                 "UnityEngine.VFX.VisualEffect",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:f6ea54b428fb0f54fabd5170e2211822": (
             display_name: "UI_SelectionWindow",
@@ -7659,6 +7893,7 @@
                 "UnityEngine.UI.Toggle",
                 "UnityEngine.UI.VerticalLayoutGroup",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:fa40ddf9af8e8e945953fbcf11f9e616": (
             display_name: "DefaultSettings",
@@ -7709,6 +7944,7 @@
                 "ScriptablesProcessorInfrastructure.AllSeasonsSettingsInstaller",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:fc00c0be3e3450d469137102c5673789": (
             display_name: "Env_Necrolands_Debris_02",
@@ -7733,6 +7969,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
         "archetype:prefab:fed2e06a75e13ae4fa198e8e92284ee3": (
             display_name: "Env_Necrolands_Ruins_01",
@@ -7793,6 +8030,7 @@
                 "UnityEngine.MeshRenderer",
                 "UnityEngine.Transform",
             ],
+            rotating_nodes: [],
         ),
     },
     foliage: [
@@ -8014,7 +8252,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8061,7 +8298,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8114,7 +8350,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8159,7 +8394,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8206,7 +8440,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8294,7 +8527,6 @@
                     full_model: "Age02_FoodStorage_Full",
                 ),
             ],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8342,7 +8574,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8381,7 +8612,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8429,7 +8659,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8488,7 +8717,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8543,7 +8771,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8594,7 +8821,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [
                 (
                     resource: "resource:gold",
@@ -8646,7 +8872,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8693,7 +8918,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8768,7 +8992,6 @@
                     full_model: "Age02_OreStorage_Full",
                 ),
             ],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8807,7 +9030,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8846,7 +9068,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8885,7 +9106,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8944,7 +9164,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8987,7 +9206,6 @@
             role_slots: [],
             model_handlers: [],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -9041,7 +9259,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -9109,7 +9326,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -9220,7 +9436,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -9275,20 +9490,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [
-                (
-                    age: 1,
-                    node: "Age01_Windmill_Blades",
-                    axis: (0.0, 0.0, 1.0),
-                    degrees_per_second: 35.0,
-                ),
-                (
-                    age: 2,
-                    node: "Age02_Windmill_Blades",
-                    axis: (0.0, 1.0, 0.0),
-                    degrees_per_second: 35.0,
-                ),
-            ],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -9346,7 +9547,6 @@
                 ),
             ],
             storage_models: [],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -9422,7 +9622,6 @@
                     full_model: "Age02_WoodStorage_Full",
                 ),
             ],
-            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((

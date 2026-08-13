@@ -499,6 +499,11 @@ mistaken for production-ready systems.
   lifetime, the focused content tool exposes it, and Bevy's heal-burst and
   revival presentation now use that typed value instead of a duplicated runtime
   constant.
+- Content schema 28 moves the reusable rotation contract onto prefab
+  archetypes and captures all three shipping `SimpleRotateOnAxis` records. The
+  `WorldLoading` state now renders the converted background, overlay, and icon,
+  rotating that icon around local Z at its authored 500 degrees/second; the two
+  age-specific Windmill rotors continue through the same validated data path.
 - Completed gates now preserve Unity's asymmetric traversal rule: player A* may
   cross their occupied cells while enemies still see the same cells as blocked.
   Gates under construction remain blocked for everyone, and the exception is

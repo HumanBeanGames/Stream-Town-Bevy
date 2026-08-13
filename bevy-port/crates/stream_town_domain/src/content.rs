@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 27;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 28;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -75,6 +75,8 @@ pub struct ArchetypeDef {
     /// Unity `SimpleDisableAfterTime` lifetime for self-disabling pooled prefabs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_after_milliseconds: Option<u32>,
+    #[serde(default)]
+    pub rotating_nodes: Vec<RotatingNodeDef>,
     /// Unity `Targetable.SizeSqr` expressed as its unsquared logical-cell size.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub target_size_milli_cells: u32,
@@ -234,8 +236,6 @@ pub struct BuildingDef {
     #[serde(default)]
     pub storage_models: Vec<StorageModelDef>,
     #[serde(default)]
-    pub rotating_nodes: Vec<RotatingNodeDef>,
-    #[serde(default)]
     pub passive_resources: Vec<PassiveResourceContribution>,
     #[serde(default)]
     pub station: Option<StationDef>,
@@ -265,10 +265,11 @@ pub struct StorageModelDef {
     pub full_model: String,
 }
 
-/// A named glTF node driven by Unity's reachable `SimpleRotateOnAxis` behavior.
+/// A prefab hierarchy node driven by Unity's reachable `SimpleRotateOnAxis` behavior.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct RotatingNodeDef {
-    pub age: u8,
+    pub hierarchy_path: String,
+    pub age: Option<u8>,
     pub node: String,
     /// Unity local Euler-axis multiplier, preserved before applying speed.
     pub axis: [f32; 3],
@@ -585,7 +586,7 @@ pub enum ContentError {
     InvalidPassiveResource(StableId),
     #[error("building {0} has invalid model-handler data")]
     InvalidBuildingModels(StableId),
-    #[error("building {0} has invalid rotating-node data")]
+    #[error("archetype {0} has invalid rotating-node data")]
     InvalidRotatingNode(StableId),
     #[error("building {0} has invalid target-scoring data")]
     InvalidTargetingScore(StableId),
@@ -647,6 +648,24 @@ impl ContentCatalog {
                 || archetype.disable_after_milliseconds == Some(0)
             {
                 return Err(ContentError::InvalidDisableAfterTime(id.clone()));
+            }
+            let has_rotate_component = archetype
+                .component_types
+                .iter()
+                .any(|component| component == "Utils.SimpleRotateOnAxis");
+            if has_rotate_component == archetype.rotating_nodes.is_empty()
+                || archetype.rotating_nodes.iter().any(|node| {
+                    node.hierarchy_path.trim().is_empty()
+                        || node.node.trim().is_empty()
+                        || node.age.is_some_and(|age| !(1..=2).contains(&age))
+                        || (archetype.kind == ArchetypeKind::Building && node.age.is_none())
+                        || node.axis.iter().any(|value| !value.is_finite())
+                        || node.axis.iter().all(|value| value.abs() <= f32::EPSILON)
+                        || !node.degrees_per_second.is_finite()
+                        || node.degrees_per_second.abs() <= f32::EPSILON
+                })
+            {
+                return Err(ContentError::InvalidRotatingNode(id.clone()));
             }
             for scene in &archetype.scenes {
                 if !scene.asset_path.starts_with("migrated/models/")
@@ -799,16 +818,6 @@ impl ContentCatalog {
                         .any(|storage| storage.resource == model.resource)
             }) {
                 return Err(ContentError::InvalidBuildingModels(id.clone()));
-            }
-            if building.rotating_nodes.iter().any(|node| {
-                !(1..=2).contains(&node.age)
-                    || node.node.trim().is_empty()
-                    || node.axis.iter().any(|value| !value.is_finite())
-                    || node.axis.iter().all(|value| value.abs() <= f32::EPSILON)
-                    || !node.degrees_per_second.is_finite()
-                    || node.degrees_per_second.abs() <= f32::EPSILON
-            }) {
-                return Err(ContentError::InvalidRotatingNode(id.clone()));
             }
             if building.station.as_ref().is_some_and(|station| {
                 station.max_targets == 0

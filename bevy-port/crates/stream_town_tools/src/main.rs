@@ -393,6 +393,17 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             f64::from(milliseconds) / 1_000.0
                         ));
                     }
+                    for rotating in &archetype.rotating_nodes {
+                        ui.monospace(format!(
+                            "rotates {}{}: [{:.1}, {:.1}, {:.1}] at {:.1} deg/s",
+                            rotating.hierarchy_path,
+                            rotating.age.map_or_else(String::new, |age| format!(" (age {age})")),
+                            rotating.axis[0],
+                            rotating.axis[1],
+                            rotating.axis[2],
+                            rotating.degrees_per_second
+                        ));
+                    }
                     ui.label(format!("Kind: {:?}", archetype.kind));
                     ui.monospace(format!("Unity prefab: {}", archetype.source_path));
                     ui.label(format!(
@@ -542,17 +553,6 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             model.empty_model,
                             model.half_full_model,
                             model.full_model
-                        ));
-                    }
-                    for rotating in &building.rotating_nodes {
-                        ui.monospace(format!(
-                            "rotates age {} {}: [{:.1}, {:.1}, {:.1}] at {:.1} deg/s",
-                            rotating.age,
-                            rotating.node,
-                            rotating.axis[0],
-                            rotating.axis[1],
-                            rotating.axis[2],
-                            rotating.degrees_per_second
                         ));
                     }
                     if let Some(shooter) = &building.projectile_shooter {

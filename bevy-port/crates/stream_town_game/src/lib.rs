@@ -106,6 +106,11 @@ const CRITTER_MATERIAL_ID: &str = "material:56cfb478fa4b9e8469bcbbf9cf077701";
 const FLAG_SHADER_ASSET_PATH: &str = "shaders/flag_material.wgsl";
 const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
 const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_DropShadow.png";
+const LOADING_SCREEN_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingScreen.png";
+const LOADING_OVERLAY_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_loadingOverlay.png";
+const LOADING_ICON_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingIcon.png";
+const LOADING_SCREEN_PREFAB_SUFFIX: &str = "UserInterface/UI_LoadingScreen.prefab";
+const LOADING_ICON_HIERARCHY_PATH: &str = "LoadingScreen/LoadingIcon/Anchor/Image";
 const GAME_LOGO_ASPECT_RATIO: f32 = 2_048.0 / 1_227.0;
 const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_Background.png",
@@ -888,6 +893,9 @@ struct RenderAssets {
     tree: Handle<TreeMaterial>,
     grass: Handle<GrassMaterial>,
     game_logo: Option<Handle<Image>>,
+    loading_screen: Option<Handle<Image>>,
+    loading_overlay: Option<Handle<Image>>,
+    loading_icon: Option<Handle<Image>>,
     top_bar_textures: BTreeMap<String, Handle<Image>>,
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
     bottom_bar_textures: BTreeMap<String, Handle<Image>>,
@@ -899,6 +907,19 @@ struct RenderAssets {
 
 #[derive(Component)]
 struct StateEntity;
+
+#[derive(Component)]
+struct LoadingScreenEntity;
+
+#[derive(Component)]
+struct LoadingIconSpinner {
+    radians_per_second: f32,
+}
+
+#[derive(Resource, Default)]
+struct WorldLoadingRuntime {
+    presented_frame: bool,
+}
 
 #[derive(Component)]
 struct AuthoredCreditsElement {
@@ -1766,7 +1787,14 @@ impl Plugin for StreamTownGamePlugin {
                     .run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
-            .add_systems(OnEnter(GameState::WorldLoading), generate_and_spawn_world)
+            .add_systems(OnEnter(GameState::WorldLoading), spawn_loading_screen)
+            .add_systems(
+                Update,
+                (animate_loading_icon, generate_and_spawn_world)
+                    .chain()
+                    .run_if(in_state(GameState::WorldLoading)),
+            )
+            .add_systems(OnExit(GameState::WorldLoading), cleanup_loading_screen)
             .add_systems(OnEnter(GameState::InGame), spawn_level_up_toast)
             .add_systems(OnEnter(GameState::InGame), spawn_menu_overlay)
             .add_systems(
@@ -2304,6 +2332,21 @@ fn setup_rendering(
         asset_server.as_deref(),
         GAME_LOGO_TEXTURE_PATH,
     );
+    let loading_screen = presentation_texture_handle(
+        &presentation.0,
+        asset_server.as_deref(),
+        LOADING_SCREEN_TEXTURE_PATH,
+    );
+    let loading_overlay = presentation_texture_handle(
+        &presentation.0,
+        asset_server.as_deref(),
+        LOADING_OVERLAY_TEXTURE_PATH,
+    );
+    let loading_icon = presentation_texture_handle(
+        &presentation.0,
+        asset_server.as_deref(),
+        LOADING_ICON_TEXTURE_PATH,
+    );
     let top_bar_textures = TOP_BAR_TEXTURE_PATHS
         .iter()
         .filter_map(|source_path| {
@@ -2512,6 +2555,9 @@ fn setup_rendering(
         tree,
         grass,
         game_logo,
+        loading_screen,
+        loading_overlay,
+        loading_icon,
         top_bar_textures,
         selection_panel_textures,
         bottom_bar_textures,
@@ -2883,6 +2929,7 @@ fn spawn_giraffe_smoke_pet(
     let Some(archetype) = content
         .archetypes
         .values()
+        .filter(|archetype| archetype.kind == ArchetypeKind::Building)
         .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
     else {
         return;
@@ -4010,6 +4057,100 @@ fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
             ..default()
         },
     ));
+}
+
+fn loading_icon_rotation(content: &ContentCatalog) -> Option<&stream_town_domain::RotatingNodeDef> {
+    content
+        .archetypes
+        .values()
+        .find(|archetype| {
+            archetype
+                .source_path
+                .ends_with(LOADING_SCREEN_PREFAB_SUFFIX)
+        })?
+        .rotating_nodes
+        .iter()
+        .find(|rotating| rotating.hierarchy_path == LOADING_ICON_HIERARCHY_PATH)
+}
+
+fn spawn_loading_screen(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    render: Res<RenderAssets>,
+) {
+    commands.insert_resource(WorldLoadingRuntime::default());
+    if let Some(background) = &render.loading_screen {
+        commands.spawn((
+            LoadingScreenEntity,
+            ImageNode::new(background.clone()).with_mode(NodeImageMode::Stretch),
+            GlobalZIndex(100),
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
+            },
+        ));
+    }
+    if let Some(overlay) = &render.loading_overlay {
+        commands.spawn((
+            LoadingScreenEntity,
+            ImageNode::new(overlay.clone()).with_mode(NodeImageMode::Stretch),
+            GlobalZIndex(101),
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
+            },
+        ));
+    }
+    let Some(icon) = &render.loading_icon else {
+        return;
+    };
+    let rotation = loading_icon_rotation(&content.0)
+        .expect("validated content contains the authored loading-icon rotation");
+    commands.spawn((
+        LoadingScreenEntity,
+        LoadingIconSpinner {
+            radians_per_second: rotation.degrees_per_second.to_radians(),
+        },
+        ImageNode::new(icon.clone()).with_color(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+        UiTransform::IDENTITY,
+        GlobalZIndex(102),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(45.0),
+            bottom: percent(8.0),
+            width: percent(10.0),
+            aspect_ratio: Some(1.0),
+            ..default()
+        },
+    ));
+}
+
+fn animate_loading_icon(
+    time: Res<Time>,
+    mut spinners: Query<(&LoadingIconSpinner, &mut UiTransform)>,
+) {
+    for (spinner, mut transform) in &mut spinners {
+        apply_loading_icon_rotation(
+            &mut transform,
+            spinner.radians_per_second,
+            time.delta_secs(),
+        );
+    }
+}
+
+fn apply_loading_icon_rotation(
+    transform: &mut UiTransform,
+    radians_per_second: f32,
+    delta_seconds: f32,
+) {
+    // Unity applies positive local-Z rotation counterclockwise. Bevy's UI
+    // transform documents positive rotation as clockwise, hence the sign.
+    transform.rotation =
+        Rot2::radians(transform.rotation.as_radians() - radians_per_second * delta_seconds);
 }
 
 fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
@@ -5454,6 +5595,7 @@ fn initial_actor_identity(index: u16) -> (String, Option<&'static str>) {
 
 fn generate_and_spawn_world(
     mut commands: Commands,
+    mut loading: ResMut<WorldLoadingRuntime>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
@@ -5469,6 +5611,9 @@ fn generate_and_spawn_world(
     mut cameras: Query<&mut Transform, With<TownCamera>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
+    if !loading_generation_ready(&mut loading) {
+        return;
+    }
     selected.0 = None;
     selected_group.actors.clear();
     selected_group.drag_start = None;
@@ -6215,6 +6360,15 @@ fn generate_and_spawn_world(
     commands.insert_resource(SimulationRuntime(simulation));
     commands.insert_resource(EnvironmentPresentation::default());
     next_state.set(GameState::InGame);
+}
+
+fn loading_generation_ready(loading: &mut WorldLoadingRuntime) -> bool {
+    if loading.presented_frame {
+        true
+    } else {
+        loading.presented_frame = true;
+        false
+    }
 }
 
 fn actor_material(
@@ -10459,10 +10613,10 @@ fn tag_building_model_nodes(
 
 fn authored_rotating_node_names(content: &ContentCatalog) -> BTreeSet<String> {
     content
-        .buildings
+        .archetypes
         .values()
-        .flat_map(|building| {
-            building
+        .flat_map(|archetype| {
+            archetype
                 .rotating_nodes
                 .iter()
                 .map(|rotating| rotating.node.clone())
@@ -10496,22 +10650,23 @@ fn tag_authored_rotating_nodes(
             let Some(state) = simulation.0.buildings.get(&runtime.id) else {
                 break;
             };
-            let Some(definition) = content
+            let Some(archetype) = content
                 .0
                 .buildings
                 .values()
                 .find(|building| building.archetype == state.archetype)
+                .and_then(|building| content.0.archetypes.get(&building.archetype))
             else {
                 break;
             };
-            if let Some(rotating) = definition
+            if let Some(rotating) = archetype
                 .rotating_nodes
                 .iter()
                 .find(|rotating| rotating.node == name.as_str())
             {
                 commands.entity(entity).insert(AuthoredRotatingNode {
                     building_root: ancestor,
-                    age: rotating.age,
+                    age: rotating.age.expect("building rotors have validated ages"),
                     axis: Vec3::from_array(rotating.axis),
                     radians_per_second: rotating.degrees_per_second.to_radians(),
                 });
@@ -20666,6 +20821,16 @@ fn cleanup_state_entities(mut commands: Commands, entities: Query<Entity, With<S
     }
 }
 
+fn cleanup_loading_screen(
+    mut commands: Commands,
+    entities: Query<Entity, With<LoadingScreenEntity>>,
+) {
+    for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+    commands.remove_resource::<WorldLoadingRuntime>();
+}
+
 fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntity>>) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -23657,19 +23822,16 @@ mod tests {
     fn windmill_rotation_preserves_unity_axes_and_speed() {
         let content = embedded_content();
         let windmill = &content.buildings[&StableId::new("building:windmill").unwrap()];
-        assert_eq!(windmill.rotating_nodes.len(), 2);
-        assert_eq!(windmill.rotating_nodes[0].age, 1);
-        assert_eq!(windmill.rotating_nodes[0].node, "Age01_Windmill_Blades");
-        assert!(
-            Vec3::from_array(windmill.rotating_nodes[0].axis).abs_diff_eq(Vec3::Z, f32::EPSILON)
-        );
-        assert!((windmill.rotating_nodes[0].degrees_per_second - 35.0).abs() < f32::EPSILON);
-        assert_eq!(windmill.rotating_nodes[1].age, 2);
-        assert_eq!(windmill.rotating_nodes[1].node, "Age02_Windmill_Blades");
-        assert!(
-            Vec3::from_array(windmill.rotating_nodes[1].axis).abs_diff_eq(Vec3::Y, f32::EPSILON)
-        );
-        assert!((windmill.rotating_nodes[1].degrees_per_second - 35.0).abs() < f32::EPSILON);
+        let rotors = &content.archetypes[&windmill.archetype].rotating_nodes;
+        assert_eq!(rotors.len(), 2);
+        assert_eq!(rotors[0].age, Some(1));
+        assert_eq!(rotors[0].node, "Age01_Windmill_Blades");
+        assert!(Vec3::from_array(rotors[0].axis).abs_diff_eq(Vec3::Z, f32::EPSILON));
+        assert!((rotors[0].degrees_per_second - 35.0).abs() < f32::EPSILON);
+        assert_eq!(rotors[1].age, Some(2));
+        assert_eq!(rotors[1].node, "Age02_Windmill_Blades");
+        assert!(Vec3::from_array(rotors[1].axis).abs_diff_eq(Vec3::Y, f32::EPSILON));
+        assert!((rotors[1].degrees_per_second - 35.0).abs() < f32::EPSILON);
 
         let mut age_one = Transform::default();
         apply_authored_local_rotation(&mut age_one, Vec3::Z, 35.0_f32.to_radians(), 1.0);
@@ -23686,6 +23848,43 @@ mod tests {
                 .rotation
                 .abs_diff_eq(Quat::from_rotation_y(17.5_f32.to_radians()), 1e-6)
         );
+    }
+
+    #[test]
+    fn loading_icon_rotation_uses_the_authored_prefab_contract() {
+        let content = embedded_content();
+        let rotation = loading_icon_rotation(&content).unwrap();
+        assert_eq!(rotation.hierarchy_path, LOADING_ICON_HIERARCHY_PATH);
+        assert_eq!(rotation.age, None);
+        assert!(Vec3::from_array(rotation.axis).abs_diff_eq(Vec3::Z, f32::EPSILON));
+        assert!((rotation.degrees_per_second - 500.0).abs() < f32::EPSILON);
+        assert!(
+            content
+                .archetypes
+                .values()
+                .flat_map(|archetype| &archetype.rotating_nodes)
+                .count()
+                == 3
+        );
+        let mut transform = UiTransform::IDENTITY;
+        apply_loading_icon_rotation(&mut transform, 500.0_f32.to_radians(), 0.1);
+        assert!((transform.rotation.as_degrees() + 50.0).abs() < 1e-5);
+        let mut loading = WorldLoadingRuntime::default();
+        assert!(!loading_generation_ready(&mut loading));
+        assert!(loading_generation_ready(&mut loading));
+        let presentation = embedded_presentation();
+        for source_path in [
+            LOADING_SCREEN_TEXTURE_PATH,
+            LOADING_OVERLAY_TEXTURE_PATH,
+            LOADING_ICON_TEXTURE_PATH,
+        ] {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path)
+            );
+        }
     }
 
     #[test]
