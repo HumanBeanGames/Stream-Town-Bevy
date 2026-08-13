@@ -327,7 +327,12 @@ load/new-world boundaries rather than entering save data. The same action
 surface supports single-recruit role changes and confirmed dismissal, plus
 selected-building level-up and confirmed removal through the authoritative
 cost, level-cap, navigation, station, and target cleanup transactions; the Town
-Hall remains protected.
+Hall remains protected. Enemy selection resolves the converted enemy type, and
+enemy camps are selectable across their complete authored footprint with live
+health, maximum-health, and correctly sized outline feedback. Player selection
+restores distinct live health and role-experience meters (including level caps
+and XP requirements), building details show authored maximum levels, and finite
+resources retain Unity's amount-only presentation instead of inventing a cap.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that

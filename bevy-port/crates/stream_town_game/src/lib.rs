@@ -1022,7 +1022,31 @@ struct SeasonMeter;
 struct SelectionPanel;
 
 #[derive(Component)]
-struct SelectionPanelSlider;
+struct SelectionPanelSlider(SelectionPanelBar);
+
+#[derive(Component)]
+struct SelectionPanelSliderTrack(SelectionPanelBar);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SelectionPanelBar {
+    Health,
+    Experience,
+}
+
+struct SelectionPanelDetails {
+    description: String,
+    health_progress: Option<f32>,
+    experience_progress: Option<f32>,
+}
+
+impl SelectionPanelDetails {
+    const fn progress(&self, bar: SelectionPanelBar) -> Option<f32> {
+        match bar {
+            SelectionPanelBar::Health => self.health_progress,
+            SelectionPanelBar::Experience => self.experience_progress,
+        }
+    }
+}
 
 #[derive(Component)]
 struct GroupSelectionPanel;
@@ -4653,8 +4677,13 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
             right: px(20),
             bottom: px(82),
             width: px(460),
-            min_height: px(138),
-            padding: UiRect::all(px(18)),
+            min_height: px(160),
+            padding: UiRect {
+                left: px(18),
+                right: px(18),
+                top: px(18),
+                bottom: px(60),
+            },
             border: UiRect::all(px(2)),
             ..default()
         },
@@ -4662,33 +4691,44 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
     ));
     selection_panel.with_children(|parent| {
-        let mut track = parent.spawn(Node {
-            position_type: PositionType::Absolute,
-            left: px(18),
-            right: px(18),
-            bottom: px(14),
-            height: px(16),
-            overflow: Overflow::clip_x(),
-            ..default()
-        });
-        if let Some(background) = slider_background {
-            track.insert(ImageNode::new(background).with_mode(NodeImageMode::Stretch));
-        }
-        track.with_children(|track_parent| {
-            let slider_image = slider_fill.map_or_else(ImageNode::default, |image| {
-                ImageNode::new(image).with_mode(NodeImageMode::Stretch)
-            });
-            track_parent.spawn((
-                SelectionPanelSlider,
-                slider_image,
+        for (bar, bottom) in [
+            (SelectionPanelBar::Health, 14.0),
+            (SelectionPanelBar::Experience, 36.0),
+        ] {
+            let mut track = parent.spawn((
+                SelectionPanelSliderTrack(bar),
+                Visibility::Hidden,
                 Node {
-                    width: percent(100.0),
-                    height: percent(100.0),
+                    position_type: PositionType::Absolute,
+                    left: px(18),
+                    right: px(18),
+                    bottom: px(bottom),
+                    height: px(16),
+                    overflow: Overflow::clip_x(),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.2, 0.8, 0.24)),
             ));
-        });
+            if let Some(background) = slider_background.clone() {
+                track.insert(ImageNode::new(background).with_mode(NodeImageMode::Stretch));
+            }
+            track.with_children(|track_parent| {
+                let slider_image = slider_fill
+                    .clone()
+                    .map_or_else(ImageNode::default, |image| {
+                        ImageNode::new(image).with_mode(NodeImageMode::Stretch)
+                    });
+                track_parent.spawn((
+                    SelectionPanelSlider(bar),
+                    slider_image,
+                    Node {
+                        width: percent(100.0),
+                        height: percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.2, 0.8, 0.24)),
+                ));
+            });
+        }
     });
 
     commands.spawn((
@@ -14447,14 +14487,8 @@ fn group_selection_action_buttons(
     mut agent_commands: ResMut<AgentCommandQueue>,
     mut building_commands: ResMut<BuildingCommandQueue>,
     buttons: Query<(&Interaction, &GroupSelectionAction), Changed<Interaction>>,
-    mut dismiss_labels: Query<
-        &mut Text,
-        (With<GroupDismissLabel>, Without<BuildingRemoveLabel>),
-    >,
-    mut remove_labels: Query<
-        &mut Text,
-        (With<BuildingRemoveLabel>, Without<GroupDismissLabel>),
-    >,
+    mut dismiss_labels: Query<&mut Text, (With<GroupDismissLabel>, Without<BuildingRemoveLabel>)>,
+    mut remove_labels: Query<&mut Text, (With<BuildingRemoveLabel>, Without<GroupDismissLabel>)>,
 ) {
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -14549,7 +14583,7 @@ fn sync_selection_outline(
         *visibility = Visibility::Hidden;
         return;
     };
-    let footprint = selected_building_footprint(cell, &content.0, &simulation.0);
+    let footprint = selected_structural_footprint(cell, &content.0, &simulation.0);
     let player_selected = simulation
         .0
         .actors
@@ -14597,6 +14631,32 @@ fn selected_building_id_at_cell(
         .map(|building| building.id.clone())
 }
 
+fn selected_enemy_camp_at_cell<'a>(
+    cell: GridPos,
+    content: &'a ContentCatalog,
+    simulation: &'a WorldSimulation,
+) -> Option<(&'a EnemyCampState, &'a ArchetypeDef)> {
+    simulation.enemy_camps.values().find_map(|camp| {
+        let archetype = content.archetypes.get(&camp.archetype)?;
+        let inside = cell.x >= camp.position.x
+            && cell.z >= camp.position.z
+            && cell.x < camp.position.x.saturating_add(archetype.footprint[0])
+            && cell.z < camp.position.z.saturating_add(archetype.footprint[1]);
+        inside.then_some((camp, archetype))
+    })
+}
+
+fn selected_structural_footprint(
+    cell: GridPos,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Option<(GridPos, [u16; 2])> {
+    selected_building_footprint(cell, content, simulation).or_else(|| {
+        selected_enemy_camp_at_cell(cell, content, simulation)
+            .map(|(camp, archetype)| (camp.position, archetype.footprint))
+    })
+}
+
 fn selection_outline_transform(
     cell: GridPos,
     building: Option<(GridPos, [u16; 2])>,
@@ -14639,9 +14699,21 @@ fn update_selection_panel(
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
-    mut panels: Query<(&mut Text, &mut Visibility), With<SelectionPanel>>,
+    mut panels: Query<
+        (&mut Text, &mut Visibility),
+        (With<SelectionPanel>, Without<SelectionPanelSliderTrack>),
+    >,
+    mut tracks: Query<
+        (&SelectionPanelSliderTrack, &mut Visibility),
+        (With<SelectionPanelSliderTrack>, Without<SelectionPanel>),
+    >,
     mut sliders: Query<
-        (&mut Node, &mut ImageNode, &mut BackgroundColor),
+        (
+            &SelectionPanelSlider,
+            &mut Node,
+            &mut ImageNode,
+            &mut BackgroundColor,
+        ),
         With<SelectionPanelSlider>,
     >,
 ) {
@@ -14654,8 +14726,7 @@ fn update_selection_panel(
         }
         return;
     };
-    let Some((description, progress)) =
-        selection_panel_details(cell, &content.0, &world.generated, &simulation.0)
+    let Some(details) = selection_panel_details(cell, &content.0, &world.generated, &simulation.0)
     else {
         for (_, mut visibility) in &mut panels {
             *visibility = Visibility::Hidden;
@@ -14663,20 +14734,31 @@ fn update_selection_panel(
         return;
     };
     for (mut text, mut visibility) in &mut panels {
-        text.0.clone_from(&description);
+        text.0.clone_from(&details.description);
         *visibility = Visibility::Visible;
     }
-    let source_path = if progress <= 0.35 {
-        SELECTION_PANEL_TEXTURE_PATHS[2]
-    } else {
-        SELECTION_PANEL_TEXTURE_PATHS[1]
-    };
-    for (mut node, mut image, mut color) in &mut sliders {
+    for (track, mut visibility) in &mut tracks {
+        *visibility = if details.progress(track.0).is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (slider, mut node, mut image, mut color) in &mut sliders {
+        let Some(progress) = details.progress(slider.0) else {
+            continue;
+        };
+        let low_health = slider.0 == SelectionPanelBar::Health && progress <= 0.35;
+        let source_path = if low_health {
+            SELECTION_PANEL_TEXTURE_PATHS[2]
+        } else {
+            SELECTION_PANEL_TEXTURE_PATHS[1]
+        };
         node.width = percent((progress * 100.0).clamp(0.0, 100.0));
         if let Some(handle) = render.selection_panel_textures.get(source_path) {
             image.image = handle.clone();
         }
-        color.0 = if progress <= 0.35 {
+        color.0 = if low_health {
             Color::srgb(0.9, 0.14, 0.1)
         } else {
             Color::srgb(0.2, 0.8, 0.24)
@@ -14887,7 +14969,11 @@ fn technology_vote_cast_button(
 fn content_label(id: Option<&StableId>, prefix: &str, fallback: &str) -> String {
     id.map_or_else(
         || fallback.to_owned(),
-        |id| title_case(&format_camel_words(id.as_str().trim_start_matches(prefix))),
+        |id| {
+            title_case(&format_camel_words(
+                &id.as_str().trim_start_matches(prefix).replace('_', " "),
+            ))
+        },
     )
 }
 
@@ -15153,29 +15239,63 @@ fn selection_panel_details(
     content: &ContentCatalog,
     world: &GeneratedWorld,
     simulation: &WorldSimulation,
-) -> Option<(String, f32)> {
+) -> Option<SelectionPanelDetails> {
     if let Some(actor) = simulation
         .actors
         .values()
         .find(|actor| actor.position == cell)
     {
+        let maximum = actor.max_health.max(1);
+        let progress = building_health_fraction(actor.health, maximum);
+        if actor.role.as_str() == "role:enemy" {
+            let enemy_name = actor
+                .archetype
+                .as_ref()
+                .and_then(|id| content.archetypes.get(id))
+                .and_then(|archetype| archetype.enemy.as_ref())
+                .map_or_else(
+                    || "Enemy".to_owned(),
+                    |enemy| content_label(Some(&enemy.enemy_type), "enemy:", "Enemy"),
+                );
+            return Some(SelectionPanelDetails {
+                description: format!(
+                    "{enemy_name}\nHealth {}/{}  |  Cell {},{}",
+                    actor.health.max(0),
+                    maximum,
+                    cell.x,
+                    cell.z
+                ),
+                health_progress: Some(progress),
+                experience_progress: None,
+            });
+        }
         let name = actor.display_name.as_deref().unwrap_or(actor.id.as_str());
         let role = content
             .roles
             .get(&actor.role)
             .map_or(actor.role.as_str(), |role| role.display_name.as_str());
-        let maximum = actor.max_health.max(1);
-        let progress = building_health_fraction(actor.health, maximum);
-        return Some((
-            format!(
-                "{name}\n{role}\nHealth {}/{}  |  Cell {},{}",
+        let role_progress = role_progress(actor);
+        let required_experience = stream_town_domain::required_role_experience(role_progress.level);
+        let experience_progress = if role_progress.level >= stream_town_domain::MAX_ROLE_LEVEL {
+            1.0
+        } else {
+            objective_progress_ratio(role_progress.experience, required_experience)
+        };
+        return Some(SelectionPanelDetails {
+            description: format!(
+                "{name}\n{role}  |  Level {}/{}\nHealth {}/{}  |  XP {}/{}  |  Cell {},{}",
+                role_progress.level,
+                stream_town_domain::MAX_ROLE_LEVEL,
                 actor.health.max(0),
                 maximum,
+                role_progress.experience,
+                required_experience,
                 cell.x,
                 cell.z
             ),
-            progress,
-        ));
+            health_progress: Some(progress),
+            experience_progress: Some(experience_progress),
+        });
     }
     if let Some((building, definition)) = simulation.buildings.values().find_map(|building| {
         let definition = content
@@ -15191,13 +15311,21 @@ fn selection_panel_details(
     }) {
         let maximum = building_max_health(content, building).max(1);
         let progress = building_health_fraction(building.health, maximum);
-        let state = if building.complete {
-            format!("Level {}", building.level)
+        let state = if building.complete && definition.can_level {
+            let building_id = content.buildings.iter().find_map(|(id, candidate)| {
+                (candidate.archetype == building.archetype).then(|| id.clone())
+            });
+            let maximum_level = building_id.as_ref().map_or(building.level, |building_id| {
+                maximum_building_level(content, simulation, building_id)
+            });
+            format!("Level {} / {maximum_level}", building.level)
+        } else if building.complete {
+            "Complete".to_owned()
         } else {
             "Under construction".to_owned()
         };
-        return Some((
-            format!(
+        return Some(SelectionPanelDetails {
+            description: format!(
                 "{}\n{state}\nHealth {}/{}  |  Cell {},{}",
                 definition.display_name,
                 building.health.max(0),
@@ -15205,8 +15333,29 @@ fn selection_panel_details(
                 cell.x,
                 cell.z
             ),
-            progress,
-        ));
+            health_progress: Some(progress),
+            experience_progress: None,
+        });
+    }
+    if let Some((camp, archetype)) = selected_enemy_camp_at_cell(cell, content, simulation) {
+        let maximum = archetype
+            .health
+            .as_ref()
+            .map_or(BUILDING_MAX_HEALTH, |health| {
+                i32::try_from(health.max_health).unwrap_or(i32::MAX)
+            })
+            .max(1);
+        return Some(SelectionPanelDetails {
+            description: format!(
+                "Enemy Camp\nHealth {}/{}  |  Cell {},{}",
+                camp.health.max(0),
+                maximum,
+                cell.x,
+                cell.z
+            ),
+            health_progress: Some(building_health_fraction(camp.health, maximum)),
+            experience_progress: None,
+        });
     }
     world
         .resources
@@ -15214,17 +15363,17 @@ fn selection_panel_details(
         .find(|resource| resource.position == cell && resource.amount > 0)
         .map(|resource| {
             let kind = resource.kind.as_str().trim_start_matches("resource:");
-            (
-                format!(
+            SelectionPanelDetails {
+                description: format!(
                     "{} node\n{} remaining  |  Cell {},{}",
                     title_case(kind),
                     resource.amount,
                     cell.x,
                     cell.z
                 ),
-                f32::from(u16::try_from(resource.amount.min(200)).expect("bounded resource fits"))
-                    / 200.0,
-            )
+                health_progress: None,
+                experience_progress: None,
+            }
         })
 }
 
@@ -24833,13 +24982,92 @@ mod tests {
         actor.max_health = 120;
         let world = generate_world(&GameConfig::default().world);
 
-        let (description, progress) =
-            selection_panel_details(position, &content, &world, &simulation)
-                .expect("actor cell should resolve");
-        assert!(description.contains("Selection Test"));
-        assert!(description.contains("Health 60/120"));
-        assert!((progress - 0.5).abs() <= f32::EPSILON);
+        let details = selection_panel_details(position, &content, &world, &simulation)
+            .expect("actor cell should resolve");
+        assert!(details.description.contains("Selection Test"));
+        assert!(details.description.contains("Level 1/99"));
+        assert!(details.description.contains("Health 60/120"));
+        assert_eq!(details.health_progress, Some(0.5));
+        assert_eq!(details.experience_progress, Some(0.0));
         assert_eq!(title_case("wood"), "Wood");
+
+        let resource = world
+            .resources
+            .iter()
+            .find(|resource| resource.amount > 0)
+            .expect("generated resource");
+        let resource_details = selection_panel_details(
+            resource.position,
+            &content,
+            &world,
+            &WorldSimulation::new(17),
+        )
+        .expect("resource cell should resolve");
+        assert!(resource_details.description.contains("remaining"));
+        assert_eq!(resource_details.health_progress, None);
+        assert_eq!(resource_details.experience_progress, None);
+
+        let enemy_archetype =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Minotaur.prefab")
+                .expect("converted enemy archetype");
+        let enemy_position = GridPos { x: 12, z: 14 };
+        assert!(simulation.spawn_enemy(
+            StableId::new("actor:selection_enemy").unwrap(),
+            enemy_archetype,
+            enemy_position,
+            25,
+        ));
+        let enemy_details = selection_panel_details(enemy_position, &content, &world, &simulation)
+            .expect("enemy cell should resolve");
+        assert!(enemy_details.description.starts_with("Minotaur\n"));
+        assert!(enemy_details.description.contains("Health 25/25"));
+        assert_eq!(enemy_details.health_progress, Some(1.0));
+        assert_eq!(enemy_details.experience_progress, None);
+    }
+
+    #[test]
+    fn selection_panel_and_outline_resolve_the_full_enemy_camp_footprint() {
+        let content = embedded_content();
+        let world = generate_world(&GameConfig::default().world);
+        let (camp_archetype_id, camp_archetype) = content
+            .archetypes
+            .iter()
+            .find(|(_, archetype)| archetype.enemy_spawner.is_some())
+            .expect("converted enemy camp archetype");
+        let camp_id = StableId::new("enemy_camp:selection_test").unwrap();
+        let origin = GridPos { x: 10, z: 12 };
+        let selected_cell = GridPos {
+            x: origin.x + camp_archetype.footprint[0] - 1,
+            z: origin.z + camp_archetype.footprint[1] - 1,
+        };
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.enemy_camps.insert(
+            camp_id.clone(),
+            EnemyCampState {
+                id: camp_id,
+                archetype: camp_archetype_id.clone(),
+                position: origin,
+                health: 400,
+                spawn_remaining_seconds: 2.0,
+                spawned_enemies: BTreeSet::new(),
+            },
+        );
+
+        assert_eq!(
+            selected_enemy_camp_at_cell(selected_cell, &content, &simulation)
+                .map(|(camp, _)| &camp.id),
+            simulation.enemy_camps.values().next().map(|camp| &camp.id)
+        );
+        assert_eq!(
+            selected_structural_footprint(selected_cell, &content, &simulation),
+            Some((origin, camp_archetype.footprint))
+        );
+        let details = selection_panel_details(selected_cell, &content, &world, &simulation)
+            .expect("camp footprint should resolve");
+        assert!(details.description.starts_with("Enemy Camp\n"));
+        assert!(details.description.contains("Health 400/1000"));
+        assert_eq!(details.health_progress, Some(0.4));
+        assert_eq!(details.experience_progress, None);
     }
 
     #[test]
