@@ -13,8 +13,8 @@ use stream_town_domain::{
     BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemySpawnerDef, FoliageHabitat,
     FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef, ObjectiveKind,
     PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
-    RoleSlotContribution, StableId, StationDef, StorageContribution, StorageModelDef, TechGroup,
-    TechNode, TechTree, WeightedEnemySpawn,
+    RoleSlotContribution, StableId, StationDef, StorageContribution, StorageModelDef,
+    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -299,6 +299,7 @@ fn convert_export(
                 storage_models: storage_model_definitions(prefab)?,
                 passive_resources: passive_resource_contributions(prefab)?,
                 station: station_definition(prefab)?,
+                targeting: targeting_score_definition(prefab)?,
                 projectile_shooter: projectile_shooter_definition(prefab)?,
             },
         );
@@ -696,6 +697,36 @@ fn station_definition(asset: &UnityAsset) -> Result<Option<StationDef>> {
         max_targets,
         update_milliseconds: positive_u32("_updateRate", 1_000.0)?,
         search_range_milli_cells: positive_u32("_targetSearchRange", 500.0)?,
+    }))
+}
+
+fn targeting_score_definition(asset: &UnityAsset) -> Result<Option<TargetingScoreDef>> {
+    let Some(component) = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .find(|component| component_type(component).starts_with("Target.Targetable"))
+    else {
+        return Ok(None);
+    };
+    let non_negative_milli = |path: &str, scale: f64| -> Result<u32> {
+        let value = component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .with_context(|| format!("{} targetable {path} is invalid", asset.path))?;
+        if !value.is_finite() || value < 0.0 {
+            bail!("{} targetable {path} must be non-negative", asset.path);
+        }
+        (value * scale)
+            .round()
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} targetable {path} is out of range", asset.path))
+    };
+    Ok(Some(TargetingScoreDef {
+        assignment_penalty_milli: non_negative_milli("_assignmentPenaltyMod", 1_000.0)?,
+        // Unity's shipping terrain grid uses two world units per logical cell.
+        distance_penalty_milli_per_cell: non_negative_milli("_distancePenaltyMod", 2_000.0)?,
     }))
 }
 
@@ -2445,6 +2476,32 @@ mod tests {
         assert_eq!(station.max_targets, 10);
         assert_eq!(station.update_milliseconds, 3_000);
         assert_eq!(station.search_range_milli_cells, 50_000);
+    }
+
+    #[test]
+    fn converts_targetable_assignment_and_distance_weights() {
+        let mut prefab = asset(
+            "farm",
+            "Assets/Prefabs/Buildings/Building_Farm.prefab",
+            "UnityEngine.GameObject",
+            vec![],
+        );
+        prefab.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Target.TargetableBuilding, Assembly-CSharp",
+                vec![
+                    field("_assignmentPenaltyMod", Value::from(10_000.0)),
+                    field("_distancePenaltyMod", Value::from(0.05)),
+                ],
+            )],
+        });
+        assert_eq!(
+            targeting_score_definition(&prefab).unwrap(),
+            Some(TargetingScoreDef {
+                assignment_penalty_milli: 10_000_000,
+                distance_penalty_milli_per_cell: 100,
+            })
+        );
     }
 
     #[test]

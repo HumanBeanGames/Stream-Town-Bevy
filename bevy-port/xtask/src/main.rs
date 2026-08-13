@@ -151,11 +151,17 @@ fn validate() -> Result<()> {
         .values()
         .map(|building| building.storage_models.len())
         .sum();
+    let targeting_scores = content
+        .buildings
+        .values()
+        .filter(|building| building.targeting.is_some())
+        .count();
     if content.foliage.len() != 4
         || foliage_variants != 21
         || passive_resource_generators != 1
         || building_model_handlers != 42
         || storage_model_handlers != 6
+        || targeting_scores != 26
         || (
             content.schema_version,
             content.archetypes.len(),
@@ -168,7 +174,7 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (21, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (22, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -492,7 +498,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes, 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

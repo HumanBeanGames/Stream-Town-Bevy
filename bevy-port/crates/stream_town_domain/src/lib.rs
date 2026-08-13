@@ -32,7 +32,7 @@ pub use content::{
     EnemySpawnerDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef, HealthDef, ObjectiveDef,
     ObjectiveKind, PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef,
     RoleEquipmentDef, RoleSlotContribution, StationDef, StorageContribution, StorageModelDef,
-    TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};

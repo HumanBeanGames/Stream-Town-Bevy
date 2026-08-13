@@ -53,8 +53,8 @@ use stream_town_domain::{
     ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
     PresentationCatalog, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
     RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
-    StationDef, StorageModelDef, StreamUserType, TownEvent, Weather, WorldSimulation,
-    WorldSnapshot, generate_world_with_content,
+    StationDef, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, Weather,
+    WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -6898,6 +6898,26 @@ fn grid_distance_squared(left: GridPos, right: GridPos) -> u64 {
     x * x + z * z
 }
 
+fn target_score_milli(
+    target: GridPos,
+    actor: GridPos,
+    assigned_count: u32,
+    scoring: &TargetingScoreDef,
+) -> u128 {
+    // Keep Unity's Euclidean `Vector3.Distance` ordering without introducing
+    // platform-dependent floating-point decisions into the simulation. The
+    // square root is evaluated in thousandths of a logical grid cell.
+    let distance_milli_cells = grid_distance_squared(target, actor)
+        .saturating_mul(1_000_000)
+        .isqrt();
+    u128::from(distance_milli_cells)
+        .saturating_mul(u128::from(scoring.distance_penalty_milli_per_cell))
+        .div_ceil(1_000)
+        .saturating_add(
+            u128::from(assigned_count).saturating_mul(u128::from(scoring.assignment_penalty_milli)),
+        )
+}
+
 fn within_station_search_region(position: GridPos, station: StationCandidate<'_>) -> bool {
     let range = station_search_range_cells(station);
     position.x.abs_diff(station.position.x) <= range
@@ -6970,6 +6990,13 @@ fn goal_reservation(goal: &AgentGoal) -> Option<&StableId> {
         // resource pipeline. Targetable farm holders continue to use their
         // station's authored max-target capacity.
         AgentGoal::Gather(target) => Some(target),
+        _ => None,
+    }
+}
+
+fn goal_assignment_target(goal: &AgentGoal) -> Option<&StableId> {
+    match goal {
+        AgentGoal::HarvestFarm(target) => Some(target),
         _ => None,
     }
 }
@@ -7120,6 +7147,7 @@ fn next_agent_goal(
         actor_id,
         current,
         &BTreeMap::new(),
+        &BTreeMap::new(),
     )
 }
 
@@ -7132,6 +7160,7 @@ fn next_agent_goal_with_reservations(
     actor_id: &StableId,
     current: GridPos,
     reservations: &BTreeMap<StableId, StableId>,
+    target_assignments: &BTreeMap<StableId, u32>,
 ) -> (AgentGoal, GridPos) {
     let Some(actor) = simulation.actors.get(actor_id) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
@@ -7443,7 +7472,25 @@ fn next_agent_goal_with_reservations(
                             station.position,
                         )
                     }),
-                    approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
+                    definition.targeting.as_ref().map_or_else(
+                        || {
+                            u128::from(grid_distance_squared(
+                                building_visual_grid(content, building),
+                                current,
+                            ))
+                        },
+                        |scoring| {
+                            target_score_milli(
+                                building_visual_grid(content, building),
+                                current,
+                                target_assignments
+                                    .get(&building.id)
+                                    .copied()
+                                    .unwrap_or_default(),
+                                scoring,
+                            )
+                        },
+                    ),
                     building.id.clone(),
                     approach,
                 ))
@@ -7455,7 +7502,7 @@ fn next_agent_goal_with_reservations(
         }
         if let Some((_, _, building, approach)) = farms
             .into_iter()
-            .min_by_key(|(_, distance, id, _)| (*distance, id.clone()))
+            .min_by_key(|(_, score, id, _)| (*score, id.clone()))
         {
             return (AgentGoal::HarvestFarm(building), approach);
         }
@@ -9221,6 +9268,7 @@ fn move_agents(
         simulation.0.weather = weather;
     }
     let mut resource_reservations = BTreeMap::new();
+    let mut target_assignment_counts: BTreeMap<StableId, u32> = BTreeMap::new();
     for (_, agent, _, _, _) in &agents {
         if let Some(target) = goal_reservation(&agent.goal)
             && goal_reservation_is_valid(
@@ -9239,6 +9287,20 @@ fn move_agents(
                     }
                 })
                 .or_insert_with(|| agent.id.clone());
+        }
+        if let Some(target) = goal_assignment_target(&agent.goal)
+            && goal_reservation_is_valid(
+                &simulation.0,
+                &world.generated,
+                &content.0,
+                &agent.id,
+                &agent.goal,
+            )
+        {
+            target_assignment_counts
+                .entry(target.clone())
+                .and_modify(|count| *count = count.saturating_add(1))
+                .or_insert(1_u32);
         }
     }
     let mut agent_order: Vec<_> = agents
@@ -9475,6 +9537,14 @@ fn move_agents(
             {
                 resource_reservations.remove(reserved);
             }
+            if let Some(target) = goal_assignment_target(&agent.goal)
+                && let Some(count) = target_assignment_counts.get_mut(target)
+            {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    target_assignment_counts.remove(target);
+                }
+            }
             let (goal, target) = next_agent_goal_with_reservations(
                 &simulation.0,
                 &world.generated,
@@ -9483,10 +9553,17 @@ fn move_agents(
                 &agent.id,
                 location.0,
                 &resource_reservations,
+                &target_assignment_counts,
             );
             agent.goal = goal;
             if let Some(reserved) = goal_reservation(&agent.goal) {
                 resource_reservations.insert(reserved.clone(), agent.id.clone());
+            }
+            if let Some(target) = goal_assignment_target(&agent.goal) {
+                target_assignment_counts
+                    .entry(target.clone())
+                    .and_modify(|count| *count = count.saturating_add(1))
+                    .or_insert(1_u32);
             }
             agent.target = target;
             agent.path = agent_path(
@@ -19103,6 +19180,18 @@ mod tests {
     }
 
     #[test]
+    fn target_score_uses_authored_euclidean_distance_and_assignment_penalty() {
+        let scoring = TargetingScoreDef {
+            assignment_penalty_milli: 10_000_000,
+            distance_penalty_milli_per_cell: 100,
+        };
+        assert_eq!(
+            target_score_milli(GridPos { x: 3, z: 4 }, GridPos { x: 0, z: 0 }, 2, &scoring,),
+            20_000_500,
+        );
+    }
+
+    #[test]
     fn combat_and_healing_bypass_station_target_caches() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -19775,6 +19864,7 @@ mod tests {
                 &first,
                 current,
                 &reservations,
+                &BTreeMap::new(),
             )
             .0,
             AgentGoal::Gather(claimed.id.clone())
@@ -19787,6 +19877,7 @@ mod tests {
             &second,
             current,
             &reservations,
+            &BTreeMap::new(),
         )
         .0;
         assert!(matches!(second_goal, AgentGoal::Gather(ref id) if id != &claimed.id));
@@ -19847,6 +19938,7 @@ mod tests {
                 &actor_id,
                 current,
                 &reservations,
+                &BTreeMap::new(),
             )
             .0,
             AgentGoal::Wander
@@ -20031,6 +20123,95 @@ mod tests {
         assert!(
             compatible_target_ids(&content, &simulation, &world, &simulation.actors[&actor_id],)
                 .contains(&farm_id)
+        );
+    }
+
+    #[test]
+    fn authored_assignment_penalty_spreads_farmers_across_farms() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let farm = &content.buildings[&StableId::new("building:farm").unwrap()];
+        assert_eq!(
+            farm.targeting,
+            Some(TargetingScoreDef {
+                assignment_penalty_milli: 10_000_000,
+                distance_penalty_milli_per_cell: 100,
+            })
+        );
+        let mut world = generate_world(&config.world);
+        let first_position =
+            find_building_site(&world, GridPos { x: 16, z: 16 }, farm.footprint).unwrap();
+        world
+            .navigation
+            .set_blocked(
+                building_region(first_position, farm.footprint, &world).unwrap(),
+                true,
+            )
+            .unwrap();
+        let second_position =
+            find_building_site(&world, GridPos { x: 48, z: 48 }, farm.footprint).unwrap();
+        world
+            .navigation
+            .set_blocked(
+                building_region(second_position, farm.footprint, &world).unwrap(),
+                true,
+            )
+            .unwrap();
+        let first_id = StableId::new("building:assignment_farm_a").unwrap();
+        let second_id = StableId::new("building:assignment_farm_b").unwrap();
+        let actor_id = StableId::new("npc:assignment_farmer").unwrap();
+        let current =
+            building_approach(&world, first_position, farm.footprint, first_position).unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        for (id, position) in [
+            (first_id.clone(), first_position),
+            (second_id.clone(), second_position),
+        ] {
+            simulation.buildings.insert(
+                id.clone(),
+                BuildingState {
+                    id,
+                    archetype: farm.archetype.clone(),
+                    position,
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: i32::try_from(building_base_max_health(&content, farm)).unwrap(),
+                    complete: true,
+                },
+            );
+        }
+        assert!(simulation.join_player(actor_id.clone(), current));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:farmer").unwrap())
+            .unwrap();
+
+        assert_eq!(
+            next_agent_goal_with_reservations(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &actor_id,
+                current,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .0,
+            AgentGoal::HarvestFarm(first_id.clone()),
+        );
+        assert_eq!(
+            next_agent_goal_with_reservations(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &actor_id,
+                current,
+                &BTreeMap::new(),
+                &BTreeMap::from([(first_id, 1)]),
+            )
+            .0,
+            AgentGoal::HarvestFarm(second_id),
         );
     }
 

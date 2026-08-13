@@ -1,5 +1,5 @@
 (
-    schema_version: 21,
+    schema_version: 22,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -7612,6 +7612,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:bowyard": (
             display_name: "Bowyard",
@@ -7654,6 +7658,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:castle": (
             display_name: "Castle",
@@ -7702,6 +7710,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:farm": (
             display_name: "Farm",
@@ -7742,6 +7754,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 10000000,
+                distance_penalty_milli_per_cell: 100,
+            )),
         ),
         "building:fishinghut": (
             display_name: "FishingHut",
@@ -7795,6 +7811,10 @@
                 max_targets: 10,
                 update_milliseconds: 3000,
                 search_range_milli_cells: 50000,
+            )),
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
             )),
         ),
         "building:foodstorage": (
@@ -7867,6 +7887,10 @@
             ],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:forge": (
             display_name: "Forge",
@@ -7910,6 +7934,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:fountain": (
             display_name: "Fountain",
@@ -7944,6 +7972,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:gate": (
             display_name: "Gate",
@@ -7987,6 +8019,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:house": (
             display_name: "House",
@@ -8041,6 +8077,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:lumbermill": (
             display_name: "Lumbermill",
@@ -8103,6 +8143,10 @@
                 update_milliseconds: 3000,
                 search_range_milli_cells: 50000,
             )),
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:marketplace": (
             display_name: "Marketplace",
@@ -8144,6 +8188,10 @@
                 ),
             ],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:monastery": (
             display_name: "Monastery",
@@ -8184,6 +8232,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:necrotower": (
             display_name: "Necromancer Tower",
@@ -8226,6 +8278,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:orestorage": (
             display_name: "Ore Storage",
@@ -8296,6 +8352,10 @@
             ],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:statue_1": (
             display_name: "Statue1",
@@ -8330,6 +8390,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:statue_2": (
             display_name: "Statue2",
@@ -8364,6 +8428,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:statue_3": (
             display_name: "Statue3",
@@ -8398,6 +8466,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:stonemason": (
             display_name: "Stonemason",
@@ -8464,6 +8536,10 @@
                 update_milliseconds: 3000,
                 search_range_milli_cells: 50000,
             )),
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:torch": (
             display_name: "Torch",
@@ -8490,6 +8566,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:tower": (
             display_name: "Tower",
@@ -8551,6 +8631,10 @@
                 max_targets: 10,
                 update_milliseconds: 3000,
                 search_range_milli_cells: 7500,
+            )),
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
             )),
             projectile_shooter: Some((
                 projectile_pool: "TowerProjectile",
@@ -8616,6 +8700,10 @@
                 max_targets: 30,
                 update_milliseconds: 3000,
                 search_range_milli_cells: 150000,
+            )),
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
             )),
         ),
         "building:wall": (
@@ -8708,6 +8796,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:windmill": (
             display_name: "Windmill",
@@ -8771,6 +8863,10 @@
                 update_milliseconds: 3000,
                 search_range_milli_cells: 50000,
             )),
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:wizardtower": (
             display_name: "Wizard Tower",
@@ -8811,6 +8907,10 @@
             storage_models: [],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
         "building:woodstorage": (
             display_name: "Wood Storage",
@@ -8882,6 +8982,10 @@
             ],
             passive_resources: [],
             station: None,
+            targeting: Some((
+                assignment_penalty_milli: 15000,
+                distance_penalty_milli_per_cell: 1000,
+            )),
         ),
     },
     roles: {

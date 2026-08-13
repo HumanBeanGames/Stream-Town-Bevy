@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786587309.3312523,
-    "ast_hash": "c70d3df87d3526fb15ca0d4817fdcccc",
+    "mtime": 1786615653.8368015,
+    "ast_hash": "1427f7ac2f5951ecf4cb5e67e1d5a190",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786612062.3349502,
-    "ast_hash": "c80ca6b47cad99633f85520d59495376",
+    "mtime": 1786615584.9392538,
+    "ast_hash": "aab0a2712a53794c2bf490421a8600d1",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786615000.4018955,
-    "ast_hash": "48abc5468f0bc5cb6afe9cba0ab24787",
+    "mtime": 1786616099.3813899,
+    "ast_hash": "169416fc1d54845dc0645bad228bcbce",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2805,13 +2805,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786587081.6868293,
-    "ast_hash": "b159601d03095dc3969f3c6eed7d567e",
+    "mtime": 1786616017.3764355,
+    "ast_hash": "34088c748bb3faafa89e919bdc61b79b",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786579389.6430626,
-    "ast_hash": "9b0c4bf2a6313d73edeae9d7f2636a00",
+    "mtime": 1786616546.783408,
+    "ast_hash": "d299de5ea49bffb298d62bf7d21ec62f",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -3630,8 +3630,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
-    "mtime": 1786575842.3613074,
-    "ast_hash": "cedf9e9d0abb007186453ab9459a84fa",
+    "mtime": 1786615684.9272509,
+    "ast_hash": "ca0acf4c97b3b71acc57bd80fb3b2936",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/models.rs": {
@@ -4452,6 +4452,11 @@
   "graphify-out/memory/query_20260813_094114_shipping_role_station_behavior_town_hall_saved_pos.md": {
     "mtime": 1786614074.9128664,
     "ast_hash": "d3303eae6403ae06e405172e732b94ec",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_100155_unity_station_targetsensor_distance_range_generate.md": {
+    "mtime": 1786615315.108449,
+    "ast_hash": "05eea36fb32058b4d0cd3d36323a1f4e",
     "semantic_hash": ""
   }
 }

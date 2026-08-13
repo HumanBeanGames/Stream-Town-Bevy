@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 21;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 22;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -183,6 +183,8 @@ pub struct BuildingDef {
     #[serde(default)]
     pub station: Option<StationDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targeting: Option<TargetingScoreDef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projectile_shooter: Option<ProjectileShooterDef>,
 }
 
@@ -252,6 +254,15 @@ pub struct StationDef {
     pub update_milliseconds: u32,
     /// Unity ranges converted through its authored two-unit building grid.
     pub search_range_milli_cells: u32,
+}
+
+/// Authored `Targetable.CalculateScore` weights converted to logical grid units.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TargetingScoreDef {
+    /// Score added for every actor already assigned to this target.
+    pub assignment_penalty_milli: u32,
+    /// Score per logical grid cell between the actor and target.
+    pub distance_penalty_milli_per_cell: u32,
 }
 
 /// Renderer-node bindings from Unity's `CharacterModelHandler`.
@@ -501,6 +512,8 @@ pub enum ContentError {
     InvalidPassiveResource(StableId),
     #[error("building {0} has invalid model-handler data")]
     InvalidBuildingModels(StableId),
+    #[error("building {0} has invalid target-scoring data")]
+    InvalidTargetingScore(StableId),
 }
 
 impl ContentCatalog {
@@ -675,6 +688,12 @@ impl ContentCatalog {
                     || station.search_range_milli_cells == 0
             }) {
                 return Err(ContentError::InvalidStation(id.clone()));
+            }
+            if building.targeting.as_ref().is_some_and(|targeting| {
+                targeting.assignment_penalty_milli == 0
+                    && targeting.distance_penalty_milli_per_cell == 0
+            }) {
+                return Err(ContentError::InvalidTargetingScore(id.clone()));
             }
             if building.projectile_shooter.as_ref().is_some_and(|shooter| {
                 shooter.projectile_pool.trim().is_empty()

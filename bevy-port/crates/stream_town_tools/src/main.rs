@@ -459,6 +459,14 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             ui.monospace(format!("target: {kind}"));
                         }
                     }
+                    if let Some(targeting) = &building.targeting {
+                        ui.separator();
+                        ui.label(format!(
+                            "Target scoring: +{:.2} per assignment, +{:.2} per cell",
+                            f64::from(targeting.assignment_penalty_milli) / 1_000.0,
+                            f64::from(targeting.distance_penalty_milli_per_cell) / 1_000.0
+                        ));
+                    }
                     for income in &building.passive_resources {
                         ui.separator();
                         ui.label(format!(
