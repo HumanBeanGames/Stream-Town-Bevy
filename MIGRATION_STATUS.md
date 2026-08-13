@@ -434,6 +434,12 @@ mistaken for production-ready systems.
   idle, event completion/stoppage sends the typed `Exit` trigger, and the Jump
   exit remains visible for Unity's authored 2.5-second delayed removal. This is
   separate from the unlockable Fish God pet, whose prefab has no Animator.
+- The shipping Eyes and Hair materials now resolve their
+  `Custom/CharacterSimple` shader to a typed Bevy material and WGSL port. Its
+  `_characterTexture * _albedoColor` surface contract is preserved, and the
+  per-renderer eye/hair/facial-hair colour updates formerly applied through
+  Unity `MaterialPropertyBlock`s now create cached typed-material variants.
+  Inherited glTF materials are promoted through the same path before tinting.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red

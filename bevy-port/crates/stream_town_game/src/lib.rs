@@ -119,6 +119,8 @@ const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
 const CRITTER_MATERIAL_ID: &str = "material:56cfb478fa4b9e8469bcbbf9cf077701";
 const FLAG_SHADER_ASSET_PATH: &str = "shaders/flag_material.wgsl";
 const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
+const CHARACTER_SHADER_ASSET_PATH: &str = "shaders/character_material.wgsl";
+const CHARACTER_UNITY_SHADER_PATH: &str = "Assets/Shaders/LowPolyST.shader";
 const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_DropShadow.png";
 const LOADING_SCREEN_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingScreen.png";
 const LOADING_OVERLAY_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_loadingOverlay.png";
@@ -772,6 +774,7 @@ type BoundsMaterial = ExtendedMaterial<StandardMaterial, BoundsMaterialExtension
 struct SpecialtyMaterialAssets<'w> {
     giraffe: Option<ResMut<'w, Assets<GiraffeMaterial>>>,
     bounds: Option<ResMut<'w, Assets<BoundsMaterial>>>,
+    character: Option<ResMut<'w, Assets<CharacterMaterial>>>,
 }
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
@@ -894,6 +897,25 @@ impl MaterialExtension for FlagMaterialExtension {
 
 type FlagMaterial = ExtendedMaterial<StandardMaterial, FlagMaterialExtension>;
 
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct CharacterMaterialUniform {
+    albedo_color: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct CharacterMaterialExtension {
+    #[uniform(100)]
+    parameters: CharacterMaterialUniform,
+}
+
+impl MaterialExtension for CharacterMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        CHARACTER_SHADER_ASSET_PATH.into()
+    }
+}
+
+type CharacterMaterial = ExtendedMaterial<StandardMaterial, CharacterMaterialExtension>;
+
 #[derive(Clone)]
 enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
@@ -906,6 +928,7 @@ enum ResolvedMaterialHandle {
     Grass(Handle<GrassMaterial>),
     Critter(Handle<CritterMaterial>),
     Flag(Handle<FlagMaterial>),
+    Character(Handle<CharacterMaterial>),
 }
 
 #[derive(Resource, Default)]
@@ -1752,19 +1775,27 @@ struct CosmeticNode {
 struct CosmeticRenderer {
     actor_root: Entity,
     kind: CosmeticNodeKind,
-    base_material: Handle<StandardMaterial>,
+    base_material: Handle<CharacterMaterial>,
     applied_color: Option<u8>,
 }
 
 struct CosmeticMaterialVariant {
-    base_material: Handle<StandardMaterial>,
+    base_material: Handle<CharacterMaterial>,
     kind: CosmeticNodeKind,
     color: u8,
-    material: Handle<StandardMaterial>,
+    material: Handle<CharacterMaterial>,
 }
 
 #[derive(Resource, Default)]
 struct CosmeticMaterialCache(Vec<CosmeticMaterialVariant>);
+
+struct CosmeticBaseMaterialVariant {
+    source: Handle<StandardMaterial>,
+    material: Handle<CharacterMaterial>,
+}
+
+#[derive(Resource, Default)]
+struct CosmeticBaseMaterialCache(Vec<CosmeticBaseMaterialVariant>);
 
 #[derive(Resource, Default)]
 struct RoleActionAudioCache(BTreeMap<StableId, Handle<Pitch>>);
@@ -1979,6 +2010,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<PostProcessPresentation>()
             .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
+            .init_resource::<CosmeticBaseMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
             .init_resource::<JukeboxRuntime>()
             .init_resource::<NativeAnimationCache>()
@@ -2350,6 +2382,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         .add_plugins(MaterialPlugin::<CritterMaterial>::default())
         .add_plugins(MaterialPlugin::<FlagMaterial>::default())
+        .add_plugins(MaterialPlugin::<CharacterMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
 }
@@ -2500,6 +2533,7 @@ fn setup_rendering(
         SpecialtyMaterialAssets {
             giraffe: Some(mut giraffe_materials),
             bounds: Some(mut bounds_materials),
+            character: Some(mut character_materials),
         },
         Some(mut tree_materials),
         Some(mut grass_materials),
@@ -2718,6 +2752,12 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Critter(critter.clone())
             } else if material.source_path == FLAG_MATERIAL_PATH {
                 ResolvedMaterialHandle::Flag(flag.clone())
+            } else if material.shader_source.as_deref() == Some(CHARACTER_UNITY_SHADER_PATH) {
+                ResolvedMaterialHandle::Character(character_materials.add(character_material(
+                    material,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                )))
             } else {
                 ResolvedMaterialHandle::Standard(materials.add(standard_material(
                     material,
@@ -3769,6 +3809,44 @@ fn standard_material(
             Vec2::from_array(texture_transform.offset),
         ),
         ..default()
+    }
+}
+
+fn character_material(
+    material: &MaterialDef,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> CharacterMaterial {
+    let mut base = standard_material(material, presentation, asset_server);
+    base.base_color = Color::WHITE;
+    CharacterMaterial {
+        base,
+        extension: CharacterMaterialExtension {
+            parameters: CharacterMaterialUniform {
+                albedo_color: Color::srgba(
+                    material.base_color[0],
+                    material.base_color[1],
+                    material.base_color[2],
+                    material.base_color[3],
+                )
+                .to_linear()
+                .to_f32_array()
+                .into(),
+            },
+        },
+    }
+}
+
+fn character_material_from_standard(material: StandardMaterial) -> CharacterMaterial {
+    let albedo_color = material.base_color.to_linear().to_f32_array().into();
+    CharacterMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            ..material
+        },
+        extension: CharacterMaterialExtension {
+            parameters: CharacterMaterialUniform { albedo_color },
+        },
     }
 }
 
@@ -8413,6 +8491,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Flag(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Character(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
         }
         return;
     }
@@ -8516,6 +8597,9 @@ fn spawn_foliage_visual(
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(ResolvedMaterialHandle::Flag(material)) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        Some(ResolvedMaterialHandle::Character(material)) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
         Some(
@@ -14850,37 +14934,98 @@ fn tag_cosmetic_renderers(
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     agents: Query<Entity, With<Agent>>,
-    renderers: Query<
+    standard_renderers: Query<
         (Entity, &MeshMaterial3d<StandardMaterial>),
         Added<MeshMaterial3d<StandardMaterial>>,
     >,
+    character_renderers: Query<
+        (Entity, &MeshMaterial3d<CharacterMaterial>),
+        Added<MeshMaterial3d<CharacterMaterial>>,
+    >,
+    standard_materials: Option<Res<Assets<StandardMaterial>>>,
+    character_materials: Option<ResMut<Assets<CharacterMaterial>>>,
+    mut base_cache: ResMut<CosmeticBaseMaterialCache>,
 ) {
-    for (entity, material) in &renderers {
-        let mut ancestor = entity;
-        let mut cosmetic_kind = None;
-        for _ in 0..64 {
-            cosmetic_kind = cosmetic_kind.or_else(|| {
-                names
-                    .get(ancestor)
-                    .ok()
-                    .and_then(|name| cosmetic_node(name.as_str()))
-                    .map(|(kind, _)| kind)
-            });
-            if let (true, Some(kind)) = (agents.contains(ancestor), cosmetic_kind) {
-                commands.entity(entity).insert(CosmeticRenderer {
-                    actor_root: ancestor,
-                    kind,
-                    base_material: material.0.clone(),
-                    applied_color: None,
-                });
-                break;
-            }
-            let Ok(parent) = parents.get(ancestor) else {
-                break;
-            };
-            ancestor = parent.parent();
-        }
+    for (entity, material) in &character_renderers {
+        let Some((actor_root, kind)) = cosmetic_renderer_context(entity, &parents, &names, &agents)
+        else {
+            continue;
+        };
+        commands.entity(entity).insert(CosmeticRenderer {
+            actor_root,
+            kind,
+            base_material: material.0.clone(),
+            applied_color: None,
+        });
     }
+
+    let (Some(standard_materials), Some(mut character_materials)) =
+        (standard_materials, character_materials)
+    else {
+        return;
+    };
+    for (entity, material) in &standard_renderers {
+        let Some((actor_root, kind)) = cosmetic_renderer_context(entity, &parents, &names, &agents)
+        else {
+            continue;
+        };
+        let character_material = if let Some(variant) = base_cache
+            .0
+            .iter()
+            .find(|variant| variant.source == material.0)
+        {
+            variant.material.clone()
+        } else {
+            let Some(source) = standard_materials.get(&material.0).cloned() else {
+                continue;
+            };
+            let character = character_materials.add(character_material_from_standard(source));
+            base_cache.0.push(CosmeticBaseMaterialVariant {
+                source: material.0.clone(),
+                material: character.clone(),
+            });
+            character
+        };
+        commands
+            .entity(entity)
+            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .insert((
+                MeshMaterial3d(character_material.clone()),
+                CosmeticRenderer {
+                    actor_root,
+                    kind,
+                    base_material: character_material,
+                    applied_color: None,
+                },
+            ));
+    }
+}
+
+fn cosmetic_renderer_context(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    names: &Query<&Name>,
+    agents: &Query<Entity, With<Agent>>,
+) -> Option<(Entity, CosmeticNodeKind)> {
+    let mut ancestor = entity;
+    let mut cosmetic_kind = None;
+    for _ in 0..64 {
+        cosmetic_kind = cosmetic_kind.or_else(|| {
+            names
+                .get(ancestor)
+                .ok()
+                .and_then(|name| cosmetic_node(name.as_str()))
+                .map(|(kind, _)| kind)
+        });
+        if let (true, Some(kind)) = (agents.contains(ancestor), cosmetic_kind) {
+            return Some((ancestor, kind));
+        }
+        let Ok(parent) = parents.get(ancestor) else {
+            break;
+        };
+        ancestor = parent.parent();
+    }
+    None
 }
 
 fn cosmetic_color(customization: ActorCustomization, kind: CosmeticNodeKind) -> (u8, [f32; 3]) {
@@ -14905,9 +15050,12 @@ fn cosmetic_color(customization: ActorCustomization, kind: CosmeticNodeKind) -> 
 fn sync_cosmetic_materials(
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
+    materials: Option<ResMut<Assets<CharacterMaterial>>>,
     mut cache: ResMut<CosmeticMaterialCache>,
-    mut renderers: Query<(&mut CosmeticRenderer, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut renderers: Query<(
+        &mut CosmeticRenderer,
+        &mut MeshMaterial3d<CharacterMaterial>,
+    )>,
 ) {
     let Some(mut materials) = materials else {
         return;
@@ -14933,7 +15081,10 @@ fn sync_cosmetic_materials(
             let Some(mut material) = materials.get(&cosmetic.base_material).cloned() else {
                 continue;
             };
-            material.base_color = Color::srgb(color[0], color[1], color[2]);
+            material.extension.parameters.albedo_color = Color::srgb(color[0], color[1], color[2])
+                .to_linear()
+                .to_f32_array()
+                .into();
             let handle = materials.add(material);
             cache.0.push(CosmeticMaterialVariant {
                 base_material: cosmetic.base_material.clone(),
@@ -15877,6 +16028,12 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Flag(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                        ResolvedMaterialHandle::Character(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -28044,6 +28201,58 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.base.base_color_texture.is_none());
+    }
+
+    #[test]
+    fn character_material_preserves_authored_albedo_and_cosmetic_contract() {
+        let presentation = embedded_presentation();
+        for (path, expected) in [
+            (
+                "Assets/Materials/Character/Hair.mat",
+                [0.018_867_91, 0.018_867_91, 0.018_867_91, 1.0],
+            ),
+            (
+                "Assets/Materials/Character/Eyes.mat",
+                [0.132_075_49, 0.097_810_62, 0.097_810_62, 1.0],
+            ),
+        ] {
+            let authored = presentation
+                .materials
+                .values()
+                .find(|material| material.source_path == path)
+                .unwrap();
+            assert_eq!(
+                authored.shader_source.as_deref(),
+                Some(CHARACTER_UNITY_SHADER_PATH)
+            );
+            let material = character_material(authored, &presentation, None);
+            let expected = Color::srgba(expected[0], expected[1], expected[2], expected[3])
+                .to_linear()
+                .to_f32_array();
+            assert_eq!(
+                material.extension.parameters.albedo_color,
+                Vec4::from_array(expected)
+            );
+            assert_eq!(material.base.base_color, Color::WHITE);
+            assert_eq!(material.base.alpha_mode, AlphaMode::Opaque);
+        }
+
+        let shader = include_str!("../../../assets/shaders/character_material.wgsl");
+        assert!(shader.contains("pbr_input.material.base_color"));
+        assert!(shader.contains("character_material.albedo_color"));
+        assert!(shader.contains("apply_pbr_lighting"));
+
+        let source = StandardMaterial {
+            base_color: Color::srgb(0.2, 0.4, 0.6),
+            ..default()
+        };
+        let expected = source.base_color.to_linear().to_f32_array();
+        let converted = character_material_from_standard(source);
+        assert_eq!(
+            converted.extension.parameters.albedo_color,
+            Vec4::from_array(expected)
+        );
+        assert_eq!(converted.base.base_color, Color::WHITE);
     }
 
     #[test]

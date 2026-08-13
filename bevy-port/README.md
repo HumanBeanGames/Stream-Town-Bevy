@@ -521,6 +521,12 @@ the inherited material is retained only as a compatibility fallback.
 Player GLB descendants also apply persisted body, hair, facial-hair, eye,
 hair-color, and eye-color selections in Unity's serialized order. Cosmetic
 material variants are cached per source material and helmets suppress hair.
+The shipping `Custom/CharacterSimple` surface used by Eyes and Hair now resolves
+to a typed Bevy material and WGSL port of `_characterTexture * _albedoColor`.
+Actor-specific hair, facial-hair, and eye colours update that typed uniform just
+as Unity's `MaterialPropertyBlock` did; inherited glTF fallback materials are
+promoted to the same material before recolouring, so converted model bindings
+cannot bypass customization.
 Converted animation clips and graphs are shared by rig/controller instead of
 being rebuilt per actor. The runtime keeps 16 fully authored, animated character
 scenes and represents the rest of a large crowd with lightweight capsule LODs;
