@@ -392,7 +392,13 @@ while the battering ram attacks only construction and buildings. Zero-health
 buildings are removed and release their dirty navigation region. Completed
 gates are actor-aware passages: player routes may cross their occupied cells
 while enemy routes remain blocked, matching the shipping Unity rule; gate
-construction sites remain blocked to both sides.
+construction sites remain blocked to both sides. Their visual controllers are
+live as well: age-one wood and age-two stone gates retarget the converted
+`Open`/`Close` FBX takes onto the building model, preserve the Unity Animator's
+quarter-second crossfade, and react only to living players inside the authored
+4x4 trigger. `STREAM_TOWN_SMOKE_GATE=1` places a completed gate around the first
+starting player and frames it for a deterministic opened-pose capture; combine
+it with `STREAM_TOWN_DEBUG_AGE_TWO=1` to exercise the stone-root retarget.
 `STREAM_TOWN_SMOKE_FOLIAGE=1` frames the generated foliage field for a
 repeatable land/shoreline visual capture.
 `STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated

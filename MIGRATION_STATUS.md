@@ -487,6 +487,13 @@ mistaken for production-ready systems.
   cross their occupied cells while enemies still see the same cells as blocked.
   Gates under construction remain blocked for everyone, and the exception is
   derived from stable building state after placement and native-save restore.
+  The matching presentation path now resolves both `GateWood` and `GateStone`
+  controllers from converted data, shares cached Bevy graphs for their exact
+  embedded `Open`/`Close` clips, retargets the stone model's `Armature` root to
+  the take's `Age02_Gate` target path, and preserves the source 0.25-second
+  transitions. Completed, living gates open while at least one living player is
+  within the prefab's 4x4 trigger and close after the last player leaves. A
+  deterministic `STREAM_TOWN_SMOKE_GATE` capture path covers the opened pose.
 - Content schema 21 preserves the exact serialized maximum health and per-level
   health increase from every shipping building prefab. Construction, building
   work, repairs, upgrades, construction models, damage materials, and persistent

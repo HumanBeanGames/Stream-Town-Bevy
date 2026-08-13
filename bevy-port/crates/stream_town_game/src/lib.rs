@@ -13,6 +13,7 @@ use bevy::{
         AnimatedBy, AnimationClip, AnimationTargetId, animated_field,
         graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex, AnimationNodeType},
         prelude::{AnimatableCurve, AnimatableKeyframeCurve},
+        transition::AnimationTransitions,
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
@@ -61,6 +62,9 @@ const MAX_TOWN_GOALS: usize = 2;
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
+// Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
+// building models are authored at Unity scale and then scaled by cell_size / 2.
+const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
 // Player_Character.prefab authors 100 Unity world units for both its target
 // and builder-resource sensors. Shipping terrain uses two units per cell.
 const PLAYER_TARGET_SEARCH_RANGE_CELLS: u16 = 50;
@@ -1478,6 +1482,50 @@ struct CachedConvertedAnimation {
 struct ConvertedAnimationCache(BTreeMap<(StableId, StableId, String), CachedConvertedAnimation>);
 
 #[derive(Clone)]
+struct GateAnimationClipRequest {
+    asset_path: String,
+    animation_index: u32,
+    speed: f32,
+    transition_seconds: f32,
+}
+
+struct GateAnimationContract {
+    controller: StableId,
+    model_root_name: &'static str,
+    animation_root_name: &'static str,
+    open: GateAnimationClipRequest,
+    close: GateAnimationClipRequest,
+}
+
+#[derive(Clone)]
+struct CachedGateAnimation {
+    graph: Handle<AnimationGraph>,
+    open: AnimationNodeIndex,
+    close: AnimationNodeIndex,
+}
+
+#[derive(Resource, Default)]
+struct GateAnimationCache(BTreeMap<(String, u32, String, u32), CachedGateAnimation>);
+
+#[derive(Component)]
+struct GateAnimationBinding {
+    age: u8,
+    animation_root: Entity,
+}
+
+#[derive(Component)]
+struct GateAnimationDriver {
+    building_root: Entity,
+    open: AnimationNodeIndex,
+    close: AnimationNodeIndex,
+    open_speed: f32,
+    close_speed: f32,
+    open_transition_seconds: f32,
+    close_transition_seconds: f32,
+    is_open: bool,
+}
+
+#[derive(Clone)]
 struct ConvertedAnimationCrossfade {
     source: Vec<(AnimationNodeIndex, f32, f32)>,
     elapsed: f32,
@@ -1551,6 +1599,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<JukeboxRuntime>()
             .init_resource::<NativeAnimationCache>()
             .init_resource::<ConvertedAnimationCache>()
+            .init_resource::<GateAnimationCache>()
             .init_resource::<LevelUpPresentation>()
             .insert_resource(PlayerSettingsRuntime {
                 autosave_elapsed_seconds: 0.0,
@@ -1666,6 +1715,16 @@ impl Plugin for StreamTownGamePlugin {
                         .after(apply_building_commands),
                     drive_level_up_presentation.after(move_agents),
                     update_hud,
+                )
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    attach_gate_animations.after(sync_building_presentation),
+                    drive_gate_animations
+                        .after(move_agents)
+                        .after(attach_gate_animations),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -5242,6 +5301,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
                 .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_xyz(focus.x + 12.0, focus.y + 10.0, focus.z + 12.0)
+                .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some() {
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 30.0, focus.y + 35.0, focus.z + 30.0)
@@ -5594,20 +5657,31 @@ fn generate_and_spawn_world(
     if let Some(weather) = debug_weather_override() {
         simulation.weather = weather;
     }
-    if std::env::var_os("STREAM_TOWN_DEBUG_AGE_TWO").is_some()
-        && let Some((technology, _)) = content
-            .0
-            .technology
-            .nodes
-            .iter()
-            .find(|(_, technology)| technology.aged_buildings.contains(&town_hall_id))
-    {
-        simulation.unlocked_technology.insert(technology.clone());
+    if std::env::var_os("STREAM_TOWN_DEBUG_AGE_TWO").is_some() {
+        let mut buildings = vec![town_hall_id.clone()];
+        if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some() {
+            buildings.push(StableId::new("building:gate").expect("static gate ID"));
+        }
+        for building in buildings {
+            if let Some((technology, _)) = content
+                .0
+                .technology
+                .nodes
+                .iter()
+                .find(|(_, technology)| technology.aged_buildings.contains(&building))
+            {
+                simulation.unlocked_technology.insert(technology.clone());
+            }
+        }
     }
     let initial_agents = runtime_initial_agents(config.0.gameplay.initial_agents);
     let smoke_pet = debug_smoke_pet();
     let spawn_positions =
         connected_actor_positions(&generated, centre, town_hall_position, initial_agents);
+    let smoke_gate_position = std::env::var_os("STREAM_TOWN_SMOKE_GATE")
+        .is_some()
+        .then(|| spawn_positions.first().copied())
+        .flatten();
     for position in spawn_positions {
         let x = position.x;
         let z = position.z;
@@ -5742,6 +5816,47 @@ fn generate_and_spawn_world(
         if spawned >= initial_agents {
             break;
         }
+    }
+
+    if let Some(position) = smoke_gate_position {
+        let gate_id = StableId::new("building:gate").expect("static gate ID");
+        let definition = &content.0.buildings[&gate_id];
+        let archetype = &content.0.archetypes[&definition.archetype];
+        let runtime_id = StableId::new("building:smoke_gate").expect("static smoke gate ID");
+        let state = BuildingState {
+            id: runtime_id.clone(),
+            archetype: definition.archetype.clone(),
+            position,
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: i32::try_from(building_base_max_health(&content.0, definition))
+                .unwrap_or(i32::MAX),
+            complete: true,
+        };
+        let footprint = rotated_footprint(definition.footprint, state.rotation_quarter_turns);
+        if let Some(region) = building_region(position, footprint, &generated) {
+            generated
+                .navigation
+                .set_blocked(region, true)
+                .expect("smoke gate footprint updates navigation");
+        }
+        let age = building_age(&content.0, &simulation, &gate_id);
+        spawn_runtime_building(
+            &mut commands,
+            &config.0,
+            &generated,
+            &presentation.0,
+            asset_server.as_deref(),
+            &asset_root.0,
+            &render,
+            &state,
+            definition,
+            archetype,
+            position,
+            definition.footprint,
+            age,
+        );
+        simulation.buildings.insert(runtime_id, state);
     }
 
     let recruit_resource = StableId::new("resource:recruit").expect("static ID");
@@ -9549,6 +9664,15 @@ fn move_agents(
                 config.0.world.cell_size,
             );
         }
+        if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some()
+            && agent.id.as_str() == "npc:starting_defender"
+        {
+            agent.path.clear();
+            agent.path_index = 0;
+            agent.origin = location.0;
+            agent.target = location.0;
+            continue;
+        }
         ensure_actor_station(&content.0, &mut simulation.0, &config.0, &agent.id);
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
@@ -10785,6 +10909,260 @@ fn attach_converted_animations(
     }
 }
 
+fn gate_animation_contract(
+    age: u8,
+    presentation: &PresentationCatalog,
+) -> Option<GateAnimationContract> {
+    let (controller_name, model_root_name, animation_root_name) = if age >= 2 {
+        ("GateStone", "Armature", "Age02_Gate")
+    } else {
+        ("GateWood", "Age01_Gate01", "Age01_Gate01")
+    };
+    let (controller_id, controller) = presentation
+        .controllers
+        .iter()
+        .find(|(_, controller)| controller.display_name == controller_name)?;
+    let request = |state_name: &str| {
+        let (state_id, state) = controller
+            .states
+            .iter()
+            .find(|(_, state)| state.display_name.eq_ignore_ascii_case(state_name))?;
+        let clip = presentation.clips.get(&state.motions.first()?.clip)?;
+        let asset_path = clip.converted_asset_path.clone()?;
+        let animation_index = clip.gltf_animation_index?;
+        let transition = controller
+            .transitions
+            .iter()
+            .filter(|transition| transition.destination.as_ref() == Some(state_id))
+            .filter(|transition| transition.is_any_state)
+            .find(|transition| {
+                transition
+                    .conditions
+                    .iter()
+                    .any(|condition| condition.parameter.eq_ignore_ascii_case(state_name))
+            });
+        let transition_seconds = transition.map_or(0.0, |transition| {
+            if transition.fixed_duration {
+                transition.duration
+            } else {
+                transition.duration * clip.duration_seconds / state.speed.abs().max(f32::EPSILON)
+            }
+        });
+        Some(GateAnimationClipRequest {
+            asset_path,
+            animation_index,
+            speed: state.speed,
+            transition_seconds: transition_seconds.max(0.0),
+        })
+    };
+    Some(GateAnimationContract {
+        controller: controller_id.clone(),
+        model_root_name,
+        animation_root_name,
+        open: request("Open")?,
+        close: request("Close")?,
+    })
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn attach_gate_animations(
+    mut commands: Commands,
+    asset_server: Option<Res<AssetServer>>,
+    animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    simulation: Res<SimulationRuntime>,
+    mut cache: ResMut<GateAnimationCache>,
+    buildings: Query<(
+        Entity,
+        &RuntimeBuilding,
+        &BuildingPresentation,
+        Option<&GateAnimationBinding>,
+    )>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    transforms: Query<&Transform>,
+) {
+    let (Some(asset_server), Some(mut animation_graphs)) = (asset_server, animation_graphs) else {
+        return;
+    };
+    for (building_root, runtime, building_presentation, binding) in &buildings {
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let Some((building_id, _)) = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, definition)| definition.archetype == state.archetype)
+        else {
+            continue;
+        };
+        if building_id.as_str() != "building:gate" {
+            continue;
+        }
+        let age = building_presentation.applied_age;
+        if binding
+            .is_some_and(|binding| binding.age == age && names.get(binding.animation_root).is_ok())
+        {
+            continue;
+        }
+        if binding.is_some() {
+            commands
+                .entity(building_root)
+                .remove::<GateAnimationBinding>();
+        }
+        let Some(contract) = gate_animation_contract(age, &presentation.0) else {
+            continue;
+        };
+        let Some(animation_root) =
+            find_named_descendant(building_root, contract.model_root_name, &children, &names)
+        else {
+            continue;
+        };
+        let targets = collect_animation_targets_with_root_name(
+            animation_root,
+            contract.animation_root_name,
+            &children,
+            &names,
+            &transforms,
+        );
+        let key = (
+            contract.close.asset_path.clone(),
+            contract.close.animation_index,
+            contract.open.asset_path.clone(),
+            contract.open.animation_index,
+        );
+        if !cache.0.contains_key(&key) {
+            let clips = [&contract.close, &contract.open].map(|request| {
+                asset_server.load(
+                    GltfAssetLabel::Animation(
+                        usize::try_from(request.animation_index)
+                            .expect("animation index fits the current platform"),
+                    )
+                    .from_asset(request.asset_path.clone()),
+                )
+            });
+            let (graph, nodes) = AnimationGraph::from_clips(clips);
+            cache.0.insert(
+                key.clone(),
+                CachedGateAnimation {
+                    graph: animation_graphs.add(graph),
+                    close: nodes[0],
+                    open: nodes[1],
+                },
+            );
+        }
+        let cached = cache
+            .0
+            .get(&key)
+            .expect("gate animation cache was populated");
+        for (path, (entity, _)) in &targets {
+            commands.entity(*entity).insert((
+                path.split('/').collect::<AnimationTargetId>(),
+                AnimatedBy(animation_root),
+            ));
+        }
+        let mut player = AnimationPlayer::default();
+        let mut transitions = AnimationTransitions::new();
+        transitions
+            .play(&mut player, cached.close, Duration::ZERO)
+            .set_speed(contract.close.speed);
+        commands.entity(animation_root).insert((
+            player,
+            transitions,
+            AnimationGraphHandle(cached.graph.clone()),
+            GateAnimationDriver {
+                building_root,
+                open: cached.open,
+                close: cached.close,
+                open_speed: contract.open.speed,
+                close_speed: contract.close.speed,
+                open_transition_seconds: contract.open.transition_seconds,
+                close_transition_seconds: contract.close.transition_seconds,
+                is_open: false,
+            },
+        ));
+        commands.entity(building_root).insert(GateAnimationBinding {
+            age,
+            animation_root,
+        });
+        info!(
+            building = %runtime.id,
+            controller = %contract.controller,
+            age,
+            targets = targets.len(),
+            "attached converted Unity gate controller"
+        );
+    }
+}
+
+fn gate_trigger_contains(gate: Vec3, player: Vec3, half_extent: f32) -> bool {
+    let relative = player - gate;
+    relative.x.abs() <= half_extent && relative.z.abs() <= half_extent
+}
+
+fn drive_gate_animations(
+    config: Res<RuntimeConfig>,
+    simulation: Res<SimulationRuntime>,
+    buildings: Query<(&RuntimeBuilding, &Transform)>,
+    agents: Query<(&Agent, &Transform)>,
+    mut players: Query<(
+        &mut AnimationPlayer,
+        &mut AnimationTransitions,
+        &mut GateAnimationDriver,
+    )>,
+) {
+    let half_extent = GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS * config.0.world.cell_size / 2.0;
+    for (mut player, mut transitions, mut driver) in &mut players {
+        let Ok((runtime, gate_transform)) = buildings.get(driver.building_root) else {
+            continue;
+        };
+        let Some(gate) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let should_open = gate.complete
+            && gate.health > 0
+            && agents.iter().any(|(agent, transform)| {
+                agent.kind == ActorKind::Player
+                    && simulation
+                        .0
+                        .actors
+                        .get(&agent.id)
+                        .is_some_and(|actor| actor.alive)
+                    && gate_trigger_contains(
+                        gate_transform.translation,
+                        transform.translation,
+                        half_extent,
+                    )
+            });
+        if should_open == driver.is_open {
+            continue;
+        }
+        let (node, speed, transition_seconds) = if should_open {
+            (
+                driver.open,
+                driver.open_speed,
+                driver.open_transition_seconds,
+            )
+        } else {
+            (
+                driver.close,
+                driver.close_speed,
+                driver.close_transition_seconds,
+            )
+        };
+        transitions
+            .play(
+                &mut player,
+                node,
+                Duration::from_secs_f32(transition_seconds),
+            )
+            .set_speed(speed);
+        driver.is_open = should_open;
+    }
+}
+
 fn build_converted_animation(
     controller: &stream_town_domain::AnimationControllerDef,
     spec: &ConvertedAnimationSpec,
@@ -11498,8 +11876,18 @@ fn collect_animation_targets(
     let Some(root_name) = names.get(root).ok().map(Name::as_str) else {
         return BTreeMap::new();
     };
+    collect_animation_targets_with_root_name(root, root_name, children, names, transforms)
+}
+
+fn collect_animation_targets_with_root_name(
+    root: Entity,
+    animation_root_name: &str,
+    children: &Query<&Children>,
+    names: &Query<&Name>,
+    transforms: &Query<&Transform>,
+) -> BTreeMap<String, (Entity, Transform)> {
     let mut targets = BTreeMap::new();
-    let mut pending = vec![(root, root_name.to_owned())];
+    let mut pending = vec![(root, animation_root_name.to_owned())];
     while let Some((entity, path)) = pending.pop() {
         if let Ok(transform) = transforms.get(entity) {
             targets.insert(path.clone(), (entity, *transform));
@@ -21697,6 +22085,74 @@ mod tests {
             ),
             vec![start]
         );
+    }
+
+    #[test]
+    fn gate_animation_contract_resolves_both_shipping_ages() {
+        let presentation = embedded_presentation();
+        let wood = gate_animation_contract(1, &presentation).unwrap();
+        assert_eq!(
+            wood.controller.as_str(),
+            "controller:20be80b0e10b1af40a0fc064abd6a19b"
+        );
+        assert_eq!(wood.model_root_name, "Age01_Gate01");
+        assert_eq!(wood.animation_root_name, "Age01_Gate01");
+        assert!(
+            wood.open
+                .asset_path
+                .ends_with("Age01_Gate_Animation_Open01.glb")
+        );
+        assert!(
+            wood.close
+                .asset_path
+                .ends_with("Age01_Gate_Animation_Closing01.glb")
+        );
+        assert_eq!(wood.open.animation_index, 0);
+        assert_eq!(wood.close.animation_index, 0);
+        assert!((wood.open.transition_seconds - 0.25).abs() <= f32::EPSILON);
+        assert!((wood.close.transition_seconds - 0.25).abs() <= f32::EPSILON);
+
+        let stone = gate_animation_contract(2, &presentation).unwrap();
+        assert_eq!(
+            stone.controller.as_str(),
+            "controller:2ddf69683616b2e43b31be96ca9624d5"
+        );
+        assert_eq!(stone.model_root_name, "Armature");
+        assert_eq!(stone.animation_root_name, "Age02_Gate");
+        assert!(
+            stone
+                .open
+                .asset_path
+                .ends_with("Age02_Gate_Animation_Open01.glb")
+        );
+        assert!(
+            stone
+                .close
+                .asset_path
+                .ends_with("Age02_Gate_Animation_Closing01.glb")
+        );
+        assert_eq!(stone.open.animation_index, 0);
+        assert_eq!(stone.close.animation_index, 0);
+    }
+
+    #[test]
+    fn gate_trigger_matches_the_authored_four_unit_box() {
+        let gate = Vec3::new(10.0, 5.0, -4.0);
+        assert!(gate_trigger_contains(
+            gate,
+            Vec3::new(12.0, 100.0, -6.0),
+            2.0
+        ));
+        assert!(!gate_trigger_contains(
+            gate,
+            Vec3::new(12.001, 5.0, -4.0),
+            2.0
+        ));
+        assert!(!gate_trigger_contains(
+            gate,
+            Vec3::new(10.0, 5.0, -6.001),
+            2.0
+        ));
     }
 
     #[test]
