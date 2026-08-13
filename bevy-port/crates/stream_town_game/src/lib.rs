@@ -511,6 +511,7 @@ struct SelectedRecruitGroup {
 struct GroupSelectionActions {
     dismiss_armed: bool,
     remove_armed: Option<StableId>,
+    panel_signature: Option<String>,
 }
 
 #[derive(Resource, Default)]
@@ -1056,6 +1057,9 @@ struct GroupDismissLabel;
 
 #[derive(Component)]
 struct BuildingRemoveLabel;
+
+#[derive(Component)]
+struct BuildingLevelEnabled(bool);
 
 #[derive(Component, Clone, Debug)]
 enum GroupSelectionAction {
@@ -14296,6 +14300,114 @@ fn remove_selected_building(
     Ok(())
 }
 
+fn passive_resource_rate_milli_per_second(
+    definition: &BuildingDef,
+    level: u16,
+) -> BTreeMap<StableId, u64> {
+    let completed_levels = u64::from(level.saturating_sub(1));
+    definition.passive_resources.iter().fold(
+        BTreeMap::<StableId, u64>::new(),
+        |mut rates, income| {
+            let rate = u64::from(income.base_milli_per_second).saturating_add(
+                u64::from(income.increment_milli_per_level)
+                    .saturating_mul(completed_levels)
+                    .saturating_mul(u64::from(income.level_event_repetitions)),
+            );
+            let total = rates.entry(income.resource.clone()).or_default();
+            *total = total.saturating_add(rate);
+            rates
+        },
+    )
+}
+
+fn format_passive_resource_rates(definition: &BuildingDef, level: u16) -> Option<String> {
+    let rates = passive_resource_rate_milli_per_second(definition, level)
+        .into_iter()
+        .map(|(resource, rate)| {
+            let per_hour = rate.saturating_mul(3_600) / 1_000;
+            format!(
+                "+{per_hour} {}/hr",
+                title_case(resource.as_str().trim_start_matches("resource:"))
+            )
+        })
+        .collect::<Vec<_>>();
+    (!rates.is_empty()).then(|| format!("Rate {}", rates.join(", ")))
+}
+
+fn building_upgrade_affordability(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    building_id: &StableId,
+    definition: &BuildingDef,
+    state: &BuildingState,
+) -> Option<(bool, BTreeMap<StableId, u32>)> {
+    if !definition.can_level
+        || !state.complete
+        || state.level >= maximum_building_level(content, simulation, building_id)
+    {
+        return None;
+    }
+    let cost = if simulation.building_costs_enabled {
+        building_upgrade_cost(content, simulation, building_id, definition, state.level)
+    } else {
+        BTreeMap::new()
+    };
+    Some((can_afford(simulation, &cost), cost))
+}
+
+fn format_resource_cost(cost: &BTreeMap<StableId, u32>) -> String {
+    cost.iter()
+        .map(|(resource, amount)| {
+            format!(
+                "{amount} {}",
+                title_case(resource.as_str().trim_start_matches("resource:"))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn group_selection_panel_signature(
+    group: &SelectedRecruitGroup,
+    selected: &SelectedCell,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> String {
+    if !group.actors.is_empty() {
+        return group
+            .actors
+            .iter()
+            .map(StableId::as_str)
+            .collect::<Vec<_>>()
+            .join("|");
+    }
+    let Some(runtime_id) = selected
+        .0
+        .and_then(|cell| selected_building_id_at_cell(cell, content, simulation))
+    else {
+        return String::new();
+    };
+    let state = &simulation.buildings[&runtime_id];
+    let Some((building_id, definition)) = content
+        .buildings
+        .iter()
+        .find(|(_, definition)| definition.archetype == state.archetype)
+    else {
+        return runtime_id.to_string();
+    };
+    let affordability =
+        building_upgrade_affordability(content, simulation, building_id, definition, state);
+    format!(
+        "{}:{}:{}:{:?}:{}:{}",
+        runtime_id,
+        state.level,
+        state.complete,
+        affordability,
+        simulation.building_costs_enabled,
+        format_passive_resource_rates(definition, state.level).unwrap_or_default(),
+    )
+}
+
 fn update_group_selection_panel(
     mut commands: Commands,
     group: Res<SelectedRecruitGroup>,
@@ -14305,7 +14417,8 @@ fn update_group_selection_panel(
     mut actions: ResMut<GroupSelectionActions>,
     panels: Query<Entity, With<GroupSelectionPanel>>,
 ) {
-    if !group.is_changed() && !selected.is_changed() {
+    let signature = group_selection_panel_signature(&group, &selected, &content.0, &simulation.0);
+    if actions.panel_signature.as_deref() == Some(&signature) {
         return;
     }
     let Ok(panel) = panels.single() else {
@@ -14313,6 +14426,7 @@ fn update_group_selection_panel(
     };
     actions.dismiss_armed = false;
     actions.remove_armed = None;
+    actions.panel_signature = Some(signature);
     commands.entity(panel).despawn_children();
     let selected_building = selected
         .0
@@ -14415,31 +14529,68 @@ fn update_group_selection_panel(
                         ..default()
                     },
                 ));
-                if definition.can_level
-                    && state.level < maximum_building_level(&content.0, &simulation.0, building_id)
-                {
+                if let Some(rate) = format_passive_resource_rates(definition, state.level) {
+                    parent.spawn((
+                        Text::new(rate),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.93, 0.78, 0.22)),
+                        Node {
+                            width: percent(100.0),
+                            ..default()
+                        },
+                    ));
+                }
+                if let Some((affordable, cost)) = building_upgrade_affordability(
+                    &content.0,
+                    &simulation.0,
+                    building_id,
+                    definition,
+                    state,
+                ) {
+                    let label = if affordable || cost.is_empty() {
+                        "Level Up".to_owned()
+                    } else {
+                        format!("Needs {}", format_resource_cost(&cost))
+                    };
                     parent
                         .spawn((
                             GroupSelectionAction::LevelBuilding(runtime_id.clone()),
+                            BuildingLevelEnabled(affordable),
                             Button,
                             Node {
                                 padding: UiRect::axes(px(9), px(5)),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.19, 0.34, 0.22)),
+                            BackgroundColor(if affordable {
+                                Color::srgb(0.19, 0.34, 0.22)
+                            } else {
+                                Color::srgb(0.18, 0.18, 0.18)
+                            }),
                         ))
                         .with_child((
-                            Text::new("Level Up"),
+                            Text::new(label),
                             TextFont {
                                 font_size: FontSize::Px(14.0),
                                 ..default()
                             },
-                            TextColor(Color::WHITE),
+                            TextColor(if affordable {
+                                Color::WHITE
+                            } else {
+                                Color::srgb(0.55, 0.55, 0.55)
+                            }),
                             Pickable::IGNORE,
                         ));
                 } else if definition.can_level {
+                    let label = if state.complete {
+                        "Max Level"
+                    } else {
+                        "Finish Construction"
+                    };
                     parent.spawn((
-                        Text::new("Max Level"),
+                        Text::new(label),
                         TextFont {
                             font_size: FontSize::Px(14.0),
                             ..default()
@@ -14486,12 +14637,19 @@ fn group_selection_action_buttons(
     mut actions: ResMut<GroupSelectionActions>,
     mut agent_commands: ResMut<AgentCommandQueue>,
     mut building_commands: ResMut<BuildingCommandQueue>,
-    buttons: Query<(&Interaction, &GroupSelectionAction), Changed<Interaction>>,
+    buttons: Query<
+        (
+            &Interaction,
+            &GroupSelectionAction,
+            Option<&BuildingLevelEnabled>,
+        ),
+        Changed<Interaction>,
+    >,
     mut dismiss_labels: Query<&mut Text, (With<GroupDismissLabel>, Without<BuildingRemoveLabel>)>,
     mut remove_labels: Query<&mut Text, (With<BuildingRemoveLabel>, Without<GroupDismissLabel>)>,
 ) {
-    for (interaction, action) in &buttons {
-        if *interaction != Interaction::Pressed {
+    for (interaction, action, level_enabled) in &buttons {
+        if *interaction != Interaction::Pressed || level_enabled.is_some_and(|enabled| !enabled.0) {
             continue;
         }
         match action {
@@ -14536,6 +14694,7 @@ fn group_selection_action_buttons(
                 );
                 selected.set_changed();
                 actions.remove_armed = None;
+                actions.panel_signature = None;
             }
             GroupSelectionAction::RemoveBuilding(runtime_id)
                 if actions.remove_armed.as_ref() != Some(runtime_id) =>
@@ -17151,15 +17310,9 @@ fn apply_passive_building_income(
         let Some(definition) = building_def_for_archetype(content, &building.archetype) else {
             continue;
         };
-        let completed_levels = u64::from(building.level.saturating_sub(1));
-        for income in &definition.passive_resources {
-            let rate = u64::from(income.base_milli_per_second).saturating_add(
-                u64::from(income.increment_milli_per_level)
-                    .saturating_mul(completed_levels)
-                    .saturating_mul(u64::from(income.level_event_repetitions)),
-            );
+        for (resource, rate) in passive_resource_rate_milli_per_second(definition, building.level) {
             let entry = rates
-                .entry((building.id.clone(), income.resource.clone()))
+                .entry((building.id.clone(), resource))
                 .or_default();
             *entry = entry.saturating_add(rate);
         }
@@ -24380,6 +24533,74 @@ mod tests {
         remove_selected_building(&runtime_id, &content, &mut world, &mut simulation).unwrap();
         assert!(!simulation.buildings.contains_key(&runtime_id));
         assert!(world.navigation.is_walkable(position));
+    }
+
+    #[test]
+    fn selected_building_panel_uses_authoritative_costs_and_passive_rates() {
+        let content = embedded_content();
+        let marketplace_id = StableId::new("building:marketplace").unwrap();
+        let marketplace = &content.buildings[&marketplace_id];
+        assert_eq!(
+            passive_resource_rate_milli_per_second(marketplace, 1),
+            BTreeMap::from([(StableId::new("resource:gold").unwrap(), 500)])
+        );
+        assert_eq!(
+            format_passive_resource_rates(marketplace, 2).as_deref(),
+            Some("Rate +3600 Gold/hr")
+        );
+
+        let runtime_id = StableId::new("building:selected_marketplace").unwrap();
+        let mut simulation = WorldSimulation::new(7);
+        simulation.unlocked_technology.insert(
+            content
+                .technology
+                .nodes
+                .iter()
+                .find(|(_, technology)| {
+                    technology
+                        .building_level_caps
+                        .get(&marketplace_id)
+                        .is_some_and(|level| *level >= 2)
+                })
+                .map(|(id, _)| id.clone())
+                .expect("marketplace level technology"),
+        );
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id,
+                archetype: marketplace.archetype.clone(),
+                position: GridPos { x: 8, z: 8 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: BUILDING_MAX_HEALTH,
+                complete: true,
+            },
+        );
+        let state = &simulation.buildings.values().next().unwrap().clone();
+        let (affordable, cost) = building_upgrade_affordability(
+            &content,
+            &simulation,
+            &marketplace_id,
+            marketplace,
+            state,
+        )
+        .expect("level two should be unlocked");
+        assert!(!affordable);
+        assert!(!format_resource_cost(&cost).is_empty());
+        for (resource, amount) in &cost {
+            simulation.town_resources.insert(resource.clone(), *amount);
+        }
+        assert!(
+            building_upgrade_affordability(
+                &content,
+                &simulation,
+                &marketplace_id,
+                marketplace,
+                state,
+            )
+            .is_some_and(|(affordable, _)| affordable)
+        );
     }
 
     #[test]

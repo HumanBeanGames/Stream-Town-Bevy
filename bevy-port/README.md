@@ -333,6 +333,10 @@ health, maximum-health, and correctly sized outline feedback. Player selection
 restores distinct live health and role-experience meters (including level caps
 and XP requirements), building details show authored maximum levels, and finite
 resources retain Unity's amount-only presentation instead of inventing a cap.
+Selected marketplaces also report their level-scaled hourly output, while
+building level-up controls live-refresh from the authoritative technology cap,
+construction state, adjusted resource cost, and town inventory; unaffordable
+upgrades are visibly disabled and cannot dispatch.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that
