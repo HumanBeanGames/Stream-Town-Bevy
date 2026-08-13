@@ -27,6 +27,12 @@ mistaken for production-ready systems.
   class is stable native actor state, survives save/reload, and is recovered
   from both binary and JSON legacy saves. Building-health preferences now drive
   continuously updated in-world bars using authored per-level maximum health.
+- With no redistributable Unity soundtrack in the source repository, Bevy now
+  generates provenance-documented seasonal day/night music and ambient
+  wind/birds entirely at runtime. The jukebox reselects on season and day/night
+  boundaries, uses Unity's 600–900-second deterministic inter-track window and
+  ten-second fade-out, and applies master/music/ambience/SFX settings through
+  independent gain paths.
 - Validated, versioned RON configuration (schema 5) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
@@ -451,7 +457,7 @@ mistaken for production-ready systems.
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
 - Remaining reachable WGSL shader ports, VFX, UI parity, post-processing,
-  replacement audio, and accessibility.
+  rare action/UI sound cues, and accessibility.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation.
 - Persistent catalog writes, node/group creation and deletion, interactive graph

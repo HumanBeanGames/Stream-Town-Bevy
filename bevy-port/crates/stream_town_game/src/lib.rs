@@ -16,7 +16,7 @@ use bevy::{
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
-    audio::{Pitch, Volume},
+    audio::{AudioPlugin, AudioSink, AudioSinkPlayback, AudioSource, Pitch, Volume},
     camera::ScalingMode,
     color::LinearRgba,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -79,6 +79,12 @@ const FIREBALL_TRAIL_SIZE: f32 = 0.3;
 const BUILDING_HIT_SECONDS: f32 = 0.5;
 const BUILDING_HIT_SMOKE_SPEED: f32 = 3.0;
 const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
+const MUSIC_TRACK_SECONDS: f32 = 32.0;
+const MUSIC_FADE_IN_SECONDS: f32 = 5.0;
+const MUSIC_FADE_OUT_SECONDS: f32 = 10.0;
+const MUSIC_GAIN: f32 = 0.22;
+const AMBIENCE_GAIN: f32 = 0.16;
+const PROCEDURAL_AUDIO_SAMPLE_RATE: u32 = 16_000;
 const BUILDING_HIT_SMOKE_SIZE: f32 = 0.5;
 const BUILDING_HIT_SPARK_SIZE: f32 = 0.25;
 const BUILDING_LEVEL_UP_SECONDS: f32 = 1.5;
@@ -863,6 +869,24 @@ struct CosmeticMaterialCache(Vec<CosmeticMaterialVariant>);
 #[derive(Resource, Default)]
 struct RoleActionAudioCache(BTreeMap<StableId, Handle<Pitch>>);
 
+#[derive(Component)]
+struct MusicAudio;
+
+#[derive(Component)]
+struct AmbienceAudio;
+
+#[derive(Resource, Default)]
+struct JukeboxRuntime {
+    ambience: Option<Handle<AudioSource>>,
+    seasonal_music: BTreeMap<u8, Handle<AudioSource>>,
+    active_music: Option<Entity>,
+    active_season: Option<Season>,
+    active_daytime: Option<bool>,
+    elapsed_seconds: f32,
+    cooldown_seconds: f32,
+    track_serial: u64,
+}
+
 #[derive(Component, Clone)]
 struct NativeAnimationSpec {
     graph: Handle<AnimationGraph>,
@@ -1000,6 +1024,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
+            .init_resource::<JukeboxRuntime>()
             .init_resource::<NativeAnimationCache>()
             .init_resource::<ConvertedAnimationCache>()
             .init_resource::<LevelUpPresentation>()
@@ -1016,6 +1041,7 @@ impl Plugin for StreamTownGamePlugin {
                 Startup,
                 (
                     setup_rendering,
+                    setup_procedural_jukebox.after(setup_rendering),
                     start_twitch_transport,
                     apply_player_settings.after(setup_rendering),
                 ),
@@ -1103,6 +1129,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                drive_procedural_jukebox
+                    .after(update_environment_presentation)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (sync_actor_name_overlays, sync_building_health_overlays)
                     .chain()
                     .after(move_agents)
@@ -1167,9 +1199,6 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .insert_resource(ClearColor(Color::srgb(0.025, 0.04, 0.055)))
         .insert_resource(RuntimeConfig(config))
         .insert_resource(RuntimePlayerSettings(player_settings.clone()))
-        .insert_resource(GlobalVolume::new(Volume::Linear(
-            player_settings.audio.master,
-        )))
         .insert_resource(DirectionalLightShadowMap {
             size: usize::from(player_settings.video.shadow_map_resolution),
         })
@@ -1180,6 +1209,10 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
             DefaultPlugins
                 .set(AssetPlugin {
                     file_path: asset_root.to_string_lossy().into_owned(),
+                    ..default()
+                })
+                .set(AudioPlugin {
+                    global_volume: GlobalVolume::new(Volume::Linear(player_settings.audio.master)),
                     ..default()
                 })
                 .set(WindowPlugin {
@@ -1638,6 +1671,236 @@ fn apply_player_settings(
                 UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
             });
     }
+}
+
+fn setup_procedural_jukebox(
+    mut commands: Commands,
+    player_settings: Res<RuntimePlayerSettings>,
+    audio_sources: Option<ResMut<Assets<AudioSource>>>,
+    mut jukebox: ResMut<JukeboxRuntime>,
+) {
+    let Some(mut audio_sources) = audio_sources else {
+        return;
+    };
+    let ambience = audio_sources.add(AudioSource {
+        bytes: procedural_ambience_wav(PROCEDURAL_AUDIO_SAMPLE_RATE, 24.0).into(),
+    });
+    let mut seasonal_music = BTreeMap::new();
+    for season in [
+        Season::Spring,
+        Season::Summer,
+        Season::Autumn,
+        Season::Winter,
+    ] {
+        for daytime in [true, false] {
+            let source = audio_sources.add(AudioSource {
+                bytes: procedural_music_wav(
+                    season,
+                    daytime,
+                    PROCEDURAL_AUDIO_SAMPLE_RATE,
+                    MUSIC_TRACK_SECONDS,
+                )
+                .into(),
+            });
+            seasonal_music.insert(music_key(season, daytime), source);
+        }
+    }
+    commands.spawn((
+        Name::new("Procedural seasonal ambience"),
+        AmbienceAudio,
+        AudioPlayer(ambience.clone()),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(
+            AMBIENCE_GAIN * player_settings.0.audio.ambience,
+        )),
+    ));
+    jukebox.ambience = Some(ambience);
+    jukebox.seasonal_music = seasonal_music;
+    jukebox.cooldown_seconds = 0.0;
+}
+
+fn drive_procedural_jukebox(
+    mut commands: Commands,
+    time: Res<Time>,
+    player_settings: Res<RuntimePlayerSettings>,
+    simulation: Option<Res<SimulationRuntime>>,
+    config: Res<RuntimeConfig>,
+    mut jukebox: ResMut<JukeboxRuntime>,
+    mut music_sinks: Query<&mut AudioSink, With<MusicAudio>>,
+    mut ambience_sinks: Query<&mut AudioSink, (With<AmbienceAudio>, Without<MusicAudio>)>,
+) {
+    for mut sink in &mut ambience_sinks {
+        sink.set_volume(Volume::Linear(
+            AMBIENCE_GAIN * player_settings.0.audio.ambience,
+        ));
+    }
+    let Some(simulation) = simulation else {
+        return;
+    };
+    jukebox.elapsed_seconds += time.delta_secs();
+    jukebox.cooldown_seconds = (jukebox.cooldown_seconds - time.delta_secs()).max(0.0);
+    let season = simulation.0.season;
+    let daytime = config
+        .0
+        .time
+        .sample(simulation.0.elapsed_seconds)
+        .is_daytime;
+    let game_state_changed =
+        jukebox.active_season != Some(season) || jukebox.active_daytime != Some(daytime);
+    if game_state_changed {
+        if let Some(entity) = jukebox.active_music {
+            commands.entity(entity).despawn();
+        }
+        jukebox.active_music = None;
+        jukebox.active_season = Some(season);
+        jukebox.active_daytime = Some(daytime);
+        jukebox.elapsed_seconds = 0.0;
+        jukebox.cooldown_seconds = 0.0;
+    }
+    if let Some(entity) = jukebox.active_music {
+        let fade = jukebox_music_fade(jukebox.elapsed_seconds, MUSIC_TRACK_SECONDS);
+        if let Ok(mut sink) = music_sinks.get_mut(entity) {
+            sink.set_volume(Volume::Linear(
+                MUSIC_GAIN * player_settings.0.audio.music * fade,
+            ));
+        }
+        if jukebox.elapsed_seconds >= MUSIC_TRACK_SECONDS {
+            commands.entity(entity).despawn();
+            jukebox.active_music = None;
+            jukebox.elapsed_seconds = 0.0;
+            jukebox.cooldown_seconds =
+                deterministic_music_wait(simulation.0.world_seed, jukebox.track_serial);
+        }
+        return;
+    }
+    if jukebox.cooldown_seconds > 0.0 || jukebox.seasonal_music.is_empty() {
+        return;
+    }
+    let Some(source) = jukebox
+        .seasonal_music
+        .get(&music_key(season, daytime))
+        .cloned()
+    else {
+        return;
+    };
+    let entity = commands
+        .spawn((
+            Name::new(format!("Procedural {season:?} music")),
+            MusicAudio,
+            AudioPlayer(source),
+            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.0)),
+        ))
+        .id();
+    jukebox.active_music = Some(entity);
+    jukebox.active_season = Some(season);
+    jukebox.active_daytime = Some(daytime);
+    jukebox.elapsed_seconds = 0.0;
+    jukebox.track_serial = jukebox.track_serial.saturating_add(1);
+}
+
+fn season_index(season: Season) -> u8 {
+    match season {
+        Season::Spring => 0,
+        Season::Summer => 1,
+        Season::Autumn => 2,
+        Season::Winter => 3,
+    }
+}
+
+fn music_key(season: Season, daytime: bool) -> u8 {
+    season_index(season) * 2 + u8::from(!daytime)
+}
+
+fn deterministic_music_wait(seed: u64, serial: u64) -> f32 {
+    let mut mixed = seed.wrapping_add(serial.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let value = (mixed ^ (mixed >> 31)) % 301;
+    600.0 + f32::from(u16::try_from(value).expect("music wait offset fits u16"))
+}
+
+fn jukebox_music_fade(elapsed_seconds: f32, duration_seconds: f32) -> f32 {
+    let fade_in = (elapsed_seconds / MUSIC_FADE_IN_SECONDS).clamp(0.0, 1.0);
+    let fade_out = ((duration_seconds - elapsed_seconds) / MUSIC_FADE_OUT_SECONDS).clamp(0.0, 1.0);
+    fade_in.min(fade_out)
+}
+
+fn procedural_ambience_wav(sample_rate: u32, seconds: f32) -> Vec<u8> {
+    synthesize_wav(sample_rate, seconds, |time, sample| {
+        let wind = (time * std::f32::consts::TAU * 0.075).sin() * 0.32
+            + (time * std::f32::consts::TAU * 0.13).sin() * 0.18;
+        let noise = pseudo_noise(sample) * (0.18 + wind.abs() * 0.2);
+        let birds = if sample % (sample_rate.saturating_mul(7)).max(1) < sample_rate / 3 {
+            (time * std::f32::consts::TAU * 1_260.0).sin() * 0.08
+        } else {
+            0.0
+        };
+        (wind * 0.09 + noise * 0.12 + birds).clamp(-0.25, 0.25)
+    })
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn procedural_music_wav(season: Season, daytime: bool, sample_rate: u32, seconds: f32) -> Vec<u8> {
+    let seasonal_root = match season {
+        Season::Spring => 261.63,
+        Season::Summer => 293.66,
+        Season::Autumn => 220.0,
+        Season::Winter => 196.0,
+    };
+    let root = seasonal_root * if daytime { 1.0 } else { 0.75 };
+    synthesize_wav(sample_rate, seconds, move |time, _| {
+        let beat = ((time / 2.0).floor() as u32) % 8;
+        let ratio = [1.0, 1.25, 1.5, 1.25, 1.0, 1.5, 1.25, 0.75]
+            [usize::try_from(beat).expect("beat fits usize")];
+        let envelope = (time.rem_euclid(2.0) * 2.5).exp2().recip();
+        let melody = (time * std::f32::consts::TAU * root * ratio).sin() * envelope;
+        let drone = (time * std::f32::consts::TAU * root * 0.5).sin()
+            + (time * std::f32::consts::TAU * root * 0.75).sin() * 0.45;
+        (melody * 0.16 + drone * 0.055).clamp(-0.3, 0.3)
+    })
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn synthesize_wav(
+    sample_rate: u32,
+    seconds: f32,
+    mut sample_value: impl FnMut(f32, u32) -> f32,
+) -> Vec<u8> {
+    let sample_count = (Duration::from_secs_f32(seconds).as_secs_f64() * f64::from(sample_rate))
+        .round()
+        .clamp(1.0, f64::from(u32::MAX)) as u32;
+    let data_bytes = sample_count.saturating_mul(2);
+    let mut wav = Vec::with_capacity(usize::try_from(data_bytes).unwrap_or(0) + 44);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&data_bytes.saturating_add(36).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.saturating_mul(2).to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_bytes.to_le_bytes());
+    for sample in 0..sample_count {
+        let time = sample as f32 / sample_rate.max(1) as f32;
+        let value = sample_value(time, sample).clamp(-1.0, 1.0);
+        let encoded = (value * f32::from(i16::MAX)).round() as i16;
+        wav.extend_from_slice(&encoded.to_le_bytes());
+    }
+    wav
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn pseudo_noise(value: u32) -> f32 {
+    let mixed = value.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let mixed = ((mixed >> ((mixed >> 28) + 4)) ^ mixed).wrapping_mul(277_803_737);
+    let normalized = ((mixed >> 22) ^ mixed) as f32 / u32::MAX as f32;
+    normalized * 2.0 - 1.0
 }
 
 fn standard_material(
@@ -13996,6 +14259,49 @@ mod tests {
                 procedural_role_action_frequency(&clip.display_name, id).to_bits()
             );
         }
+    }
+
+    #[test]
+    fn procedural_jukebox_wav_is_valid_deterministic_and_seasonal() {
+        let ambience = procedural_ambience_wav(8_000, 1.0);
+        assert_eq!(&ambience[0..4], b"RIFF");
+        assert_eq!(&ambience[8..12], b"WAVE");
+        assert_eq!(ambience.len(), 44 + 8_000 * 2);
+        assert_eq!(ambience, procedural_ambience_wav(8_000, 1.0));
+
+        let spring_day = procedural_music_wav(Season::Spring, true, 8_000, 1.0);
+        let spring_night = procedural_music_wav(Season::Spring, false, 8_000, 1.0);
+        let winter_day = procedural_music_wav(Season::Winter, true, 8_000, 1.0);
+        assert_eq!(&spring_day[0..4], b"RIFF");
+        assert_ne!(spring_day, spring_night);
+        assert_ne!(spring_day, winter_day);
+    }
+
+    #[test]
+    fn procedural_jukebox_preserves_unity_timing_and_fades() {
+        for serial in 0..64 {
+            let wait = deterministic_music_wait(17, serial);
+            assert!((600.0..=900.0).contains(&wait));
+            assert_eq!(
+                wait.to_bits(),
+                deterministic_music_wait(17, serial).to_bits()
+            );
+        }
+        assert_eq!(
+            jukebox_music_fade(0.0, MUSIC_TRACK_SECONDS).to_bits(),
+            0.0_f32.to_bits()
+        );
+        assert_eq!(
+            jukebox_music_fade(MUSIC_FADE_IN_SECONDS, MUSIC_TRACK_SECONDS).to_bits(),
+            1.0_f32.to_bits()
+        );
+        assert_eq!(
+            jukebox_music_fade(MUSIC_TRACK_SECONDS, MUSIC_TRACK_SECONDS).to_bits(),
+            0.0_f32.to_bits()
+        );
+        assert_eq!(music_key(Season::Spring, true), 0);
+        assert_eq!(music_key(Season::Spring, false), 1);
+        assert_eq!(music_key(Season::Winter, false), 7);
     }
 
     #[test]

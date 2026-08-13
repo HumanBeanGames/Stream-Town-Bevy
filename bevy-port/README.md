@@ -114,6 +114,11 @@ explicit paths. The Settings tab in `stream_town_tools` edits and validates the
 native file. Window mode/resolution, VSync/FPS limit, MSAA, shadows, SSAO,
 brightness/gamma, audio volume, keyboard/mouse/edge camera controls, and the
 Unity 0/5/10/30/60-minute autosave choices are applied by the runtime.
+Because the Unity repository contains no redistributable soundtrack files, the
+runtime synthesizes four seasonal day/night music beds and a continuous ambient
+wind/bird loop. Unity's separate master, music, ambience, and sound-effect gains,
+fade behavior, day/night and season reselection, and deterministic 600–900 second
+inter-track waits are preserved without adding licensed media.
 
 Twitch is disabled in the checked-in configuration. The tools application writes
 public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
@@ -400,9 +405,10 @@ so the shipping Character Top layer continues to evaluate its carry state machin
 but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
-[`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). Rare/non-gameplay action
-emitters and the remaining reachable WGSL shader ports remain presentation
-work. Property curves
+[`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). The same provenance
+record covers the synthesized seasonal music and ambience. Rare/non-gameplay
+action emitters and the remaining reachable WGSL shader ports remain
+presentation work. Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.
