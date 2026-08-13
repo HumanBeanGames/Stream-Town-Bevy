@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786575818.206336,
-    "ast_hash": "7b134827d897d1b3effd6085f2c430b6",
+    "mtime": 1786587309.3312523,
+    "ast_hash": "c70d3df87d3526fb15ca0d4817fdcccc",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2805,8 +2805,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786586348.763159,
-    "ast_hash": "5598a055cbacbeee3b0b4d7db376f9b8",
+    "mtime": 1786587081.6868293,
+    "ast_hash": "b159601d03095dc3969f3c6eed7d567e",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786586372.2965233,
-    "ast_hash": "edee2a3d37f2dd467aea09b5b8f58484",
+    "mtime": 1786587210.4027658,
+    "ast_hash": "4a5129f8f6d73b606ce4ba271b209c35",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786586372.2965233,
-    "ast_hash": "0647f5824de0b51cf33073c9f55cfec0",
+    "mtime": 1786587210.4008937,
+    "ast_hash": "4e53cfd97053ea912716c68d048a7bdf",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {

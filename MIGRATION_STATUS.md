@@ -437,6 +437,12 @@ mistaken for production-ready systems.
   identity, actor/building/resource counts, Twitch status, acknowledgements,
   and rolling average/p95 frame time. Atomic JSON requests/status never contain
   OAuth credentials or Bevy entity IDs.
+- The technology graph tool is now a persistent authoring workflow: validated
+  catalog writes use an atomic temporary file, preserve a backup, and reload the
+  result before reporting success. Node/group creation, node moves, reference-
+  cleaning node deletion, empty-group deletion, and metadata/prerequisite edits
+  all share cycle/dangling-reference validation plus undo/redo. The searchable
+  tier minimap remains live after each mutation.
 - A measured 300-agent presentation LOD: 16 actors use authored GLB rigs and
   shared animation graphs while the remaining crowd uses lightweight capsule
   visuals without changing authoritative gameplay or persistence. The recorded
@@ -472,10 +478,11 @@ mistaken for production-ready systems.
   complete persisted-settings workflow are live.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation.
-- Persistent catalog writes, node/group creation and deletion, and interactive
-  graph layout. Live runtime bridging, integrated frame capture, stable command
-  injection, and rolling profiling controls are implemented; deeper ECS
-  mutation remains intentionally outside the tool protocol.
+- Interactive technology graph layout. Persistent validated catalog writes,
+  node/group creation/deletion/moves, live runtime bridging, integrated frame
+  capture, stable command injection, and rolling profiling controls are
+  implemented; deeper ECS mutation remains intentionally outside the tool
+  protocol.
 - Curated screenshot baselines, a launch-through-credits gameplay acceptance
   suite, signed/notarized distribution, and a hosted Windows release. The
   unsigned CI/local Windows archive and measured reference-machine 60 FPS gate

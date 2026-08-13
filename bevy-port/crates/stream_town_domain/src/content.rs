@@ -469,6 +469,12 @@ pub enum ContentError {
     },
     #[error("technology group {group} references missing node {node}")]
     MissingGroupNode { group: StableId, node: StableId },
+    #[error("technology {node} references missing group {group}")]
+    MissingTechnologyGroup { node: StableId, group: StableId },
+    #[error("technology {node} is assigned to group {group} but is absent from its node list")]
+    TechnologyMissingFromGroup { node: StableId, group: StableId },
+    #[error("technology group {group} lists node {node} assigned to a different group")]
+    TechnologyGroupMismatch { node: StableId, group: StableId },
     #[error("technology {technology} references missing building {building}")]
     MissingTechnologyBuilding {
         technology: StableId,
@@ -767,9 +773,29 @@ impl TechTree {
                         node: node.clone(),
                     });
                 }
+                if self.nodes[node].group.as_ref() != Some(group_id) {
+                    return Err(ContentError::TechnologyGroupMismatch {
+                        node: node.clone(),
+                        group: group_id.clone(),
+                    });
+                }
             }
         }
         for (node_id, node) in &self.nodes {
+            if let Some(group_id) = &node.group {
+                let Some(group) = self.groups.get(group_id) else {
+                    return Err(ContentError::MissingTechnologyGroup {
+                        node: node_id.clone(),
+                        group: group_id.clone(),
+                    });
+                };
+                if !group.nodes.contains(node_id) {
+                    return Err(ContentError::TechnologyMissingFromGroup {
+                        node: node_id.clone(),
+                        group: group_id.clone(),
+                    });
+                }
+            }
             for prerequisite in &node.prerequisites {
                 if !self.nodes.contains_key(prerequisite) {
                     return Err(ContentError::MissingPrerequisite {
@@ -842,5 +868,36 @@ mod tests {
             groups: BTreeMap::new(),
         };
         assert_eq!(tree.validate(), Err(ContentError::TechnologyCycle(first)));
+    }
+
+    #[test]
+    fn technology_groups_are_bidirectionally_consistent() {
+        let node_id = StableId::new("tech:grouped").unwrap();
+        let group_id = StableId::new("tech_group:test").unwrap();
+        let mut tree = TechTree {
+            nodes: BTreeMap::from([(
+                node_id.clone(),
+                TechNode {
+                    group: Some(group_id.clone()),
+                    ..TechNode::default()
+                },
+            )]),
+            groups: BTreeMap::from([(
+                group_id.clone(),
+                TechGroup {
+                    display_name: "Test".to_owned(),
+                    nodes: Vec::new(),
+                },
+            )]),
+        };
+        assert_eq!(
+            tree.validate(),
+            Err(ContentError::TechnologyMissingFromGroup {
+                node: node_id.clone(),
+                group: group_id.clone(),
+            })
+        );
+        tree.groups.get_mut(&group_id).unwrap().nodes.push(node_id);
+        assert_eq!(tree.validate(), Ok(()));
     }
 }

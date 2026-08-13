@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::Write,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex, mpsc},
@@ -13,7 +15,7 @@ use stream_town_domain::{
     BuildingHealthDisplayMode, ChatCommand, ContentCatalog, DisplayMode, GameConfig,
     GeneratedWorld, GridPos, NameDisplayMode, PlayerSettings, PlayerSettingsStore,
     PostProcessAntiAliasing, PresentationCatalog, RuntimeConsoleAction, RuntimeConsoleRequest,
-    RuntimeConsoleStatus, RuntimeConsoleStore, StableId,
+    RuntimeConsoleStatus, RuntimeConsoleStore, StableId, TechGroup, TechNode,
 };
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
@@ -78,6 +80,11 @@ struct ToolState {
     technology_search: String,
     selected_group: Option<StableId>,
     technology_draft: Option<TechnologyDraft>,
+    catalog_path: String,
+    new_technology_id: String,
+    new_technology_name: String,
+    new_group_id: String,
+    new_group_name: String,
     undo_catalogs: Vec<ContentCatalog>,
     redo_catalogs: Vec<ContentCatalog>,
     twitch_auth_events: Option<Arc<Mutex<mpsc::Receiver<TwitchToolEvent>>>>,
@@ -116,6 +123,7 @@ struct TechnologyDraft {
     description: String,
     age: String,
     tier: i32,
+    group: Option<StableId>,
     prerequisites: String,
     initially_unlocked: bool,
     unavailable: bool,
@@ -163,6 +171,11 @@ impl Default for ToolState {
             technology_search: String::new(),
             selected_group,
             technology_draft: None,
+            catalog_path: default_catalog_path().display().to_string(),
+            new_technology_id: "technology:new".to_owned(),
+            new_technology_name: "New Technology".to_owned(),
+            new_group_id: "technology_group:new".to_owned(),
+            new_group_name: "New Group".to_owned(),
             undo_catalogs: Vec::new(),
             redo_catalogs: Vec::new(),
             twitch_auth_events: None,
@@ -711,8 +724,18 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 Err(error) => format!("Technology graph error: {error}"),
             };
         }
+        if ui.button("Save validated catalog").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved validated content catalog to {}", path.display()),
+                Err(error) => format!("Could not save content catalog: {error:#}"),
+            };
+        }
         ui.label("Search");
         ui.text_edit_singleline(&mut state.technology_search);
+    });
+    ui.horizontal(|ui| {
+        ui.label("Catalog path");
+        ui.text_edit_singleline(&mut state.catalog_path);
     });
 
     let groups: Vec<_> = state
@@ -739,6 +762,30 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 ui.selectable_value(&mut state.selected_group, Some(id.clone()), name);
             }
         });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("New group ID");
+        ui.text_edit_singleline(&mut state.new_group_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_group_name);
+        if ui.button("Create group").clicked() {
+            state.status = match create_technology_group(state) {
+                Ok(()) => "Created technology group".to_owned(),
+                Err(error) => format!("Group creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_group.is_some(),
+                egui::Button::new("Delete group"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_technology_group(state) {
+                Ok(()) => "Deleted empty technology group".to_owned(),
+                Err(error) => format!("Group deletion rejected: {error}"),
+            };
+        }
+    });
     technology_minimap(
         ui,
         &state.catalog,
@@ -786,6 +833,37 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         state.technology_draft = technology_draft(&state.catalog, &selected);
     }
 
+    ui.horizontal_wrapped(|ui| {
+        ui.label("New node ID");
+        ui.text_edit_singleline(&mut state.new_technology_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_technology_name);
+        if ui
+            .add_enabled(
+                state.selected_group.is_some(),
+                egui::Button::new("Create node"),
+            )
+            .clicked()
+        {
+            state.status = match create_technology_node(state) {
+                Ok(()) => "Created technology node".to_owned(),
+                Err(error) => format!("Node creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.technology_draft.is_some(),
+                egui::Button::new("Delete node"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_technology_node(state) {
+                Ok(()) => "Deleted technology node and cleaned references".to_owned(),
+                Err(error) => format!("Node deletion rejected: {error}"),
+            };
+        }
+    });
+
     let mut apply = false;
     if let Some(draft) = state.technology_draft.as_mut() {
         ui.separator();
@@ -797,6 +875,20 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             ui.text_edit_singleline(&mut draft.age);
             ui.add(egui::DragValue::new(&mut draft.tier).prefix("Tier "));
         });
+        egui::ComboBox::from_label("Node group")
+            .selected_text(
+                draft
+                    .group
+                    .as_ref()
+                    .and_then(|id| state.catalog.technology.groups.get(id))
+                    .map_or("Ungrouped", |group| group.display_name.as_str()),
+            )
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut draft.group, None, "Ungrouped");
+                for (id, group) in &state.catalog.technology.groups {
+                    ui.selectable_value(&mut draft.group, Some(id.clone()), &group.display_name);
+                }
+            });
         ui.label("Description");
         ui.text_edit_multiline(&mut draft.description);
         if let Some(node) = state.catalog.technology.nodes.get(&draft.id) {
@@ -1783,6 +1875,7 @@ fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<Technolog
         description: node.description.clone(),
         age: node.age.clone(),
         tier: node.tier,
+        group: node.group.clone(),
         prerequisites: node
             .prerequisites
             .iter()
@@ -1792,6 +1885,169 @@ fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<Technolog
         initially_unlocked: node.initially_unlocked,
         unavailable: node.unavailable,
     })
+}
+
+fn default_catalog_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/catalog.ron")
+}
+
+fn save_content_catalog(catalog: &ContentCatalog, path: &str) -> anyhow::Result<PathBuf> {
+    catalog.validate()?;
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("catalog path cannot be empty");
+    }
+    let encoded = ron::ser::to_string_pretty(catalog, ron::ser::PrettyConfig::default())?;
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    fs::create_dir_all(parent)?;
+    let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(encoded.as_bytes())?;
+    file.sync_all()?;
+    if path.is_file() {
+        fs::copy(&path, &backup)?;
+        fs::remove_file(&path)?;
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        if backup.is_file() && !path.exists() {
+            let _ = fs::copy(&backup, &path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    let reloaded: ContentCatalog = ron::from_str(&fs::read_to_string(&path)?)?;
+    reloaded.validate()?;
+    if reloaded != *catalog {
+        anyhow::bail!("reloaded catalog does not match the authored catalog");
+    }
+    Ok(path)
+}
+
+fn commit_catalog_candidate(
+    state: &mut ToolState,
+    candidate: ContentCatalog,
+) -> Result<(), String> {
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.undo_catalogs.push(state.catalog.clone());
+    state.redo_catalogs.clear();
+    state.catalog = candidate;
+    refresh_technology_draft(state);
+    Ok(())
+}
+
+fn create_technology_group(state: &mut ToolState) -> Result<(), String> {
+    let id =
+        StableId::new(state.new_group_id.trim().to_owned()).map_err(|error| error.to_string())?;
+    let display_name = state.new_group_name.trim();
+    if display_name.is_empty() {
+        return Err("group name cannot be empty".to_owned());
+    }
+    if state.catalog.technology.groups.contains_key(&id) {
+        return Err(format!("technology group {id} already exists"));
+    }
+    let mut candidate = state.catalog.clone();
+    candidate.technology.groups.insert(
+        id.clone(),
+        TechGroup {
+            display_name: display_name.to_owned(),
+            nodes: Vec::new(),
+        },
+    );
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_group = Some(id);
+    Ok(())
+}
+
+fn delete_selected_technology_group(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_group
+        .clone()
+        .ok_or_else(|| "no technology group selected".to_owned())?;
+    let group = state
+        .catalog
+        .technology
+        .groups
+        .get(&id)
+        .ok_or_else(|| format!("missing technology group {id}"))?;
+    if !group.nodes.is_empty()
+        || state
+            .catalog
+            .technology
+            .nodes
+            .values()
+            .any(|node| node.group.as_ref() == Some(&id))
+    {
+        return Err("move or delete every node before deleting its group".to_owned());
+    }
+    let mut candidate = state.catalog.clone();
+    candidate.technology.groups.remove(&id);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_group = state.catalog.technology.groups.keys().next().cloned();
+    Ok(())
+}
+
+fn create_technology_node(state: &mut ToolState) -> Result<(), String> {
+    let group_id = state
+        .selected_group
+        .clone()
+        .ok_or_else(|| "select a technology group first".to_owned())?;
+    let id = StableId::new(state.new_technology_id.trim().to_owned())
+        .map_err(|error| error.to_string())?;
+    let display_name = state.new_technology_name.trim();
+    if display_name.is_empty() {
+        return Err("technology name cannot be empty".to_owned());
+    }
+    if state.catalog.technology.nodes.contains_key(&id) {
+        return Err(format!("technology {id} already exists"));
+    }
+    let mut candidate = state.catalog.clone();
+    candidate.technology.nodes.insert(
+        id.clone(),
+        TechNode {
+            display_name: display_name.to_owned(),
+            group: Some(group_id.clone()),
+            ..TechNode::default()
+        },
+    );
+    candidate
+        .technology
+        .groups
+        .get_mut(&group_id)
+        .ok_or_else(|| format!("missing technology group {group_id}"))?
+        .nodes
+        .push(id.clone());
+    commit_catalog_candidate(state, candidate)?;
+    state.technology_draft = technology_draft(&state.catalog, &id);
+    Ok(())
+}
+
+fn delete_selected_technology_node(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .technology_draft
+        .as_ref()
+        .map(|draft| draft.id.clone())
+        .ok_or_else(|| "no technology selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    candidate
+        .technology
+        .nodes
+        .remove(&id)
+        .ok_or_else(|| format!("missing technology {id}"))?;
+    for node in candidate.technology.nodes.values_mut() {
+        node.prerequisites.retain(|reference| reference != &id);
+        node.unlocks.retain(|reference| reference != &id);
+    }
+    for group in candidate.technology.groups.values_mut() {
+        group.nodes.retain(|reference| reference != &id);
+    }
+    commit_catalog_candidate(state, candidate)?;
+    state.technology_draft = None;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1867,15 +2123,23 @@ fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
     node.description = draft.description;
     node.age = draft.age;
     node.tier = draft.tier;
+    node.group.clone_from(&draft.group);
     node.prerequisites = prerequisites;
     node.initially_unlocked = draft.initially_unlocked;
     node.unavailable = draft.unavailable;
-    candidate.validate().map_err(|error| error.to_string())?;
-    state.undo_catalogs.push(state.catalog.clone());
-    state.redo_catalogs.clear();
-    state.catalog = candidate;
-    refresh_technology_draft(state);
-    Ok(())
+    for group in candidate.technology.groups.values_mut() {
+        group.nodes.retain(|reference| reference != &draft.id);
+    }
+    if let Some(group_id) = &draft.group {
+        candidate
+            .technology
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| format!("missing technology group {group_id}"))?
+            .nodes
+            .push(draft.id.clone());
+    }
+    commit_catalog_candidate(state, candidate)
 }
 
 fn technology_minimap(
@@ -2005,5 +2269,58 @@ mod tests {
         let before = state.catalog.clone();
         assert!(apply_technology_draft(&mut state).is_err());
         assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn technology_authoring_create_move_delete_and_undo_remains_valid() {
+        let mut state = ToolState {
+            new_group_id: "technology_group:test".to_owned(),
+            new_group_name: "Test Group".to_owned(),
+            ..ToolState::default()
+        };
+        create_technology_group(&mut state).unwrap();
+        let group_id = StableId::new("technology_group:test").unwrap();
+        assert_eq!(state.selected_group.as_ref(), Some(&group_id));
+
+        state.new_technology_id = "technology:test".to_owned();
+        state.new_technology_name = "Test Technology".to_owned();
+        create_technology_node(&mut state).unwrap();
+        let node_id = StableId::new("technology:test").unwrap();
+        assert_eq!(
+            state.catalog.technology.nodes[&node_id].group.as_ref(),
+            Some(&group_id)
+        );
+        assert!(
+            state.catalog.technology.groups[&group_id]
+                .nodes
+                .contains(&node_id)
+        );
+        assert!(delete_selected_technology_group(&mut state).is_err());
+
+        delete_selected_technology_node(&mut state).unwrap();
+        assert!(!state.catalog.technology.nodes.contains_key(&node_id));
+        delete_selected_technology_group(&mut state).unwrap();
+        assert!(!state.catalog.technology.groups.contains_key(&group_id));
+        state.catalog.validate().unwrap();
+
+        let previous = state.undo_catalogs.pop().unwrap();
+        state.catalog = previous;
+        assert!(state.catalog.technology.groups.contains_key(&group_id));
+        state.catalog.validate().unwrap();
+    }
+
+    #[test]
+    fn technology_catalog_save_is_atomic_validated_and_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("catalog.ron");
+        let catalog = ToolState::default().catalog;
+
+        save_content_catalog(&catalog, path.to_str().unwrap()).unwrap();
+        save_content_catalog(&catalog, path.to_str().unwrap()).unwrap();
+
+        let reloaded: ContentCatalog = ron::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded, catalog);
+        assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
+        assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
     }
 }

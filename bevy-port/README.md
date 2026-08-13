@@ -14,6 +14,12 @@ here.
   device-OAuth/vault diagnostics are functional. Its Runtime tab can launch or
   attach to the game, inject validated commands, request save/load/frame
   capture, and inspect stable world/session/profiling status.
+
+The Technology tab supports searchable group/node authoring rather than only
+inspection: create or delete groups and nodes, move nodes between groups, edit
+prerequisites and metadata, validate cycles/dangling references, undo/redo, and
+save the complete content catalog atomically. Catalog saves preserve a `.bak`
+copy and are reloaded and revalidated before success is reported.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
