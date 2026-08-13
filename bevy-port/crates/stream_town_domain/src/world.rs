@@ -7,6 +7,7 @@ use crate::{FoliageHabitat, FoliageLayerDef, GridPos, NavGrid, StableId, WorldGe
 pub struct GeneratedResource {
     pub id: StableId,
     pub kind: StableId,
+    pub target_kind: StableId,
     pub position: GridPos,
     pub amount: u32,
 }
@@ -50,7 +51,7 @@ fn generate_world_from_layers(
     config: &WorldGenConfig,
     foliage_layers: &[FoliageLayerDef],
 ) -> GeneratedWorld {
-    const GENERATOR_VERSION: u32 = 1;
+    const GENERATOR_VERSION: u32 = 2;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let mut heights = Vec::with_capacity(cell_count);
     let mut blocked = Vec::with_capacity(cell_count);
@@ -80,14 +81,15 @@ fn generate_world_from_layers(
 
             let resource_roll = u16::try_from(random % 1_000).expect("modulo 1000");
             if !is_blocked && resource_roll < config.resource_density_per_thousand {
-                let kind = match (random >> 10) % 3 {
-                    0 => "resource:wood",
-                    1 => "resource:ore",
-                    _ => "resource:food",
+                let (kind, target_kind) = match (random >> 10) % 3 {
+                    0 => ("resource:wood", "target:tree"),
+                    1 => ("resource:ore", "target:ore"),
+                    _ => ("resource:food", "target:bush"),
                 };
                 resources.push(GeneratedResource {
                     id: StableId::new(format!("resource:{x}:{z}")).expect("generated stable ID"),
                     kind: StableId::new(kind).expect("static stable ID"),
+                    target_kind: StableId::new(target_kind).expect("static stable ID"),
                     position,
                     amount: 50 + u32::try_from((random >> 24) % 151).expect("bounded amount"),
                 });
@@ -105,6 +107,7 @@ fn generate_world_from_layers(
 
     let navigation = NavGrid::new(config.width, config.height, blocked, heights)
         .expect("validated world configuration produces a valid grid");
+    generate_shoreline_fish(config, &navigation, &mut resources);
     let foliage = generate_foliage(config, &navigation, &resources, foliage_layers);
     // Decorative foliage is regenerated from authored content and deliberately
     // excluded from native-save compatibility. The saved world fingerprint
@@ -118,6 +121,104 @@ fn generate_world_from_layers(
         foliage,
         deterministic_hash,
     }
+}
+
+fn generate_shoreline_fish(
+    config: &WorldGenConfig,
+    navigation: &NavGrid,
+    resources: &mut Vec<GeneratedResource>,
+) {
+    const FISH_SEED_SALT: u64 = 0x4649_5348_5F53_484F;
+    let density = config
+        .resource_density_per_thousand
+        .saturating_mul(4)
+        .min(1_000);
+    for z in 0..navigation.height() {
+        for x in 0..navigation.width() {
+            let position = GridPos { x, z };
+            if navigation.is_walkable(position)
+                || navigation.height_at(position).unwrap_or_default()
+                    > config.water_level_centimetres
+                || shoreline_approaches(navigation, position).next().is_none()
+            {
+                continue;
+            }
+            let random = cell_hash(config.seed ^ FISH_SEED_SALT, x, z);
+            let roll = u16::try_from(random % 1_000).expect("modulo 1000");
+            if roll >= density {
+                continue;
+            }
+            resources.push(GeneratedResource {
+                id: StableId::new(format!("resource:fish:{x}:{z}")).expect("generated stable ID"),
+                kind: StableId::new("resource:food").expect("static stable ID"),
+                target_kind: StableId::new("target:fish").expect("static stable ID"),
+                position,
+                amount: 50 + u32::try_from((random >> 24) % 151).expect("bounded amount"),
+            });
+        }
+    }
+}
+
+pub fn shoreline_approaches(
+    navigation: &NavGrid,
+    position: GridPos,
+) -> impl Iterator<Item = GridPos> + '_ {
+    [
+        position
+            .x
+            .checked_add(1)
+            .filter(|x| *x < navigation.width())
+            .map(|x| GridPos { x, z: position.z }),
+        position
+            .x
+            .checked_sub(1)
+            .map(|x| GridPos { x, z: position.z }),
+        position
+            .z
+            .checked_add(1)
+            .filter(|z| *z < navigation.height())
+            .map(|z| GridPos { x: position.x, z }),
+        position
+            .z
+            .checked_sub(1)
+            .map(|z| GridPos { x: position.x, z }),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|candidate| navigation.is_walkable(*candidate))
+}
+
+#[must_use]
+pub fn legacy_v1_world_hash(world: &GeneratedWorld) -> String {
+    let resources: Vec<_> = world
+        .resources
+        .iter()
+        .filter(|resource| resource.target_kind.as_str() != "target:fish")
+        .collect();
+    let mut hasher = Sha256::new();
+    hasher.update(world.seed.to_le_bytes());
+    hasher.update(1_u32.to_le_bytes());
+    for z in 0..world.navigation.height() {
+        for x in 0..world.navigation.width() {
+            let position = GridPos { x, z };
+            hasher.update(
+                world
+                    .navigation
+                    .height_at(position)
+                    .unwrap_or_default()
+                    .to_le_bytes(),
+            );
+            hasher.update([u8::from(world.navigation.is_walkable(position))]);
+        }
+    }
+    for resource in resources {
+        hasher.update(resource.id.as_str().as_bytes());
+        hasher.update(resource.kind.as_str().as_bytes());
+        hasher.update(resource.position.x.to_le_bytes());
+        hasher.update(resource.position.z.to_le_bytes());
+        hasher.update(resource.amount.to_le_bytes());
+    }
+    hex::encode(hasher.finalize())
 }
 
 fn generate_foliage(
@@ -283,6 +384,7 @@ fn hash_world(
     for resource in resources {
         hasher.update(resource.id.as_str().as_bytes());
         hasher.update(resource.kind.as_str().as_bytes());
+        hasher.update(resource.target_kind.as_str().as_bytes());
         hasher.update(resource.position.x.to_le_bytes());
         hasher.update(resource.position.z.to_le_bytes());
         hasher.update(resource.amount.to_le_bytes());
@@ -311,6 +413,39 @@ mod tests {
         let first = generate_world(&config).deterministic_hash;
         config.seed += 1;
         assert_ne!(first, generate_world(&config).deterministic_hash);
+    }
+
+    #[test]
+    fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
+        let config = GameConfig::default().world;
+        let world = generate_world(&config);
+        assert_eq!(world.generator_version, 2);
+        assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
+        for resource in &world.resources {
+            match resource.kind.as_str() {
+                "resource:wood" => assert_eq!(resource.target_kind.as_str(), "target:tree"),
+                "resource:ore" => assert_eq!(resource.target_kind.as_str(), "target:ore"),
+                "resource:food" => assert!(matches!(
+                    resource.target_kind.as_str(),
+                    "target:bush" | "target:fish"
+                )),
+                kind => panic!("unexpected generated resource kind {kind}"),
+            }
+        }
+        let fish: Vec<_> = world
+            .resources
+            .iter()
+            .filter(|resource| resource.target_kind.as_str() == "target:fish")
+            .collect();
+        assert!(!fish.is_empty());
+        for resource in fish {
+            assert!(!world.navigation.is_walkable(resource.position));
+            assert!(
+                shoreline_approaches(&world.navigation, resource.position)
+                    .next()
+                    .is_some()
+            );
+        }
     }
 
     #[test]

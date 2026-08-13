@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786585743.8982048,
-    "ast_hash": "4b11947c33dcb324be63df6162eaf053",
+    "mtime": 1786606715.2246902,
+    "ast_hash": "d4e0f33f5b789212cba6a734f323adbc",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2785,13 +2785,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/world.rs": {
-    "mtime": 1786566239.7665532,
-    "ast_hash": "b39fd54fa0dbc747db0129c7fb760020",
+    "mtime": 1786606715.2236955,
+    "ast_hash": "45f5d37a8a75ec574e59e14f2b70ebf3",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786605317.818087,
-    "ast_hash": "e6dbc1a344f9d2389f978df7d0055e4c",
+    "mtime": 1786607081.137741,
+    "ast_hash": "5628d5f5591262da0dcd96674c7f720a",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786605104.7147856,
-    "ast_hash": "f428edb6888e09addb7a362bf7af11ed",
+    "mtime": 1786606756.2143807,
+    "ast_hash": "2bcbe54f5f0f6b884e0b2ae156e7c7a3",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786605295.170517,
-    "ast_hash": "13a3490535a00c504c4c51469e60123e",
+    "mtime": 1786606756.2138658,
+    "ast_hash": "c1650b7bdb4804585a9a3c84e9b29af7",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -4387,6 +4387,16 @@
   "graphify-out/memory/query_20260813_065153_boundsvisualizer_buildingplacer_visualbounds_colli.md": {
     "mtime": 1786603913.6491425,
     "ast_hash": "3fe861b39d838603375f0e6170dd30f4",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_072115_if_there_is_more_to_do__keep_going.md": {
+    "mtime": 1786605675.3697107,
+    "ast_hash": "b0585e6a5e2df48b951f991210b83893",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_074412_how_do_typed_unity_resource_targets__farm_harvesti.md": {
+    "mtime": 1786607052.1757078,
+    "ast_hash": "5df69bc8ea7b091cb4805a140f577f3d",
     "semantic_hash": ""
   }
 }

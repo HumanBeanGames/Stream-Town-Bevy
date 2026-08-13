@@ -909,6 +909,7 @@ enum AgentGoal {
     #[default]
     Wander,
     Gather(StableId),
+    HarvestFarm(StableId),
     Deposit,
     Attack(StableId),
     AttackBuilding(StableId),
@@ -5934,6 +5935,21 @@ fn spawn_resource_visual(
     position: Vec3,
     cell_size: f32,
 ) {
+    if resource.target_kind.as_str() == "target:fish" {
+        // Unity's Resource_Fish_Base prefab is an invisible work target in the
+        // water. Keep the ECS node for depletion/save state without rendering
+        // the bush model used by the shared food resource kind.
+        commands.spawn((
+            WorldEntity,
+            ResourceNode {
+                id: resource.id.clone(),
+            },
+            GridLocation(resource.position),
+            Transform::from_translation(position),
+            Visibility::Hidden,
+        ));
+        return;
+    }
     let visual = resource_visual_archetype(content, &resource.kind)
         .and_then(default_archetype_scene)
         .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
@@ -6445,6 +6461,23 @@ fn actor_resource_storage_has_room(
         < resource_storage_capacity(config, content, simulation, &resource)
 }
 
+fn actor_remaining_carry_capacity(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor: &ActorState,
+) -> u32 {
+    let carried = actor
+        .inventory
+        .values()
+        .copied()
+        .fold(0_u32, u32::saturating_add);
+    let capacity = effective_role_stats(content, simulation, actor)
+        .map(|stats| stats.carry_capacity)
+        .filter(|capacity| *capacity > 0)
+        .unwrap_or(25);
+    capacity.saturating_sub(carried)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EffectiveRoleStats {
     level: u16,
@@ -6737,6 +6770,21 @@ fn station_supports_role_targets(station: &StationDef, role: &stream_town_domain
             .any(|kind| station.target_kinds.contains(kind))
 }
 
+fn role_accepts_target(role: &stream_town_domain::RoleDef, target_kind: &StableId) -> bool {
+    role.targets_all || role.target_kinds.contains(target_kind)
+}
+
+fn actor_accepts_resource(
+    content: &ContentCatalog,
+    actor: &ActorState,
+    resource: &stream_town_domain::GeneratedResource,
+) -> bool {
+    content.roles.get(&actor.role).is_some_and(|role| {
+        role.resource.as_ref() == Some(&resource.kind)
+            && role_accepts_target(role, &resource.target_kind)
+    })
+}
+
 fn station_candidate<'a>(
     content: &'a ContentCatalog,
     simulation: &'a WorldSimulation,
@@ -6857,6 +6905,33 @@ fn building_def_for_archetype<'a>(
         .buildings
         .values()
         .find(|building| building.archetype == *archetype)
+}
+
+fn is_farm_resource_building(content: &ContentCatalog, building: &BuildingState) -> bool {
+    building.complete
+        && content
+            .buildings
+            .get(&StableId::new("building:farm").expect("static building ID"))
+            .is_some_and(|farm| farm.archetype == building.archetype)
+}
+
+fn resource_approach(
+    world: &GeneratedWorld,
+    resource: &stream_town_domain::GeneratedResource,
+    from: GridPos,
+) -> Option<GridPos> {
+    if world.navigation.is_walkable(resource.position) {
+        return Some(resource.position);
+    }
+    stream_town_domain::shoreline_approaches(&world.navigation, resource.position).min_by_key(
+        |candidate| {
+            (
+                candidate.x.abs_diff(from.x) + candidate.z.abs_diff(from.z),
+                candidate.z,
+                candidate.x,
+            )
+        },
+    )
 }
 
 fn building_max_health(content: &ContentCatalog, building: &BuildingState) -> i32 {
@@ -7013,14 +7088,42 @@ fn next_agent_goal(
             .resources
             .iter()
             .find(|resource| resource.id == *preferred && resource.amount > 0)
-            .filter(|resource| {
-                resource_for_role(content, &actor.role).as_ref() == Some(&resource.kind)
-            })
+            .filter(|resource| actor_accepts_resource(content, actor, resource))
+            .filter(|_| actor_remaining_carry_capacity(content, simulation, actor) > 0)
+            .filter(|_| actor_resource_storage_has_room(config, content, simulation, actor))
             .filter(|resource| {
                 station.is_none_or(|station| within_station_range(resource.position, station))
             })
+            && let Some(approach) = resource_approach(world, resource, current)
         {
-            return (AgentGoal::Gather(resource.id.clone()), resource.position);
+            return (AgentGoal::Gather(resource.id.clone()), approach);
+        }
+        if let Some(building) = simulation
+            .buildings
+            .get(preferred)
+            .filter(|building| is_farm_resource_building(content, building))
+            .filter(|_| {
+                content.roles.get(&actor.role).is_some_and(|role| {
+                    role_accepts_target(
+                        role,
+                        &StableId::new("target:farm").expect("static target ID"),
+                    )
+                })
+            })
+            .filter(|_| actor_remaining_carry_capacity(content, simulation, actor) > 0)
+            .filter(|_| actor_resource_storage_has_room(config, content, simulation, actor))
+            .filter(|building| {
+                station.is_none_or(|station| within_station_range(building.position, station))
+            })
+            && let Some(definition) = building_def_for_archetype(content, &building.archetype)
+            && let Some(approach) = building_approach(
+                world,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                current,
+            )
+        {
+            return (AgentGoal::HarvestFarm(building.id.clone()), approach);
         }
         if let Some(building) = simulation
             .buildings
@@ -7248,16 +7351,7 @@ fn next_agent_goal(
     if !actor_resource_storage_has_room(config, content, simulation, actor) {
         return (AgentGoal::Wander, mirrored_target(world, current));
     }
-    let carried = actor
-        .inventory
-        .values()
-        .copied()
-        .fold(0_u32, u32::saturating_add);
-    let carry_capacity = effective_role_stats(content, simulation, actor)
-        .map(|stats| stats.carry_capacity)
-        .filter(|capacity| *capacity > 0)
-        .unwrap_or(25);
-    if carried >= carry_capacity {
+    if actor_remaining_carry_capacity(content, simulation, actor) == 0 {
         let destination = station.map_or_else(
             || town_hall_grid_position(config),
             |station| station.position,
@@ -7268,10 +7362,57 @@ fn next_agent_goal(
     let Some(resource_kind) = resource_for_role(content, &actor.role) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
     };
+    if content.roles.get(&actor.role).is_some_and(|role| {
+        role_accepts_target(
+            role,
+            &StableId::new("target:farm").expect("static target ID"),
+        )
+    }) {
+        let mut farms: Vec<_> = simulation
+            .buildings
+            .values()
+            .filter(|building| is_farm_resource_building(content, building))
+            .filter(|building| {
+                station.is_none_or(|station| within_station_range(building.position, station))
+            })
+            .filter_map(|building| {
+                let definition = building_def_for_archetype(content, &building.archetype)?;
+                let approach = building_approach(
+                    world,
+                    building.position,
+                    rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                    current,
+                )?;
+                Some((
+                    station.map_or(0, |station| {
+                        building.position.x.abs_diff(station.position.x)
+                            + building.position.z.abs_diff(station.position.z)
+                    }),
+                    approach.x.abs_diff(current.x) + approach.z.abs_diff(current.z),
+                    building.id.clone(),
+                    approach,
+                ))
+            })
+            .collect();
+        if let Some(station) = station {
+            farms.sort_by_key(|(station_distance, _, id, _)| (*station_distance, id.clone()));
+            farms.truncate(usize::from(station.definition.max_targets));
+        }
+        if let Some((_, _, building, approach)) = farms
+            .into_iter()
+            .min_by_key(|(_, distance, id, _)| (*distance, id.clone()))
+        {
+            return (AgentGoal::HarvestFarm(building), approach);
+        }
+    }
     let mut resources: Vec<_> = world
         .resources
         .iter()
-        .filter(|resource| resource.kind == resource_kind && resource.amount > 0)
+        .filter(|resource| {
+            resource.kind == resource_kind
+                && resource.amount > 0
+                && actor_accepts_resource(content, actor, resource)
+        })
         .filter(|resource| {
             station.is_none_or(|station| within_station_range(resource.position, station))
         })
@@ -7294,10 +7435,12 @@ fn next_agent_goal(
             resource.position.x,
         )
     });
-    resource.map_or_else(
-        || (AgentGoal::Wander, mirrored_target(world, current)),
-        |resource| (AgentGoal::Gather(resource.id.clone()), resource.position),
-    )
+    resource
+        .and_then(|resource| {
+            resource_approach(world, resource, current)
+                .map(|approach| (AgentGoal::Gather(resource.id.clone()), approach))
+        })
+        .unwrap_or_else(|| (AgentGoal::Wander, mirrored_target(world, current)))
 }
 
 fn complete_agent_goal(
@@ -7325,11 +7468,24 @@ fn complete_agent_goal(
             || stats.map_or(1, |stats| stats.action_amount),
             |enemy| enemy.action_amount,
         );
+    let mut experience_amount = action_amount;
     let mut action_presentation = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
             let actor = simulation.actors.get(actor_id)?;
             if !actor_resource_storage_has_room(config, content, simulation, actor) {
+                return None;
+            }
+            if !world
+                .resources
+                .iter()
+                .find(|resource| resource.id == *resource_id && resource.amount > 0)
+                .is_some_and(|resource| actor_accepts_resource(content, actor, resource))
+            {
+                return None;
+            }
+            let remaining_carry = actor_remaining_carry_capacity(content, simulation, actor);
+            if remaining_carry == 0 {
                 return None;
             }
             let gathering_pet = simulation.actors.get(actor_id).and_then(|actor| {
@@ -7345,7 +7501,8 @@ fn complete_agent_goal(
                 .resources
                 .iter_mut()
                 .find(|resource| resource.id == *resource_id && resource.amount > 0)?;
-            let amount = resource.amount.min(action_amount);
+            let amount = resource.amount.min(action_amount).min(remaining_carry);
+            experience_amount = amount;
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
             if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
@@ -7362,6 +7519,40 @@ fn complete_agent_goal(
                     info!(actor = %actor_id, %pet, "unlocked gathering pet");
                 }
                 amount > 0
+            }
+        }
+        AgentGoal::HarvestFarm(building_id) => {
+            let actor = simulation.actors.get(actor_id)?;
+            if !actor_resource_storage_has_room(config, content, simulation, actor)
+                || !content.roles.get(&actor.role).is_some_and(|role| {
+                    role.resource
+                        .as_ref()
+                        .is_some_and(|resource| resource.as_str() == "resource:food")
+                        && role_accepts_target(
+                            role,
+                            &StableId::new("target:farm").expect("static target ID"),
+                        )
+                })
+                || !simulation
+                    .buildings
+                    .get(building_id)
+                    .is_some_and(|building| is_farm_resource_building(content, building))
+            {
+                return None;
+            }
+            let amount =
+                action_amount.min(actor_remaining_carry_capacity(content, simulation, actor));
+            if amount == 0 {
+                return None;
+            }
+            experience_amount = amount;
+            let food = StableId::new("resource:food").expect("static resource ID");
+            match simulation.gather(actor_id, food, amount) {
+                Ok(()) => amount > 0,
+                Err(error) => {
+                    warn!(actor = %actor_id, building = %building_id, %error, "farm harvest action failed");
+                    false
+                }
             }
         }
         AgentGoal::Deposit => {
@@ -7595,7 +7786,7 @@ fn complete_agent_goal(
         && let Some(stats) = stats
         && let Ok(levels_gained) = simulation.grant_role_experience(
             actor_id,
-            action_amount,
+            experience_amount,
             stats.experience_multiplier_per_thousand,
         )
         && levels_gained > 0
@@ -8824,7 +9015,7 @@ fn action_cooldown(
     let fallback = match goal {
         AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_) | AgentGoal::Heal(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
-        AgentGoal::Gather(_) => 0.75,
+        AgentGoal::Gather(_) | AgentGoal::HarvestFarm(_) => 0.75,
         AgentGoal::Deposit => 0.25,
         AgentGoal::Wander => 0.0,
     };
@@ -8843,6 +9034,7 @@ fn action_cooldown(
             | AgentGoal::AttackBuilding(_)
             | AgentGoal::Construct(_)
             | AgentGoal::Gather(_)
+            | AgentGoal::HarvestFarm(_)
             | AgentGoal::Heal(_)
     ) {
         effective_role_stats(content, simulation, actor).map_or(fallback, |stats| {
@@ -11382,6 +11574,7 @@ fn agent_action_animation(
     }
     match agent.goal {
         AgentGoal::Gather(_)
+        | AgentGoal::HarvestFarm(_)
         | AgentGoal::Construct(_)
         | AgentGoal::Attack(_)
         | AgentGoal::AttackBuilding(_)
@@ -13904,10 +14097,14 @@ fn load_input(
         }
     };
     placers.0.clear();
-    if snapshot.world_seed != world.generated.seed
-        || snapshot.generator_version != world.generated.generator_version
-        || snapshot.world_hash != world.generated.deterministic_hash
-    {
+    let mut restored_world = generate_world_with_content(&config.0.world, &content.0);
+    let compatibility = native_world_compatibility(
+        snapshot.world_seed,
+        snapshot.generator_version,
+        &snapshot.world_hash,
+        &restored_world,
+    );
+    if compatibility.is_none() {
         error!(
             saved_seed = snapshot.world_seed,
             runtime_seed = world.generated.seed,
@@ -13915,8 +14112,18 @@ fn load_input(
         );
         return;
     }
+    if compatibility == Some(NativeWorldCompatibility::UpgradeV1) {
+        info!(
+            saved_generator_version = snapshot.generator_version,
+            runtime_generator_version = world.generated.generator_version,
+            "upgrading native save world fingerprint; new typed resources start at full stock"
+        );
+        snapshot.generator_version = world.generated.generator_version;
+        snapshot
+            .world_hash
+            .clone_from(&world.generated.deterministic_hash);
+    }
 
-    let mut restored_world = generate_world_with_content(&config.0.world, &content.0);
     if !snapshot.resource_nodes.is_empty() {
         for resource in &mut restored_world.resources {
             if let Some(remaining) = snapshot.resource_nodes.get(&resource.id) {
@@ -14138,6 +14345,28 @@ fn load_input(
             .map_or(0, |mesh| mesh.vertices.len()),
         "native save loaded and applied"
     );
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeWorldCompatibility {
+    Current,
+    UpgradeV1,
+}
+
+fn native_world_compatibility(
+    seed: u64,
+    generator_version: u32,
+    world_hash: &str,
+    world: &GeneratedWorld,
+) -> Option<NativeWorldCompatibility> {
+    if seed != world.seed {
+        return None;
+    }
+    if generator_version == world.generator_version && world_hash == world.deterministic_hash {
+        return Some(NativeWorldCompatibility::Current);
+    }
+    (generator_version == 1 && world_hash == stream_town_domain::legacy_v1_world_hash(world))
+        .then_some(NativeWorldCompatibility::UpgradeV1)
 }
 
 fn capture_screenshot(
@@ -15388,34 +15617,22 @@ fn compatible_target_ids(
     let mut targets = Vec::new();
     let accepts =
         |kind: &str| role.targets_all || role.target_kinds.iter().any(|id| id.as_str() == kind);
-    if accepts("target:tree") {
+    targets.extend(
+        world
+            .resources
+            .iter()
+            .filter(|resource| {
+                resource.amount > 0 && actor_accepts_resource(content, actor, resource)
+            })
+            .map(|resource| resource.id.clone()),
+    );
+    if accepts("target:farm") {
         targets.extend(
-            world
-                .resources
-                .iter()
-                .filter(|resource| resource.amount > 0 && resource.kind.as_str() == "resource:wood")
-                .map(|resource| resource.id.clone()),
-        );
-    }
-    if accepts("target:ore") {
-        targets.extend(
-            world
-                .resources
-                .iter()
-                .filter(|resource| resource.amount > 0 && resource.kind.as_str() == "resource:ore")
-                .map(|resource| resource.id.clone()),
-        );
-    }
-    if ["target:bush", "target:farm", "target:fish"]
-        .iter()
-        .any(|kind| accepts(kind))
-    {
-        targets.extend(
-            world
-                .resources
-                .iter()
-                .filter(|resource| resource.amount > 0 && resource.kind.as_str() == "resource:food")
-                .map(|resource| resource.id.clone()),
+            simulation
+                .buildings
+                .values()
+                .filter(|building| is_farm_resource_building(content, building))
+                .map(|building| building.id.clone()),
         );
     }
     if accepts("target:enemy") {
@@ -17135,7 +17352,7 @@ fn update_hud(
         .map_or("none", |agent| agent.id.as_str());
     let gathering = agents
         .iter()
-        .filter(|agent| matches!(agent.goal, AgentGoal::Gather(_)))
+        .filter(|agent| matches!(agent.goal, AgentGoal::Gather(_) | AgentGoal::HarvestFarm(_)))
         .count();
     let depositing = agents
         .iter()
@@ -19078,6 +19295,144 @@ mod tests {
     }
 
     #[test]
+    fn native_world_compatibility_accepts_current_and_verified_v1_only() {
+        let world = generate_world(&GameConfig::default().world);
+        assert_eq!(
+            native_world_compatibility(
+                world.seed,
+                world.generator_version,
+                &world.deterministic_hash,
+                &world,
+            ),
+            Some(NativeWorldCompatibility::Current)
+        );
+        assert_eq!(
+            native_world_compatibility(
+                world.seed,
+                1,
+                &stream_town_domain::legacy_v1_world_hash(&world),
+                &world,
+            ),
+            Some(NativeWorldCompatibility::UpgradeV1)
+        );
+        assert_eq!(
+            native_world_compatibility(world.seed, 1, "corrupt", &world),
+            None
+        );
+        assert_eq!(
+            native_world_compatibility(
+                world.seed.wrapping_add(1),
+                world.generator_version,
+                &world.deterministic_hash,
+                &world,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn food_roles_only_select_their_authored_target_types() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let bush = world
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:bush")
+            .unwrap();
+        let fish = world
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:fish")
+            .unwrap();
+
+        for (serial, role, expected_target, rejected_target) in [
+            (0, "role:gatherer", bush, fish),
+            (1, "role:fisher", fish, bush),
+        ] {
+            let actor_id = StableId::new(format!("npc:typed_food_{serial}")).unwrap();
+            let current = resource_approach(&world, expected_target, expected_target.position)
+                .expect("generated resource has an approach");
+            let mut simulation = WorldSimulation::new(world.seed);
+            assert!(simulation.join_player(actor_id.clone(), current));
+            simulation
+                .assign_role(&actor_id, StableId::new(role).unwrap())
+                .unwrap();
+            let (goal, target) =
+                next_agent_goal(&simulation, &world, &config, &content, &actor_id, current);
+            assert_eq!(goal, AgentGoal::Gather(expected_target.id.clone()));
+            assert_eq!(target, current);
+            let compatible =
+                compatible_target_ids(&content, &simulation, &world, &simulation.actors[&actor_id]);
+            assert!(compatible.contains(&expected_target.id));
+            assert!(!compatible.contains(&rejected_target.id));
+        }
+    }
+
+    #[test]
+    fn farmer_harvests_unlimited_food_from_completed_farm() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let farm = &content.buildings[&StableId::new("building:farm").unwrap()];
+        let position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            farm.footprint,
+        )
+        .unwrap();
+        let farm_id = StableId::new("building:test_farm").unwrap();
+        let region = building_region(position, farm.footprint, &world).unwrap();
+        world.navigation.set_blocked(region, true).unwrap();
+        let current = building_approach(&world, position, farm.footprint, position).unwrap();
+        let actor_id = StableId::new("npc:farmer_test").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.buildings.insert(
+            farm_id.clone(),
+            BuildingState {
+                id: farm_id.clone(),
+                archetype: farm.archetype.clone(),
+                position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: i32::try_from(building_base_max_health(&content, farm)).unwrap(),
+                complete: true,
+            },
+        );
+        assert!(simulation.join_player(actor_id.clone(), current));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:farmer").unwrap())
+            .unwrap();
+
+        let (goal, target) =
+            next_agent_goal(&simulation, &world, &config, &content, &actor_id, current);
+        assert_eq!(goal, AgentGoal::HarvestFarm(farm_id.clone()));
+        assert_eq!(target, current);
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &actor_id,
+                &goal,
+                current,
+            )
+            .is_none()
+        );
+        let food = StableId::new("resource:food").unwrap();
+        assert_eq!(simulation.actors[&actor_id].inventory[&food], 1);
+        assert_eq!(role_progress(&simulation.actors[&actor_id]).experience, 1);
+        assert!(
+            compatible_target_ids(&content, &simulation, &world, &simulation.actors[&actor_id],)
+                .contains(&farm_id)
+        );
+    }
+
+    #[test]
     fn full_town_storage_pauses_gathering_and_preserves_carried_overflow() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -20256,6 +20611,12 @@ mod tests {
         let resource = |kind: &str, x, z| stream_town_domain::GeneratedResource {
             id: StableId::new(format!("resource:{x}:{z}")).unwrap(),
             kind: StableId::new(kind).unwrap(),
+            target_kind: StableId::new(match kind {
+                "resource:wood" => "target:tree",
+                "resource:ore" => "target:ore",
+                _ => "target:bush",
+            })
+            .unwrap(),
             position: GridPos { x, z },
             amount: 100,
         };

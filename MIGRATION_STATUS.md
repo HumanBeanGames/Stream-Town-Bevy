@@ -78,6 +78,15 @@ mistaken for production-ready systems.
   change; gathering, construction, combat, and deposits honor assigned range and
   target capacity. Assignments persist in native saves, and resolvable legacy
   JSON/binary building GUID assignments survive one-time import.
+- Generated resource nodes retain Unity's tree, ore, bush, and fish target
+  identities. Shoreline fish are deterministic invisible food nodes with a
+  guaranteed walkable approach, so Fishers cannot harvest bushes and Gatherers
+  cannot fish. Completed Farms expose Unity's unlimited food holder to Farmers;
+  target selection, manual `!target`, carry limits, XP, depletion, and native
+  save fingerprints share the typed contract. This gameplay-world change
+  advances the deterministic generator fingerprint to version 2. Native
+  generator-v1 saves are recognized by their former hash, retain depleted land
+  nodes, and upgrade with newly introduced fish at full stock.
 - All 15 `CharacterModelHandler` equipment sets are typed using exact converted
   GLB node names. Bevy activates the selected slim role body and permanent tools,
   shields, and helmets; toggles carry-only props from authoritative inventory;
@@ -501,9 +510,10 @@ mistaken for production-ready systems.
   parent exits, masks, and property curves are converted and live.
 - Chunked terrain/foliage LOD, production-grade actor steering, complete advanced
   role/inventory behavior beyond the live resource-worker loop,
-  additional enemy archetype behaviors/spawners, combat buildings beyond the
-  Tower, richer station behavior, and every reachable balance rule from the
-  Unity scenes.
+  additional enemy archetype behaviors/spawners, remaining station behavior,
+  and every reachable balance rule from the Unity scenes. The source audit
+  confirms the Tower contains the shipping project's sole `ProjectileShooter`;
+  there is no second reachable combat building to reproduce.
 - Exact production outbound response wording. The authenticated IRC path now includes player
   role/health/progression, role/station/target selection, unstuck/ping,
   pets and cosmetics, catalogs/info/town stats, recruit inspection/dismissal/

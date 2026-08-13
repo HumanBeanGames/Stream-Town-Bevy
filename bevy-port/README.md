@@ -212,7 +212,14 @@ consumes the House-backed recruit capacity, and persists normally.
 
 The Unity starting NPC roster is present as stable Defender, Logger, Miner,
 Gatherer, and Builder actors. Resource roles select their authored resource and
-the nearest matching generated node, gather using `BaseActionAmount`, carry the
+the nearest matching generated node and exact target mask: trees, ore, bushes,
+and reachable shoreline fish no longer collapse into interchangeable resource
+targets. Farmers harvest the completed Farm's authored unlimited food holder,
+while Fishers approach invisible water targets from a walkable shore cell.
+World-generator schema 2 fingerprints these target identities and fish nodes.
+Schema-1 native saves are hash-verified during load, preserve their existing
+land-node depletion, and add the new fish nodes at full stock.
+Workers gather using `BaseActionAmount`, carry the
 authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
 into the town balances shown by the HUD. Successful actions award Unity-scaled
 role XP; per-role progress survives role changes and saves, levels follow the
