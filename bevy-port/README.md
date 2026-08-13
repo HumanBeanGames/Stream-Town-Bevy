@@ -303,7 +303,10 @@ their own translated Unity `MoveSpeed` controllers and retargeted idle/walk
 clips; the unanimated Fish God keeps its authored static model. The converted
 Fish God GLB appears at town center while a deterministic falling-fish field provides the
 missing Unity VFX Graph equivalent; HUD and tools expose event progress and
-repeatable injection commands. Initial actors are
+repeatable injection commands. The event presentation also plays the converted
+`FishGod` controller's Belly Flop entry, loops its idle, consumes Unity's `Exit`
+trigger, and retains the Jump exit for the authored 2.5-second removal delay.
+Initial actors are
 placed by a deterministic flood fill from the connected town centre so combat
 and work targets are reachable rather than stranded on isolated land cells.
 

@@ -67,6 +67,7 @@ const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.g
 const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98fe";
 const PING_POINTER_MODEL_MIN_Y: f32 = 851.829_35;
 const PING_POINTER_MODEL_HEIGHT: f32 = 314.468_26;
+const FISH_GOD_EXIT_DELAY_SECONDS: f32 = 2.5;
 // Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
 // building models are authored at Unity scale and then scaled by cell_size / 2.
 const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
@@ -1142,6 +1143,17 @@ struct EnemyCamp {
 struct FishGodPresentation;
 
 #[derive(Component)]
+struct FishGodAnimation;
+
+#[derive(Component)]
+struct FishGodExitTimer {
+    remaining_seconds: f32,
+}
+
+#[derive(Component)]
+struct FishGodExitTriggerSent;
+
+#[derive(Component)]
 struct FallingFish {
     floor_height: f32,
     top_height: f32,
@@ -1692,8 +1704,13 @@ impl Plugin for StreamTownGamePlugin {
                     animate_building_effects.after(emit_damaged_building_effects),
                     repeat_building_smoke.after(animate_building_effects),
                     update_enemy_encounters.after(move_combat_projectiles),
-                    sync_fish_god_presentation.after(update_enemy_encounters),
+                    sync_fish_god_presentation
+                        .after(update_enemy_encounters)
+                        .after(process_injected_commands),
                     animate_falling_fish.after(sync_fish_god_presentation),
+                    drive_fish_god_exit
+                        .after(sync_fish_god_presentation)
+                        .before(drive_converted_animations),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -1708,7 +1725,8 @@ impl Plugin for StreamTownGamePlugin {
                     attach_native_animations,
                     attach_converted_animations
                         .after(upgrade_actor_placeholders)
-                        .after(sync_active_pets),
+                        .after(sync_active_pets)
+                        .after(sync_fish_god_presentation),
                     drive_native_animations,
                     drive_converted_animations
                         .after(move_agents)
@@ -6395,6 +6413,34 @@ fn converted_animation_spec(
     })
 }
 
+fn complete_converted_animation_spec(
+    archetype: &ArchetypeDef,
+    scene: &ArchetypeScene,
+    presentation: &PresentationCatalog,
+) -> Option<ConvertedAnimationSpec> {
+    let binding = presentation.prefab_bindings.get(&archetype.source_guid)?;
+    let controller = presentation.controllers.get(&binding.controller)?;
+    let state = controller.default_states.first()?.clone();
+    let motions = controller
+        .states
+        .values()
+        .flat_map(|state| &state.motions)
+        .collect::<Vec<_>>();
+    (!motions.is_empty()
+        && motions.iter().all(|motion| {
+            presentation.clips.get(&motion.clip).is_some_and(|clip| {
+                !clip.transform_tracks.is_empty()
+                    || clip.converted_asset_path.as_deref() == Some(scene.asset_path.as_str())
+                        && clip.gltf_animation_index.is_some()
+            })
+        }))
+    .then(|| ConvertedAnimationSpec {
+        controller: binding.controller.clone(),
+        state,
+        rig_scene: scene.asset_path.clone(),
+    })
+}
+
 fn pet_animation_spec(
     pet: &StableId,
     scene: &ArchetypeScene,
@@ -9188,7 +9234,7 @@ fn update_enemy_encounters(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_fish_god_presentation(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
@@ -9199,16 +9245,27 @@ fn sync_fish_god_presentation(
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
-    existing: Query<Entity, With<FishGodPresentation>>,
+    existing: Query<
+        (Entity, Option<&FishGodAnimation>, Option<&FishGodExitTimer>),
+        With<FishGodPresentation>,
+    >,
 ) {
     let active = simulation.0.fish_god.is_some();
     if !active {
-        for entity in &existing {
-            commands.entity(entity).despawn();
+        for (entity, animation, exit_timer) in &existing {
+            if animation.is_some() {
+                if exit_timer.is_none() {
+                    commands.entity(entity).insert(FishGodExitTimer {
+                        remaining_seconds: FISH_GOD_EXIT_DELAY_SECONDS,
+                    });
+                }
+            } else {
+                commands.entity(entity).despawn();
+            }
         }
         return;
     }
-    if !existing.is_empty() {
+    if existing.iter().any(|(_, animation, _)| animation.is_some()) {
         return;
     }
     let spawn = nearest_walkable(
@@ -9234,6 +9291,7 @@ fn sync_fish_god_presentation(
     let mut entity = commands.spawn((
         WorldEntity,
         FishGodPresentation,
+        FishGodAnimation,
         Transform::from_translation(position),
     ));
     if let Some((archetype, scene)) = fish_god
@@ -9254,6 +9312,11 @@ fn sync_fish_god_presentation(
         ));
         if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
             entity.insert(material);
+        }
+        if let Some(animation) =
+            complete_converted_animation_spec(archetype, scene, &presentation.0)
+        {
+            entity.insert(animation);
         }
     } else {
         let scale = config.0.world.cell_size * 1.5;
@@ -9302,6 +9365,56 @@ fn animate_falling_fish(time: Res<Time>, mut fish: Query<(&FallingFish, &mut Tra
             transform.translation.y = fish.top_height;
         }
         transform.rotate_y(time.delta_secs() * 2.5);
+    }
+}
+
+fn drive_fish_god_exit(
+    mut commands: Commands,
+    time: Res<Time>,
+    parents: Query<&ChildOf>,
+    mut roots: Query<
+        (
+            Entity,
+            &mut FishGodExitTimer,
+            Option<&FishGodExitTriggerSent>,
+        ),
+        With<FishGodAnimation>,
+    >,
+    mut drivers: Query<&mut ConvertedAnimationDriver>,
+) {
+    for (entity, mut exit, trigger_already_sent) in &mut roots {
+        let mut trigger_sent = false;
+        for mut driver in &mut drivers {
+            if trigger_already_sent.is_some() {
+                break;
+            }
+            let mut ancestor = driver.actor_root;
+            let mut belongs_to_fish_god = ancestor == entity;
+            for _ in 0..64 {
+                if belongs_to_fish_god {
+                    break;
+                }
+                let Ok(parent) = parents.get(ancestor) else {
+                    break;
+                };
+                ancestor = parent.parent();
+                belongs_to_fish_god = ancestor == entity;
+            }
+            if !belongs_to_fish_god {
+                continue;
+            }
+            for layer in &mut driver.layers {
+                let _ = layer.runtime.set_trigger("Exit");
+            }
+            trigger_sent = true;
+        }
+        if trigger_sent {
+            commands.entity(entity).insert(FishGodExitTriggerSent);
+        }
+        exit.remaining_seconds -= time.delta_secs();
+        if exit.remaining_seconds <= 0.0 {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -10827,6 +10940,7 @@ fn attach_converted_animations(
     native_players: Query<(), With<AnimationPlayer>>,
     applied: Query<(), (With<ConvertedAnimationDriver>, Without<ActivePetVisual>)>,
     pets: Query<(), With<ActivePetVisual>>,
+    fish_gods: Query<(), With<FishGodAnimation>>,
 ) {
     let (Some(asset_server), Some(mut animation_clips), Some(mut animation_graphs)) =
         (asset_server, animation_clips, animation_graphs)
@@ -10839,8 +10953,8 @@ fn attach_converted_animations(
         .unwrap_or(DEFAULT_ACTOR_DETAIL_BUDGET);
     let mut remaining = animation_budget.saturating_sub(applied.iter().count());
     for (actor_root, spec) in &specs {
-        let is_pet = pets.contains(actor_root);
-        if !is_pet && remaining == 0 {
+        let is_unbudgeted = pets.contains(actor_root) || fish_gods.contains(actor_root);
+        if !is_unbudgeted && remaining == 0 {
             continue;
         }
         let Some(controller) = presentation.0.controllers.get(&spec.controller) else {
@@ -10927,7 +11041,7 @@ fn attach_converted_animations(
         commands
             .entity(actor_root)
             .insert(ConvertedAnimationApplied);
-        if !is_pet {
+        if !is_unbudgeted {
             remaining -= 1;
         }
         info!(
@@ -12142,6 +12256,7 @@ fn drive_converted_animations(
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
     pets: Query<&ActivePetVisual>,
+    fish_gods: Query<(), With<FishGodAnimation>>,
     mut players: Query<(&mut AnimationPlayer, &mut ConvertedAnimationDriver)>,
     mut audio_cache: ResMut<RoleActionAudioCache>,
     mut procedural_pitches: Option<ResMut<Assets<Pitch>>>,
@@ -12150,7 +12265,8 @@ fn drive_converted_animations(
     for (mut player, mut driver) in &mut players {
         let agent = agents.get(driver.actor_root).ok();
         let pet = pets.get(driver.actor_root).ok();
-        if agent.is_none() && pet.is_none() {
+        let fish_god = fish_gods.contains(driver.actor_root);
+        if agent.is_none() && pet.is_none() && !fish_god {
             continue;
         }
         let Some(controller) = presentation.0.controllers.get(&driver.controller) else {
@@ -22391,6 +22507,73 @@ mod tests {
                 .zip([0.890_021_1, 0.0, 0.0, 1.0])
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
+    }
+
+    #[test]
+    fn fish_god_uses_complete_shipping_entry_idle_exit_controller() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let archetype = content
+            .archetypes
+            .values()
+            .find(|archetype| archetype.source_path.ends_with("Event_FishGod.prefab"))
+            .unwrap();
+        let scene = default_archetype_scene(archetype).unwrap();
+        let spec = complete_converted_animation_spec(archetype, scene, &presentation).unwrap();
+        assert_eq!(
+            spec.controller.as_str(),
+            "controller:c11f40d5660648f46b67cfaaa37761e5"
+        );
+        assert_eq!(
+            scene.asset_path,
+            "migrated/models/Models/Events/FishGod.glb"
+        );
+        let controller = &presentation.controllers[&spec.controller];
+        assert_eq!(controller.display_name, "FishGod");
+        assert_eq!(controller.states[&spec.state].display_name, "Entry");
+        let states = controller
+            .states
+            .values()
+            .map(|state| state.display_name.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(states, BTreeSet::from(["Entry", "Exit", "Idle"]));
+        assert!(controller.parameters.iter().any(|parameter| {
+            parameter.name == "Exit"
+                && parameter.kind == stream_town_domain::AnimationParameterKind::Trigger
+        }));
+        let clips = controller
+            .states
+            .values()
+            .flat_map(|state| &state.motions)
+            .map(|motion| &presentation.clips[&motion.clip])
+            .collect::<Vec<_>>();
+        assert_eq!(clips.len(), 3);
+        assert!(clips.iter().all(|clip| {
+            clip.converted_asset_path.as_deref() == Some(scene.asset_path.as_str())
+                && clip.gltf_animation_index.is_some()
+        }));
+        let idle = controller
+            .states
+            .iter()
+            .find(|(_, state)| state.display_name == "Idle")
+            .map(|(id, _)| id.clone())
+            .unwrap();
+        let exit = controller
+            .states
+            .iter()
+            .find(|(_, state)| state.display_name == "Exit")
+            .map(|(id, _)| id.clone())
+            .unwrap();
+        let mut runtime = AnimationControllerRuntime::in_state(controller, idle).unwrap();
+        runtime.set_trigger("Exit").unwrap();
+        assert_eq!(
+            runtime.evaluate_transitions(controller, 0.91).unwrap(),
+            stream_town_domain::AnimationTransitionOutcome::Entered(exit)
+        );
+        let playback = runtime.take_transition_playback().unwrap();
+        assert!(playback.fixed_duration);
+        assert!((playback.duration - 0.25).abs() < f32::EPSILON);
+        assert!((FISH_GOD_EXIT_DELAY_SECONDS - 2.5).abs() < f32::EPSILON);
     }
 
     #[test]
