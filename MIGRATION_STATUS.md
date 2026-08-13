@@ -397,6 +397,8 @@ mistaken for production-ready systems.
   The converter resolves their exact Unity scene positions and graph GUID, the
   graph data remains engine-neutral RON, and the runtime respects the converted
   `CreditsFireworks` activation curve rather than carrying a hard-coded start.
+  Its bottom-right sliced `UI_Button` SKIP control now reproduces the reachable
+  scene button and shares Unity's return-to-Main-Menu behavior with Escape.
 - The in-game HUD now reconstructs Unity's image-backed top bar from all ten
   packaged TopBar sprites: tiled dark/gold background, four town-resource
   icons, player/building/play-time counters, and the seasonal gauge/meter. The

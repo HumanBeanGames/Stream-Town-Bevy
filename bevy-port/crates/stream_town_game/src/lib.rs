@@ -982,6 +982,9 @@ struct AuthoredCreditsElement {
 }
 
 #[derive(Component)]
+struct CreditsSkipButton;
+
+#[derive(Component)]
 struct CreditsFade;
 
 #[derive(Component)]
@@ -2162,6 +2165,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     drive_credits_animation,
                     update_credits_fireworks,
+                    credits_skip_button,
                     credits_input,
                 )
                     .chain()
@@ -21638,22 +21642,43 @@ fn spawn_credits(
         ));
     }
     spawn_credits_fireworks_emitters(&mut commands, &presentation.0);
-    commands.spawn((
-        StateEntity,
-        Text::new("ESC  Main Menu"),
-        TextFont {
-            font_size: FontSize::Px(20.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.65, 0.72, 0.66)),
-        GlobalZIndex(10),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: percent(5.0),
-            left: percent(45.0),
-            ..default()
-        },
-    ));
+    commands
+        .spawn((
+            StateEntity,
+            CreditsSkipButton,
+            Name::new("Shipping Credits skip button"),
+            Button,
+            ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[1])).with_mode(
+                NodeImageMode::Sliced(TextureSlicer {
+                    border: BorderRect::all(15.0),
+                    center_scale_mode: default(),
+                    sides_scale_mode: default(),
+                    max_corner_scale: 1.0,
+                }),
+            ),
+            GlobalZIndex(30),
+            Node {
+                position_type: PositionType::Absolute,
+                right: percent(1.0),
+                bottom: percent(1.0),
+                width: percent(7.5),
+                height: percent(4.5),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|button| {
+            button.spawn((
+                Text::new("SKIP"),
+                TextFont {
+                    font_size: FontSize::Px(31.2),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+        });
     commands.spawn((
         StateEntity,
         CreditsFade,
@@ -22162,6 +22187,18 @@ fn credits_input(
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
+        next_state.set(GameState::MainMenu);
+    }
+}
+
+fn credits_skip_button(
+    buttons: Query<&Interaction, (Changed<Interaction>, With<CreditsSkipButton>)>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    if buttons
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
         next_state.set(GameState::MainMenu);
     }
 }
@@ -28707,10 +28744,15 @@ mod tests {
                 .count()
                 >= 2
         );
-
+        let skip_button = app
+            .world_mut()
+            .query_filtered::<Entity, With<CreditsSkipButton>>()
+            .single(app.world())
+            .unwrap();
         app.world_mut()
-            .resource_mut::<NextState<GameState>>()
-            .set(GameState::MainMenu);
+            .entity_mut(skip_button)
+            .insert(Interaction::Pressed);
+        app.update();
         app.update();
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),

@@ -584,7 +584,9 @@ to engine-neutral launch/burst rates, capacities, ranges, delays, and its eight
 HDR gradient colors, while both exact Credits scene placements are retained.
 At the Unity-authored 56-second key, a deterministic Bevy UI particle runtime
 launches rockets, delayed flashes, and radial sparks instead of displaying the
-earlier text-glyph placeholder.
+earlier text-glyph placeholder. The scene's authored bottom-right `SKIP` button
+uses the packaged sliced `UI_Button` art and returns to the Main Menu through the
+same state transition and cleanup path as Escape.
 Presentation schema 16 also converts the reachable `VFX_Chimney_Smoke`
 particle prefab and all seven authored placements across House, Forge,
 Stonemason, Barracks, and Fishing Hut models. Completed buildings emit
