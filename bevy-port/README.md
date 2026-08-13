@@ -455,6 +455,13 @@ the packaged 2048x1227 `Game_Logo_DropShadow` sprite at its source aspect ratio
 instead of substituting a text heading; assetless/headless runs retain a text
 fallback.
 
+The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
+text block. Its dark/gold background, food/gold/ore/wood icons, player/building/
+play-time counters, and four-season gauge are loaded from the converted catalog
+and updated from authoritative ECS state. The remaining runtime diagnostics and
+keyboard hints occupy a compact bottom strip and stay available for migration
+testing.
+
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
 remaining work.

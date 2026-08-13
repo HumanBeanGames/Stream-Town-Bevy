@@ -78,6 +78,18 @@ const FLAG_SHADER_ASSET_PATH: &str = "shaders/flag_material.wgsl";
 const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
 const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_DropShadow.png";
 const GAME_LOGO_ASPECT_RATIO: f32 = 2_048.0 / 1_227.0;
+const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
+    "Assets/Sprites/TopBar/UI_TopBar_Background.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Resources_Food.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Resources_Gold.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Resources_Ore.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Resources_Wood.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Stats_Players.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Stats_Buildings.png",
+    "Assets/Sprites/TopBar/UI_TopBar_Stats_PlayTime.png",
+    "Assets/Sprites/TopBar/UI_TopBar_SeasonGauge.png",
+    "Assets/Sprites/TopBar/UI_TopBar_SeasonGauge_Meter.png",
+];
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -665,6 +677,7 @@ struct RenderAssets {
     tree: Handle<TreeMaterial>,
     grass: Handle<GrassMaterial>,
     game_logo: Option<Handle<Image>>,
+    top_bar_textures: BTreeMap<String, Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -768,6 +781,20 @@ struct FoliageVisual;
 
 #[derive(Component)]
 struct Hud;
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+enum HudMetric {
+    Food,
+    Gold,
+    Ore,
+    Wood,
+    Players,
+    Buildings,
+    PlayTime,
+}
+
+#[derive(Component)]
+struct SeasonMeter;
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1702,6 +1729,13 @@ fn setup_rendering(
         asset_server.as_deref(),
         GAME_LOGO_TEXTURE_PATH,
     );
+    let top_bar_textures = TOP_BAR_TEXTURE_PATHS
+        .iter()
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
     let presentation_materials = presentation
         .0
         .materials
@@ -1862,6 +1896,7 @@ fn setup_rendering(
         tree,
         grass,
         game_logo,
+        top_bar_textures,
         presentation_materials,
     });
 }
@@ -3178,6 +3213,140 @@ fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height
     }
 }
 
+fn top_bar_texture(render: &RenderAssets, source_path: &str) -> Option<Handle<Image>> {
+    render.top_bar_textures.get(source_path).cloned()
+}
+
+fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_hash: &str) {
+    let background = top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[0]);
+    let complete_art = TOP_BAR_TEXTURE_PATHS
+        .iter()
+        .all(|path| render.top_bar_textures.contains_key(*path));
+    let mut root = commands.spawn((
+        WorldEntity,
+        Name::new("Shipping top bar"),
+        GlobalZIndex(20),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(0),
+            left: px(0),
+            width: percent(100.0),
+            height: px(106),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            column_gap: px(24),
+            padding: UiRect::axes(px(24), px(12)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.025, 0.05, 0.035, 0.88)),
+    ));
+    if let Some(background) = background {
+        root.insert(ImageNode::new(background).with_mode(NodeImageMode::Tiled {
+            tile_x: true,
+            tile_y: false,
+            stretch_value: 1.0,
+        }));
+    }
+    root.with_children(|parent| {
+        for (metric, source_path) in [
+            (HudMetric::Food, TOP_BAR_TEXTURE_PATHS[1]),
+            (HudMetric::Gold, TOP_BAR_TEXTURE_PATHS[2]),
+            (HudMetric::Ore, TOP_BAR_TEXTURE_PATHS[3]),
+            (HudMetric::Wood, TOP_BAR_TEXTURE_PATHS[4]),
+            (HudMetric::Players, TOP_BAR_TEXTURE_PATHS[5]),
+            (HudMetric::Buildings, TOP_BAR_TEXTURE_PATHS[6]),
+            (HudMetric::PlayTime, TOP_BAR_TEXTURE_PATHS[7]),
+        ] {
+            let icon = top_bar_texture(render, source_path);
+            parent
+                .spawn(Node {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: px(5),
+                    ..default()
+                })
+                .with_children(|metric_parent| {
+                    if let Some(icon) = icon {
+                        metric_parent.spawn((
+                            ImageNode::new(icon),
+                            Node {
+                                width: px(48),
+                                height: px(48),
+                                ..default()
+                            },
+                        ));
+                    }
+                    metric_parent.spawn((
+                        metric,
+                        Text::new("0"),
+                        TextFont {
+                            font_size: FontSize::Px(22.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+        }
+        if let (Some(gauge), Some(meter)) = (
+            top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[8]),
+            top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[9]),
+        ) {
+            parent
+                .spawn((
+                    ImageNode::new(gauge),
+                    Node {
+                        width: px(300),
+                        height: px(32),
+                        ..default()
+                    },
+                ))
+                .with_children(|gauge_parent| {
+                    gauge_parent.spawn((
+                        SeasonMeter,
+                        ImageNode::new(meter),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: px(-3),
+                            left: percent(0.0),
+                            width: px(10),
+                            height: px(38),
+                            ..default()
+                        },
+                    ));
+                });
+        }
+    });
+
+    commands.spawn((
+        WorldEntity,
+        Hud,
+        Name::new("Runtime diagnostics"),
+        Text::new(if complete_art {
+            format!("{agents} agents | world {}", &world_hash[..12])
+        } else {
+            format!(
+                "{agents} agents | world {} | HUD art fallback",
+                &world_hash[..12]
+            )
+        }),
+        TextFont {
+            font_size: FontSize::Px(15.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.9, 0.96, 0.9)),
+        GlobalZIndex(20),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(8),
+            left: px(12),
+            ..default()
+        },
+    ));
+}
+
 fn main_menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     menu: Res<MenuRuntime>,
@@ -4230,26 +4399,12 @@ fn generate_and_spawn_world(
         );
     }
 
-    commands.spawn((
-        WorldEntity,
-        Hud,
-        Text::new(format!(
-            "{} agents | world {}\nF5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu",
-            spawned,
-            &generated.deterministic_hash[..12]
-        )),
-        TextFont {
-            font_size: FontSize::Px(22.0),
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(12),
-            left: px(12),
-            ..default()
-        },
-    ));
+    spawn_hud(
+        &mut commands,
+        &render,
+        spawned,
+        &generated.deterministic_hash,
+    );
     if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
         let focus = grid_to_world_on_surface(centre, &config.0, &generated);
         let spacing = config.0.world.cell_size * 3.2;
@@ -14284,6 +14439,8 @@ fn update_hud(
     feedback: Res<CommandFeedback>,
     agents: Query<&Agent>,
     mut hud: Single<&mut Text, With<Hud>>,
+    mut metrics: Query<(&HudMetric, &mut Text), Without<Hud>>,
+    mut season_meters: Query<&mut Node, With<SeasonMeter>>,
 ) {
     if !stats.is_changed()
         && !twitch.is_changed()
@@ -14345,26 +14502,44 @@ fn update_hud(
     } else {
         "Night"
     };
+    for (metric, mut text) in &mut metrics {
+        text.0 = match metric {
+            HudMetric::Food => town_resource_amount(&simulation.0, "resource:food").to_string(),
+            HudMetric::Gold => town_resource_amount(&simulation.0, "resource:gold").to_string(),
+            HudMetric::Ore => town_resource_amount(&simulation.0, "resource:ore").to_string(),
+            HudMetric::Wood => town_resource_amount(&simulation.0, "resource:wood").to_string(),
+            HudMetric::Players => agents.iter().len().to_string(),
+            HudMetric::Buildings => simulation.0.buildings.len().to_string(),
+            HudMetric::PlayTime => hud_play_time(stats.elapsed_seconds),
+        };
+    }
+    let season_progress = hud_season_meter_percent(simulation.0.day);
+    for mut meter in &mut season_meters {
+        meter.left = percent(season_progress);
+    }
     hud.0 = format!(
-        "{} agents | {:.0}s | Day {} ({day_phase}) | {} routes | workers {gathering} gather/{depositing} deposit/{constructing} build | buildings {incomplete_buildings} construction/{building_levels} levels | combat {attacking} attack/{healing} heal/{dead} dead | {} commands | {:?} / {:?} | Twitch: {}\nResources F:{} G:{} O:{} W:{} R:{} | Goals: {} | Event: {} | Governance: {} | {}\nF1 Twitch Off | F2 Twitch On | F5 Save | F9 Load | F12 Capture | J Inject !join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
-        agents.iter().len(),
-        stats.elapsed_seconds,
+        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nF1/F2 Twitch | F5 Save | F9 Load | F12 Capture | J Join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
         simulation.0.day,
         stats.paths_completed,
         stats.commands_processed,
         simulation.0.season,
         simulation.0.weather,
         twitch_status_text(&twitch),
-        town_resource_amount(&simulation.0, "resource:food"),
-        town_resource_amount(&simulation.0, "resource:gold"),
-        town_resource_amount(&simulation.0, "resource:ore"),
-        town_resource_amount(&simulation.0, "resource:wood"),
         town_resource_amount(&simulation.0, "resource:recruit"),
         town_goal_status(&content.0, &simulation.0),
         active_event_text(&simulation.0),
         ruler_status(&simulation.0),
         feedback.0,
     );
+}
+
+fn hud_play_time(elapsed_seconds: f64) -> String {
+    let total = std::time::Duration::from_secs_f64(elapsed_seconds.max(0.0)).as_secs();
+    format!("{:02}:{:02}", total / 60, total % 60)
+}
+
+fn hud_season_meter_percent(day: u32) -> f32 {
+    (f32::from((day % 28) as u16) / 28.0 * 96.0).clamp(0.0, 96.0)
 }
 
 fn town_goal_status(content: &ContentCatalog, simulation: &WorldSimulation) -> String {
@@ -17534,6 +17709,25 @@ mod tests {
         );
         assert!((GAME_LOGO_ASPECT_RATIO - 1.669_111_7).abs() < 0.000_001);
         assert!(presentation_texture_handle(&presentation, None, GAME_LOGO_TEXTURE_PATH).is_none());
+    }
+
+    #[test]
+    fn shipping_top_bar_assets_and_metric_formatting_are_complete() {
+        let presentation = embedded_presentation();
+        for source_path in TOP_BAR_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing top-bar texture {source_path}"
+            );
+        }
+        assert_eq!(hud_play_time(0.0), "00:00");
+        assert_eq!(hud_play_time(125.9), "02:05");
+        assert!(hud_season_meter_percent(0).abs() <= f32::EPSILON);
+        assert!((hud_season_meter_percent(7) - 24.0).abs() <= f32::EPSILON);
+        assert!(hud_season_meter_percent(28).abs() <= f32::EPSILON);
     }
 
     #[test]

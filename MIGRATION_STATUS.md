@@ -345,6 +345,11 @@ mistaken for production-ready systems.
   verifies the transparent layer field and authored `_CloudTint=200` value.
   Both scenes render the shipping 2048x1227 `Game_Logo_DropShadow` sprite with
   its source aspect ratio while preserving a text fallback for assetless tests.
+- The in-game HUD now reconstructs Unity's image-backed top bar from all ten
+  packaged TopBar sprites: tiled dark/gold background, four town-resource
+  icons, player/building/play-time counters, and the seasonal gauge/meter. The
+  counters and 28-day meter position are driven directly from live ECS state;
+  migration diagnostics remain available in a compact bottom strip.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red
