@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::Path, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+    time::Instant,
+};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -284,6 +289,29 @@ fn validate() -> Result<()> {
                 );
             }
         }
+        if let Some(models) = &archetype.enemy_models {
+            let mut packaged_nodes = BTreeSet::new();
+            for scene in &archetype.scenes {
+                packaged_nodes.extend(glb_node_names(
+                    &Path::new("assets").join(&scene.asset_path),
+                )?);
+            }
+            for expected in models
+                .base_models
+                .iter()
+                .chain(&models.permanent_models)
+                .chain(&models.optional_models)
+                .chain(models.weapons.iter().flat_map(|weapon| {
+                    std::iter::once(&weapon.main_model).chain(&weapon.off_hand_models)
+                }))
+            {
+                if !packaged_nodes.contains(expected) {
+                    bail!(
+                        "enemy model handler {archetype_id} references node {expected:?} absent from its packaged GLB scenes"
+                    );
+                }
+            }
+        }
     }
     for layer in &content.foliage {
         if !presentation
@@ -545,6 +573,48 @@ fn validate() -> Result<()> {
     Ok(())
 }
 
+fn glb_node_names(path: &Path) -> Result<BTreeSet<String>> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    glb_node_names_from_bytes(&bytes)
+        .with_context(|| format!("failed to inspect GLB nodes in {}", path.display()))
+}
+
+fn glb_node_names_from_bytes(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
+        bail!("missing glTF 2.0 binary header");
+    }
+    let version = u32::from_le_bytes(bytes[4..8].try_into().expect("four-byte GLB version"));
+    let declared_length = u32::from_le_bytes(
+        bytes[8..12]
+            .try_into()
+            .expect("four-byte GLB declared length"),
+    );
+    let json_length =
+        u32::from_le_bytes(bytes[12..16].try_into().expect("four-byte GLB JSON length"));
+    let json_type = u32::from_le_bytes(bytes[16..20].try_into().expect("four-byte GLB JSON type"));
+    if version != 2
+        || usize::try_from(declared_length).ok() != Some(bytes.len())
+        || json_type != 0x4E4F_534A
+    {
+        bail!("invalid glTF 2.0 binary header");
+    }
+    let json_end = 20_usize
+        .checked_add(usize::try_from(json_length).context("GLB JSON chunk is too large")?)
+        .filter(|end| *end <= bytes.len())
+        .context("GLB JSON chunk exceeds file bounds")?;
+    let document: serde_json::Value =
+        serde_json::from_slice(&bytes[20..json_end]).context("GLB JSON chunk is invalid")?;
+    let nodes = document
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .context("GLB JSON has no nodes array")?;
+    Ok(nodes
+        .iter()
+        .filter_map(|node| node.get("name").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect())
+}
+
 fn stress(agents: u32) -> Result<()> {
     let config = GameConfig::default();
     let content: ContentCatalog =
@@ -582,4 +652,46 @@ fn stress(agents: u32) -> Result<()> {
         &world.deterministic_hash[..16]
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn glb_with_nodes(names: &[&str]) -> Vec<u8> {
+        let mut json = serde_json::to_vec(&serde_json::json!({
+            "asset": {"version": "2.0"},
+            "nodes": names.iter().map(|name| serde_json::json!({"name": name})).collect::<Vec<_>>()
+        }))
+        .unwrap();
+        while !json.len().is_multiple_of(4) {
+            json.push(b' ');
+        }
+        let length = 20 + json.len();
+        let mut bytes = Vec::with_capacity(length);
+        bytes.extend_from_slice(b"glTF");
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(length).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(json.len()).unwrap().to_le_bytes());
+        bytes.extend_from_slice(&0x4E4F_534A_u32.to_le_bytes());
+        bytes.extend_from_slice(&json);
+        bytes
+    }
+
+    #[test]
+    fn glb_node_validation_preserves_exact_names() {
+        let names =
+            glb_node_names_from_bytes(&glb_with_nodes(&["Enemy_SkeleSword", "Enemy_SkeleShield"]))
+                .unwrap();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "Enemy_SkeleShield".to_owned(),
+                "Enemy_SkeleSword".to_owned(),
+            ])
+        );
+        let mut corrupt = glb_with_nodes(&["Enemy_SkeleSword"]);
+        corrupt[4] = 1;
+        assert!(glb_node_names_from_bytes(&corrupt).is_err());
+    }
 }

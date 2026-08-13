@@ -2810,8 +2810,8 @@
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786621190.6938205,
-    "ast_hash": "3cf71dc1c955f41be0a49a804d6e1f25",
+    "mtime": 1786621581.374421,
+    "ast_hash": "1be1fa51e9c5e49b74b6257045fc538d",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786620895.639848,
-    "ast_hash": "969d40f34f8f6e95f23cde46464e9d00",
+    "mtime": 1786621557.6060357,
+    "ast_hash": "8b9ff3940e01a7af5f18c376cf154ac1",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786620895.639848,
-    "ast_hash": "2c97eddfddc9ce87c2bd7a84a170c09e",
+    "mtime": 1786621557.6044712,
+    "ast_hash": "e5a4bb9e9688f84948bfea71f96c7fca",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {

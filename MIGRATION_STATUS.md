@@ -471,6 +471,8 @@ mistaken for production-ready systems.
   Weapon choice also drives the authored action name, variant count, and
   generic/two-handed `RunAnimationIndex`; enemies without weapon sets use their
   base variant count and `GenericAction`, matching Unity's fallback contract.
+  Repository validation parses every referenced GLB JSON chunk and proves that
+  each of those authored node names survives the Blender pipeline.
 - Content schema 21 promotes all 42 reachable Unity `BuildingModelHandler`
   records and all six `BuildingResourceModelHandler` records with exact glTF
   node names. Bevy now swaps authored construction stages, full and upgrade

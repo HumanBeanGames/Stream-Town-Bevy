@@ -460,6 +460,8 @@ hide every unselected glTF node. The selected weapon supplies its authored
 attack parameter, action-variant count, and generic/two-handed
 `RunAnimationIndex`, so skeleton sword-and-shield and pole-weapon animation
 contracts remain coupled across save/reload.
+`xtask validate` parses the packaged GLB JSON chunks and rejects any content
+catalog enemy-model reference whose exact node name was lost during conversion.
 
 `STREAM_TOWN_REPORT_FRAME_TIME=1` raises startup to at least 300 agents and
 enables the explicit GPU benchmark,
