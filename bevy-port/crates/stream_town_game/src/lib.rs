@@ -510,6 +510,7 @@ struct SelectedRecruitGroup {
 #[derive(Resource, Default)]
 struct GroupSelectionActions {
     dismiss_armed: bool,
+    remove_armed: Option<StableId>,
 }
 
 #[derive(Resource, Default)]
@@ -1029,10 +1030,15 @@ struct GroupSelectionPanel;
 #[derive(Component)]
 struct GroupDismissLabel;
 
+#[derive(Component)]
+struct BuildingRemoveLabel;
+
 #[derive(Component, Clone, Debug)]
 enum GroupSelectionAction {
     AssignRole(StableId),
     Dismiss,
+    LevelBuilding(StableId),
+    RemoveBuilding(StableId),
 }
 
 #[derive(Component)]
@@ -13961,7 +13967,11 @@ fn recruit_group_selection_input(
                 .0
                 .actors
                 .values()
-                .find(|actor| actor.position == cell && is_recruited_actor(&actor.id))
+                .find(|actor| {
+                    actor.position == cell
+                        && (is_recruited_actor(&actor.id)
+                            || actor.user_type == StreamUserType::Broadcaster)
+                })
                 .map(|actor| actor.id.clone());
             group.actors = single_recruit.into_iter().collect();
         }
@@ -14104,10 +14114,7 @@ fn sync_group_selection_outlines(
     world: Res<WorldRuntime>,
     render: Res<RenderAssets>,
     agents: Query<(&Agent, &GridLocation, &Transform), Without<GroupSelectionOutline>>,
-    mut outlines: Query<
-        (Entity, &GroupSelectionOutline, &mut Transform),
-        Without<Agent>,
-    >,
+    mut outlines: Query<(Entity, &GroupSelectionOutline, &mut Transform), Without<Agent>>,
 ) {
     let mut existing = BTreeMap::new();
     for (entity, outline, mut transform) in &mut outlines {
@@ -14214,22 +14221,63 @@ fn dismiss_group_recruits(
     dismissed
 }
 
+fn remove_selected_building(
+    runtime_id: &StableId,
+    content: &ContentCatalog,
+    world: &mut GeneratedWorld,
+    simulation: &mut WorldSimulation,
+) -> Result<(), String> {
+    if runtime_id.as_str() == "building:townhall" {
+        return Err("the Town Hall cannot be removed".to_owned());
+    }
+    let removed = simulation
+        .buildings
+        .get(runtime_id)
+        .cloned()
+        .ok_or_else(|| format!("building instance {runtime_id} does not exist"))?;
+    let definition = building_def_for_archetype(content, &removed.archetype)
+        .ok_or_else(|| format!("unknown building archetype {}", removed.archetype))?;
+    let footprint = rotated_footprint(definition.footprint, removed.rotation_quarter_turns);
+    let region = building_region(removed.position, footprint, world)
+        .ok_or_else(|| "removed building lies outside the world".to_owned())?;
+    world
+        .navigation
+        .set_blocked(region, false)
+        .map_err(|error| error.to_string())?;
+    simulation.buildings.remove(runtime_id);
+    for actor in simulation.actors.values_mut() {
+        if actor.station.as_ref() == Some(runtime_id) {
+            actor.station = None;
+        }
+        if actor.preferred_target.as_ref() == Some(runtime_id) {
+            actor.preferred_target = None;
+        }
+    }
+    Ok(())
+}
+
 fn update_group_selection_panel(
     mut commands: Commands,
     group: Res<SelectedRecruitGroup>,
+    selected: Res<SelectedCell>,
     content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
     mut actions: ResMut<GroupSelectionActions>,
     panels: Query<Entity, With<GroupSelectionPanel>>,
 ) {
-    if !group.is_changed() {
+    if !group.is_changed() && !selected.is_changed() {
         return;
     }
     let Ok(panel) = panels.single() else {
         return;
     };
     actions.dismiss_armed = false;
+    actions.remove_armed = None;
     commands.entity(panel).despawn_children();
-    if group.actors.len() < 2 {
+    let selected_building = selected
+        .0
+        .and_then(|cell| selected_building_id_at_cell(cell, &content.0, &simulation.0));
+    if group.actors.is_empty() && selected_building.is_none() {
         commands.entity(panel).insert(Visibility::Hidden);
         return;
     }
@@ -14237,70 +14285,176 @@ fn update_group_selection_panel(
         .entity(panel)
         .insert(Visibility::Visible)
         .with_children(|parent| {
-            parent.spawn((
-                Text::new(format!("Mass Selection: {}", group.actors.len())),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Node {
-                    width: percent(100.0),
-                    ..default()
-                },
-            ));
-            for role in group_role_ids(&content.0) {
-                parent
-                    .spawn((
-                        GroupSelectionAction::AssignRole(role.clone()),
-                        Button,
-                        Node {
-                            padding: UiRect::axes(px(9), px(5)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.19, 0.34, 0.22)),
-                    ))
-                    .with_child((
-                        Text::new(&content.0.roles[&role].display_name),
+            if !group.actors.is_empty() {
+                let label = if group.actors.len() == 1 {
+                    "Recruit Selection".to_owned()
+                } else {
+                    format!("Mass Selection: {}", group.actors.len())
+                };
+                parent.spawn((
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    Node {
+                        width: percent(100.0),
+                        ..default()
+                    },
+                ));
+                for role in group_role_ids(&content.0) {
+                    parent
+                        .spawn((
+                            GroupSelectionAction::AssignRole(role.clone()),
+                            Button,
+                            Node {
+                                padding: UiRect::axes(px(9), px(5)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.19, 0.34, 0.22)),
+                        ))
+                        .with_child((
+                            Text::new(&content.0.roles[&role].display_name),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                            Pickable::IGNORE,
+                        ));
+                }
+                let dismissible = group.actors.iter().all(is_recruited_actor);
+                if dismissible {
+                    let label = if group.actors.len() == 1 {
+                        "Dismiss"
+                    } else {
+                        "Mass Dismiss"
+                    };
+                    parent
+                        .spawn((
+                            GroupSelectionAction::Dismiss,
+                            Button,
+                            Node {
+                                padding: UiRect::axes(px(9), px(5)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.48, 0.12, 0.1)),
+                        ))
+                        .with_child((
+                            GroupDismissLabel,
+                            Text::new(label),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                            Pickable::IGNORE,
+                        ));
+                }
+            } else if let Some(runtime_id) = selected_building {
+                let state = &simulation.0.buildings[&runtime_id];
+                let (building_id, definition) = content
+                    .0
+                    .buildings
+                    .iter()
+                    .find(|(_, definition)| definition.archetype == state.archetype)
+                    .expect("selected building definition was resolved");
+                parent.spawn((
+                    Text::new(format!(
+                        "{}  |  Level {}",
+                        definition.display_name, state.level
+                    )),
+                    TextFont {
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    Node {
+                        width: percent(100.0),
+                        ..default()
+                    },
+                ));
+                if definition.can_level
+                    && state.level < maximum_building_level(&content.0, &simulation.0, building_id)
+                {
+                    parent
+                        .spawn((
+                            GroupSelectionAction::LevelBuilding(runtime_id.clone()),
+                            Button,
+                            Node {
+                                padding: UiRect::axes(px(9), px(5)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.19, 0.34, 0.22)),
+                        ))
+                        .with_child((
+                            Text::new("Level Up"),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                            Pickable::IGNORE,
+                        ));
+                } else if definition.can_level {
+                    parent.spawn((
+                        Text::new("Max Level"),
                         TextFont {
                             font_size: FontSize::Px(14.0),
                             ..default()
                         },
-                        TextColor(Color::WHITE),
-                        Pickable::IGNORE,
+                        TextColor(Color::srgb(0.55, 0.55, 0.55)),
+                        Node {
+                            padding: UiRect::axes(px(9), px(5)),
+                            ..default()
+                        },
                     ));
+                }
+                if runtime_id.as_str() != "building:townhall" {
+                    parent
+                        .spawn((
+                            GroupSelectionAction::RemoveBuilding(runtime_id),
+                            Button,
+                            Node {
+                                padding: UiRect::axes(px(9), px(5)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.48, 0.12, 0.1)),
+                        ))
+                        .with_child((
+                            BuildingRemoveLabel,
+                            Text::new("Remove"),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                            Pickable::IGNORE,
+                        ));
+                }
             }
-            parent
-                .spawn((
-                    GroupSelectionAction::Dismiss,
-                    Button,
-                    Node {
-                        padding: UiRect::axes(px(9), px(5)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.48, 0.12, 0.1)),
-                ))
-                .with_child((
-                    GroupDismissLabel,
-                    Text::new("Mass Dismiss"),
-                    TextFont {
-                        font_size: FontSize::Px(14.0),
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    Pickable::IGNORE,
-                ));
         });
 }
 
 fn group_selection_action_buttons(
     content: Res<RuntimeContent>,
+    mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
+    mut selected: ResMut<SelectedCell>,
     mut group: ResMut<SelectedRecruitGroup>,
     mut actions: ResMut<GroupSelectionActions>,
     mut agent_commands: ResMut<AgentCommandQueue>,
+    mut building_commands: ResMut<BuildingCommandQueue>,
     buttons: Query<(&Interaction, &GroupSelectionAction), Changed<Interaction>>,
-    mut dismiss_labels: Query<&mut Text, With<GroupDismissLabel>>,
+    mut dismiss_labels: Query<
+        &mut Text,
+        (With<GroupDismissLabel>, Without<BuildingRemoveLabel>),
+    >,
+    mut remove_labels: Query<
+        &mut Text,
+        (With<BuildingRemoveLabel>, Without<GroupDismissLabel>),
+    >,
 ) {
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -14331,6 +14485,47 @@ fn group_selection_action_buttons(
                 }
                 group.actors.clear();
                 actions.dismiss_armed = false;
+            }
+            GroupSelectionAction::LevelBuilding(runtime_id) => {
+                let Some(building_id) = simulation.0.buildings.get(runtime_id).and_then(|state| {
+                    content.0.buildings.iter().find_map(|(id, definition)| {
+                        (definition.archetype == state.archetype).then(|| id.clone())
+                    })
+                }) else {
+                    continue;
+                };
+                let _ = upgrade_building_instance(
+                    &content.0,
+                    &mut simulation.0,
+                    &building_id,
+                    runtime_id,
+                );
+                selected.set_changed();
+                actions.remove_armed = None;
+            }
+            GroupSelectionAction::RemoveBuilding(runtime_id)
+                if actions.remove_armed.as_ref() != Some(runtime_id) =>
+            {
+                actions.remove_armed = Some(runtime_id.clone());
+                for mut label in &mut remove_labels {
+                    "Confirm Remove".clone_into(&mut label.0);
+                }
+            }
+            GroupSelectionAction::RemoveBuilding(runtime_id) => {
+                if remove_selected_building(
+                    runtime_id,
+                    &content.0,
+                    &mut world.generated,
+                    &mut simulation.0,
+                )
+                .is_ok()
+                {
+                    building_commands
+                        .0
+                        .push_back(BuildingRuntimeCommand::Despawn(runtime_id.clone()));
+                    selected.0 = None;
+                }
+                actions.remove_armed = None;
             }
         }
     }
@@ -14387,6 +14582,19 @@ fn selected_building_footprint(
             && cell.z < building.position.z.saturating_add(footprint[1]);
         inside.then_some((building.position, footprint))
     })
+}
+
+fn selected_building_id_at_cell(
+    cell: GridPos,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Option<StableId> {
+    let (origin, _) = selected_building_footprint(cell, content, simulation)?;
+    simulation
+        .buildings
+        .values()
+        .find(|building| building.position == origin)
+        .map(|building| building.id.clone())
 }
 
 fn selection_outline_transform(
@@ -18437,30 +18645,12 @@ fn process_injected_commands(
                     .get(usize::from(index.saturating_sub(1)))
                     .cloned()
                     .ok_or_else(|| format!("{} building ID {index} does not exist", definition.display_name))?;
-                let removed = simulation
-                    .0
-                    .buildings
-                    .remove(&runtime_id)
-                    .expect("building instance was validated");
-                let footprint = rotated_footprint(
-                    definition.footprint,
-                    removed.rotation_quarter_turns,
-                );
-                let region = building_region(removed.position, footprint, &world.generated)
-                    .ok_or_else(|| "removed building lies outside the world".to_owned())?;
-                world
-                    .generated
-                    .navigation
-                    .set_blocked(region, false)
-                    .map_err(|error| error.to_string())?;
-                for actor in simulation.0.actors.values_mut() {
-                    if actor.station.as_ref() == Some(&runtime_id) {
-                        actor.station = None;
-                    }
-                    if actor.preferred_target.as_ref() == Some(&runtime_id) {
-                        actor.preferred_target = None;
-                    }
-                }
+                remove_selected_building(
+                    &runtime_id,
+                    &content.0,
+                    &mut world.generated,
+                    &mut simulation.0,
+                )?;
                 queues
                     .building
                     .0
@@ -23979,6 +24169,68 @@ mod tests {
             simulation.town_resources[&StableId::new("resource:recruit").unwrap()],
             before.saturating_sub(2)
         );
+    }
+
+    #[test]
+    fn selected_building_actions_share_authoritative_upgrade_and_removal_rules() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let mut simulation = WorldSimulation::new(world.seed);
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        assert!(
+            remove_selected_building(
+                &StableId::new("building:townhall").unwrap(),
+                &content,
+                &mut world,
+                &mut simulation,
+            )
+            .is_err()
+        );
+
+        let building_id = StableId::new("building:house").unwrap();
+        let definition = &content.buildings[&building_id];
+        let position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            definition.footprint,
+        )
+        .unwrap();
+        let runtime_id = StableId::new("building:selected_house").unwrap();
+        let region = building_region(position, definition.footprint, &world).unwrap();
+        world.navigation.set_blocked(region, true).unwrap();
+        simulation.building_costs_enabled = false;
+        simulation.buildings.insert(
+            runtime_id.clone(),
+            BuildingState {
+                id: runtime_id.clone(),
+                archetype: definition.archetype.clone(),
+                position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: building_base_max_health(&content, definition)
+                    .try_into()
+                    .unwrap(),
+                complete: true,
+            },
+        );
+        let selected_cell = GridPos {
+            x: position.x.saturating_add(definition.footprint[0] - 1),
+            z: position.z.saturating_add(definition.footprint[1] - 1),
+        };
+        assert_eq!(
+            selected_building_id_at_cell(selected_cell, &content, &simulation),
+            Some(runtime_id.clone())
+        );
+        let upgrade =
+            upgrade_building_instance(&content, &mut simulation, &building_id, &runtime_id);
+        assert!(upgrade.is_err(), "the default technology cap is level one");
+        remove_selected_building(&runtime_id, &content, &mut world, &mut simulation).unwrap();
+        assert!(!simulation.buildings.contains_key(&runtime_id));
+        assert!(world.navigation.is_walkable(position));
     }
 
     #[test]

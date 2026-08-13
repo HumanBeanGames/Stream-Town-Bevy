@@ -323,7 +323,11 @@ full rotated footprint. Drag selection recreates Unity's local-recruit group
 selection with one outline per member, mass role assignment, confirmed mass
 dismissal, and compatible right-click orders for stations, enemies, and
 resources. Transient selection stores stable actor IDs and is cleared across
-load/new-world boundaries rather than entering save data.
+load/new-world boundaries rather than entering save data. The same action
+surface supports single-recruit role changes and confirmed dismissal, plus
+selected-building level-up and confirmed removal through the authoritative
+cost, level-cap, navigation, station, and target cleanup transactions; the Town
+Hall remains protected.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that
