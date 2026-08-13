@@ -598,7 +598,11 @@ surface exponent; this deliberately preserves the shipping material's extreme
 `_CloudTint=200` rather than silently normalizing its look. Both scenes now use
 the packaged 2048x1227 `Game_Logo_DropShadow` sprite at its source aspect ratio
 instead of substituting a text heading; assetless/headless runs retain a text
-fallback.
+fallback. The Main Menu's reachable `UI_MainMenu.prefab` is reconstructed with
+its tinted left-half panel, copyright line, and five packaged sliced-image
+buttons in authored order. New Game, Load Game, Settings, Credits, and Quit are
+mouse-operable while retaining their keyboard paths; Load Game selects the exact
+disabled sprite and cannot activate until a native save exists.
 
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/

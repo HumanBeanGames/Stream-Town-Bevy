@@ -124,6 +124,12 @@ const LOADING_ICON_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_Loading
 const LOADING_SCREEN_PREFAB_SUFFIX: &str = "UserInterface/UI_LoadingScreen.prefab";
 const LOADING_ICON_HIERARCHY_PATH: &str = "LoadingScreen/LoadingIcon/Anchor/Image";
 const GAME_LOGO_ASPECT_RATIO: f32 = 2_048.0 / 1_227.0;
+const MAIN_MENU_TEXTURE_PATHS: [&str; 4] = [
+    "Assets/Sprites/Buttons/UI_Button_Unpressed.png",
+    "Assets/Sprites/Buttons/UI_Button.png",
+    "Assets/Sprites/Buttons/UI_Button_Disabled.png",
+    "Assets/Sprites/Objectives/UI_Objectives_Background.png",
+];
 const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_Background.png",
     "Assets/Sprites/TopBar/UI_TopBar_Resources_Food.png",
@@ -916,6 +922,7 @@ struct RenderAssets {
     loading_screen: Option<Handle<Image>>,
     loading_overlay: Option<Handle<Image>>,
     loading_icon: Option<Handle<Image>>,
+    main_menu_textures: BTreeMap<String, Handle<Image>>,
     top_bar_textures: BTreeMap<String, Handle<Image>>,
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
     bottom_bar_textures: BTreeMap<String, Handle<Image>>,
@@ -927,6 +934,15 @@ struct RenderAssets {
 
 #[derive(Component)]
 struct StateEntity;
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum MainMenuAction {
+    NewGame,
+    LoadGame,
+    Settings,
+    Credits,
+    Quit,
+}
 
 #[derive(Component)]
 struct LoadingScreenEntity;
@@ -1908,7 +1924,13 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                (main_menu_input, menu_input, update_menu_overlay)
+                (
+                    main_menu_input,
+                    main_menu_buttons,
+                    update_main_menu_buttons,
+                    menu_input,
+                    update_menu_overlay,
+                )
                     .chain()
                     .run_if(in_state(GameState::MainMenu)),
             )
@@ -2500,6 +2522,13 @@ fn setup_rendering(
         asset_server.as_deref(),
         LOADING_ICON_TEXTURE_PATH,
     );
+    let main_menu_textures = MAIN_MENU_TEXTURE_PATHS
+        .iter()
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
     let top_bar_textures = TOP_BAR_TEXTURE_PATHS
         .iter()
         .filter_map(|source_path| {
@@ -2748,6 +2777,7 @@ fn setup_rendering(
         loading_screen,
         loading_overlay,
         loading_icon,
+        main_menu_textures,
         top_bar_textures,
         selection_panel_textures,
         bottom_bar_textures,
@@ -4370,6 +4400,22 @@ fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
 
 fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
     spawn_cloud_field(&mut commands, &render, 72.0);
+    commands.spawn((
+        StateEntity,
+        Name::new("Shipping Main Menu backdrop"),
+        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[3]))
+            .with_color(Color::srgba(0.090_196_08, 0.109_803_93, 0.203_921_59, 0.55))
+            .with_mode(NodeImageMode::Stretch),
+        GlobalZIndex(8),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            top: px(0),
+            width: percent(50.0),
+            height: percent(100.0),
+            ..default()
+        },
+    ));
     if let Some(game_logo) = &render.game_logo {
         commands.spawn((
             StateEntity,
@@ -4378,9 +4424,10 @@ fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
             GlobalZIndex(10),
             Node {
                 position_type: PositionType::Absolute,
-                top: percent(10.0),
-                left: percent(27.0),
-                width: percent(46.0),
+                top: percent(4.9),
+                left: px(0),
+                width: percent(37.3),
+                height: percent(35.1),
                 aspect_ratio: Some(GAME_LOGO_ASPECT_RATIO),
                 ..default()
             },
@@ -4397,28 +4444,97 @@ fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
             TextColor(Color::srgb(0.86, 0.95, 0.84)),
             Node {
                 position_type: PositionType::Absolute,
-                top: percent(18.0),
-                left: percent(36.0),
+                top: percent(12.0),
+                left: percent(6.0),
                 ..default()
             },
         ));
     }
+    commands
+        .spawn((
+            StateEntity,
+            Name::new("Shipping Main Menu buttons"),
+            GlobalZIndex(10),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(12.65),
+                top: percent(44.1),
+                width: percent(12.1),
+                height: percent(37.9),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(20),
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            for action in [
+                MainMenuAction::NewGame,
+                MainMenuAction::LoadGame,
+                MainMenuAction::Settings,
+                MainMenuAction::Credits,
+                MainMenuAction::Quit,
+            ] {
+                parent
+                    .spawn((
+                        action,
+                        Button,
+                        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
+                            .with_mode(NodeImageMode::Sliced(TextureSlicer {
+                                border: BorderRect::all(15.0),
+                                center_scale_mode: default(),
+                                sides_scale_mode: default(),
+                                max_corner_scale: 1.0,
+                            })),
+                        Node {
+                            width: percent(100.0),
+                            flex_grow: 1.0,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|button| {
+                        button.spawn((
+                            Text::new(main_menu_action_label(action)),
+                            TextFont {
+                                font_size: FontSize::Px(24.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                            Pickable::IGNORE,
+                        ));
+                    });
+            }
+        });
     commands.spawn((
         StateEntity,
-        Text::new("ENTER  Generate Town\nS  Menu & Settings\nC  Credits\nESC  Quit"),
+        Name::new("Shipping Main Menu copyright"),
+        Text::new("© 2022 Panda Belly"),
         TextFont {
-            font_size: FontSize::Px(36.0),
+            font_size: FontSize::Px(16.0),
             ..default()
         },
         TextLayout::justify(Justify::Center),
-        TextColor(Color::srgb(0.86, 0.95, 0.84)),
+        TextColor(Color::WHITE),
+        GlobalZIndex(10),
         Node {
             position_type: PositionType::Absolute,
-            top: percent(62.0),
-            left: percent(36.0),
+            left: percent(11.8),
+            top: percent(89.4),
+            width: percent(13.8),
             ..default()
         },
     ));
+}
+
+const fn main_menu_action_label(action: MainMenuAction) -> &'static str {
+    match action {
+        MainMenuAction::NewGame => "New Game",
+        MainMenuAction::LoadGame => "Load Game",
+        MainMenuAction::Settings => "Settings",
+        MainMenuAction::Credits => "Credits",
+        MainMenuAction::Quit => "Quit",
+    }
 }
 
 fn loading_icon_rotation(content: &ContentCatalog) -> Option<&stream_town_domain::RotatingNodeDef> {
@@ -4675,6 +4791,14 @@ fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height
 
 fn top_bar_texture(render: &RenderAssets, source_path: &str) -> Option<Handle<Image>> {
     render.top_bar_textures.get(source_path).cloned()
+}
+
+fn main_menu_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
+    render
+        .main_menu_textures
+        .get(source_path)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn bottom_bar_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
@@ -5545,6 +5669,72 @@ fn main_menu_input(
         && !keyboard.pressed(KeyCode::ShiftRight)
     {
         exit.write(AppExit::Success);
+    }
+}
+
+fn main_menu_action_enabled(action: MainMenuAction, has_save: bool) -> bool {
+    action != MainMenuAction::LoadGame || has_save
+}
+
+fn main_menu_buttons(
+    save: Res<SaveRuntime>,
+    settings: Res<RuntimePlayerSettings>,
+    mut menu: ResMut<MenuRuntime>,
+    mut io: ResMut<MenuIoRequest>,
+    buttons: Query<(&Interaction, &MainMenuAction), Changed<Interaction>>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if menu.page != MenuPage::Closed {
+        return;
+    }
+    let has_save = save.store.path().is_file();
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed || !main_menu_action_enabled(*action, has_save) {
+            continue;
+        }
+        match action {
+            MainMenuAction::NewGame => {
+                io.load = false;
+                next_state.set(GameState::WorldLoading);
+            }
+            MainMenuAction::LoadGame => {
+                io.load = true;
+                next_state.set(GameState::WorldLoading);
+            }
+            MainMenuAction::Settings => {
+                open_settings_menu(&mut menu, MenuPage::Closed, &settings.0);
+            }
+            MainMenuAction::Credits => next_state.set(GameState::Credits),
+            MainMenuAction::Quit => {
+                exit.write(AppExit::Success);
+            }
+        }
+    }
+}
+
+fn update_main_menu_buttons(
+    save: Res<SaveRuntime>,
+    menu: Res<MenuRuntime>,
+    render: Res<RenderAssets>,
+    mut buttons: Query<(&Interaction, &MainMenuAction, &mut ImageNode)>,
+) {
+    let has_save = save.store.path().is_file();
+    for (interaction, action, mut image) in &mut buttons {
+        let enabled = menu.page == MenuPage::Closed && main_menu_action_enabled(*action, has_save);
+        let source_path = if !enabled {
+            MAIN_MENU_TEXTURE_PATHS[2]
+        } else if *interaction == Interaction::Hovered || *interaction == Interaction::Pressed {
+            MAIN_MENU_TEXTURE_PATHS[1]
+        } else {
+            MAIN_MENU_TEXTURE_PATHS[0]
+        };
+        image.image = main_menu_texture(&render, source_path);
+        image.color = if enabled {
+            Color::WHITE
+        } else {
+            Color::srgba(0.78, 0.78, 0.78, 0.5)
+        };
     }
 }
 
@@ -22897,6 +23087,63 @@ mod tests {
     }
 
     #[test]
+    fn shipping_main_menu_preserves_art_order_and_load_availability() {
+        let presentation = embedded_presentation();
+        for source_path in MAIN_MENU_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing Main Menu texture {source_path}"
+            );
+        }
+        let actions = [
+            MainMenuAction::NewGame,
+            MainMenuAction::LoadGame,
+            MainMenuAction::Settings,
+            MainMenuAction::Credits,
+            MainMenuAction::Quit,
+        ];
+        assert_eq!(
+            actions.map(main_menu_action_label),
+            ["New Game", "Load Game", "Settings", "Credits", "Quit"]
+        );
+        assert!(!main_menu_action_enabled(MainMenuAction::LoadGame, false));
+        assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
+        assert!(main_menu_action_enabled(MainMenuAction::NewGame, false));
+    }
+
+    #[test]
+    fn main_menu_mouse_actions_use_the_shipping_state_and_settings_paths() {
+        let save_directory = tempfile::tempdir().unwrap();
+        let save_path = save_directory.path().join("menu-actions.stbevy");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<GameState>()
+            .init_resource::<MenuRuntime>()
+            .init_resource::<MenuIoRequest>()
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(SaveRuntime {
+                store: NativeSaveStore::new(&save_path),
+            })
+            .add_systems(Update, main_menu_buttons);
+        app.world_mut()
+            .spawn((Interaction::Pressed, MainMenuAction::Settings));
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MenuRuntime>().page,
+            MenuPage::Settings
+        );
+        assert_eq!(
+            app.world().resource::<MenuRuntime>().return_page,
+            MenuPage::Closed
+        );
+    }
+
+    #[test]
     fn settings_menu_edits_a_complete_valid_draft() {
         let original = PlayerSettings::default();
         let mut draft = original.clone();
@@ -28362,6 +28609,14 @@ mod tests {
                 .count()
                 > 0
         );
+        let main_menu_actions = app
+            .world_mut()
+            .query::<&MainMenuAction>()
+            .iter(app.world())
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(main_menu_actions.len(), 5);
+        assert!(main_menu_actions.contains(&MainMenuAction::LoadGame));
 
         enter_headless_world(&mut app);
         let viewer = StableId::new("twitch:acceptance_viewer").unwrap();

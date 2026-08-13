@@ -387,6 +387,11 @@ mistaken for production-ready systems.
   verifies the transparent layer field and authored `_CloudTint=200` value.
   Both scenes render the shipping 2048x1227 `Game_Logo_DropShadow` sprite with
   its source aspect ratio while preserving a text fallback for assetless tests.
+  The Main Menu now also reconstructs `UI_MainMenu.prefab`: its left-half tinted
+  image panel, copyright line, and five sliced-image New Game, Load Game,
+  Settings, Credits, and Quit buttons appear in authored order. Mouse actions
+  share the existing typed state/settings paths, and Load Game uses Unity's
+  disabled sprite and rejects activation until a native save exists.
 - Credits now recreates both reachable `VFX_FireWorks` instances as a
   deterministic purpose-built particle effect driven by presentation schema 15.
   The converter resolves their exact Unity scene positions and graph GUID, the
