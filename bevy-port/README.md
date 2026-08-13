@@ -368,6 +368,8 @@ does not modify the saved player settings.
 `STREAM_TOWN_SMOKE_FLAG=1` spawns and frames the converted Age 2 Castle so every
 authored `Flag` renderer binding and the custom wind/color material can be
 validated together.
+`STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
+the image-backed selection window can be captured without pointer automation.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -461,6 +463,12 @@ play-time counters, and four-season gauge are loaded from the converted catalog
 and updated from authoritative ECS state. The remaining runtime diagnostics and
 keyboard hints occupy a compact bottom strip and stay available for migration
 testing.
+
+Selecting an occupied grid cell now opens a shipping-style selection window.
+Actors, resource nodes, and every cell in a building footprint resolve against
+authoritative runtime state; the packaged unfilled, green, and red slider art
+shows live health or remaining resources. Selecting empty terrain keeps the
+window hidden.
 
 This is an early migration milestone, not a parity release. The repository-level
 [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and

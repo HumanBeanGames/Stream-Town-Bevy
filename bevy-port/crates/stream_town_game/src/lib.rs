@@ -90,6 +90,11 @@ const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_SeasonGauge.png",
     "Assets/Sprites/TopBar/UI_TopBar_SeasonGauge_Meter.png",
 ];
+const SELECTION_PANEL_TEXTURE_PATHS: [&str; 3] = [
+    "Assets/Sprites/SelectionWindow/UI_SelectionWindow_Slider_Unfilled.png",
+    "Assets/Sprites/SelectionWindow/UI_SelectionWindow_GreenSlider_Filled.png",
+    "Assets/Sprites/SelectionWindow/UI_SelectionWindow_RedSlider_Filled.png",
+];
 const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
 const HEALED_BURST_SECONDS: f32 = 1.2;
 const HEALING_CHANNEL_SECONDS: f32 = 5.0;
@@ -678,6 +683,7 @@ struct RenderAssets {
     grass: Handle<GrassMaterial>,
     game_logo: Option<Handle<Image>>,
     top_bar_textures: BTreeMap<String, Handle<Image>>,
+    selection_panel_textures: BTreeMap<String, Handle<Image>>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -795,6 +801,12 @@ enum HudMetric {
 
 #[derive(Component)]
 struct SeasonMeter;
+
+#[derive(Component)]
+struct SelectionPanel;
+
+#[derive(Component)]
+struct SelectionPanelSlider;
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1359,6 +1371,10 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                update_selection_panel.run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     drive_procedural_jukebox.after(update_environment_presentation),
                     drive_seagull_flight.after(drive_procedural_jukebox),
@@ -1736,6 +1752,13 @@ fn setup_rendering(
                 .map(|handle| ((*source_path).to_owned(), handle))
         })
         .collect();
+    let selection_panel_textures = SELECTION_PANEL_TEXTURE_PATHS
+        .iter()
+        .filter_map(|source_path| {
+            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
+                .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
     let presentation_materials = presentation
         .0
         .materials
@@ -1897,6 +1920,7 @@ fn setup_rendering(
         grass,
         game_logo,
         top_bar_textures,
+        selection_panel_textures,
         presentation_materials,
     });
 }
@@ -3345,6 +3369,69 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
             ..default()
         },
     ));
+
+    let slider_background = render
+        .selection_panel_textures
+        .get(SELECTION_PANEL_TEXTURE_PATHS[0])
+        .cloned();
+    let slider_fill = render
+        .selection_panel_textures
+        .get(SELECTION_PANEL_TEXTURE_PATHS[1])
+        .cloned();
+    let mut selection_panel = commands.spawn((
+        WorldEntity,
+        SelectionPanel,
+        Name::new("Selection window"),
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(19.0),
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        GlobalZIndex(20),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            right: px(20),
+            bottom: px(82),
+            width: px(460),
+            min_height: px(138),
+            padding: UiRect::all(px(18)),
+            border: UiRect::all(px(2)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.035, 0.075, 0.05, 0.94)),
+        BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
+    ));
+    selection_panel.with_children(|parent| {
+        let mut track = parent.spawn(Node {
+            position_type: PositionType::Absolute,
+            left: px(18),
+            right: px(18),
+            bottom: px(14),
+            height: px(16),
+            overflow: Overflow::clip_x(),
+            ..default()
+        });
+        if let Some(background) = slider_background {
+            track.insert(ImageNode::new(background).with_mode(NodeImageMode::Stretch));
+        }
+        track.with_children(|track_parent| {
+            let slider_image = slider_fill.map_or_else(ImageNode::default, |image| {
+                ImageNode::new(image).with_mode(NodeImageMode::Stretch)
+            });
+            track_parent.spawn((
+                SelectionPanelSlider,
+                slider_image,
+                Node {
+                    width: percent(100.0),
+                    height: percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.2, 0.8, 0.24)),
+            ));
+        });
+    });
 }
 
 fn main_menu_input(
@@ -4461,6 +4548,9 @@ fn generate_and_spawn_world(
         &asset_root.0,
         generated.seed,
     );
+    if std::env::var_os("STREAM_TOWN_SMOKE_SELECTION").is_some() {
+        selected.0 = Some(town_hall_placement);
+    }
     commands.insert_resource(WorldRuntime {
         generated,
         legacy_terrain_mesh: None,
@@ -10818,6 +10908,144 @@ fn select_grid_cell(
         transform.translation = marker_position + Vec3::Y * 0.12;
         *visibility = Visibility::Visible;
     }
+}
+
+fn update_selection_panel(
+    selected: Res<SelectedCell>,
+    content: Res<RuntimeContent>,
+    render: Res<RenderAssets>,
+    world: Res<WorldRuntime>,
+    simulation: Res<SimulationRuntime>,
+    mut panels: Query<(&mut Text, &mut Visibility), With<SelectionPanel>>,
+    mut sliders: Query<
+        (&mut Node, &mut ImageNode, &mut BackgroundColor),
+        With<SelectionPanelSlider>,
+    >,
+) {
+    if !selected.is_changed() && !simulation.is_changed() && !world.is_changed() {
+        return;
+    }
+    let Some(cell) = selected.0 else {
+        for (_, mut visibility) in &mut panels {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+    let Some((description, progress)) =
+        selection_panel_details(cell, &content.0, &world.generated, &simulation.0)
+    else {
+        for (_, mut visibility) in &mut panels {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+    for (mut text, mut visibility) in &mut panels {
+        text.0.clone_from(&description);
+        *visibility = Visibility::Visible;
+    }
+    let source_path = if progress <= 0.35 {
+        SELECTION_PANEL_TEXTURE_PATHS[2]
+    } else {
+        SELECTION_PANEL_TEXTURE_PATHS[1]
+    };
+    for (mut node, mut image, mut color) in &mut sliders {
+        node.width = percent((progress * 100.0).clamp(0.0, 100.0));
+        if let Some(handle) = render.selection_panel_textures.get(source_path) {
+            image.image = handle.clone();
+        }
+        color.0 = if progress <= 0.35 {
+            Color::srgb(0.9, 0.14, 0.1)
+        } else {
+            Color::srgb(0.2, 0.8, 0.24)
+        };
+    }
+}
+
+fn selection_panel_details(
+    cell: GridPos,
+    content: &ContentCatalog,
+    world: &GeneratedWorld,
+    simulation: &WorldSimulation,
+) -> Option<(String, f32)> {
+    if let Some(actor) = simulation
+        .actors
+        .values()
+        .find(|actor| actor.position == cell)
+    {
+        let name = actor.display_name.as_deref().unwrap_or(actor.id.as_str());
+        let role = content
+            .roles
+            .get(&actor.role)
+            .map_or(actor.role.as_str(), |role| role.display_name.as_str());
+        let maximum = actor.max_health.max(1);
+        let progress = building_health_fraction(actor.health, maximum);
+        return Some((
+            format!(
+                "{name}\n{role}\nHealth {}/{}  |  Cell {},{}",
+                actor.health.max(0),
+                maximum,
+                cell.x,
+                cell.z
+            ),
+            progress,
+        ));
+    }
+    if let Some((building, definition)) = simulation.buildings.values().find_map(|building| {
+        let definition = content
+            .buildings
+            .values()
+            .find(|definition| definition.archetype == building.archetype)?;
+        let footprint = rotated_footprint(definition.footprint, building.rotation_quarter_turns);
+        let inside = cell.x >= building.position.x
+            && cell.z >= building.position.z
+            && cell.x < building.position.x.saturating_add(footprint[0])
+            && cell.z < building.position.z.saturating_add(footprint[1]);
+        inside.then_some((building, definition))
+    }) {
+        let maximum = building_max_health(content, building).max(1);
+        let progress = building_health_fraction(building.health, maximum);
+        let state = if building.complete {
+            format!("Level {}", building.level)
+        } else {
+            "Under construction".to_owned()
+        };
+        return Some((
+            format!(
+                "{}\n{state}\nHealth {}/{}  |  Cell {},{}",
+                definition.display_name,
+                building.health.max(0),
+                maximum,
+                cell.x,
+                cell.z
+            ),
+            progress,
+        ));
+    }
+    world
+        .resources
+        .iter()
+        .find(|resource| resource.position == cell && resource.amount > 0)
+        .map(|resource| {
+            let kind = resource.kind.as_str().trim_start_matches("resource:");
+            (
+                format!(
+                    "{} node\n{} remaining  |  Cell {},{}",
+                    title_case(kind),
+                    resource.amount,
+                    cell.x,
+                    cell.z
+                ),
+                f32::from(u16::try_from(resource.amount.min(200)).expect("bounded resource fits"))
+                    / 200.0,
+            )
+        })
+}
+
+fn title_case(value: &str) -> String {
+    let mut characters = value.chars();
+    characters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + characters.as_str()
+    })
 }
 
 fn game_input(
@@ -17728,6 +17956,38 @@ mod tests {
         assert!(hud_season_meter_percent(0).abs() <= f32::EPSILON);
         assert!((hud_season_meter_percent(7) - 24.0).abs() <= f32::EPSILON);
         assert!(hud_season_meter_percent(28).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn selection_panel_uses_packaged_sliders_and_authoritative_actor_state() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        for source_path in SELECTION_PANEL_TEXTURE_PATHS {
+            assert!(
+                presentation
+                    .textures
+                    .values()
+                    .any(|texture| texture.source_path == source_path),
+                "missing selection slider texture {source_path}"
+            );
+        }
+        let position = GridPos { x: 4, z: 7 };
+        let actor_id = StableId::new("actor:selection_test").expect("test ID");
+        let mut simulation = WorldSimulation::new(17);
+        simulation.join_player(actor_id.clone(), position);
+        let actor = simulation.actors.get_mut(&actor_id).expect("joined actor");
+        actor.display_name = Some("Selection Test".to_owned());
+        actor.health = 60;
+        actor.max_health = 120;
+        let world = generate_world(&GameConfig::default().world);
+
+        let (description, progress) =
+            selection_panel_details(position, &content, &world, &simulation)
+                .expect("actor cell should resolve");
+        assert!(description.contains("Selection Test"));
+        assert!(description.contains("Health 60/120"));
+        assert!((progress - 0.5).abs() <= f32::EPSILON);
+        assert_eq!(title_case("wood"), "Wood");
     }
 
     #[test]

@@ -350,6 +350,11 @@ mistaken for production-ready systems.
   icons, player/building/play-time counters, and the seasonal gauge/meter. The
   counters and 28-day meter position are driven directly from live ECS state;
   migration diagnostics remain available in a compact bottom strip.
+- Cell picking now drives an image-backed selection window for actors, resource
+  nodes, and complete building footprints. Its text resolves names, roles,
+  construction/level state, health, and remaining resources from authoritative
+  simulation data, while the three packaged selection-slider sprites provide
+  live green/red progress and an assetless fallback remains functional.
 - The Age 2 Castle's base and seven individual flag renderer bindings now use a
   typed WGSL port of `Flag.shader`. It preserves vertex-alpha anchoring, the
   authored scrolling-noise and time-rotated displacement, vertex-red
@@ -484,7 +489,7 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining reachable WGSL shader ports, VFX, detailed HUD/menu art parity,
+- Remaining reachable WGSL shader ports, VFX, remaining HUD/menu art parity,
   post-processing, rare action/UI sound cues, and screen-reader/accessibility
   verification. The functional Main Menu, in-game menu, save/load actions, and
   complete persisted-settings workflow are live.
