@@ -13,6 +13,14 @@ mistaken for production-ready systems.
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
   states, with state-scoped entity cleanup.
+- Versioned player settings reproduce Unity's defaults and its saved video,
+  audio, camera/input, autosave, name-display, and building-health preferences.
+  The runtime imports the legacy `SettingsData.json` once when present, writes
+  validated RON atomically with backup recovery, applies display mode,
+  resolution, VSync/FPS limiting, MSAA, shadows, shadow-map size, SSAO,
+  brightness/gamma, master/SFX volume, and camera sensitivities, and performs
+  autosaves at Unity's 0/5/10/30/60-minute intervals. The tools application has
+  a dedicated settings editor, reset, validation, and save workflow.
 - Validated, versioned RON configuration (schema 5) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero

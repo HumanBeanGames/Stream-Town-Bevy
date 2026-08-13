@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, fs, path::Path, time::Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use stream_town_domain::{
-    ContentCatalog, GameConfig, GridPos, PresentationCatalog, SHIPPING_SECONDS_PER_DAY,
-    generate_world_with_content,
+    ContentCatalog, GameConfig, GridPos, PlayerSettings, PresentationCatalog,
+    SHIPPING_SECONDS_PER_DAY, generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -57,6 +57,15 @@ fn validate() -> Result<()> {
             .with_context(|| format!("failed to read {}", config_path.display()))?,
     )?;
     config.validate()?;
+    let player_settings_path = Path::new("assets/config/player-settings.ron");
+    let player_settings: PlayerSettings = ron::from_str(
+        &fs::read_to_string(player_settings_path)
+            .with_context(|| format!("failed to read {}", player_settings_path.display()))?,
+    )?;
+    player_settings.validate()?;
+    if player_settings != PlayerSettings::default() {
+        bail!("checked-in player settings no longer match Unity defaults");
+    }
     if config.time.seconds_per_day != SHIPPING_SECONDS_PER_DAY
         || config.time.daylight_per_thousand != 666
         || config.time.transition_seconds != 100

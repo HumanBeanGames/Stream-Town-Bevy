@@ -14,6 +14,7 @@ use bevy::{
         graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex, AnimationNodeType},
         prelude::{AnimatableCurve, AnimatableKeyframeCurve},
     },
+    anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
     audio::{Pitch, Volume},
     camera::ScalingMode,
@@ -21,14 +22,22 @@ use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::system::SystemParam,
     gltf::{GltfMaterialName, GltfMeshName},
+    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    light::DirectionalLightShadowMap,
     math::Affine2,
     mesh::Indices,
+    pbr::ScreenSpaceAmbientOcclusion,
     pbr::{ExtendedMaterial, MaterialExtension},
     prelude::*,
     render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
     render::view::screenshot::{Screenshot, save_to_disk},
+    render::view::{ColorGrading, Msaa},
     shader::ShaderRef,
-    window::{PresentMode, PrimaryWindow, WindowResolution},
+    window::{
+        MonitorSelection, PresentMode, PrimaryWindow, VideoModeSelection, WindowMode,
+        WindowResolution,
+    },
+    winit::{UpdateMode, WinitSettings},
 };
 use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
@@ -38,9 +47,10 @@ use stream_town_domain::{
     BuildingDirection, BuildingModelDef, BuildingState, CameraAction, CameraDirection, ChatCommand,
     ContentCatalog, CustomizationKind, EnemyCampState, GameConfig, GeneratedFoliage,
     GeneratedWorld, GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode,
-    MaterialDef, NativeSaveStore, ObjectiveEvent, PresentationCatalog, RoleEquipmentDef,
-    RulerVoteKind, SavedActor, SavedTerrainMesh, Season, StableId, StationDef, StorageModelDef,
-    TownEvent, Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
+    MaterialDef, NativeSaveStore, ObjectiveEvent, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor,
+    SavedTerrainMesh, Season, StableId, StationDef, StorageModelDef, TownEvent, Weather,
+    WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -127,6 +137,14 @@ pub enum GameState {
 
 #[derive(Resource)]
 pub struct RuntimeConfig(pub GameConfig);
+
+#[derive(Resource, Clone)]
+pub struct RuntimePlayerSettings(pub PlayerSettings);
+
+#[derive(Resource)]
+struct PlayerSettingsRuntime {
+    autosave_elapsed_seconds: f32,
+}
 
 #[derive(Resource)]
 pub struct RuntimeContent(pub ContentCatalog);
@@ -951,6 +969,9 @@ impl Plugin for StreamTownGamePlugin {
         if !app.world().contains_resource::<RuntimeAssetRoot>() {
             app.insert_resource(RuntimeAssetRoot(locate_asset_root()));
         }
+        if !app.world().contains_resource::<RuntimePlayerSettings>() {
+            app.insert_resource(RuntimePlayerSettings(PlayerSettings::default()));
+        }
         app.init_state::<GameState>()
             .init_resource::<SessionStats>()
             .init_resource::<InjectedCommands>()
@@ -968,13 +989,23 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<NativeAnimationCache>()
             .init_resource::<ConvertedAnimationCache>()
             .init_resource::<LevelUpPresentation>()
+            .insert_resource(PlayerSettingsRuntime {
+                autosave_elapsed_seconds: 0.0,
+            })
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(std::env::var_os("STREAM_TOWN_SAVE_PATH").map_or_else(
                     || PathBuf::from(".stream-town").join("StreamTownSave.stbevy"),
                     PathBuf::from,
                 )),
             })
-            .add_systems(Startup, (setup_rendering, start_twitch_transport))
+            .add_systems(
+                Startup,
+                (
+                    setup_rendering,
+                    start_twitch_transport,
+                    apply_player_settings.after(setup_rendering),
+                ),
+            )
             .add_systems(OnEnter(GameState::Boot), finish_boot)
             .add_systems(OnEnter(GameState::MainMenu), spawn_main_menu)
             .add_systems(
@@ -1064,6 +1095,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                autosave_game
+                    .after(move_agents)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     instantiate_building_materials.after(apply_material_overrides),
                     sync_building_material_instances.after(instantiate_building_materials),
@@ -1096,7 +1133,7 @@ impl Plugin for StreamTownGamePlugin {
     }
 }
 
-pub fn run(config: GameConfig) {
+pub fn run(config: GameConfig, player_settings: PlayerSettings) {
     let content = embedded_content();
     let asset_root = locate_asset_root();
     let resolution = WindowResolution::new(config.window.width, config.window.height);
@@ -1104,6 +1141,13 @@ pub fn run(config: GameConfig) {
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.04, 0.055)))
         .insert_resource(RuntimeConfig(config))
+        .insert_resource(RuntimePlayerSettings(player_settings.clone()))
+        .insert_resource(GlobalVolume::new(Volume::Linear(
+            player_settings.audio.master,
+        )))
+        .insert_resource(DirectionalLightShadowMap {
+            size: usize::from(player_settings.video.shadow_map_resolution),
+        })
         .insert_resource(RuntimeContent(content))
         .insert_resource(RuntimePresentation(embedded_presentation()))
         .insert_resource(RuntimeAssetRoot(asset_root.clone()))
@@ -1120,9 +1164,12 @@ pub fn run(config: GameConfig) {
                         present_mode: if std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some()
                         {
                             PresentMode::AutoNoVsync
-                        } else {
+                        } else if player_settings.video.vsync {
                             PresentMode::AutoVsync
+                        } else {
+                            PresentMode::AutoNoVsync
                         },
+                        mode: player_window_mode(player_settings.video.display_mode),
                         ..default()
                     }),
                     ..default()
@@ -1137,6 +1184,69 @@ pub fn run(config: GameConfig) {
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
+}
+
+#[must_use]
+pub fn player_settings_path() -> PathBuf {
+    std::env::var_os("STREAM_TOWN_PLAYER_SETTINGS_PATH").map_or_else(
+        || PathBuf::from(".stream-town").join("settings.ron"),
+        PathBuf::from,
+    )
+}
+
+pub fn load_player_settings() -> AnyResult<PlayerSettings> {
+    let store = PlayerSettingsStore::new(player_settings_path());
+    if store.path().is_file() || store.backup_path().is_file() {
+        return store.load().context("player settings failed to load");
+    }
+    if let Some(path) = legacy_unity_settings_path().filter(|path| path.is_file()) {
+        let encoded = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read Unity settings {}", path.display()))?;
+        let settings = PlayerSettings::from_unity_json(&encoded)
+            .context("Unity SettingsData.json is invalid")?;
+        settings
+            .validate()
+            .context("converted Unity settings failed validation")?;
+        store
+            .write(&settings)
+            .context("converted Unity settings could not be persisted")?;
+        return Ok(settings);
+    }
+    let settings: PlayerSettings =
+        ron::from_str(include_str!("../../../assets/config/player-settings.ron"))
+            .context("checked-in player settings are invalid RON")?;
+    settings
+        .validate()
+        .context("checked-in player settings failed validation")?;
+    store
+        .write(&settings)
+        .context("default player settings could not be persisted")?;
+    Ok(settings)
+}
+
+fn legacy_unity_settings_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("STREAM_TOWN_UNITY_SETTINGS_PATH") {
+        return Some(PathBuf::from(path));
+    }
+    std::env::var_os("USERPROFILE").map(|profile| {
+        PathBuf::from(profile)
+            .join("Documents")
+            .join("Panda Belly")
+            .join("Stream Town")
+            .join("SettingsData.json")
+    })
+}
+
+fn player_window_mode(mode: stream_town_domain::DisplayMode) -> WindowMode {
+    match mode {
+        stream_town_domain::DisplayMode::Windowed => WindowMode::Windowed,
+        stream_town_domain::DisplayMode::Borderless => {
+            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+        }
+        stream_town_domain::DisplayMode::Fullscreen => {
+            WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Current)
+        }
+    }
 }
 
 pub fn load_runtime_config() -> AnyResult<GameConfig> {
@@ -1443,6 +1553,63 @@ fn setup_rendering(
         tree,
         presentation_materials,
     });
+}
+
+fn apply_player_settings(
+    settings: Res<RuntimePlayerSettings>,
+    mut commands: Commands,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut cameras: Query<Entity, With<TownCamera>>,
+    mut lights: Query<&mut DirectionalLight>,
+    mut winit: Option<ResMut<WinitSettings>>,
+) {
+    if let Ok(mut window) = windows.single_mut() {
+        window.mode = player_window_mode(settings.0.video.display_mode);
+        window.present_mode = if settings.0.video.vsync {
+            PresentMode::AutoVsync
+        } else {
+            PresentMode::AutoNoVsync
+        };
+        window.resolution.set(
+            f32::from(u16::try_from(settings.0.video.width).unwrap_or(u16::MAX)),
+            f32::from(u16::try_from(settings.0.video.height).unwrap_or(u16::MAX)),
+        );
+    }
+    let msaa = Msaa::from_samples(u32::from(settings.0.video.msaa_samples));
+    for entity in &mut cameras {
+        let mut grading = ColorGrading::default();
+        grading.global.exposure = settings.0.video.brightness_ev;
+        let gamma = (1.0 + settings.0.video.gamma * 0.1).clamp(0.5, 1.5);
+        grading.shadows.gamma = gamma;
+        grading.midtones.gamma = gamma;
+        grading.highlights.gamma = gamma;
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((msaa, grading));
+        match settings.0.video.post_process_aa {
+            PostProcessAntiAliasing::None => {}
+            PostProcessAntiAliasing::Fxaa => {
+                entity_commands.insert(Fxaa::default());
+            }
+            PostProcessAntiAliasing::Smaa => {
+                entity_commands.insert(Smaa::default());
+            }
+        }
+        if settings.0.video.ambient_occlusion {
+            entity_commands.insert(ScreenSpaceAmbientOcclusion::default());
+        }
+    }
+    for mut light in &mut lights {
+        light.shadow_maps_enabled = settings.0.video.shadows_enabled;
+    }
+    if let Some(winit) = winit.as_deref_mut() {
+        winit.focused_mode = settings
+            .0
+            .video
+            .fps_limit
+            .map_or(UpdateMode::Continuous, |limit| {
+                UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
+            });
+    }
 }
 
 fn standard_material(
@@ -7593,6 +7760,7 @@ fn drive_converted_animations(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<RuntimeConfig>,
+    player_settings: Res<RuntimePlayerSettings>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     simulation: Res<SimulationRuntime>,
@@ -7797,7 +7965,8 @@ fn drive_converted_animations(
                     cue.display_name, cue.actor
                 )),
                 AudioPlayer(source),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.08)),
+                PlaybackSettings::DESPAWN
+                    .with_volume(Volume::Linear(0.08 * player_settings.0.audio.sound_effects)),
             ));
         }
     }
@@ -8395,34 +8564,67 @@ fn building_damage_value(health: i32, max_health: i32) -> f32 {
 fn camera_controls(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
+    mouse_scroll: Res<AccumulatedMouseScroll>,
+    settings: Res<RuntimePlayerSettings>,
     mut requests: ResMut<CameraCommandQueue>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<TownCamera>>,
 ) {
     let Ok((mut transform, mut projection)) = cameras.single_mut() else {
         return;
     };
     let mut direction = Vec2::ZERO;
-    if keyboard.pressed(KeyCode::KeyA) {
+    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyA) {
         direction.x -= 1.0;
     }
-    if keyboard.pressed(KeyCode::KeyD) {
+    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyD) {
         direction.x += 1.0;
     }
-    if keyboard.pressed(KeyCode::KeyS) {
+    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyS) {
         direction.y -= 1.0;
     }
-    if keyboard.pressed(KeyCode::KeyW) {
+    if settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyW) {
         direction.y += 1.0;
     }
+    if settings.0.camera.mouse_controls
+        && settings.0.camera.edge_scrolling
+        && let Ok(window) = windows.single()
+        && let Some(cursor) = window.cursor_position()
+    {
+        let edge = 5.0;
+        if cursor.x <= edge {
+            direction.x -= settings.0.camera.edge_scroll_sensitivity / 10.0;
+        } else if cursor.x >= window.width() - edge {
+            direction.x += settings.0.camera.edge_scroll_sensitivity / 10.0;
+        }
+        if cursor.y <= edge {
+            direction.y += settings.0.camera.edge_scroll_sensitivity / 10.0;
+        } else if cursor.y >= window.height() - edge {
+            direction.y -= settings.0.camera.edge_scroll_sensitivity / 10.0;
+        }
+    }
     if direction != Vec2::ZERO {
-        let speed = 420.0 * time.delta_secs();
+        let speed = 42.0 * settings.0.camera.keyboard_pan_sensitivity * time.delta_secs();
         let direction = direction.normalize();
         transform.translation += Vec3::new(direction.x, 0.0, direction.y) * speed;
     }
-    let zoom_factor = if keyboard.pressed(KeyCode::KeyQ) {
-        1.0 + time.delta_secs()
+    if settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle) {
+        let pan = mouse_motion.delta * settings.0.camera.pan_sensitivity * 0.12;
+        transform.translation += Vec3::new(pan.y, 0.0, -pan.x);
+    }
+    let wheel_zoom = if settings.0.camera.mouse_controls {
+        mouse_scroll.delta.y * settings.0.camera.zoom_sensitivity * 0.004
+    } else {
+        0.0
+    };
+    let zoom_factor = if wheel_zoom.abs() > f32::EPSILON {
+        (1.0 - wheel_zoom).clamp(0.5, 1.5)
+    } else if keyboard.pressed(KeyCode::KeyQ) {
+        1.0 + time.delta_secs() * settings.0.camera.zoom_sensitivity / 10.0
     } else if keyboard.pressed(KeyCode::KeyE) {
-        1.0 - time.delta_secs() * 0.65
+        1.0 - time.delta_secs() * 0.65 * settings.0.camera.zoom_sensitivity / 10.0
     } else {
         1.0
     };
@@ -8953,6 +9155,33 @@ fn save_input(
     match save.store.write(&snapshot) {
         Ok(()) => info!(path = %save.store.path().display(), "native save written"),
         Err(error) => error!(%error, "native save failed"),
+    }
+}
+
+fn autosave_game(
+    time: Res<Time>,
+    mut settings: ResMut<PlayerSettingsRuntime>,
+    player_settings: Res<RuntimePlayerSettings>,
+    save: Res<SaveRuntime>,
+    world: Res<WorldRuntime>,
+    stats: Res<SessionStats>,
+    simulation: Res<SimulationRuntime>,
+    agents: Query<(&Agent, &GridLocation)>,
+) {
+    if player_settings.0.autosave_minutes == 0 {
+        settings.autosave_elapsed_seconds = 0.0;
+        return;
+    }
+    settings.autosave_elapsed_seconds += time.delta_secs();
+    let interval = f32::from(player_settings.0.autosave_minutes) * 60.0;
+    if settings.autosave_elapsed_seconds < interval {
+        return;
+    }
+    settings.autosave_elapsed_seconds = settings.autosave_elapsed_seconds.rem_euclid(interval);
+    let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
+    match save.store.write(&snapshot) {
+        Ok(()) => info!(path = %save.store.path().display(), "autosave written"),
+        Err(error) => error!(%error, "autosave failed"),
     }
 }
 

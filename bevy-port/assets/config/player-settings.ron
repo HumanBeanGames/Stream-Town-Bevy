@@ -1,0 +1,38 @@
+(
+    schema_version: 1,
+    video: (
+        display_mode: Fullscreen,
+        width: 1920,
+        height: 1080,
+        shadows_enabled: true,
+        shadow_map_resolution: 4096,
+        ambient_occlusion: true,
+        vsync: true,
+        fps_limit: None,
+        brightness_ev: 0.0,
+        gamma: 0.0,
+        msaa_samples: 8,
+        post_process_aa: Smaa,
+    ),
+    audio: (
+        master: 1.0,
+        music: 1.0,
+        sound_effects: 1.0,
+        ambience: 1.0,
+    ),
+    camera: (
+        pan_sensitivity: 10.0,
+        zoom_sensitivity: 10.0,
+        keyboard_pan_sensitivity: 10.0,
+        edge_scroll_sensitivity: 10.0,
+        field_of_view_degrees: 60,
+        edge_scrolling: true,
+        keyboard_movement: true,
+        mouse_controls: true,
+    ),
+    interface: (
+        display_names: None,
+        display_building_health: DamagedOnly,
+    ),
+    autosave_minutes: 30,
+)

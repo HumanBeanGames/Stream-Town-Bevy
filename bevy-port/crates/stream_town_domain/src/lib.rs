@@ -8,6 +8,7 @@ pub mod id;
 pub mod navigation;
 pub mod presentation;
 pub mod save;
+pub mod settings;
 pub mod simulation;
 pub mod world;
 
@@ -47,6 +48,12 @@ pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,
     NativeSaveStore, SavedActor, SavedTerrainMesh, SavedTerrainMeshError, WorldSnapshot,
     inspect_legacy_save,
+};
+pub use settings::{
+    AudioMixSettings, BuildingHealthDisplayMode, CURRENT_PLAYER_SETTINGS_SCHEMA, CameraSettings,
+    DisplayMode, InterfaceSettings, NameDisplayMode, PlayerSettings, PlayerSettingsStore,
+    PlayerSettingsStoreError, PlayerSettingsValidationError, PostProcessAntiAliasing,
+    VideoSettings,
 };
 pub use simulation::{
     ActorCustomization, ActorState, BUILDING_MAX_HEALTH, BuildingState, EnemyCampState,

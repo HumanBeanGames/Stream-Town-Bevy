@@ -95,6 +95,7 @@ crashlytics-build.properties
 # Rust / Bevy migration workspace
 /bevy-port/target/
 /bevy-port/.stream-town/
+/bevy-port/**/.stream-town/
 /bevy-port/generated/
 /bevy-port/tests/generated/
 /bevy-port/dist/

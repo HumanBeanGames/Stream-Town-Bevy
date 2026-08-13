@@ -10,7 +10,9 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
-    ChatCommand, ContentCatalog, GameConfig, GeneratedWorld, GridPos, PresentationCatalog, StableId,
+    BuildingHealthDisplayMode, ChatCommand, ContentCatalog, DisplayMode, GameConfig,
+    GeneratedWorld, GridPos, NameDisplayMode, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PresentationCatalog, StableId,
 };
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
@@ -24,18 +26,20 @@ enum ToolTab {
     Technology,
     World,
     Runtime,
+    Settings,
     Twitch,
     Validation,
     Inspector,
 }
 
 impl ToolTab {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Migration,
         Self::Content,
         Self::Technology,
         Self::World,
         Self::Runtime,
+        Self::Settings,
         Self::Twitch,
         Self::Validation,
         Self::Inspector,
@@ -48,6 +52,7 @@ impl ToolTab {
             Self::Technology => "Technology",
             Self::World => "World + Nav",
             Self::Runtime => "Runtime",
+            Self::Settings => "Settings",
             Self::Twitch => "Twitch",
             Self::Validation => "Validation",
             Self::Inspector => "ECS Inspector",
@@ -62,6 +67,7 @@ struct ToolState {
     command: String,
     status: String,
     config: GameConfig,
+    player_settings: PlayerSettings,
     catalog: ContentCatalog,
     presentation: PresentationCatalog,
     generated_world: Option<GeneratedWorld>,
@@ -123,6 +129,9 @@ impl Default for ToolState {
             .validate()
             .expect("checked-in presentation catalog must validate");
         let config = stream_town_game::load_runtime_config().unwrap_or_default();
+        let player_settings_store =
+            PlayerSettingsStore::new(stream_town_game::player_settings_path());
+        let player_settings = player_settings_store.load().unwrap_or_default();
         let game_master_ids = config
             .twitch
             .game_master_ids
@@ -136,6 +145,7 @@ impl Default for ToolState {
             command: "!join".to_owned(),
             status: "Ready. Migration operations are read-only by default.".to_owned(),
             config,
+            player_settings,
             catalog,
             presentation,
             generated_world: None,
@@ -221,6 +231,7 @@ fn tools_ui(
         ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::World => world_tab(ui, &mut state),
         ToolTab::Runtime => runtime_tab(ui, &mut state),
+        ToolTab::Settings => settings_tab(ui, &mut state),
         ToolTab::Twitch => twitch_tab(ui, &mut state),
         ToolTab::Validation => validation_tab(ui, &mut state),
         ToolTab::Inspector => inspector_tab(ui),
@@ -907,6 +918,215 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         ui.label(format!("Generator version: {}", world.generator_version));
         draw_world_preview(ui, world, &state.preview_path);
     }
+}
+
+fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Player settings");
+    ui.label("Unity SettingsData parity with validated, atomic RON persistence.");
+    ui.horizontal(|ui| {
+        ui.label("Display mode");
+        for (mode, label) in [
+            (DisplayMode::Windowed, "Windowed"),
+            (DisplayMode::Borderless, "Borderless"),
+            (DisplayMode::Fullscreen, "Fullscreen"),
+        ] {
+            ui.selectable_value(&mut state.player_settings.video.display_mode, mode, label);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut state.player_settings.video.width)
+                .range(640..=16_384)
+                .prefix("Width "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.player_settings.video.height)
+                .range(480..=8_640)
+                .prefix("Height "),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.player_settings.video.vsync, "VSync");
+        ui.checkbox(&mut state.player_settings.video.shadows_enabled, "Shadows");
+        ui.checkbox(
+            &mut state.player_settings.video.ambient_occlusion,
+            "Ambient occlusion",
+        );
+    });
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_label("MSAA")
+            .selected_text(format!("{}x", state.player_settings.video.msaa_samples))
+            .show_ui(ui, |ui| {
+                for samples in [1, 2, 4, 8] {
+                    ui.selectable_value(
+                        &mut state.player_settings.video.msaa_samples,
+                        samples,
+                        format!("{samples}x"),
+                    );
+                }
+            });
+        egui::ComboBox::from_label("Post AA")
+            .selected_text(format!("{:?}", state.player_settings.video.post_process_aa))
+            .show_ui(ui, |ui| {
+                for mode in [
+                    PostProcessAntiAliasing::None,
+                    PostProcessAntiAliasing::Fxaa,
+                    PostProcessAntiAliasing::Smaa,
+                ] {
+                    ui.selectable_value(
+                        &mut state.player_settings.video.post_process_aa,
+                        mode,
+                        format!("{mode:?}"),
+                    );
+                }
+            });
+        egui::ComboBox::from_label("Shadow map")
+            .selected_text(
+                state
+                    .player_settings
+                    .video
+                    .shadow_map_resolution
+                    .to_string(),
+            )
+            .show_ui(ui, |ui| {
+                for resolution in [256, 512, 1_024, 2_048, 4_096] {
+                    ui.selectable_value(
+                        &mut state.player_settings.video.shadow_map_resolution,
+                        resolution,
+                        resolution.to_string(),
+                    );
+                }
+            });
+        let mut fps = state.player_settings.video.fps_limit.unwrap_or_default();
+        egui::ComboBox::from_label("FPS limit")
+            .selected_text(if fps == 0 {
+                "Unlimited".to_owned()
+            } else {
+                fps.to_string()
+            })
+            .show_ui(ui, |ui| {
+                for (value, label) in [
+                    (0, "Unlimited"),
+                    (24, "24"),
+                    (30, "30"),
+                    (60, "60"),
+                    (120, "120"),
+                    (240, "240"),
+                ] {
+                    ui.selectable_value(&mut fps, value, label);
+                }
+            });
+        state.player_settings.video.fps_limit = (fps != 0).then_some(fps);
+    });
+    ui.separator();
+    ui.label("Audio mix");
+    ui.add(egui::Slider::new(&mut state.player_settings.audio.master, 0.0..=1.0).text("Master"));
+    ui.add(egui::Slider::new(&mut state.player_settings.audio.music, 0.0..=1.0).text("Music"));
+    ui.add(
+        egui::Slider::new(&mut state.player_settings.audio.sound_effects, 0.0..=1.0)
+            .text("Sound effects"),
+    );
+    ui.add(
+        egui::Slider::new(&mut state.player_settings.audio.ambience, 0.0..=1.0).text("Ambience"),
+    );
+    ui.separator();
+    ui.label("Camera and input");
+    ui.add(
+        egui::Slider::new(
+            &mut state.player_settings.camera.keyboard_pan_sensitivity,
+            0.0..=100.0,
+        )
+        .text("WASD sensitivity"),
+    );
+    ui.add(
+        egui::Slider::new(
+            &mut state.player_settings.camera.zoom_sensitivity,
+            0.0..=100.0,
+        )
+        .text("Zoom sensitivity"),
+    );
+    ui.checkbox(
+        &mut state.player_settings.camera.keyboard_movement,
+        "Keyboard movement",
+    );
+    ui.checkbox(
+        &mut state.player_settings.camera.edge_scrolling,
+        "Edge scrolling",
+    );
+    ui.checkbox(
+        &mut state.player_settings.camera.mouse_controls,
+        "Mouse controls",
+    );
+    egui::ComboBox::from_label("Autosave")
+        .selected_text(if state.player_settings.autosave_minutes == 0 {
+            "Off".to_owned()
+        } else {
+            format!("{} minutes", state.player_settings.autosave_minutes)
+        })
+        .show_ui(ui, |ui| {
+            for (minutes, label) in [
+                (0, "Off"),
+                (5, "5 minutes"),
+                (10, "10 minutes"),
+                (30, "30 minutes"),
+                (60, "60 minutes"),
+            ] {
+                ui.selectable_value(&mut state.player_settings.autosave_minutes, minutes, label);
+            }
+        });
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_label("Names")
+            .selected_text(format!(
+                "{:?}",
+                state.player_settings.interface.display_names
+            ))
+            .show_ui(ui, |ui| {
+                for value in [
+                    NameDisplayMode::None,
+                    NameDisplayMode::AllPlayers,
+                    NameDisplayMode::ModeratorsAndSubscribers,
+                ] {
+                    ui.selectable_value(
+                        &mut state.player_settings.interface.display_names,
+                        value,
+                        format!("{value:?}"),
+                    );
+                }
+            });
+        egui::ComboBox::from_label("Building health")
+            .selected_text(format!(
+                "{:?}",
+                state.player_settings.interface.display_building_health
+            ))
+            .show_ui(ui, |ui| {
+                for value in [
+                    BuildingHealthDisplayMode::None,
+                    BuildingHealthDisplayMode::DamagedOnly,
+                    BuildingHealthDisplayMode::Always,
+                ] {
+                    ui.selectable_value(
+                        &mut state.player_settings.interface.display_building_health,
+                        value,
+                        format!("{value:?}"),
+                    );
+                }
+            });
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Save validated settings").clicked() {
+            let store = PlayerSettingsStore::new(stream_town_game::player_settings_path());
+            state.status = match store.write(&state.player_settings) {
+                Ok(()) => format!("Saved player settings to {}", store.path().display()),
+                Err(error) => format!("Could not save player settings: {error}"),
+            };
+        }
+        if ui.button("Restore Unity defaults").clicked() {
+            state.player_settings = PlayerSettings::default();
+            "Restored Unity-equivalent defaults; save to persist them"
+                .clone_into(&mut state.status);
+        }
+    });
+    ui.label("Restart the game after saving to apply window, renderer, and audio changes.");
 }
 
 fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {

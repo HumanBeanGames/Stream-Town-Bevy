@@ -160,6 +160,7 @@ pub fn validate_windows_package(archive: &Path) -> Result<()> {
         "StreamTown/LICENSE",
         "StreamTown/README.md",
         "StreamTown/assets/config/game.ron",
+        "StreamTown/assets/config/player-settings.ron",
         "StreamTown/assets/content/catalog.ron",
         "StreamTown/assets/content/presentation.ron",
     ] {
@@ -220,6 +221,10 @@ mod tests {
         assert_eq!(
             portable_path(Path::new("assets/config/game.ron")),
             "assets/config/game.ron"
+        );
+        assert_eq!(
+            portable_path(Path::new("assets/config/player-settings.ron")),
+            "assets/config/player-settings.ron"
         );
     }
 }

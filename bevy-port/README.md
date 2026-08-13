@@ -106,6 +106,15 @@ geometry, rigs, and translation animation curves.
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
 Legacy Unity saves are never modified by migration tools.
 
+Player preferences are written atomically to `.stream-town/settings.ron` with a
+backup. On first launch, the Windows game imports Unity's
+`Documents/Panda Belly/Stream Town/SettingsData.json` when available; set
+`STREAM_TOWN_PLAYER_SETTINGS_PATH` or `STREAM_TOWN_UNITY_SETTINGS_PATH` to use
+explicit paths. The Settings tab in `stream_town_tools` edits and validates the
+native file. Window mode/resolution, VSync/FPS limit, MSAA, shadows, SSAO,
+brightness/gamma, audio volume, keyboard/mouse/edge camera controls, and the
+Unity 0/5/10/30/60-minute autosave choices are applied by the runtime.
+
 Twitch is disabled in the checked-in configuration. The tools application writes
 public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
 stored only in the operating-system credential vault. The game validates or
