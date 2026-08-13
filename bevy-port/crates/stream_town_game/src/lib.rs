@@ -14274,7 +14274,11 @@ fn load_input(
     }
     if matches!(
         compatibility,
-        Some(NativeWorldCompatibility::UpgradeV1 | NativeWorldCompatibility::UpgradeV2)
+        Some(
+            NativeWorldCompatibility::UpgradeV1
+                | NativeWorldCompatibility::UpgradeV2
+                | NativeWorldCompatibility::UpgradeV3
+        )
     ) {
         info!(
             saved_generator_version = snapshot.generator_version,
@@ -14528,6 +14532,7 @@ enum NativeWorldCompatibility {
     Current,
     UpgradeV1,
     UpgradeV2,
+    UpgradeV3,
 }
 
 fn native_world_compatibility(
@@ -14545,8 +14550,11 @@ fn native_world_compatibility(
     if generator_version == 1 && world_hash == stream_town_domain::legacy_v1_world_hash(world) {
         return Some(NativeWorldCompatibility::UpgradeV1);
     }
-    (generator_version == 2 && world_hash == stream_town_domain::legacy_v2_world_hash(world))
-        .then_some(NativeWorldCompatibility::UpgradeV2)
+    if generator_version == 2 && world_hash == stream_town_domain::legacy_v2_world_hash(world) {
+        return Some(NativeWorldCompatibility::UpgradeV2);
+    }
+    (generator_version == 3 && world_hash == stream_town_domain::legacy_v3_world_hash(world))
+        .then_some(NativeWorldCompatibility::UpgradeV3)
 }
 
 fn capture_screenshot(
@@ -19498,6 +19506,15 @@ mod tests {
                 &world,
             ),
             Some(NativeWorldCompatibility::UpgradeV2)
+        );
+        assert_eq!(
+            native_world_compatibility(
+                world.seed,
+                3,
+                &stream_town_domain::legacy_v3_world_hash(&world),
+                &world,
+            ),
+            Some(NativeWorldCompatibility::UpgradeV3)
         );
         assert_eq!(
             native_world_compatibility(world.seed, 1, "corrupt", &world),

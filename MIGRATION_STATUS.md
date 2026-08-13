@@ -83,12 +83,14 @@ mistaken for production-ready systems.
   guaranteed walkable approach, so Fishers cannot harvest bushes and Gatherers
   cannot fish. Completed Farms expose Unity's unlimited food holder to Farmers;
   target selection, manual `!target`, carry limits, XP, depletion, and native
-  save fingerprints share the typed contract. Generator version 3 also marks
+  save fingerprints share the typed contract. Generator version 4 also marks
   land resource cells unwalkable, routes workers to a nearest edge, validates
   the action at that edge, and clears the dirty navigation cell on depletion,
-  matching `ResourceProcessor.UpdateAllGraphBounds`/`ClearGraphBounds`.
-  Native generator-v1 and v2 saves are recognized by reconstructed former
-  hashes, retain depleted land nodes, and upgrade without being discarded.
+  matching `ResourceProcessor.UpdateAllGraphBounds`/`ClearGraphBounds`. All four
+  shipping generation settings leave `SetByDistance` false, so generated nodes
+  now use Unity's hard-coded 100-unit amount instead of an invented random range.
+  Native generator-v1 through v3 saves are recognized by reconstructed former
+  hashes, retain saved depletion, and upgrade without being discarded.
 - Unity's data-driven generated-resource reservation rule is live. Stable actor
   ordering grants each active node to one worker, conflicting workers select the
   next compatible node, and claims are reconstructed each frame then released

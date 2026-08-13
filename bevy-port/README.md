@@ -216,12 +216,13 @@ the nearest matching generated node and exact target mask: trees, ore, bushes,
 and reachable shoreline fish no longer collapse into interchangeable resource
 targets. Farmers harvest the completed Farm's authored unlimited food holder,
 while Fishers approach invisible water targets from a walkable shore cell.
-World-generator schema 3 fingerprints these target identities, fish nodes, and
+World-generator schema 4 fingerprints these target identities, fish nodes, and
 generated-resource navigation occupancy. Land nodes block their cell, workers
 act from the nearest walkable edge, and depletion clears the cell through a
-dirty-region update. Schema-1 and schema-2 native saves are hash-verified during
-load, preserve their existing land-node depletion, and add newer world features
-without discarding saves.
+dirty-region update. Every shipping generated resource starts at Unity's
+hard-coded 100 units (`SetByDistance` is false). Schema-1 through schema-3 native
+saves are hash-verified during load, preserve their existing depletion, and add
+newer world features without discarding saves.
 Generated nodes also reproduce Unity's zero-assignment claim rule: deterministic
 stable-ID ordering gives each active node one worker, other workers fail over to
 the next compatible target, and claims release on depletion, death, role change,

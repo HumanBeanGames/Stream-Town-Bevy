@@ -51,7 +51,7 @@ fn generate_world_from_layers(
     config: &WorldGenConfig,
     foliage_layers: &[FoliageLayerDef],
 ) -> GeneratedWorld {
-    const GENERATOR_VERSION: u32 = 3;
+    const GENERATOR_VERSION: u32 = 4;
     let cell_count = usize::from(config.width) * usize::from(config.height);
     let mut heights = Vec::with_capacity(cell_count);
     let mut blocked = Vec::with_capacity(cell_count);
@@ -91,7 +91,7 @@ fn generate_world_from_layers(
                     kind: StableId::new(kind).expect("static stable ID"),
                     target_kind: StableId::new(target_kind).expect("static stable ID"),
                     position,
-                    amount: 50 + u32::try_from((random >> 24) % 151).expect("bounded amount"),
+                    amount: 100,
                 });
             }
         }
@@ -161,7 +161,7 @@ fn generate_shoreline_fish(
                 kind: StableId::new("resource:food").expect("static stable ID"),
                 target_kind: StableId::new("target:fish").expect("static stable ID"),
                 position,
-                amount: 50 + u32::try_from((random >> 24) % 151).expect("bounded amount"),
+                amount: 100,
             });
         }
     }
@@ -198,8 +198,8 @@ pub fn shoreline_approaches(
 
 #[must_use]
 pub fn legacy_v1_world_hash(world: &GeneratedWorld) -> String {
-    let resources: Vec<_> = world
-        .resources
+    let legacy_resources = legacy_variable_resource_amounts(world);
+    let resources: Vec<_> = legacy_resources
         .iter()
         .filter(|resource| resource.target_kind.as_str() != "target:fish")
         .collect();
@@ -231,12 +231,43 @@ pub fn legacy_v1_world_hash(world: &GeneratedWorld) -> String {
 
 #[must_use]
 pub fn legacy_v2_world_hash(world: &GeneratedWorld) -> String {
+    let resources = legacy_variable_resource_amounts(world);
     hash_world(
         world.seed,
         2,
         &legacy_resource_navigation(world),
-        &world.resources,
+        &resources,
     )
+}
+
+#[must_use]
+pub fn legacy_v3_world_hash(world: &GeneratedWorld) -> String {
+    hash_world(
+        world.seed,
+        3,
+        &world.navigation,
+        &legacy_variable_resource_amounts(world),
+    )
+}
+
+fn legacy_variable_resource_amounts(world: &GeneratedWorld) -> Vec<GeneratedResource> {
+    const FISH_SEED_SALT: u64 = 0x4649_5348_5F53_484F;
+    world
+        .resources
+        .iter()
+        .cloned()
+        .map(|mut resource| {
+            let seed = if resource.target_kind.as_str() == "target:fish" {
+                world.seed ^ FISH_SEED_SALT
+            } else {
+                world.seed
+            };
+            let random = cell_hash(seed, resource.position.x, resource.position.z);
+            resource.amount =
+                50 + u32::try_from((random >> 24) % 151).expect("bounded legacy amount");
+            resource
+        })
+        .collect()
 }
 
 fn legacy_resource_navigation(world: &GeneratedWorld) -> NavGrid {
@@ -454,9 +485,16 @@ mod tests {
     fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
         let config = GameConfig::default().world;
         let world = generate_world(&config);
-        assert_eq!(world.generator_version, 3);
+        assert_eq!(world.generator_version, 4);
         assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v2_world_hash(&world), world.deterministic_hash);
+        assert_ne!(legacy_v3_world_hash(&world), world.deterministic_hash);
+        assert!(
+            world
+                .resources
+                .iter()
+                .all(|resource| resource.amount == 100)
+        );
         for resource in &world.resources {
             match resource.kind.as_str() {
                 "resource:wood" => assert_eq!(resource.target_kind.as_str(), "target:tree"),
