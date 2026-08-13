@@ -319,7 +319,11 @@ and selection outlines use the same centimetre height data as navigation. The
 live picker uses the converted `SelectionMask` texture and authored emissive
 alpha-cutout material on a terrain-following plane; actor outlines preserve
 Unity's 1.5-unit collider and 1.25 scale, while building selections cover their
-full rotated footprint.
+full rotated footprint. Drag selection recreates Unity's local-recruit group
+selection with one outline per member, mass role assignment, confirmed mass
+dismissal, and compatible right-click orders for stations, enemies, and
+resources. Transient selection stores stable actor IDs and is cleared across
+load/new-world boundaries rather than entering save data.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls; Bevy's configured waterline adapts that
@@ -441,6 +445,8 @@ at once. The live placer uses a typed port of Unity's transparent lit
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
 the image-backed selection window and authored footprint outline can be
 captured without pointer automation.
+`STREAM_TOWN_SMOKE_GROUP_SELECTION=1` selects all starting recruits so their
+authored outlines and mass-action panel can be captured without drag input.
 `STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the
 corresponding shipping bottom-bar context for repeatable UI captures.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a

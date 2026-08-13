@@ -474,6 +474,7 @@ struct CameraRequest {
 #[derive(Clone, Debug)]
 enum AgentCommand {
     Teleport { actor: StableId, position: GridPos },
+    Retarget(StableId),
     Ping(StableId),
     Despawn(StableId),
 }
@@ -499,6 +500,17 @@ impl Default for TwitchConnection {
 
 #[derive(Resource, Default)]
 struct SelectedCell(Option<GridPos>);
+
+#[derive(Resource, Default)]
+struct SelectedRecruitGroup {
+    actors: BTreeSet<StableId>,
+    drag_start: Option<Vec2>,
+}
+
+#[derive(Resource, Default)]
+struct GroupSelectionActions {
+    dismiss_armed: bool,
+}
 
 #[derive(Resource, Default)]
 struct EnvironmentPresentation {
@@ -1012,6 +1024,18 @@ struct SelectionPanel;
 struct SelectionPanelSlider;
 
 #[derive(Component)]
+struct GroupSelectionPanel;
+
+#[derive(Component)]
+struct GroupDismissLabel;
+
+#[derive(Component, Clone, Debug)]
+enum GroupSelectionAction {
+    AssignRole(StableId),
+    Dismiss,
+}
+
+#[derive(Component)]
 struct BottomBarMain;
 
 #[derive(Component)]
@@ -1315,6 +1339,12 @@ struct BuildingPresentation {
 
 #[derive(Component)]
 struct SelectionMarker;
+
+#[derive(Component)]
+struct GroupSelectionOutline(StableId);
+
+#[derive(Component)]
+struct GroupSelectionRect;
 
 #[derive(Component)]
 struct TownCamera;
@@ -1622,6 +1652,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<BuildingPlacers>()
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
+            .init_resource::<SelectedRecruitGroup>()
+            .init_resource::<GroupSelectionActions>()
             .init_resource::<EnvironmentPresentation>()
             .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
@@ -1767,7 +1799,15 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
+                    recruit_group_selection_input
+                        .after(select_grid_cell)
+                        .before(move_agents),
                     sync_selection_outline.after(select_grid_cell),
+                    sync_group_selection_outlines
+                        .after(recruit_group_selection_input)
+                        .after(move_agents),
+                    update_group_selection_panel.after(recruit_group_selection_input),
+                    group_selection_action_buttons.after(update_group_selection_panel),
                     update_selection_panel,
                     update_vote_panels.after(move_agents),
                     update_town_goal_panel.after(move_agents),
@@ -4645,6 +4685,45 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         });
     });
 
+    commands.spawn((
+        WorldEntity,
+        GroupSelectionRect,
+        Name::new("Recruit group selection rectangle"),
+        GlobalZIndex(35),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            border: UiRect::all(px(2)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.95, 0.82, 0.08, 0.12)),
+        BorderColor::all(Color::srgba(1.0, 0.92, 0.18, 0.9)),
+    ));
+
+    commands.spawn((
+        WorldEntity,
+        GroupSelectionPanel,
+        Name::new("Recruit group actions"),
+        GlobalZIndex(24),
+        Visibility::Hidden,
+        Node {
+            position_type: PositionType::Absolute,
+            right: px(20),
+            bottom: px(232),
+            width: px(460),
+            min_height: px(112),
+            padding: UiRect::all(px(12)),
+            border: UiRect::all(px(2)),
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            row_gap: px(6),
+            column_gap: px(6),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.035, 0.075, 0.05, 0.96)),
+        BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
+    ));
+
     commands
         .spawn((
             WorldEntity,
@@ -5305,6 +5384,7 @@ fn generate_and_spawn_world(
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
+    mut selected_group: ResMut<SelectedRecruitGroup>,
     mut bottom_bar: ResMut<BottomBarRuntime>,
     mut placers: ResMut<BuildingPlacers>,
     mut agent_commands: ResMut<AgentCommandQueue>,
@@ -5312,6 +5392,8 @@ fn generate_and_spawn_world(
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     selected.0 = None;
+    selected_group.actors.clear();
+    selected_group.drag_start = None;
     let mut generated = generate_world_with_content(&config.0.world, &content.0);
     let centre = GridPos {
         x: config.0.world.width / 2,
@@ -6034,6 +6116,15 @@ fn generate_and_spawn_world(
     );
     if std::env::var_os("STREAM_TOWN_SMOKE_SELECTION").is_some() {
         selected.0 = Some(town_hall_placement);
+    }
+    if std::env::var_os("STREAM_TOWN_SMOKE_GROUP_SELECTION").is_some() {
+        selected.0 = None;
+        selected_group.actors = simulation
+            .actors
+            .keys()
+            .filter(|actor| is_recruited_actor(actor))
+            .cloned()
+            .collect();
     }
     commands.insert_resource(WorldRuntime {
         generated,
@@ -13539,6 +13630,17 @@ fn apply_agent_commands(
                     transform.translation = world_position;
                 }
             }
+            AgentCommand::Retarget(actor) => {
+                if let Some((_, mut agent, _, _, _)) = agents
+                    .iter_mut()
+                    .find(|(_, agent, _, _, _)| agent.id == actor)
+                {
+                    agent.goal = AgentGoal::Wander;
+                    agent.path.clear();
+                    agent.path_index = 0;
+                    agent.action_cooldown_seconds = 0.0;
+                }
+            }
             AgentCommand::Ping(actor) => {
                 if !pointed_actors.insert(actor.clone()) {
                     continue;
@@ -13774,6 +13876,464 @@ fn select_grid_cell(
         return;
     };
     selected.0 = Some(cell);
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RecruitGroupOrder {
+    Station(StableId),
+    Target(StableId),
+}
+
+fn recruit_group_selection_input(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    ui_buttons: Query<&Interaction, With<Button>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    spatial: Option<SpatialQuery>,
+    config: Res<RuntimeConfig>,
+    world: Res<WorldRuntime>,
+    content: Res<RuntimeContent>,
+    mut simulation: ResMut<SimulationRuntime>,
+    mut selected: ResMut<SelectedCell>,
+    mut group: ResMut<SelectedRecruitGroup>,
+    mut rects: Query<(&mut Node, &mut Visibility), With<GroupSelectionRect>>,
+    mut agents: Query<(&mut Agent, &Transform)>,
+) {
+    if keyboard.just_pressed(KeyCode::Escape) {
+        group.actors.clear();
+        group.drag_start = None;
+        selected.0 = None;
+    }
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let cursor = window.cursor_position();
+    let pointer_over_ui = pointer_is_over_button(ui_buttons.iter());
+    if mouse.just_pressed(MouseButton::Left) && !pointer_over_ui {
+        group.drag_start = cursor;
+    }
+    if let Ok((mut node, mut visibility)) = rects.single_mut() {
+        if let (Some(start), Some(current)) = (group.drag_start, cursor)
+            && mouse.pressed(MouseButton::Left)
+            && start.distance_squared(current) >= 36.0
+        {
+            node.left = px(start.x.min(current.x));
+            node.top = px(start.y.min(current.y));
+            node.width = px((current.x - start.x).abs());
+            node.height = px((current.y - start.y).abs());
+            *visibility = Visibility::Visible;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
+    if mouse.just_released(MouseButton::Left) {
+        let start = group.drag_start.take();
+        if let (Some(start), Some(end)) = (start, cursor)
+            && start.distance_squared(end) >= 36.0
+            && let (Some(start_world), Some(end_world)) = (
+                viewport_ground_position(camera, camera_transform, start),
+                viewport_ground_position(camera, camera_transform, end),
+            )
+        {
+            let minimum = start_world.min(end_world);
+            let maximum = start_world.max(end_world);
+            let mut recruits = agents
+                .iter()
+                .filter(|(agent, _)| is_recruited_actor(&agent.id))
+                .filter(|(_, transform)| {
+                    world_selection_contains(transform.translation, minimum, maximum)
+                })
+                .map(|(agent, _)| agent.id.clone())
+                .collect::<BTreeSet<_>>();
+            if recruits.len() > 1 {
+                group.actors = recruits;
+                selected.0 = None;
+            } else if let Some(actor) = recruits.pop_first() {
+                group.actors.clear();
+                selected.0 = simulation.0.actors.get(&actor).map(|actor| actor.position);
+            } else {
+                group.actors.clear();
+                selected.0 = None;
+            }
+        } else if let Some(cell) = selected.0 {
+            let single_recruit = simulation
+                .0
+                .actors
+                .values()
+                .find(|actor| actor.position == cell && is_recruited_actor(&actor.id))
+                .map(|actor| actor.id.clone());
+            group.actors = single_recruit.into_iter().collect();
+        }
+    }
+    if !mouse.just_pressed(MouseButton::Right) || pointer_over_ui || group.actors.is_empty() {
+        return;
+    }
+    let (Some(cursor), Some(spatial)) = (cursor, spatial) else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(camera_transform, cursor) else {
+        return;
+    };
+    let Some(hit) = spatial.cast_ray(
+        ray.origin,
+        ray.direction,
+        2_000.0,
+        true,
+        &SpatialQueryFilter::default(),
+    ) else {
+        return;
+    };
+    let Some(cell) = world_to_grid(ray.get_point(hit.distance), &config.0) else {
+        return;
+    };
+    let Some(order) =
+        recruit_group_order_at_cell(cell, &content.0, &world.generated, &simulation.0)
+    else {
+        return;
+    };
+    let ordered = apply_recruit_group_order(
+        &group.actors,
+        &order,
+        &content.0,
+        &config.0,
+        &world.generated,
+        &mut simulation.0,
+    );
+    if ordered == 0 {
+        return;
+    }
+    for (mut agent, _) in &mut agents {
+        if group.actors.contains(&agent.id) {
+            agent.goal = AgentGoal::Wander;
+            agent.path.clear();
+            agent.path_index = 0;
+        }
+    }
+}
+
+fn viewport_ground_position(
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    viewport: Vec2,
+) -> Option<Vec3> {
+    let ray = camera.viewport_to_world(camera_transform, viewport).ok()?;
+    let distance = -ray.origin.y / ray.direction.y;
+    (distance.is_finite() && distance >= 0.0).then(|| ray.get_point(distance))
+}
+
+fn world_selection_contains(position: Vec3, minimum: Vec3, maximum: Vec3) -> bool {
+    position.x >= minimum.x
+        && position.x <= maximum.x
+        && position.z >= minimum.z
+        && position.z <= maximum.z
+}
+
+fn is_recruited_actor(actor: &StableId) -> bool {
+    actor.as_str().starts_with("npc:recruit_") || actor.as_str().starts_with("npc:starting_")
+}
+
+fn recruit_group_order_at_cell(
+    cell: GridPos,
+    content: &ContentCatalog,
+    world: &GeneratedWorld,
+    simulation: &WorldSimulation,
+) -> Option<RecruitGroupOrder> {
+    if let Some((building, _)) = selected_building_footprint(cell, content, simulation) {
+        let building = simulation
+            .buildings
+            .values()
+            .find(|state| state.position == building)?;
+        return Some(RecruitGroupOrder::Station(building.id.clone()));
+    }
+    if let Some(enemy) = simulation
+        .actors
+        .values()
+        .find(|actor| actor.position == cell && actor.alive && actor.role.as_str() == "role:enemy")
+    {
+        return Some(RecruitGroupOrder::Target(enemy.id.clone()));
+    }
+    world
+        .resources
+        .iter()
+        .find(|resource| resource.position == cell && resource.amount > 0)
+        .map(|resource| RecruitGroupOrder::Target(resource.id.clone()))
+}
+
+fn apply_recruit_group_order(
+    selected: &BTreeSet<StableId>,
+    order: &RecruitGroupOrder,
+    content: &ContentCatalog,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    simulation: &mut WorldSimulation,
+) -> usize {
+    let mut applied = 0;
+    for actor_id in selected {
+        let valid = simulation
+            .actors
+            .get(actor_id)
+            .is_some_and(|actor| match order {
+                RecruitGroupOrder::Station(station) => {
+                    compatible_station_ids(content, simulation, config, actor).contains(station)
+                }
+                RecruitGroupOrder::Target(target) => {
+                    compatible_target_ids(content, simulation, world, actor).contains(target)
+                }
+            });
+        if !valid {
+            continue;
+        }
+        let actor = simulation
+            .actors
+            .get_mut(actor_id)
+            .expect("group actor was validated");
+        match order {
+            RecruitGroupOrder::Station(station) => actor.station = Some(station.clone()),
+            RecruitGroupOrder::Target(target) => actor.preferred_target = Some(target.clone()),
+        }
+        applied += 1;
+    }
+    applied
+}
+
+fn sync_group_selection_outlines(
+    mut commands: Commands,
+    group: Res<SelectedRecruitGroup>,
+    config: Res<RuntimeConfig>,
+    world: Res<WorldRuntime>,
+    render: Res<RenderAssets>,
+    agents: Query<(&Agent, &GridLocation, &Transform), Without<GroupSelectionOutline>>,
+    mut outlines: Query<
+        (Entity, &GroupSelectionOutline, &mut Transform),
+        Without<Agent>,
+    >,
+) {
+    let mut existing = BTreeMap::new();
+    for (entity, outline, mut transform) in &mut outlines {
+        if group.actors.len() < 2 || !group.actors.contains(&outline.0) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if let Some((_, location, agent_transform)) =
+            agents.iter().find(|(agent, _, _)| agent.id == outline.0)
+        {
+            transform.translation = Vec3::new(
+                agent_transform.translation.x,
+                terrain_height(&world.generated, location.0) + SELECTION_OUTLINE_SURFACE_OFFSET,
+                agent_transform.translation.z,
+            );
+            transform.rotation =
+                Quat::from_rotation_y(agent_transform.rotation.to_euler(EulerRot::YXZ).0);
+        }
+        existing.insert(outline.0.clone(), entity);
+    }
+    for (agent, location, transform) in &agents {
+        if group.actors.len() < 2
+            || !group.actors.contains(&agent.id)
+            || existing.contains_key(&agent.id)
+        {
+            continue;
+        }
+        commands.spawn((
+            WorldEntity,
+            GroupSelectionOutline(agent.id.clone()),
+            Mesh3d(render.cloud_plane.clone()),
+            MeshMaterial3d(render.selection.clone()),
+            Transform::from_xyz(
+                transform.translation.x,
+                terrain_height(&world.generated, location.0) + SELECTION_OUTLINE_SURFACE_OFFSET,
+                transform.translation.z,
+            )
+            .with_rotation(Quat::from_rotation_y(
+                transform.rotation.to_euler(EulerRot::YXZ).0,
+            ))
+            .with_scale(Vec3::new(
+                config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
+                1.0,
+                config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
+            )),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
+        ));
+    }
+}
+
+fn group_role_ids(content: &ContentCatalog) -> Vec<StableId> {
+    content
+        .roles
+        .keys()
+        .filter(|id| !matches!(id.as_str(), "role:ruler" | "role:blacksmith" | "role:enemy"))
+        .cloned()
+        .collect()
+}
+
+fn assign_group_role(
+    selected: &BTreeSet<StableId>,
+    role: &StableId,
+    content: &ContentCatalog,
+    simulation: &mut WorldSimulation,
+) -> usize {
+    if !group_role_ids(content).contains(role) {
+        return 0;
+    }
+    let mut changed = 0;
+    for actor in selected {
+        if simulation.actors.contains_key(actor)
+            && role_is_available(content, simulation, role, Some(actor))
+            && simulation.assign_role(actor, role.clone()).is_ok()
+        {
+            changed += 1;
+        }
+    }
+    changed
+}
+
+fn dismiss_group_recruits(
+    selected: &BTreeSet<StableId>,
+    simulation: &mut WorldSimulation,
+) -> Vec<StableId> {
+    let dismissed = selected
+        .iter()
+        .filter(|actor| is_recruited_actor(actor) && simulation.actors.contains_key(*actor))
+        .cloned()
+        .collect::<Vec<_>>();
+    for actor in &dismissed {
+        simulation.actors.remove(actor);
+    }
+    let resource = StableId::new("resource:recruit").expect("static ID");
+    let current = simulation
+        .town_resources
+        .get(&resource)
+        .copied()
+        .unwrap_or_default();
+    simulation.town_resources.insert(
+        resource,
+        current.saturating_sub(u32::try_from(dismissed.len()).unwrap_or(u32::MAX)),
+    );
+    dismissed
+}
+
+fn update_group_selection_panel(
+    mut commands: Commands,
+    group: Res<SelectedRecruitGroup>,
+    content: Res<RuntimeContent>,
+    mut actions: ResMut<GroupSelectionActions>,
+    panels: Query<Entity, With<GroupSelectionPanel>>,
+) {
+    if !group.is_changed() {
+        return;
+    }
+    let Ok(panel) = panels.single() else {
+        return;
+    };
+    actions.dismiss_armed = false;
+    commands.entity(panel).despawn_children();
+    if group.actors.len() < 2 {
+        commands.entity(panel).insert(Visibility::Hidden);
+        return;
+    }
+    commands
+        .entity(panel)
+        .insert(Visibility::Visible)
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(format!("Mass Selection: {}", group.actors.len())),
+                TextFont {
+                    font_size: FontSize::Px(18.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    width: percent(100.0),
+                    ..default()
+                },
+            ));
+            for role in group_role_ids(&content.0) {
+                parent
+                    .spawn((
+                        GroupSelectionAction::AssignRole(role.clone()),
+                        Button,
+                        Node {
+                            padding: UiRect::axes(px(9), px(5)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.19, 0.34, 0.22)),
+                    ))
+                    .with_child((
+                        Text::new(&content.0.roles[&role].display_name),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+            }
+            parent
+                .spawn((
+                    GroupSelectionAction::Dismiss,
+                    Button,
+                    Node {
+                        padding: UiRect::axes(px(9), px(5)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.48, 0.12, 0.1)),
+                ))
+                .with_child((
+                    GroupDismissLabel,
+                    Text::new("Mass Dismiss"),
+                    TextFont {
+                        font_size: FontSize::Px(14.0),
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    Pickable::IGNORE,
+                ));
+        });
+}
+
+fn group_selection_action_buttons(
+    content: Res<RuntimeContent>,
+    mut simulation: ResMut<SimulationRuntime>,
+    mut group: ResMut<SelectedRecruitGroup>,
+    mut actions: ResMut<GroupSelectionActions>,
+    mut agent_commands: ResMut<AgentCommandQueue>,
+    buttons: Query<(&Interaction, &GroupSelectionAction), Changed<Interaction>>,
+    mut dismiss_labels: Query<&mut Text, With<GroupDismissLabel>>,
+) {
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            GroupSelectionAction::AssignRole(role) => {
+                assign_group_role(&group.actors, role, &content.0, &mut simulation.0);
+                for actor in &group.actors {
+                    agent_commands
+                        .0
+                        .push_back(AgentCommand::Retarget(actor.clone()));
+                }
+                actions.dismiss_armed = false;
+                for mut label in &mut dismiss_labels {
+                    "Mass Dismiss".clone_into(&mut label.0);
+                }
+            }
+            GroupSelectionAction::Dismiss if !actions.dismiss_armed => {
+                actions.dismiss_armed = true;
+                for mut label in &mut dismiss_labels {
+                    "Confirm Dismiss".clone_into(&mut label.0);
+                }
+            }
+            GroupSelectionAction::Dismiss => {
+                for actor in dismiss_group_recruits(&group.actors, &mut simulation.0) {
+                    agent_commands.0.push_back(AgentCommand::Despawn(actor));
+                }
+                group.actors.clear();
+                actions.dismiss_armed = false;
+            }
+        }
+    }
 }
 
 fn sync_selection_outline(
@@ -15391,6 +15951,8 @@ fn load_input(
     mut placers: ResMut<BuildingPlacers>,
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
+    mut selected: ResMut<SelectedCell>,
+    mut selected_group: ResMut<SelectedRecruitGroup>,
     mut entities: LoadWorldEntities,
     mut automatic_complete: Local<bool>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
@@ -15409,6 +15971,9 @@ fn load_input(
             return;
         }
     };
+    selected.0 = None;
+    selected_group.actors.clear();
+    selected_group.drag_start = None;
     let mut restored_config = config.0.clone();
     restored_config.world.seed = snapshot.world_seed;
     let mut restored_world = generate_world_with_content(&restored_config.world, &content.0);
@@ -18877,7 +19442,7 @@ fn update_hud(
         meter.left = percent(season_progress);
     }
     hud.0 = format!(
-        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nF1/F2 Twitch | F5 Save | F9 Load | F12 Capture | J Join | WASD Pan | Q/E Zoom | Click Select | ESC Menu | first {first_id}",
+        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nF1/F2 Twitch | F5 Save | F9 Load | F12 Capture | J Join | WASD Pan | Q/E Zoom | Click/Drag Select | Right-click Order | ESC Menu | first {first_id}",
         simulation.0.day,
         stats.paths_completed,
         stats.commands_processed,
@@ -23299,6 +23864,120 @@ mod tests {
                 - SELECTION_OUTLINE_SURFACE_OFFSET)
                 .abs()
                 <= f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn recruit_group_orders_roles_and_dismissal_match_unity_contracts() {
+        assert!(world_selection_contains(
+            Vec3::new(2.0, 99.0, -3.0),
+            Vec3::new(-1.0, 0.0, -4.0),
+            Vec3::new(3.0, 0.0, 2.0)
+        ));
+        assert!(!world_selection_contains(
+            Vec3::new(4.0, 0.0, -3.0),
+            Vec3::new(-1.0, 0.0, -4.0),
+            Vec3::new(3.0, 0.0, 2.0)
+        ));
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let mut simulation = WorldSimulation::new(world.seed);
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        simulation
+            .town_resources
+            .insert(StableId::new("resource:recruit").unwrap(), 2);
+        for (id, role, position) in [
+            (
+                "npc:starting_builder",
+                "role:builder",
+                GridPos { x: 30, z: 30 },
+            ),
+            (
+                "npc:starting_defender",
+                "role:defender",
+                GridPos { x: 31, z: 30 },
+            ),
+        ] {
+            let id = StableId::new(id).unwrap();
+            assert!(simulation.join_player(id.clone(), position));
+            simulation
+                .assign_role(&id, StableId::new(role).unwrap())
+                .unwrap();
+        }
+        let selected = recruited_actor_ids(&simulation)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(selected.len(), 2);
+
+        let town_hall = StableId::new("building:townhall").unwrap();
+        let town_hall_cell = simulation.buildings[&town_hall].position;
+        assert_eq!(
+            recruit_group_order_at_cell(town_hall_cell, &content, &world, &simulation),
+            Some(RecruitGroupOrder::Station(town_hall.clone()))
+        );
+        assert_eq!(
+            apply_recruit_group_order(
+                &selected,
+                &RecruitGroupOrder::Station(town_hall.clone()),
+                &content,
+                &config,
+                &world,
+                &mut simulation,
+            ),
+            2
+        );
+        assert!(
+            selected
+                .iter()
+                .all(|actor| simulation.actors[actor].station.as_ref() == Some(&town_hall))
+        );
+
+        let resource = world
+            .resources
+            .iter()
+            .find(|resource| resource.amount > 0)
+            .unwrap();
+        let compatible = selected
+            .iter()
+            .filter(|actor| {
+                compatible_target_ids(&content, &simulation, &world, &simulation.actors[*actor])
+                    .contains(&resource.id)
+            })
+            .count();
+        assert_eq!(
+            apply_recruit_group_order(
+                &selected,
+                &RecruitGroupOrder::Target(resource.id.clone()),
+                &content,
+                &config,
+                &world,
+                &mut simulation,
+            ),
+            compatible
+        );
+
+        let builder = StableId::new("role:builder").unwrap();
+        assert_eq!(
+            assign_group_role(&selected, &builder, &content, &mut simulation),
+            2
+        );
+        assert!(
+            selected
+                .iter()
+                .all(|actor| simulation.actors[actor].role == builder)
+        );
+        let before = simulation.town_resources[&StableId::new("resource:recruit").unwrap()];
+        let dismissed = dismiss_group_recruits(&selected, &mut simulation);
+        assert_eq!(dismissed.len(), 2);
+        assert!(
+            selected
+                .iter()
+                .all(|actor| !simulation.actors.contains_key(actor))
+        );
+        assert_eq!(
+            simulation.town_resources[&StableId::new("resource:recruit").unwrap()],
+            before.saturating_sub(2)
         );
     }
 
