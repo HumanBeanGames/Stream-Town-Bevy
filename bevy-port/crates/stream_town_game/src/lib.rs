@@ -6934,6 +6934,55 @@ fn resource_approach(
     )
 }
 
+fn goal_reservation(goal: &AgentGoal) -> Option<&StableId> {
+    match goal {
+        // Unity's zero-assignment claim is part of the data-driven generated
+        // resource pipeline. Targetable farm holders continue to use their
+        // station's authored max-target capacity.
+        AgentGoal::Gather(target) => Some(target),
+        _ => None,
+    }
+}
+
+fn reservation_available(
+    reservations: &BTreeMap<StableId, StableId>,
+    actor: &StableId,
+    target: &StableId,
+) -> bool {
+    reservations.get(target).is_none_or(|owner| owner == actor)
+}
+
+fn goal_reservation_is_valid(
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    content: &ContentCatalog,
+    actor_id: &StableId,
+    goal: &AgentGoal,
+) -> bool {
+    let Some(actor) = simulation.actors.get(actor_id).filter(|actor| actor.alive) else {
+        return false;
+    };
+    match goal {
+        AgentGoal::Gather(resource_id) => world
+            .resources
+            .iter()
+            .find(|resource| resource.id == *resource_id && resource.amount > 0)
+            .is_some_and(|resource| actor_accepts_resource(content, actor, resource)),
+        AgentGoal::HarvestFarm(building_id) => {
+            content.roles.get(&actor.role).is_some_and(|role| {
+                role_accepts_target(
+                    role,
+                    &StableId::new("target:farm").expect("static target ID"),
+                )
+            }) && simulation
+                .buildings
+                .get(building_id)
+                .is_some_and(|building| is_farm_resource_building(content, building))
+        }
+        _ => false,
+    }
+}
+
 fn building_max_health(content: &ContentCatalog, building: &BuildingState) -> i32 {
     content
         .archetypes
@@ -7024,6 +7073,7 @@ fn building_approach(
     approaches.into_iter().next()
 }
 
+#[cfg(test)]
 fn next_agent_goal(
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
@@ -7031,6 +7081,27 @@ fn next_agent_goal(
     content: &ContentCatalog,
     actor_id: &StableId,
     current: GridPos,
+) -> (AgentGoal, GridPos) {
+    next_agent_goal_with_reservations(
+        simulation,
+        world,
+        config,
+        content,
+        actor_id,
+        current,
+        &BTreeMap::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn next_agent_goal_with_reservations(
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    actor_id: &StableId,
+    current: GridPos,
+    reservations: &BTreeMap<StableId, StableId>,
 ) -> (AgentGoal, GridPos) {
     let Some(actor) = simulation.actors.get(actor_id) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
@@ -7088,6 +7159,7 @@ fn next_agent_goal(
             .resources
             .iter()
             .find(|resource| resource.id == *preferred && resource.amount > 0)
+            .filter(|resource| reservation_available(reservations, actor_id, &resource.id))
             .filter(|resource| actor_accepts_resource(content, actor, resource))
             .filter(|_| actor_remaining_carry_capacity(content, simulation, actor) > 0)
             .filter(|_| actor_resource_storage_has_room(config, content, simulation, actor))
@@ -7102,6 +7174,7 @@ fn next_agent_goal(
             .buildings
             .get(preferred)
             .filter(|building| is_farm_resource_building(content, building))
+            .filter(|building| reservation_available(reservations, actor_id, &building.id))
             .filter(|_| {
                 content.roles.get(&actor.role).is_some_and(|role| {
                     role_accepts_target(
@@ -7372,6 +7445,7 @@ fn next_agent_goal(
             .buildings
             .values()
             .filter(|building| is_farm_resource_building(content, building))
+            .filter(|building| reservation_available(reservations, actor_id, &building.id))
             .filter(|building| {
                 station.is_none_or(|station| within_station_range(building.position, station))
             })
@@ -7412,6 +7486,7 @@ fn next_agent_goal(
             resource.kind == resource_kind
                 && resource.amount > 0
                 && actor_accepts_resource(content, actor, resource)
+                && reservation_available(reservations, actor_id, &resource.id)
         })
         .filter(|resource| {
             station.is_none_or(|station| within_station_range(resource.position, station))
@@ -9106,6 +9181,7 @@ fn move_agents(
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
     mut agents: Query<(
+        Entity,
         &mut Agent,
         &mut GridLocation,
         &AgentAnimation,
@@ -9147,7 +9223,37 @@ fn move_agents(
     if let Some(weather) = debug_weather_override() {
         simulation.0.weather = weather;
     }
-    for (mut agent, mut location, animation, mut transform) in &mut agents {
+    let mut resource_reservations = BTreeMap::new();
+    for (_, agent, _, _, _) in &agents {
+        if let Some(target) = goal_reservation(&agent.goal)
+            && goal_reservation_is_valid(
+                &simulation.0,
+                &world.generated,
+                &content.0,
+                &agent.id,
+                &agent.goal,
+            )
+        {
+            resource_reservations
+                .entry(target.clone())
+                .and_modify(|owner| {
+                    if agent.id < *owner {
+                        owner.clone_from(&agent.id);
+                    }
+                })
+                .or_insert_with(|| agent.id.clone());
+        }
+    }
+    let mut agent_order: Vec<_> = agents
+        .iter()
+        .map(|(entity, agent, _, _, _)| (agent.id.clone(), entity))
+        .collect();
+    agent_order.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (_, entity) in agent_order {
+        let Ok((_, mut agent, mut location, animation, mut transform)) = agents.get_mut(entity)
+        else {
+            continue;
+        };
         agent.action_cooldown_seconds =
             (agent.action_cooldown_seconds - time.delta_secs()).max(0.0);
         if let Some((role_stats, regeneration_requires_food)) = simulation
@@ -9367,15 +9473,24 @@ fn move_agents(
                 }
             }
             agent.origin = location.0;
-            let (goal, target) = next_agent_goal(
+            if let Some(reserved) = goal_reservation(&agent.goal)
+                && resource_reservations.get(reserved) == Some(&agent.id)
+            {
+                resource_reservations.remove(reserved);
+            }
+            let (goal, target) = next_agent_goal_with_reservations(
                 &simulation.0,
                 &world.generated,
                 &config.0,
                 &content.0,
                 &agent.id,
                 location.0,
+                &resource_reservations,
             );
             agent.goal = goal;
+            if let Some(reserved) = goal_reservation(&agent.goal) {
+                resource_reservations.insert(reserved.clone(), agent.id.clone());
+            }
             agent.target = target;
             agent.path = agent_path(
                 &world.generated.navigation,
@@ -19367,6 +19482,111 @@ mod tests {
             assert!(compatible.contains(&expected_target.id));
             assert!(!compatible.contains(&rejected_target.id));
         }
+    }
+
+    #[test]
+    fn generated_resource_reservations_are_exclusive_and_fail_over() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let claimed = world
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:tree")
+            .unwrap();
+        let current = claimed.position;
+        let first = StableId::new("npc:reservation_first").unwrap();
+        let second = StableId::new("npc:reservation_second").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        for actor in [&first, &second] {
+            assert!(simulation.join_player(actor.clone(), current));
+            simulation
+                .assign_role(actor, StableId::new("role:logger").unwrap())
+                .unwrap();
+        }
+        let reservations = BTreeMap::from([(claimed.id.clone(), first.clone())]);
+        assert_eq!(
+            next_agent_goal_with_reservations(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &first,
+                current,
+                &reservations,
+            )
+            .0,
+            AgentGoal::Gather(claimed.id.clone())
+        );
+        let second_goal = next_agent_goal_with_reservations(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &second,
+            current,
+            &reservations,
+        )
+        .0;
+        assert!(matches!(second_goal, AgentGoal::Gather(ref id) if id != &claimed.id));
+        assert!(reservation_available(
+            &BTreeMap::new(),
+            &second,
+            &claimed.id
+        ));
+    }
+
+    #[test]
+    fn stale_resource_reservations_release_after_role_change_or_depletion() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let claimed = world
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:tree")
+            .unwrap()
+            .clone();
+        let actor_id = StableId::new("npc:stale_reservation").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), claimed.position));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:logger").unwrap())
+            .unwrap();
+        let goal = AgentGoal::Gather(claimed.id.clone());
+        assert!(goal_reservation_is_valid(
+            &simulation,
+            &world,
+            &content,
+            &actor_id,
+            &goal,
+        ));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:miner").unwrap())
+            .unwrap();
+        assert!(!goal_reservation_is_valid(
+            &simulation,
+            &world,
+            &content,
+            &actor_id,
+            &goal,
+        ));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:logger").unwrap())
+            .unwrap();
+        world
+            .resources
+            .iter_mut()
+            .find(|resource| resource.id == claimed.id)
+            .unwrap()
+            .amount = 0;
+        assert!(!goal_reservation_is_valid(
+            &simulation,
+            &world,
+            &content,
+            &actor_id,
+            &goal,
+        ));
     }
 
     #[test]

@@ -219,6 +219,10 @@ while Fishers approach invisible water targets from a walkable shore cell.
 World-generator schema 2 fingerprints these target identities and fish nodes.
 Schema-1 native saves are hash-verified during load, preserve their existing
 land-node depletion, and add the new fish nodes at full stock.
+Generated nodes also reproduce Unity's zero-assignment claim rule: deterministic
+stable-ID ordering gives each active node one worker, other workers fail over to
+the next compatible target, and claims release on depletion, death, role change,
+or retargeting. Farms retain station-controlled multi-worker capacity.
 Workers gather using `BaseActionAmount`, carry the
 authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
 into the town balances shown by the HUD. Successful actions award Unity-scaled

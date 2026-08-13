@@ -87,6 +87,11 @@ mistaken for production-ready systems.
   advances the deterministic generator fingerprint to version 2. Native
   generator-v1 saves are recognized by their former hash, retain depleted land
   nodes, and upgrade with newly introduced fish at full stock.
+- Unity's data-driven generated-resource reservation rule is live. Stable actor
+  ordering grants each active node to one worker, conflicting workers select the
+  next compatible node, and claims are reconstructed each frame then released
+  after depletion, death, role changes, or retargeting. Farm holders remain on
+  the separate station-capacity path, matching Unity's `Targetable` behavior.
 - All 15 `CharacterModelHandler` equipment sets are typed using exact converted
   GLB node names. Bevy activates the selected slim role body and permanent tools,
   shields, and helmets; toggles carry-only props from authoritative inventory;
