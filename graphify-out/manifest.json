@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786620366.200422,
-    "ast_hash": "dbc8d93b9fa078b1f162dcfc78a759ed",
+    "mtime": 1786638689.1165357,
+    "ast_hash": "f3e5f33dd713cedbe5de2fd77858dc3c",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786620366.201953,
-    "ast_hash": "471eb819853e081d2aacd946e3e2ef91",
+    "mtime": 1786638689.1178684,
+    "ast_hash": "061b3ef0746a6baf51ef69080c44bb0a",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786637821.3973913,
-    "ast_hash": "be3fc75c7acb5a3d43d7a49b5e4c7007",
+    "mtime": 1786639120.981472,
+    "ast_hash": "4af48a19145b6972df3d3c5a761851e9",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2805,13 +2805,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786620541.399622,
-    "ast_hash": "e49bd2176ba7f9ff85562ac13fde52e6",
+    "mtime": 1786638746.822614,
+    "ast_hash": "317c8de60b4151fd85f9b2210837a5ed",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786624861.7694852,
-    "ast_hash": "458b7cbfb13c048753e50bdc5283661d",
+    "mtime": 1786638746.8216138,
+    "ast_hash": "35b8e1f75832b560c77956b6813dd9af",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786637650.0639124,
-    "ast_hash": "cf729cf404f0ca1305b6f2e48a7c93f7",
+    "mtime": 1786638823.173284,
+    "ast_hash": "cd5e0aa084e081c97740b09bfc2baeec",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786637650.0639124,
-    "ast_hash": "cf951e857ece6481b25d3fbb332e6fc6",
+    "mtime": 1786638823.172279,
+    "ast_hash": "0b6bfb7915dc233520ebe973c4fea6bf",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -3630,8 +3630,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
-    "mtime": 1786622353.3120232,
-    "ast_hash": "4c8cef365af304ebeece87f1e4af0ffe",
+    "mtime": 1786638746.8206086,
+    "ast_hash": "7331e0425068eb115e5763b7c0a1412d",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/models.rs": {

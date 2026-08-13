@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 25;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 26;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -231,6 +231,8 @@ pub struct BuildingDef {
     #[serde(default)]
     pub storage_models: Vec<StorageModelDef>,
     #[serde(default)]
+    pub rotating_nodes: Vec<RotatingNodeDef>,
+    #[serde(default)]
     pub passive_resources: Vec<PassiveResourceContribution>,
     #[serde(default)]
     pub station: Option<StationDef>,
@@ -258,6 +260,16 @@ pub struct StorageModelDef {
     pub empty_model: String,
     pub half_full_model: String,
     pub full_model: String,
+}
+
+/// A named glTF node driven by Unity's reachable `SimpleRotateOnAxis` behavior.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RotatingNodeDef {
+    pub age: u8,
+    pub node: String,
+    /// Unity local Euler-axis multiplier, preserved before applying speed.
+    pub axis: [f32; 3],
+    pub degrees_per_second: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -568,6 +580,8 @@ pub enum ContentError {
     InvalidPassiveResource(StableId),
     #[error("building {0} has invalid model-handler data")]
     InvalidBuildingModels(StableId),
+    #[error("building {0} has invalid rotating-node data")]
+    InvalidRotatingNode(StableId),
     #[error("building {0} has invalid target-scoring data")]
     InvalidTargetingScore(StableId),
 }
@@ -771,6 +785,16 @@ impl ContentCatalog {
                         .any(|storage| storage.resource == model.resource)
             }) {
                 return Err(ContentError::InvalidBuildingModels(id.clone()));
+            }
+            if building.rotating_nodes.iter().any(|node| {
+                !(1..=2).contains(&node.age)
+                    || node.node.trim().is_empty()
+                    || node.axis.iter().any(|value| !value.is_finite())
+                    || node.axis.iter().all(|value| value.abs() <= f32::EPSILON)
+                    || !node.degrees_per_second.is_finite()
+                    || node.degrees_per_second.abs() <= f32::EPSILON
+            }) {
+                return Err(ContentError::InvalidRotatingNode(id.clone()));
             }
             if building.station.as_ref().is_some_and(|station| {
                 station.max_targets == 0

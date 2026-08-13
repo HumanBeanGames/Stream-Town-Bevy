@@ -156,6 +156,11 @@ fn validate() -> Result<()> {
         .values()
         .map(|building| building.storage_models.len())
         .sum();
+    let rotating_nodes: usize = content
+        .buildings
+        .values()
+        .map(|building| building.rotating_nodes.len())
+        .sum();
     let targeting_scores = content
         .buildings
         .values()
@@ -200,6 +205,7 @@ fn validate() -> Result<()> {
         || passive_resource_generators != 1
         || building_model_handlers != 42
         || storage_model_handlers != 6
+        || rotating_nodes != 2
         || targeting_scores != 26
         || target_sizes != 44
         || (
@@ -221,7 +227,7 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (25, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (26, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
     {
         bail!("authored content counts differ from the verified Unity baseline");
     }
@@ -310,6 +316,31 @@ fn validate() -> Result<()> {
                         "enemy model handler {archetype_id} references node {expected:?} absent from its packaged GLB scenes"
                     );
                 }
+            }
+        }
+        for rotating in content
+            .buildings
+            .values()
+            .filter(|building| building.archetype == *archetype_id)
+            .flat_map(|building| &building.rotating_nodes)
+        {
+            let scene = archetype
+                .scenes
+                .iter()
+                .find(|scene| scene.age == Some(rotating.age))
+                .with_context(|| {
+                    format!(
+                        "rotating node {} has no packaged age-{} scene",
+                        rotating.node, rotating.age
+                    )
+                })?;
+            let packaged_nodes = glb_node_names(&Path::new("assets").join(&scene.asset_path))?;
+            if !packaged_nodes.contains(&rotating.node) {
+                bail!(
+                    "rotating node {:?} is absent from its packaged GLB scene {}",
+                    rotating.node,
+                    scene.asset_path
+                );
             }
         }
     }
@@ -617,7 +648,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes with 44 target sizes, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 2 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }

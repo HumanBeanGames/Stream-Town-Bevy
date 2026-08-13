@@ -13,9 +13,9 @@ use stream_town_domain::{
     BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemyModelSetDef, EnemyRunAnimation,
     EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef,
     HealthDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution, ProjectileShooterDef,
-    ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution, StableId, StationDef,
-    StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode, TechTree,
-    WeightedEnemySpawn,
+    ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StableId,
+    StationDef, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode,
+    TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -50,6 +50,7 @@ pub struct ContentConversionReport {
     pub building_prefabs: usize,
     pub building_model_handlers: usize,
     pub storage_model_handlers: usize,
+    pub rotating_nodes: usize,
     pub passive_resource_generators: usize,
     pub enemy_resource_rewards: usize,
     pub enemy_model_handlers: usize,
@@ -300,6 +301,7 @@ fn convert_export(
                 role_slots: role_slot_contributions(prefab)?,
                 model_handlers: building_model_definitions(prefab)?,
                 storage_models: storage_model_definitions(prefab)?,
+                rotating_nodes: rotating_node_definitions(prefab)?,
                 passive_resources: passive_resource_contributions(prefab)?,
                 station: station_definition(prefab)?,
                 targeting: targeting_score_definition(prefab)?,
@@ -506,7 +508,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 2,
+        schema_version: 3,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -540,6 +542,11 @@ fn convert_export(
             .buildings
             .values()
             .map(|building| building.storage_models.len())
+            .sum(),
+        rotating_nodes: catalog
+            .buildings
+            .values()
+            .map(|building| building.rotating_nodes.len())
             .sum(),
         passive_resource_generators: catalog
             .buildings
@@ -1720,6 +1727,41 @@ fn storage_model_definitions(asset: &UnityAsset) -> Result<Vec<StorageModelDef>>
     Ok(models)
 }
 
+fn rotating_node_definitions(asset: &UnityAsset) -> Result<Vec<RotatingNodeDef>> {
+    let mut nodes = Vec::new();
+    for component in asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components)
+        .filter(|component| component_type(component) == "Utils.SimpleRotateOnAxis")
+    {
+        let node = component
+            .hierarchy_path
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.trim().is_empty())
+            .with_context(|| format!("{} rotating component has no hierarchy node", asset.path))?
+            .to_owned();
+        let axis = component_field_value(component, "_axis")
+            .and_then(vector3)
+            .with_context(|| format!("{} rotating node {node} has no axis", asset.path))?;
+        let degrees_per_second = component_field_value(component, "_speed")
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && value.abs() > f64::EPSILON)
+            .with_context(|| format!("{} rotating node {node} has invalid speed", asset.path))?;
+        #[allow(clippy::cast_possible_truncation)]
+        nodes.push(RotatingNodeDef {
+            age: building_node_age(asset, &node)?,
+            node,
+            axis: [axis[0] as f32, axis[1] as f32, axis[2] as f32],
+            degrees_per_second: degrees_per_second as f32,
+        });
+    }
+    nodes.sort_by(|left, right| (left.age, &left.node).cmp(&(right.age, &right.node)));
+    Ok(nodes)
+}
+
 fn component_type(component: &UnityComponent) -> &str {
     component
         .unity_type
@@ -2598,8 +2640,16 @@ mod tests {
     }
 
     fn component(unity_type: &str, fields: Vec<UnityField>) -> UnityComponent {
+        component_at("", unity_type, fields)
+    }
+
+    fn component_at(
+        hierarchy_path: &str,
+        unity_type: &str,
+        fields: Vec<UnityField>,
+    ) -> UnityComponent {
         UnityComponent {
-            hierarchy_path: String::new(),
+            hierarchy_path: hierarchy_path.to_owned(),
             unity_type: Some(unity_type.to_owned()),
             fields,
         }
@@ -3293,6 +3343,14 @@ mod tests {
                         ),
                     ],
                 ),
+                component_at(
+                    "Age01_TownHall/Age01_TownHall_Base/Age01_TownHall_Sign",
+                    "Utils.SimpleRotateOnAxis, Assembly-CSharp",
+                    vec![
+                        field("_axis", serde_json::json!({ "x": 0.0, "y": 1.0, "z": 0.0 })),
+                        field("_speed", Value::from(35.0)),
+                    ],
+                ),
                 component(
                     "GameResources.PassiveResourceIncrementer, Assembly-CSharp",
                     vec![
@@ -3466,6 +3524,7 @@ mod tests {
         assert_eq!(report.building_prefabs, 1);
         assert_eq!(report.building_model_handlers, 1);
         assert_eq!(report.storage_model_handlers, 1);
+        assert_eq!(report.rotating_nodes, 1);
         assert_eq!(report.passive_resource_generators, 1);
         assert_eq!(report.roles, 1);
         assert_eq!(report.technology_nodes, 2);
@@ -3538,6 +3597,15 @@ mod tests {
                 empty_model: "Age01_TownHall_Empty".to_owned(),
                 half_full_model: "Age01_TownHall_Half".to_owned(),
                 full_model: "Age01_TownHall_Full".to_owned(),
+            }]
+        );
+        assert_eq!(
+            catalog.buildings[&town_hall].rotating_nodes,
+            vec![RotatingNodeDef {
+                age: 1,
+                node: "Age01_TownHall_Sign".to_owned(),
+                axis: [0.0, 1.0, 0.0],
+                degrees_per_second: 35.0,
             }]
         );
         assert_eq!(

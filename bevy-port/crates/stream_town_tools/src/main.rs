@@ -538,6 +538,17 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                             model.full_model
                         ));
                     }
+                    for rotating in &building.rotating_nodes {
+                        ui.monospace(format!(
+                            "rotates age {} {}: [{:.1}, {:.1}, {:.1}] at {:.1} deg/s",
+                            rotating.age,
+                            rotating.node,
+                            rotating.axis[0],
+                            rotating.axis[1],
+                            rotating.axis[2],
+                            rotating.degrees_per_second
+                        ));
+                    }
                     if let Some(shooter) = &building.projectile_shooter {
                         ui.separator();
                         ui.label(format!(

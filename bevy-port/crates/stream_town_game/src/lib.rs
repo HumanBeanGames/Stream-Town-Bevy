@@ -1464,6 +1464,14 @@ struct BuildingModelNode {
     name: String,
 }
 
+#[derive(Component)]
+struct AuthoredRotatingNode {
+    building_root: Entity,
+    age: u8,
+    axis: Vec3,
+    radians_per_second: f32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CosmeticNodeKind {
     Eyes,
@@ -1774,6 +1782,10 @@ impl Plugin for StreamTownGamePlugin {
                         .after(apply_material_overrides),
                     tag_building_model_nodes.after(sync_building_presentation),
                     sync_building_model_nodes.after(tag_building_model_nodes),
+                    tag_authored_rotating_nodes.after(tag_building_model_nodes),
+                    rotate_authored_building_nodes
+                        .after(tag_authored_rotating_nodes)
+                        .after(sync_building_model_nodes),
                     sync_tiled_building_rotation.after(sync_building_presentation),
                 )
                     .run_if(in_state(GameState::InGame)),
@@ -10415,6 +10427,115 @@ fn tag_building_model_nodes(
                 break;
             }
         }
+    }
+}
+
+fn authored_rotating_node_names(content: &ContentCatalog) -> BTreeSet<String> {
+    content
+        .buildings
+        .values()
+        .flat_map(|building| {
+            building
+                .rotating_nodes
+                .iter()
+                .map(|rotating| rotating.node.clone())
+        })
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
+fn tag_authored_rotating_nodes(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    buildings: Query<&RuntimeBuilding>,
+    parents: Query<&ChildOf>,
+    nodes: Query<(Entity, &Name), (Without<AuthoredRotatingNode>, Without<RuntimeBuilding>)>,
+) {
+    let names = authored_rotating_node_names(&content.0);
+    for (entity, name) in &nodes {
+        if !names.contains(name.as_str()) {
+            continue;
+        }
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            let Ok(runtime) = buildings.get(ancestor) else {
+                continue;
+            };
+            let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+                break;
+            };
+            let Some(definition) = content
+                .0
+                .buildings
+                .values()
+                .find(|building| building.archetype == state.archetype)
+            else {
+                break;
+            };
+            if let Some(rotating) = definition
+                .rotating_nodes
+                .iter()
+                .find(|rotating| rotating.node == name.as_str())
+            {
+                commands.entity(entity).insert(AuthoredRotatingNode {
+                    building_root: ancestor,
+                    age: rotating.age,
+                    axis: Vec3::from_array(rotating.axis),
+                    radians_per_second: rotating.degrees_per_second.to_radians(),
+                });
+            }
+            break;
+        }
+    }
+}
+
+fn apply_authored_local_rotation(
+    transform: &mut Transform,
+    axis: Vec3,
+    radians_per_second: f32,
+    delta_seconds: f32,
+) {
+    let euler = axis * radians_per_second * delta_seconds;
+    // Unity's `Quaternion.Euler` contract applies Z, then X, then Y.
+    transform.rotation *= Quat::from_euler(EulerRot::ZXY, euler.z, euler.x, euler.y);
+}
+
+fn rotate_authored_building_nodes(
+    time: Res<Time>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    buildings: Query<&RuntimeBuilding>,
+    mut nodes: Query<(&AuthoredRotatingNode, &mut Transform)>,
+) {
+    for (node, mut transform) in &mut nodes {
+        let Ok(runtime) = buildings.get(node.building_root) else {
+            continue;
+        };
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let Some((building_id, _)) = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, building)| building.archetype == state.archetype)
+        else {
+            continue;
+        };
+        if !state.complete || building_age(&content.0, &simulation.0, building_id) != node.age {
+            continue;
+        }
+        apply_authored_local_rotation(
+            &mut transform,
+            node.axis,
+            node.radians_per_second,
+            time.delta_secs(),
+        );
     }
 }
 
@@ -23488,6 +23609,41 @@ mod tests {
             .town_resources
             .insert(storage.resource.clone(), capacity);
         assert_eq!(visible(&simulation, &storage.full_model, 1), Some(true));
+    }
+
+    #[test]
+    fn windmill_rotation_preserves_unity_axes_and_speed() {
+        let content = embedded_content();
+        let windmill = &content.buildings[&StableId::new("building:windmill").unwrap()];
+        assert_eq!(windmill.rotating_nodes.len(), 2);
+        assert_eq!(windmill.rotating_nodes[0].age, 1);
+        assert_eq!(windmill.rotating_nodes[0].node, "Age01_Windmill_Blades");
+        assert!(
+            Vec3::from_array(windmill.rotating_nodes[0].axis).abs_diff_eq(Vec3::Z, f32::EPSILON)
+        );
+        assert!((windmill.rotating_nodes[0].degrees_per_second - 35.0).abs() < f32::EPSILON);
+        assert_eq!(windmill.rotating_nodes[1].age, 2);
+        assert_eq!(windmill.rotating_nodes[1].node, "Age02_Windmill_Blades");
+        assert!(
+            Vec3::from_array(windmill.rotating_nodes[1].axis).abs_diff_eq(Vec3::Y, f32::EPSILON)
+        );
+        assert!((windmill.rotating_nodes[1].degrees_per_second - 35.0).abs() < f32::EPSILON);
+
+        let mut age_one = Transform::default();
+        apply_authored_local_rotation(&mut age_one, Vec3::Z, 35.0_f32.to_radians(), 1.0);
+        assert!(
+            age_one
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_z(35.0_f32.to_radians()), 1e-6)
+        );
+
+        let mut age_two = Transform::default();
+        apply_authored_local_rotation(&mut age_two, Vec3::Y, 35.0_f32.to_radians(), 0.5);
+        assert!(
+            age_two
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_y(17.5_f32.to_radians()), 1e-6)
+        );
     }
 
     #[test]

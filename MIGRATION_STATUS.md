@@ -488,6 +488,12 @@ mistaken for production-ready systems.
   every imported node simultaneously. Wall and gate adjacency also follows the
   shipping Unity tile-value model/rotation tables; placeholder cubes retain the
   old scale-based construction fallback.
+- Content schema 26 promotes both shipping `SimpleRotateOnAxis` records instead
+  of special-casing the Windmill: its converted Age 1 blade node rotates around
+  local Z and its Age 2 blade node around local Y, both at the authored 35
+  degrees/second and only while the matching completed age model is active.
+  Repository validation proves both typed node names survive in their packaged
+  GLBs, and the focused content tool exposes their axes and rates.
 - Completed gates now preserve Unity's asymmetric traversal rule: player A* may
   cross their occupied cells while enemies still see the same cells as blocked.
   Gates under construction remain blocked for everyone, and the exception is

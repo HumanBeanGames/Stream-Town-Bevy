@@ -1,5 +1,5 @@
 (
-    schema_version: 25,
+    schema_version: 26,
     archetypes: {
         "archetype:building:barracks": (
             display_name: "Building_Barracks",
@@ -8013,6 +8013,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8059,6 +8060,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8111,6 +8113,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8155,6 +8158,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8201,6 +8205,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8288,6 +8293,7 @@
                     full_model: "Age02_FoodStorage_Full",
                 ),
             ],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8335,6 +8341,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8373,6 +8380,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8420,6 +8428,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8478,6 +8487,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8532,6 +8542,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8582,6 +8593,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [
                 (
                     resource: "resource:gold",
@@ -8633,6 +8645,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8679,6 +8692,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8753,6 +8767,7 @@
                     full_model: "Age02_OreStorage_Full",
                 ),
             ],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8791,6 +8806,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8829,6 +8845,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8867,6 +8884,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -8925,6 +8943,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -8967,6 +8986,7 @@
             role_slots: [],
             model_handlers: [],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -9020,6 +9040,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -9087,6 +9108,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -9197,6 +9219,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -9251,6 +9274,20 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [
+                (
+                    age: 1,
+                    node: "Age01_Windmill_Blades",
+                    axis: (0.0, 0.0, 1.0),
+                    degrees_per_second: 35.0,
+                ),
+                (
+                    age: 2,
+                    node: "Age02_Windmill_Blades",
+                    axis: (0.0, 1.0, 0.0),
+                    degrees_per_second: 35.0,
+                ),
+            ],
             passive_resources: [],
             station: Some((
                 accepts_all_roles: false,
@@ -9308,6 +9345,7 @@
                 ),
             ],
             storage_models: [],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
@@ -9383,6 +9421,7 @@
                     full_model: "Age02_WoodStorage_Full",
                 ),
             ],
+            rotating_nodes: [],
             passive_resources: [],
             station: None,
             targeting: Some((
