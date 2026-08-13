@@ -368,6 +368,9 @@ does not modify the saved player settings.
 `STREAM_TOWN_SMOKE_FLAG=1` spawns and frames the converted Age 2 Castle so every
 authored `Flag` renderer binding and the custom wind/color material can be
 validated together.
+`STREAM_TOWN_SMOKE_GODRAY=1` spawns and frames the converted Age 2 Necromancer
+Tower so its exact `Env_Godrays_08` renderer binding and transparent material can
+be validated together.
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
 the image-backed selection window can be captured without pointer automation.
 `STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the
@@ -446,7 +449,12 @@ Bevy retains the textured PBR surface. The Age 2 Castle's `Flags` material also
 uses a dedicated vertex/fragment WGSL port: vertex alpha anchors the cloth while
 the authored scrolling noise and time-rotated displacement animate it; vertex
 red blends yellow-to-red color and reduces the metallic/smoothness edge. The
-remaining reachable WGSL shader ports remain presentation work. Property curves
+Necromancer Tower's reachable `Env_Godrays_08` renderer now resolves its exact
+`VFX_Godrays` material slot to a dedicated transparent, double-sided WGSL port.
+It preserves the source mesh's vertex-color albedo, the authored 0.06 emission
+strength, and 1.64 vertex-alpha multiplier instead of receiving a generic PBR
+fallback. The remaining reachable WGSL shader ports remain presentation work.
+Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/fireworks/end fade and
 the live level-up toast consume the converted float-property curves directly.

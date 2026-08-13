@@ -69,6 +69,8 @@ const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
+const GODRAY_SHADER_ASSET_PATH: &str = "shaders/godray_material.wgsl";
+const GODRAY_MATERIAL_PATH: &str = "Assets/Materials/VFX/VFX_Godrays.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
@@ -569,6 +571,25 @@ impl MaterialExtension for CloudMaterialExtension {
 type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudMaterialExtension>;
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct GodrayMaterialUniform {
+    emission_alpha: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct GodrayMaterialExtension {
+    #[uniform(100)]
+    parameters: GodrayMaterialUniform,
+}
+
+impl MaterialExtension for GodrayMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        GODRAY_SHADER_ASSET_PATH.into()
+    }
+}
+
+type GodrayMaterial = ExtendedMaterial<StandardMaterial, GodrayMaterialExtension>;
+
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
 struct TreeMaterialUniform {
     wind_direction_smoothness: Vec4,
     wind_controls: Vec4,
@@ -693,6 +714,7 @@ enum ResolvedMaterialHandle {
     Standard(Handle<StandardMaterial>),
     Building(Handle<BuildingMaterial>),
     Cloud(Handle<CloudMaterial>),
+    Godray(Handle<GodrayMaterial>),
     Tree(Handle<TreeMaterial>),
     Grass(Handle<GrassMaterial>),
     Critter(Handle<CritterMaterial>),
@@ -1677,6 +1699,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
+        .add_plugins(MaterialPlugin::<GodrayMaterial>::default())
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         .add_plugins(MaterialPlugin::<CritterMaterial>::default())
@@ -1813,6 +1836,7 @@ fn setup_rendering(
     water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
+    godray_materials: Option<ResMut<Assets<GodrayMaterial>>>,
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
     critter_materials: Option<ResMut<Assets<CritterMaterial>>>,
@@ -1825,6 +1849,7 @@ fn setup_rendering(
         Some(mut water_materials),
         Some(mut building_materials),
         Some(mut cloud_materials),
+        Some(mut godray_materials),
         Some(mut tree_materials),
         Some(mut grass_materials),
         Some(mut critter_materials),
@@ -1836,6 +1861,7 @@ fn setup_rendering(
         water_materials,
         building_materials,
         cloud_materials,
+        godray_materials,
         tree_materials,
         grass_materials,
         critter_materials,
@@ -1856,6 +1882,7 @@ fn setup_rendering(
     let overlay_closeup = std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some();
     let seagull_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some();
     let flag_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some();
+    let godray_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1884,6 +1911,8 @@ fn setup_rendering(
                     80.0
                 } else if flag_closeup {
                     52.0
+                } else if godray_closeup {
+                    86.0
                 } else {
                     520.0
                 },
@@ -1916,6 +1945,7 @@ fn setup_rendering(
     let authored_building =
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
+    let godrays = godray_materials.add(godray_material(&presentation.0));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
@@ -1978,6 +2008,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Building(authored_building.clone())
             } else if material.source_path == CLOUD_MATERIAL_PATH {
                 ResolvedMaterialHandle::Cloud(clouds.clone())
+            } else if material.source_path == GODRAY_MATERIAL_PATH {
+                ResolvedMaterialHandle::Godray(godrays.clone())
             } else if material.source_path == TREE_MATERIAL_PATH {
                 ResolvedMaterialHandle::Tree(tree.clone())
             } else if material.source_path == GRASS_MATERIAL_PATH {
@@ -2449,6 +2481,40 @@ fn spawn_flag_smoke_castle(
     ));
     if let Some(materials) = prefab_material_spec(archetype, scene, presentation, render) {
         castle.insert(materials);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_godray_smoke_tower(
+    commands: &mut Commands,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+    position: Vec3,
+    cell_size: f32,
+) {
+    let archetype_id = StableId::new("archetype:building:necrotower").expect("static archetype ID");
+    let Some(archetype) = content.archetypes.get(&archetype_id) else {
+        return;
+    };
+    let Some(scene) = archetype.scenes.iter().find(|scene| scene.age == Some(2)) else {
+        return;
+    };
+    if !converted_asset_exists(asset_root, &scene.asset_path) {
+        return;
+    }
+    let mut tower = commands.spawn((
+        Name::new("Godray material smoke necromancer tower"),
+        WorldEntity,
+        WorldAssetRoot(
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+        ),
+        Transform::from_translation(position).with_scale(Vec3::splat(cell_size / 2.0)),
+    ));
+    if let Some(materials) = prefab_material_spec(archetype, scene, presentation, render) {
+        tower.insert(materials);
     }
 }
 
@@ -3049,6 +3115,37 @@ fn cloud_material(
                 ),
             },
             noise_texture: texture,
+        },
+    }
+}
+
+fn godray_material(presentation: &PresentationCatalog) -> GodrayMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == GODRAY_MATERIAL_PATH);
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    GodrayMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            alpha_mode: AlphaMode::Blend,
+            cull_mode: None,
+            ..default()
+        },
+        extension: GodrayMaterialExtension {
+            parameters: GodrayMaterialUniform {
+                emission_alpha: Vec4::new(
+                    scalar("_EmissionStrength", 0.06),
+                    scalar("_AlphaStrength", 1.64),
+                    0.0,
+                    0.0,
+                ),
+            },
         },
     }
 }
@@ -4893,6 +4990,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_translation(focus + Vec3::new(30.0, 34.0, 30.0))
                 .looking_at(focus + Vec3::Y * 7.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_translation(focus + Vec3::new(52.0, 66.0, 52.0))
+                .looking_at(focus + Vec3::Y * 22.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
@@ -5430,6 +5531,21 @@ fn generate_and_spawn_world(
             config.0.world.cell_size,
         );
     }
+    if std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some()
+        && let Some(asset_server) = asset_server.as_deref()
+    {
+        let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+        spawn_godray_smoke_tower(
+            &mut commands,
+            &content.0,
+            &presentation.0,
+            &render,
+            asset_server,
+            &asset_root.0,
+            focus,
+            config.0.world.cell_size,
+        );
+    }
     spawn_seagull(
         &mut commands,
         &render,
@@ -5562,6 +5678,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Cloud(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Godray(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
             ResolvedMaterialHandle::Tree(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
@@ -5679,7 +5798,7 @@ fn spawn_foliage_visual(
         Some(ResolvedMaterialHandle::Flag(material)) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
-        Some(ResolvedMaterialHandle::Cloud(_)) | None => {
+        Some(ResolvedMaterialHandle::Cloud(_) | ResolvedMaterialHandle::Godray(_)) | None => {
             entity.insert(MeshMaterial3d(render.food.clone()));
         }
     }
@@ -11147,6 +11266,12 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Cloud(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
+                        ResolvedMaterialHandle::Godray(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -19830,6 +19955,73 @@ mod tests {
     }
 
     #[test]
+    fn godray_material_preserves_authored_vertex_colour_emission_and_alpha_contract() {
+        let material = godray_material(&embedded_presentation());
+        assert_eq!(
+            material.extension.parameters.emission_alpha,
+            Vec4::new(0.06, 1.64, 0.0, 0.0)
+        );
+        assert_eq!(material.base.alpha_mode, AlphaMode::Blend);
+        assert!(material.base.cull_mode.is_none());
+
+        let shader = include_str!("../../../assets/shaders/godray_material.wgsl");
+        assert!(shader.contains("vertex_color.rgb"));
+        assert!(shader.contains("vertex_color.a * godray_material.emission_alpha.y"));
+        assert!(shader.contains("1.0 + godray_material.emission_alpha.x"));
+    }
+
+    #[test]
+    fn necromancer_tower_godray_binding_and_converted_vertex_colours_are_packaged() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let archetype =
+            &content.archetypes[&StableId::new("archetype:building:necrotower").unwrap()];
+        let scene = archetype
+            .scenes
+            .iter()
+            .find(|scene| scene.age == Some(2))
+            .unwrap();
+        let binding = presentation.prefab_renderer_materials[&archetype.source_guid]
+            .iter()
+            .find(|binding| binding.target_path.ends_with("Env_Godrays_08"))
+            .unwrap();
+        let material_id = &binding.materials["VFX_Godrays"];
+        assert_eq!(
+            presentation.materials[material_id].source_path,
+            GODRAY_MATERIAL_PATH
+        );
+
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets")
+                .join(&scene.asset_path),
+        )
+        .unwrap();
+        let json_length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let json = &bytes[20..20 + json_length];
+        let json_end = json
+            .iter()
+            .rposition(|byte| !byte.is_ascii_whitespace() && *byte != 0)
+            .unwrap()
+            + 1;
+        let document: serde_json::Value = serde_json::from_slice(&json[..json_end]).unwrap();
+        let godray_material_index = document["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|material| material["name"].as_str() == Some("God_rays"))
+            .expect("converted necromancer tower retains the God_rays material");
+        let ray_primitive = document["meshes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|mesh| mesh["primitives"].as_array().unwrap())
+            .find(|primitive| primitive["material"].as_u64() == Some(godray_material_index as u64))
+            .expect("converted necromancer tower contains its God_rays primitive");
+        assert!(ray_primitive["attributes"].get("COLOR_0").is_some());
+    }
+
+    #[test]
     fn main_menu_logo_resolves_the_shipping_drop_shadow_sprite() {
         let presentation = embedded_presentation();
         let logo = presentation
@@ -20370,6 +20562,8 @@ mod tests {
         let building = building_materials.add(building_material(&embedded_presentation(), None));
         let mut cloud_materials = Assets::<CloudMaterial>::default();
         let cloud = cloud_materials.add(cloud_material(&embedded_presentation(), None));
+        let mut godray_materials = Assets::<GodrayMaterial>::default();
+        let godray = godray_materials.add(godray_material(&embedded_presentation()));
         let spec = MaterialOverrideSpec {
             fallback: Some(ResolvedMaterialHandle::Standard(fallback.clone())),
             model_materials: BTreeMap::from([
@@ -20388,6 +20582,10 @@ mod tests {
                 (
                     "CloudMaterial".into(),
                     ResolvedMaterialHandle::Cloud(cloud.clone()),
+                ),
+                (
+                    "VFX_Godrays".into(),
+                    ResolvedMaterialHandle::Godray(godray.clone()),
                 ),
             ]),
             renderer_materials: vec![
@@ -20466,6 +20664,18 @@ mod tests {
         assert!(matches!(
             typed_cloud,
             ResolvedMaterialHandle::Cloud(material) if material.id() == cloud.id()
+        ));
+
+        let typed_godray = resolved_renderer_material(
+            &spec,
+            "Scene/Age02_NecroTower/Env_Godrays_08/Env_Godrays_08.VFX_Godrays",
+            Some("Env_Godrays_08"),
+            Some("VFX_Godrays"),
+        )
+        .unwrap();
+        assert!(matches!(
+            typed_godray,
+            ResolvedMaterialHandle::Godray(material) if material.id() == godray.id()
         ));
 
         let final_fallback =
