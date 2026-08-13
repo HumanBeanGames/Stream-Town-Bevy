@@ -6623,22 +6623,92 @@ fn role_action_range_milli_cells(
 }
 
 fn within_milli_cell_range(left: GridPos, right: GridPos, range_milli_cells: u32) -> bool {
-    u128::from(grid_distance_squared(left, right)).saturating_mul(1_000_000)
+    grid_distance_squared_milli_cells(left, right)
         <= u128::from(range_milli_cells).saturating_mul(u128::from(range_milli_cells))
 }
 
-fn within_actor_action_range(
+fn grid_distance_squared_milli_cells(left: GridPos, right: GridPos) -> u128 {
+    u128::from(grid_distance_squared(left, right)).saturating_mul(1_000_000)
+}
+
+fn actor_target_size_milli_cells(content: &ContentCatalog, actor: &ActorState) -> u32 {
+    actor_archetype(content, actor).map_or(0, |archetype| archetype.target_size_milli_cells)
+}
+
+fn building_target_size_milli_cells(content: &ContentCatalog, building: &BuildingState) -> u32 {
+    content
+        .archetypes
+        .get(&building.archetype)
+        .map_or(0, |archetype| archetype.target_size_milli_cells)
+}
+
+fn within_actor_attack_range(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
-    actor: &ActorState,
-    left: GridPos,
-    right: GridPos,
+    attacker: &ActorState,
+    target: &ActorState,
+    current: GridPos,
 ) -> bool {
-    within_milli_cell_range(
-        left,
-        right,
-        role_action_range_milli_cells(content, simulation, actor),
-    )
+    let range = u128::from(role_action_range_milli_cells(content, simulation, attacker));
+    let target_size = u128::from(actor_target_size_milli_cells(content, target));
+    // Unity's shipping action states compare squared world distance against
+    // `(range * 2[.5]) + SizeSqr` (rather than squaring the range). After
+    // converting two world units to one cell, the coefficients are 1.0 for
+    // enemies and 1.25 for players.
+    let range_term = if attacker.role.as_str() == "role:enemy" {
+        range.saturating_mul(1_000)
+    } else {
+        range.saturating_mul(1_250)
+    };
+    grid_distance_squared_milli_cells(current, target.position)
+        <= range_term.saturating_add(target_size.saturating_mul(target_size))
+}
+
+fn within_actor_heal_range(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    healer: &ActorState,
+    target: &ActorState,
+    current: GridPos,
+) -> bool {
+    let range = u128::from(role_action_range_milli_cells(content, simulation, healer));
+    let target_size = u128::from(actor_target_size_milli_cells(content, target));
+    grid_distance_squared_milli_cells(current, target.position)
+        <= range
+            .saturating_mul(1_000)
+            .saturating_add(target_size.saturating_mul(target_size))
+}
+
+fn within_enemy_building_attack_range(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    attacker: &ActorState,
+    building: &BuildingState,
+    current: GridPos,
+) -> bool {
+    let range = u128::from(role_action_range_milli_cells(content, simulation, attacker));
+    let target_size = u128::from(building_target_size_milli_cells(content, building));
+    grid_distance_squared_milli_cells(current, building_visual_grid(content, building))
+        <= range
+            .saturating_mul(1_000)
+            .saturating_add(target_size.saturating_mul(target_size))
+}
+
+fn within_building_work_range(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    builder: &ActorState,
+    building: &BuildingState,
+    current: GridPos,
+) -> bool {
+    let range = u128::from(role_action_range_milli_cells(content, simulation, builder));
+    let target_size = u128::from(building_target_size_milli_cells(content, building));
+    let maximum = range
+        .saturating_mul(5)
+        .div_ceil(2)
+        .saturating_add(target_size);
+    grid_distance_squared_milli_cells(current, building_visual_grid(content, building))
+        <= maximum.saturating_mul(maximum)
 }
 
 fn is_combat_role(role: &StableId) -> bool {
@@ -7196,7 +7266,7 @@ fn next_agent_goal_with_reservations(
         {
             return (
                 AgentGoal::Attack(target.id.clone()),
-                if within_actor_action_range(content, simulation, actor, current, target.position) {
+                if within_actor_attack_range(content, simulation, actor, target, current) {
                     current
                 } else {
                     target.position
@@ -7215,7 +7285,7 @@ fn next_agent_goal_with_reservations(
         {
             return (
                 AgentGoal::Heal(target.id.clone()),
-                if within_actor_action_range(content, simulation, actor, current, target.position) {
+                if within_actor_heal_range(content, simulation, actor, target, current) {
                     current
                 } else {
                     target.position
@@ -7293,7 +7363,7 @@ fn next_agent_goal_with_reservations(
         }) {
             return (
                 AgentGoal::Heal(target.id.clone()),
-                if within_actor_action_range(content, simulation, actor, current, target.position) {
+                if within_actor_heal_range(content, simulation, actor, target, current) {
                     current
                 } else {
                     target.position
@@ -7348,9 +7418,10 @@ fn next_agent_goal_with_reservations(
             (Some((player_distance, player, position)), Some((building_distance, _, _)))
                 if player_distance <= building_distance =>
             {
+                let target = &simulation.actors[&player];
                 return (
                     AgentGoal::Attack(player),
-                    if within_actor_action_range(content, simulation, actor, current, position) {
+                    if within_actor_attack_range(content, simulation, actor, target, current) {
                         current
                     } else {
                         position
@@ -7358,9 +7429,12 @@ fn next_agent_goal_with_reservations(
                 );
             }
             (_, Some((_, building, approach))) => {
+                let target = &simulation.buildings[&building];
                 return (
                     AgentGoal::AttackBuilding(building),
-                    if within_actor_action_range(content, simulation, actor, current, approach) {
+                    if within_enemy_building_attack_range(
+                        content, simulation, actor, target, current,
+                    ) {
                         current
                     } else {
                         approach
@@ -7368,9 +7442,10 @@ fn next_agent_goal_with_reservations(
                 );
             }
             (Some((_, player, position)), None) => {
+                let target = &simulation.actors[&player];
                 return (
                     AgentGoal::Attack(player),
-                    if within_actor_action_range(content, simulation, actor, current, position) {
+                    if within_actor_attack_range(content, simulation, actor, target, current) {
                         current
                     } else {
                         position
@@ -7396,12 +7471,12 @@ fn next_agent_goal_with_reservations(
         None
     };
     if let Some(target) = combat_target {
-        let destination =
-            if within_actor_action_range(content, simulation, actor, current, target.position) {
-                current
-            } else {
-                target.position
-            };
+        let destination = if within_actor_attack_range(content, simulation, actor, target, current)
+        {
+            current
+        } else {
+            target.position
+        };
         return (AgentGoal::Attack(target.id.clone()), destination);
     }
     if actor.role.as_str() == "role:builder" {
@@ -7725,13 +7800,7 @@ fn complete_agent_goal(
             let target_position = target.position;
             if !attacker.alive
                 || !target.alive
-                || !within_actor_action_range(
-                    content,
-                    simulation,
-                    attacker,
-                    current,
-                    target.position,
-                )
+                || !within_actor_attack_range(content, simulation, attacker, target, current)
             {
                 return None;
             }
@@ -7771,7 +7840,12 @@ fn complete_agent_goal(
         AgentGoal::AttackBuilding(building_id) => {
             let attacker = simulation.actors.get(actor_id)?;
             let building = simulation.buildings.get(building_id)?;
-            if !attacker.alive || building.health <= 0 {
+            if !attacker.alive
+                || building.health <= 0
+                || !within_enemy_building_attack_range(
+                    content, simulation, attacker, building, current,
+                )
+            {
                 return None;
             }
             let building_position = building_visual_grid(content, building);
@@ -7824,7 +7898,7 @@ fn complete_agent_goal(
                 || !target.alive
                 || target.role.as_str() == "role:enemy"
                 || target.health >= target.max_health
-                || !within_actor_action_range(content, simulation, healer, current, target.position)
+                || !within_actor_heal_range(content, simulation, healer, target, current)
             {
                 return None;
             }
@@ -7847,11 +7921,12 @@ fn complete_agent_goal(
             }
         }
         AgentGoal::Construct(building_id) => {
+            let builder = simulation.actors.get(actor_id)?;
             if !simulation
                 .buildings
                 .get(building_id)
                 .is_some_and(|building| {
-                    is_current_building_approach(world, content, building, current)
+                    within_building_work_range(content, simulation, builder, building, current)
                 })
             {
                 return None;
@@ -19231,6 +19306,129 @@ mod tests {
     }
 
     #[test]
+    fn authored_target_sizes_drive_unity_action_reach_formulas() {
+        let content = embedded_content();
+        let player_archetype =
+            archetype_id_by_source(&content, ArchetypeKind::Player, "Player_Character.prefab")
+                .unwrap();
+        let blargul_archetype =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Blargul.prefab").unwrap();
+        assert_eq!(
+            content.archetypes[&player_archetype].target_size_milli_cells,
+            750
+        );
+        assert_eq!(
+            content.archetypes[&blargul_archetype].target_size_milli_cells,
+            500
+        );
+
+        let defender_id = StableId::new("npc:target_size_defender").unwrap();
+        let enemy_id = StableId::new("actor:target_size_blargul").unwrap();
+        let mut combat = WorldSimulation::new(1);
+        assert!(combat.join_player(defender_id.clone(), GridPos { x: 20, z: 20 }));
+        combat
+            .assign_role(&defender_id, StableId::new("role:defender").unwrap())
+            .unwrap();
+        combat.actors.get_mut(&defender_id).unwrap().archetype = Some(player_archetype.clone());
+        assert!(combat.spawn_enemy(
+            enemy_id.clone(),
+            blargul_archetype,
+            GridPos { x: 21, z: 20 },
+            100,
+        ));
+        let defender = &combat.actors[&defender_id];
+        let enemy = &combat.actors[&enemy_id];
+        assert!(within_actor_attack_range(
+            &content,
+            &combat,
+            defender,
+            enemy,
+            GridPos { x: 20, z: 20 },
+        ));
+        assert!(!within_actor_attack_range(
+            &content,
+            &combat,
+            defender,
+            enemy,
+            GridPos { x: 20, z: 19 },
+        ));
+
+        combat.actors.get_mut(&defender_id).unwrap().position = GridPos { x: 22, z: 20 };
+        let defender = &combat.actors[&defender_id];
+        let enemy = &combat.actors[&enemy_id];
+        assert!(within_actor_attack_range(
+            &content,
+            &combat,
+            enemy,
+            defender,
+            GridPos { x: 20, z: 20 },
+        ));
+        assert!(!within_actor_attack_range(
+            &content,
+            &combat,
+            enemy,
+            defender,
+            GridPos { x: 19, z: 20 },
+        ));
+
+        let priest_id = StableId::new("npc:target_size_priest").unwrap();
+        assert!(combat.join_player(priest_id.clone(), GridPos { x: 20, z: 20 }));
+        combat
+            .assign_role(&priest_id, StableId::new("role:priest").unwrap())
+            .unwrap();
+        let priest = &combat.actors[&priest_id];
+        assert!(within_actor_heal_range(
+            &content,
+            &combat,
+            priest,
+            &combat.actors[&defender_id],
+            GridPos { x: 20, z: 20 },
+        ));
+        assert!(!within_actor_heal_range(
+            &content,
+            &combat,
+            priest,
+            &combat.actors[&defender_id],
+            GridPos { x: 19, z: 20 },
+        ));
+
+        let builder_id = StableId::new("npc:target_size_builder").unwrap();
+        assert!(combat.join_player(builder_id.clone(), GridPos { x: 20, z: 20 }));
+        combat
+            .assign_role(&builder_id, StableId::new("role:builder").unwrap())
+            .unwrap();
+        let house = &content.buildings[&StableId::new("building:house").unwrap()];
+        assert_eq!(
+            content.archetypes[&house.archetype].target_size_milli_cells,
+            2_000
+        );
+        let mut building = BuildingState {
+            id: StableId::new("building:target_size_house").unwrap(),
+            archetype: house.archetype.clone(),
+            position: GridPos { x: 22, z: 19 },
+            rotation_quarter_turns: 0,
+            level: 1,
+            health: BUILDING_MAX_HEALTH,
+            complete: false,
+        };
+        assert!(within_building_work_range(
+            &content,
+            &combat,
+            &combat.actors[&builder_id],
+            &building,
+            GridPos { x: 20, z: 20 },
+        ));
+        building.position.x += 1;
+        assert!(!within_building_work_range(
+            &content,
+            &combat,
+            &combat.actors[&builder_id],
+            &building,
+            GridPos { x: 20, z: 20 },
+        ));
+    }
+
+    #[test]
     fn combat_and_healing_bypass_station_target_caches() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -20489,9 +20687,10 @@ mod tests {
         let enemy_id = StableId::new("actor:enemy_authored_test").unwrap();
         let player_id = StableId::new("actor:player_authored_test").unwrap();
         let enemy_position = GridPos { x: 30, z: 30 };
-        // Blargul's authored 10-world-unit reach is five logical terrain
-        // cells after conversion, so keep the action fixture inside it.
-        let player_position = GridPos { x: 34, z: 30 };
+        // Unity's shipped attack state compares squared distance against a
+        // linear range term plus the target bounds, giving Blargul a little
+        // over two logical cells of effective reach.
+        let player_position = GridPos { x: 32, z: 30 };
         let mut simulation = WorldSimulation::new(world.seed);
         let gold = StableId::new("resource:gold").unwrap();
         simulation.town_resources.insert(gold.clone(), 0);
@@ -20720,7 +20919,7 @@ mod tests {
         let content = embedded_content();
         let mut world = generate_world(&config.world);
         let ranger_position = GridPos { x: 32, z: 32 };
-        let enemy_position = GridPos { x: 38, z: 32 };
+        let enemy_position = GridPos { x: 34, z: 32 };
         let ranger = StableId::new("npc:ranger_test").unwrap();
         let enemy = StableId::new("actor:enemy_ranged_test").unwrap();
         let mut simulation = WorldSimulation::new(world.seed);

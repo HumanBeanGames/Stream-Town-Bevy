@@ -387,6 +387,12 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                         archetype.footprint[1],
                         archetype.scenes.len()
                     ));
+                    if archetype.target_size_milli_cells > 0 {
+                        ui.label(format!(
+                            "Target size: {:.2} cells",
+                            f64::from(archetype.target_size_milli_cells) / 1_000.0
+                        ));
+                    }
                     if let Some(health) = &archetype.health {
                         ui.label(format!(
                             "Health: {} base; +{} per level; {} milli/s regeneration",

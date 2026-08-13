@@ -733,6 +733,44 @@ fn targeting_score_definition(asset: &UnityAsset) -> Result<Option<TargetingScor
     }))
 }
 
+fn targetable_size_milli_cells(asset: &UnityAsset) -> Result<u32> {
+    let components = asset
+        .game_object
+        .as_ref()
+        .into_iter()
+        .flat_map(|game_object| &game_object.components);
+    let Some(targetable) = components
+        .clone()
+        .find(|component| component_type(component).starts_with("Target.Targetable"))
+    else {
+        return Ok(0);
+    };
+    let use_custom_size = component_field_value(targetable, "_useCustomSize")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let size = if use_custom_size {
+        component_field_value(targetable, "_customSize")
+            .and_then(Value::as_f64)
+            .with_context(|| format!("{} targetable custom size is invalid", asset.path))?
+    } else {
+        components
+            .filter(|component| {
+                component.hierarchy_path.is_empty()
+                    && component_type(component) == "UnityEngine.BoxCollider"
+            })
+            .find_map(|component| component_field_value(component, "size").and_then(vector3))
+            .map_or(0.0, |size| size[0].max(size[2]))
+    };
+    if !size.is_finite() || size < 0.0 {
+        bail!("{} targetable size must be non-negative", asset.path);
+    }
+    (size * 500.0)
+        .round()
+        .to_string()
+        .parse()
+        .with_context(|| format!("{} targetable size is out of range", asset.path))
+}
+
 fn health_definition(asset: &UnityAsset) -> Result<Option<HealthDef>> {
     let Some(component) = asset
         .game_object
@@ -1279,6 +1317,7 @@ fn convert_archetypes(
             footprint,
             scenes,
             component_types,
+            target_size_milli_cells: targetable_size_milli_cells(asset)?,
             health: health_definition(asset)?,
             enemy: enemy_definition(asset, pools)?,
             enemy_spawner: enemy_spawner_definition(asset, pools)?,
@@ -2520,6 +2559,39 @@ mod tests {
                 distance_penalty_milli_per_cell: 100,
             })
         );
+    }
+
+    #[test]
+    fn converts_targetable_custom_and_root_collider_sizes() {
+        let mut custom = asset("farm", "farm.prefab", "UnityEngine.GameObject", vec![]);
+        custom.game_object = Some(UnityGameObject {
+            components: vec![component(
+                "Target.TargetableBuilding, Assembly-CSharp",
+                vec![
+                    field("_useCustomSize", Value::Bool(true)),
+                    field("_customSize", Value::from(1.0)),
+                ],
+            )],
+        });
+        assert_eq!(targetable_size_milli_cells(&custom).unwrap(), 500);
+
+        let mut collider = asset("player", "player.prefab", "UnityEngine.GameObject", vec![]);
+        collider.game_object = Some(UnityGameObject {
+            components: vec![
+                component(
+                    "Target.TargetablePlayer, Assembly-CSharp",
+                    vec![field("_useCustomSize", Value::Bool(false))],
+                ),
+                component(
+                    "UnityEngine.BoxCollider, UnityEngine.PhysicsModule",
+                    vec![field(
+                        "size",
+                        serde_json::json!({"x": 1.5, "y": 2.0, "z": 1.0}),
+                    )],
+                ),
+            ],
+        });
+        assert_eq!(targetable_size_milli_cells(&collider).unwrap(), 750);
     }
 
     #[test]

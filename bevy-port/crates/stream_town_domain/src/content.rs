@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 23;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 24;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -72,12 +72,20 @@ pub struct ArchetypeDef {
     pub footprint: [u16; 2],
     pub scenes: Vec<ArchetypeScene>,
     pub component_types: Vec<String>,
+    /// Unity `Targetable.SizeSqr` expressed as its unsquared logical-cell size.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub target_size_milli_cells: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enemy: Option<EnemyDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enemy_spawner: Option<EnemySpawnerDef>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Authored `HealthHandler` and optional player-revival behavior attached to a prefab.
@@ -471,6 +479,8 @@ pub enum ContentError {
     InvalidRoleAnimation(StableId),
     #[error("archetype {0} has an empty footprint")]
     EmptyArchetypeFootprint(StableId),
+    #[error("targetable archetype {0} has no authored target size")]
+    InvalidTargetSize(StableId),
     #[error("archetype {archetype} has invalid scene asset path {path}")]
     InvalidScenePath { archetype: StableId, path: String },
     #[error("archetype {archetype} has {defaults} default scenes; expected exactly one")]
@@ -555,6 +565,14 @@ impl ContentCatalog {
         for (id, archetype) in &self.archetypes {
             if archetype.footprint[0] == 0 || archetype.footprint[1] == 0 {
                 return Err(ContentError::EmptyArchetypeFootprint(id.clone()));
+            }
+            if archetype
+                .component_types
+                .iter()
+                .any(|component| component.starts_with("Target.Targetable"))
+                && archetype.target_size_milli_cells == 0
+            {
+                return Err(ContentError::InvalidTargetSize(id.clone()));
             }
             for scene in &archetype.scenes {
                 if !scene.asset_path.starts_with("migrated/models/")

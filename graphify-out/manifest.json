@@ -2755,8 +2755,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/content.rs": {
-    "mtime": 1786617651.0096688,
-    "ast_hash": "cdb779efdc59af25434c6173a3c0bec1",
+    "mtime": 1786619389.3479097,
+    "ast_hash": "20f7211adee781d9660cd2e9367e8f46",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/id.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786617912.6798415,
-    "ast_hash": "5cecceac5aa0f7f90aaea409caa72c7a",
+    "mtime": 1786619417.4946806,
+    "ast_hash": "9fe9f6c3c54f60654ba2aea698198bf7",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2805,13 +2805,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786616017.3764355,
-    "ast_hash": "34088c748bb3faafa89e919bdc61b79b",
+    "mtime": 1786618888.6422558,
+    "ast_hash": "cd4d57a5a4c804f1e05419b8899a1745",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786617698.7582748,
-    "ast_hash": "d216a1d86755b6bdb2d72407e49a7de3",
+    "mtime": 1786618888.643263,
+    "ast_hash": "acfe935c8a76ced2c8b66204ddbdd059",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -3630,8 +3630,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/content.rs": {
-    "mtime": 1786617710.2194257,
-    "ast_hash": "f65bc867d8e0278f3c0092f9ab3a3468",
+    "mtime": 1786618584.0403497,
+    "ast_hash": "e70bc685bc86927d737069de05000efd",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/models.rs": {
@@ -4462,6 +4462,11 @@
   "graphify-out/memory/query_20260813_102417_how_does_the_bevy_migration_reproduce_unity_target.md": {
     "mtime": 1786616657.937158,
     "ast_hash": "fc9204c9f82321ed84b4db7ac05171a3",
+    "semantic_hash": ""
+  },
+  "graphify-out/memory/query_20260813_104920_how_does_the_bevy_runtime_preserve_unity_world_spa.md": {
+    "mtime": 1786618160.5219145,
+    "ast_hash": "2ea3a172790101c8b9aafc6c90715241",
     "semantic_hash": ""
   }
 }
