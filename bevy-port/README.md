@@ -112,6 +112,8 @@ record. The same schema converts the two reachable global URP volume profiles
 and all three shipping scene bindings. Runtime mapping applies the authored
 bloom, vignette, motion blur, ACES tonemapping, exposure, and the town's
 inverse-daylight night color grade while retaining player brightness/gamma.
+An HDR post-process pass applies the authored RGB filter directly in WGSL after
+tonemapping instead of approximating the blue night tint with white balance.
 
 Convert all FBX models with the pinned Blender version, then validate every
 source/output hash and GLB header:

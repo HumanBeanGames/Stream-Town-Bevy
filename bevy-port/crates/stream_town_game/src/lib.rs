@@ -1,4 +1,5 @@
 pub mod twitch;
+mod unity_color_filter;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
@@ -249,6 +250,7 @@ const EYE_COLORS: [[f32; 3]; 5] = [
     [0.801_886_8, 0.693_535_1, 0.086_997_17],
 ];
 use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
+use unity_color_filter::{UnityColorFilter, UnityColorFilterPlugin};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
 pub enum GameState {
@@ -1752,6 +1754,7 @@ pub struct StreamTownGamePlugin;
 
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(UnityColorFilterPlugin);
         if !app.world().contains_resource::<RuntimeConfig>() {
             app.insert_resource(RuntimeConfig(GameConfig::default()));
         }
@@ -2748,8 +2751,18 @@ fn sync_authored_post_processing(
     entity.insert(authored_color_grading(&settings.0, &stack));
     if primary.is_some() {
         entity.insert(Hdr);
+        let color_filter = authored_rgb_filter(&stack);
+        if color_filter
+            .into_iter()
+            .any(|component| (component - 1.0).abs() > f32::EPSILON)
+        {
+            entity.insert(UnityColorFilter::new(color_filter));
+        } else {
+            entity.remove::<UnityColorFilter>();
+        }
     } else {
         entity.remove::<Hdr>();
+        entity.remove::<UnityColorFilter>();
     }
 
     if let Some(bloom) = primary.and_then(|profile| profile.bloom) {
@@ -2833,7 +2846,6 @@ fn authored_color_grading(
     stack: &[(&PostProcessProfileDef, f32)],
 ) -> ColorGrading {
     let mut exposure = 0.0;
-    let mut filter = [1.0_f32; 4];
     let mut hue_degrees = 0.0;
     let mut saturation = 0.0;
     for (profile, weight) in stack {
@@ -2841,9 +2853,6 @@ fn authored_color_grading(
             continue;
         };
         exposure += (adjustments.post_exposure - exposure) * weight;
-        for (current, target) in filter.iter_mut().zip(adjustments.color_filter) {
-            *current += (target - *current) * weight;
-        }
         hue_degrees += (adjustments.hue_shift_degrees - hue_degrees) * weight;
         saturation += (adjustments.saturation - saturation) * weight;
     }
@@ -2851,15 +2860,24 @@ fn authored_color_grading(
     grading.global.exposure = settings.video.brightness_ev + exposure;
     grading.global.hue = hue_degrees.to_radians();
     grading.global.post_saturation = (1.0 + saturation / 100.0).max(0.0);
-    // Bevy exposes chromaticity temperature/tint rather than URP's RGB multiplier.
-    // Retain the exact filter in RON and approximate its blue/green bias here.
-    grading.global.temperature = (filter[0] - filter[2]) * 0.04;
-    grading.global.tint = ((filter[0] + filter[2]) * 0.5 - filter[1]) * 0.04;
     let gamma = (1.0 + settings.video.gamma * 0.1).clamp(0.5, 1.5);
     grading.shadows.gamma = gamma;
     grading.midtones.gamma = gamma;
     grading.highlights.gamma = gamma;
     grading
+}
+
+fn authored_rgb_filter(stack: &[(&PostProcessProfileDef, f32)]) -> [f32; 4] {
+    let mut filter = [1.0_f32; 4];
+    for (profile, weight) in stack {
+        let Some(adjustments) = profile.color_adjustments else {
+            continue;
+        };
+        for (current, target) in filter.iter_mut().zip(adjustments.color_filter) {
+            *current += (target - *current) * weight;
+        }
+    }
+    filter
 }
 
 fn player_msaa(settings: &PlayerSettings) -> Msaa {
@@ -26872,7 +26890,17 @@ mod tests {
         let night_grading = authored_color_grading(&PlayerSettings::default(), &night);
         assert!((day_grading.global.exposure - 1.1).abs() < f32::EPSILON);
         assert!((night_grading.global.exposure - 0.75).abs() < f32::EPSILON);
-        assert!(night_grading.global.temperature < day_grading.global.temperature);
+        assert!(
+            authored_rgb_filter(&day)
+                .into_iter()
+                .all(|component| (component - 1.0).abs() < f32::EPSILON)
+        );
+        assert!(
+            authored_rgb_filter(&night)
+                .into_iter()
+                .zip([0.674_528_3, 0.728_030_44, 1.0, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
         assert_eq!(
             presentation
                 .materials
