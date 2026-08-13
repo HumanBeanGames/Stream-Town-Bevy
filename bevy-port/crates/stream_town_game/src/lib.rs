@@ -71,6 +71,8 @@ const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
 const GODRAY_SHADER_ASSET_PATH: &str = "shaders/godray_material.wgsl";
 const GODRAY_MATERIAL_PATH: &str = "Assets/Materials/VFX/VFX_Godrays.mat";
+const GIRAFFE_SHADER_ASSET_PATH: &str = "shaders/giraffe_material.wgsl";
+const GIRAFFE_MATERIAL_PATH: &str = "Assets/Materials/Character/Giraffe.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
@@ -590,6 +592,35 @@ impl MaterialExtension for GodrayMaterialExtension {
 type GodrayMaterial = ExtendedMaterial<StandardMaterial, GodrayMaterialExtension>;
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct GiraffeMaterialUniform {
+    animation_controls: Vec4,
+    mask_controls: Vec4,
+    rotation_controls: Vec4,
+    main_scale_offset: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct GiraffeMaterialExtension {
+    #[uniform(100)]
+    parameters: GiraffeMaterialUniform,
+    #[texture(101)]
+    #[sampler(102)]
+    main_texture: Option<Handle<Image>>,
+}
+
+impl MaterialExtension for GiraffeMaterialExtension {
+    fn vertex_shader() -> ShaderRef {
+        GIRAFFE_SHADER_ASSET_PATH.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        GIRAFFE_SHADER_ASSET_PATH.into()
+    }
+}
+
+type GiraffeMaterial = ExtendedMaterial<StandardMaterial, GiraffeMaterialExtension>;
+
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
 struct TreeMaterialUniform {
     wind_direction_smoothness: Vec4,
     wind_controls: Vec4,
@@ -715,6 +746,7 @@ enum ResolvedMaterialHandle {
     Building(Handle<BuildingMaterial>),
     Cloud(Handle<CloudMaterial>),
     Godray(Handle<GodrayMaterial>),
+    Giraffe(Handle<GiraffeMaterial>),
     Tree(Handle<TreeMaterial>),
     Grass(Handle<GrassMaterial>),
     Critter(Handle<CritterMaterial>),
@@ -1700,6 +1732,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
         .add_plugins(MaterialPlugin::<GodrayMaterial>::default())
+        .add_plugins(MaterialPlugin::<GiraffeMaterial>::default())
         .add_plugins(MaterialPlugin::<TreeMaterial>::default())
         .add_plugins(MaterialPlugin::<GrassMaterial>::default())
         .add_plugins(MaterialPlugin::<CritterMaterial>::default())
@@ -1837,6 +1870,7 @@ fn setup_rendering(
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
     cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
     godray_materials: Option<ResMut<Assets<GodrayMaterial>>>,
+    giraffe_materials: Option<ResMut<Assets<GiraffeMaterial>>>,
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
     critter_materials: Option<ResMut<Assets<CritterMaterial>>>,
@@ -1850,6 +1884,7 @@ fn setup_rendering(
         Some(mut building_materials),
         Some(mut cloud_materials),
         Some(mut godray_materials),
+        Some(mut giraffe_materials),
         Some(mut tree_materials),
         Some(mut grass_materials),
         Some(mut critter_materials),
@@ -1862,6 +1897,7 @@ fn setup_rendering(
         building_materials,
         cloud_materials,
         godray_materials,
+        giraffe_materials,
         tree_materials,
         grass_materials,
         critter_materials,
@@ -1883,6 +1919,7 @@ fn setup_rendering(
     let seagull_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some();
     let flag_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some();
     let godray_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some();
+    let giraffe_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -1913,6 +1950,8 @@ fn setup_rendering(
                     52.0
                 } else if godray_closeup {
                     86.0
+                } else if giraffe_closeup {
+                    42.0
                 } else {
                     520.0
                 },
@@ -1946,6 +1985,7 @@ fn setup_rendering(
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
     let godrays = godray_materials.add(godray_material(&presentation.0));
+    let giraffe = giraffe_materials.add(giraffe_material(&presentation.0, asset_server.as_deref()));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
@@ -2010,6 +2050,8 @@ fn setup_rendering(
                 ResolvedMaterialHandle::Cloud(clouds.clone())
             } else if material.source_path == GODRAY_MATERIAL_PATH {
                 ResolvedMaterialHandle::Godray(godrays.clone())
+            } else if material.source_path == GIRAFFE_MATERIAL_PATH {
+                ResolvedMaterialHandle::Giraffe(giraffe.clone())
             } else if material.source_path == TREE_MATERIAL_PATH {
                 ResolvedMaterialHandle::Tree(tree.clone())
             } else if material.source_path == GRASS_MATERIAL_PATH {
@@ -2518,6 +2560,44 @@ fn spawn_godray_smoke_tower(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_giraffe_smoke_pet(
+    commands: &mut Commands,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+    position: Vec3,
+    cell_size: f32,
+) {
+    let Some(archetype) = content
+        .archetypes
+        .values()
+        .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
+    else {
+        return;
+    };
+    let pet = StableId::new("pet:giraffe").expect("static pet ID");
+    let Some(scene) = pet_scene(archetype, &pet) else {
+        return;
+    };
+    if !converted_asset_exists(asset_root, &scene.asset_path) {
+        return;
+    }
+    let mut giraffe = commands.spawn((
+        Name::new("Giraffe material smoke pet"),
+        WorldEntity,
+        WorldAssetRoot(
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+        ),
+        Transform::from_translation(position).with_scale(Vec3::splat(cell_size * 0.28)),
+    ));
+    if let Some(materials) = prefab_material_spec(archetype, scene, presentation, render) {
+        giraffe.insert(materials);
+    }
+}
+
 fn drive_seagull_flight(
     mut commands: Commands,
     time: Res<Time>,
@@ -2831,15 +2911,15 @@ fn terrain_material(
         .materials
         .values()
         .find(|material| material.source_path == TERRAIN_MATERIAL_PATH);
-    let vector = |name: &str, fallback: [f32; 4]| {
-        authored
-            .and_then(|material| material.custom_vectors.get(name))
-            .copied()
-            .unwrap_or(fallback)
-    };
     let scalar = |name: &str, fallback: f32| {
         authored
             .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let vector = |name: &str, fallback: [f32; 4]| {
+        authored
+            .and_then(|material| material.custom_vectors.get(name))
             .copied()
             .unwrap_or(fallback)
     };
@@ -3146,6 +3226,60 @@ fn godray_material(presentation: &PresentationCatalog) -> GodrayMaterial {
                     0.0,
                 ),
             },
+        },
+    }
+}
+
+fn giraffe_material(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+) -> GiraffeMaterial {
+    let authored = presentation
+        .materials
+        .values()
+        .find(|material| material.source_path == GIRAFFE_MATERIAL_PATH);
+    let scalar = |name: &str, fallback: f32| {
+        authored
+            .and_then(|material| material.custom_properties.get(name))
+            .copied()
+            .unwrap_or(fallback)
+    };
+    let main_texture = authored.and_then(|material| {
+        asset_server.and_then(|asset_server| {
+            material
+                .textures
+                .get("_TextureSample0")
+                .and_then(|id| presentation.textures.get(id))
+                .map(|texture| asset_server.load(texture.asset_path.clone()))
+        })
+    });
+    let transform = authored
+        .and_then(|material| material.texture_transforms.get("_TextureSample0"))
+        .copied()
+        .unwrap_or_default();
+    GiraffeMaterial {
+        base: StandardMaterial {
+            base_color_texture: main_texture.clone(),
+            base_color: Color::WHITE,
+            perceptual_roughness: 1.0,
+            metallic: 0.0,
+            ..default()
+        },
+        extension: GiraffeMaterialExtension {
+            parameters: GiraffeMaterialUniform {
+                animation_controls: Vec4::new(scalar("_NeckHeight", 8.15), 0.9, 2.0, 0.9),
+                mask_controls: Vec4::new(0.07, 1.2, 0.8, 2.1),
+                // These values are constants in Amplify's generated shader; similarly named
+                // serialized material properties are disconnected graph-editor remnants.
+                rotation_controls: Vec4::new(0.11, 4.1, 1.8, 0.0),
+                main_scale_offset: Vec4::new(
+                    transform.scale[0],
+                    transform.scale[1],
+                    transform.offset[0],
+                    transform.offset[1],
+                ),
+            },
+            main_texture,
         },
     }
 }
@@ -4994,6 +5128,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_translation(focus + Vec3::new(52.0, 66.0, 52.0))
                 .looking_at(focus + Vec3::Y * 22.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some() {
+            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+            Transform::from_translation(focus + Vec3::new(24.0, 24.0, 24.0))
+                .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
@@ -5546,6 +5684,21 @@ fn generate_and_spawn_world(
             config.0.world.cell_size,
         );
     }
+    if std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some()
+        && let Some(asset_server) = asset_server.as_deref()
+    {
+        let focus = grid_to_world_on_surface(centre, &config.0, &generated);
+        spawn_giraffe_smoke_pet(
+            &mut commands,
+            &content.0,
+            &presentation.0,
+            &render,
+            asset_server,
+            &asset_root.0,
+            focus,
+            config.0.world.cell_size,
+        );
+    }
     spawn_seagull(
         &mut commands,
         &render,
@@ -5681,6 +5834,9 @@ fn spawn_resource_visual(
             ResolvedMaterialHandle::Godray(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
+            ResolvedMaterialHandle::Giraffe(material) => {
+                entity.insert(MeshMaterial3d(material.clone()));
+            }
             ResolvedMaterialHandle::Tree(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
             }
@@ -5798,7 +5954,12 @@ fn spawn_foliage_visual(
         Some(ResolvedMaterialHandle::Flag(material)) => {
             entity.insert(MeshMaterial3d(material.clone()));
         }
-        Some(ResolvedMaterialHandle::Cloud(_) | ResolvedMaterialHandle::Godray(_)) | None => {
+        Some(
+            ResolvedMaterialHandle::Cloud(_)
+            | ResolvedMaterialHandle::Godray(_)
+            | ResolvedMaterialHandle::Giraffe(_),
+        )
+        | None => {
             entity.insert(MeshMaterial3d(render.food.clone()));
         }
     }
@@ -11277,6 +11438,12 @@ fn apply_material_overrides(
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
+                        ResolvedMaterialHandle::Giraffe(authored) => {
+                            commands
+                                .entity(entity)
+                                .remove::<MeshMaterial3d<StandardMaterial>>()
+                                .insert(MeshMaterial3d(authored.clone()));
+                        }
                         ResolvedMaterialHandle::Tree(authored) => {
                             commands
                                 .entity(entity)
@@ -11632,6 +11799,8 @@ fn sync_active_pets(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
     simulation: Res<SimulationRuntime>,
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
@@ -11700,7 +11869,7 @@ fn sync_active_pets(
             0.0,
             config.0.world.cell_size * 0.4,
         );
-        commands.spawn((
+        let mut visual = commands.spawn((
             WorldEntity,
             ActivePetVisual { owner, pet },
             WorldAssetRoot(
@@ -11709,6 +11878,9 @@ fn sync_active_pets(
             Transform::from_translation(*owner_position + offset)
                 .with_scale(Vec3::splat(config.0.world.cell_size * 0.28)),
         ));
+        if let Some(materials) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
+            visual.insert(materials);
+        }
     }
 }
 
@@ -19971,6 +20143,86 @@ mod tests {
     }
 
     #[test]
+    fn giraffe_material_preserves_authored_skinned_vertex_animation_contract() {
+        let material = giraffe_material(&embedded_presentation(), None);
+        let parameters = material.extension.parameters;
+        assert_eq!(
+            parameters.animation_controls,
+            Vec4::new(8.15, 0.9, 2.0, 0.9)
+        );
+        assert_eq!(parameters.mask_controls, Vec4::new(0.07, 1.2, 0.8, 2.1));
+        assert_eq!(parameters.rotation_controls, Vec4::new(0.11, 4.1, 1.8, 0.0));
+        assert_eq!(parameters.main_scale_offset, Vec4::new(1.0, 1.0, 0.0, 0.0));
+        assert!(material.extension.main_texture.is_none());
+        assert!((material.base.perceptual_roughness - 1.0).abs() <= f32::EPSILON);
+        assert!(material.base.metallic.abs() <= f32::EPSILON);
+
+        let shader = include_str!("../../../assets/shaders/giraffe_material.wgsl");
+        assert!(shader.contains("skinning::skin_model"));
+        assert!(shader.contains("skinning::skin_normals"));
+        assert!(shader.contains("smoothstep("));
+        assert!(shader.contains("textureSample(main_texture"));
+        assert!(!shader.contains("normalize(axis)"));
+    }
+
+    #[test]
+    fn live_giraffe_pet_resolves_typed_material_and_converted_vertex_masks() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let archetype = content
+            .archetypes
+            .values()
+            .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
+            .unwrap();
+        let pet = StableId::new("pet:giraffe").unwrap();
+        let scene = pet_scene(archetype, &pet).unwrap();
+        assert!(scene.source_model.ends_with("Pet_TallBoi.fbx"));
+        let material_id = presentation.model_materials[&scene.source_model]["MainMaterial"].clone();
+        assert_eq!(
+            presentation.materials[&material_id].source_path,
+            GIRAFFE_MATERIAL_PATH
+        );
+
+        let mut giraffe_materials = Assets::<GiraffeMaterial>::default();
+        let handle = giraffe_materials.add(giraffe_material(&presentation, None));
+        let mut render = RenderAssets::default();
+        render
+            .presentation_materials
+            .insert(material_id, ResolvedMaterialHandle::Giraffe(handle.clone()));
+        let spec = prefab_material_spec(archetype, scene, &presentation, &render)
+            .expect("live pet spawn should carry converted material bindings");
+        assert!(matches!(
+            &spec.model_materials["MainMaterial"],
+            ResolvedMaterialHandle::Giraffe(resolved) if resolved.id() == handle.id()
+        ));
+
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets")
+                .join(&scene.asset_path),
+        )
+        .unwrap();
+        let json_length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let json = &bytes[20..20 + json_length];
+        let json_end = json
+            .iter()
+            .rposition(|byte| !byte.is_ascii_whitespace() && *byte != 0)
+            .unwrap()
+            + 1;
+        let document: serde_json::Value = serde_json::from_slice(&json[..json_end]).unwrap();
+        assert_eq!(document["skins"].as_array().unwrap().len(), 1);
+        let attributes = document["meshes"][0]["primitives"][0]["attributes"]
+            .as_object()
+            .unwrap();
+        for attribute in ["COLOR_0", "JOINTS_0", "WEIGHTS_0"] {
+            assert!(
+                attributes.contains_key(attribute),
+                "giraffe lacks {attribute}"
+            );
+        }
+    }
+
+    #[test]
     fn necromancer_tower_godray_binding_and_converted_vertex_colours_are_packaged() {
         let content = embedded_content();
         let presentation = embedded_presentation();
@@ -20564,6 +20816,8 @@ mod tests {
         let cloud = cloud_materials.add(cloud_material(&embedded_presentation(), None));
         let mut godray_materials = Assets::<GodrayMaterial>::default();
         let godray = godray_materials.add(godray_material(&embedded_presentation()));
+        let mut giraffe_materials = Assets::<GiraffeMaterial>::default();
+        let giraffe = giraffe_materials.add(giraffe_material(&embedded_presentation(), None));
         let spec = MaterialOverrideSpec {
             fallback: Some(ResolvedMaterialHandle::Standard(fallback.clone())),
             model_materials: BTreeMap::from([
@@ -20586,6 +20840,10 @@ mod tests {
                 (
                     "VFX_Godrays".into(),
                     ResolvedMaterialHandle::Godray(godray.clone()),
+                ),
+                (
+                    "MainMaterial".into(),
+                    ResolvedMaterialHandle::Giraffe(giraffe.clone()),
                 ),
             ]),
             renderer_materials: vec![
@@ -20676,6 +20934,18 @@ mod tests {
         assert!(matches!(
             typed_godray,
             ResolvedMaterialHandle::Godray(material) if material.id() == godray.id()
+        ));
+
+        let typed_giraffe = resolved_renderer_material(
+            &spec,
+            "Scene/Pet_TallBoi/Pet_TallBoi.MainMaterial",
+            Some("Pet_TallBoi"),
+            Some("MainMaterial"),
+        )
+        .unwrap();
+        assert!(matches!(
+            typed_giraffe,
+            ResolvedMaterialHandle::Giraffe(material) if material.id() == giraffe.id()
         ));
 
         let final_fallback =

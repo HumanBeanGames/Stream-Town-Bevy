@@ -371,6 +371,11 @@ validated together.
 `STREAM_TOWN_SMOKE_GODRAY=1` spawns and frames the converted Age 2 Necromancer
 Tower so its exact `Env_Godrays_08` renderer binding and transparent material can
 be validated together.
+`STREAM_TOWN_SMOKE_GIRAFFE=1` spawns and frames the converted giraffe pet with
+its exact `MainMaterial` binding. The typed material retains Unity's
+vertex-colour neck/head masks, non-normalized rotation-axis math, textured PBR
+surface, and Bevy skinning path. Live equipped pets now receive the same exact
+prefab/model material overrides as the diagnostic scene.
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
 the image-backed selection window can be captured without pointer automation.
 `STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the
