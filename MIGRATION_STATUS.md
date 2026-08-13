@@ -430,6 +430,13 @@ mistaken for production-ready systems.
   produces a validated ZIP containing the game/tools executables, runtime
   assets, README, and GPL license; CI publishes the green archive as an
   artifact.
+- The focused tools Runtime tab now uses a versioned, opt-in local control
+  channel instead of a diagnostic shell. It can launch or attach to the Bevy
+  game, inject validated chat commands under a stable debug actor ID, request
+  save/load/frame capture/Main Menu/exit actions, and show live state, world
+  identity, actor/building/resource counts, Twitch status, acknowledgements,
+  and rolling average/p95 frame time. Atomic JSON requests/status never contain
+  OAuth credentials or Bevy entity IDs.
 - A measured 300-agent presentation LOD: 16 actors use authored GLB rigs and
   shared animation graphs while the remaining crowd uses lightweight capsule
   visuals without changing authoritative gameplay or persistence. The recorded
@@ -465,9 +472,10 @@ mistaken for production-ready systems.
   complete persisted-settings workflow are live.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation.
-- Persistent catalog writes, node/group creation and deletion, interactive graph
-  layout, live runtime bridging, integrated frame capture, and profiling
-  controls beyond the command-line GPU harness.
+- Persistent catalog writes, node/group creation and deletion, and interactive
+  graph layout. Live runtime bridging, integrated frame capture, stable command
+  injection, and rolling profiling controls are implemented; deeper ECS
+  mutation remains intentionally outside the tool protocol.
 - Curated screenshot baselines, a launch-through-credits gameplay acceptance
   suite, signed/notarized distribution, and a hosted Windows release. The
   unsigned CI/local Windows archive and measured reference-machine 60 FPS gate

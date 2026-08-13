@@ -11,8 +11,9 @@ here.
   Twitch, validation, and runtime tooling. Its catalog browser, validated
   technology editor with undo/redo, occupancy/path lab, prefab/archetype browser,
   material/texture and Animator-controller diagnostics, and Twitch
-  device-OAuth/vault diagnostics are functional; the runtime panel remains a
-  diagnostic shell.
+  device-OAuth/vault diagnostics are functional. Its Runtime tab can launch or
+  attach to the game, inject validated commands, request save/load/frame
+  capture, and inspect stable world/session/profiling status.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
@@ -32,6 +33,13 @@ cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 cargo run -p xtask -- package-windows --output dist
 ```
+
+The tools Runtime tab launches the game with an opt-in atomic control directory
+at `.stream-town/runtime-console`. A separately launched game can be attached by
+setting `STREAM_TOWN_RUNTIME_CONSOLE=1`, or both processes can share an explicit
+`STREAM_TOWN_RUNTIME_CONSOLE_DIR`. The channel carries stable IDs, actions, and
+status only; Twitch OAuth tokens remain exclusively in the operating-system
+credential vault. Normal game launches do not read or write console files.
 
 The Windows packager builds optimized game and tools executables, bundles the
 validated runtime assets, README, and GPL license, validates safe archive paths

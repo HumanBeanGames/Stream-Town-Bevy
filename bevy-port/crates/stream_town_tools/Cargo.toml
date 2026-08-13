@@ -16,5 +16,8 @@ stream_town_domain = { path = "../stream_town_domain" }
 stream_town_game = { path = "../stream_town_game" }
 tokio.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

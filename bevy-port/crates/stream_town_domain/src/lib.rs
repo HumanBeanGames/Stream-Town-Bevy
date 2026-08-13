@@ -7,6 +7,7 @@ pub mod content;
 pub mod id;
 pub mod navigation;
 pub mod presentation;
+pub mod runtime_console;
 pub mod save;
 pub mod settings;
 pub mod simulation;
@@ -43,6 +44,11 @@ pub use presentation::{
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
     AvatarMaskDef, MaterialAlphaMode, MaterialDef, PrefabPresentationBinding, PresentationCatalog,
     PresentationError, RendererMaterialBinding, TextureDef, TextureTransform,
+};
+pub use runtime_console::{
+    CURRENT_RUNTIME_CONSOLE_SCHEMA, RuntimeConsoleAction, RuntimeConsoleRequest,
+    RuntimeConsoleStatus, RuntimeConsoleStore, RuntimeConsoleStoreError,
+    RuntimeConsoleValidationError,
 };
 pub use save::{
     ActorKind, LegacyMigrationMetadata, LegacySaveInfo, LegacySaveKind, NativeSaveError,

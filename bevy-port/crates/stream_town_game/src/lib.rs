@@ -44,14 +44,15 @@ use stream_town_domain::{
     AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
-    BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState, CameraAction,
-    CameraDirection, ChatCommand, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
-    GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, LegacyMigrationMetadata,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
-    ObjectiveEvent, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
-    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, SavedActor, SavedTerrainMesh, Season,
-    StableId, StationDef, StorageModelDef, StreamUserType, TownEvent, Weather, WorldSimulation,
-    WorldSnapshot, generate_world_with_content,
+    BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
+    CURRENT_RUNTIME_CONSOLE_SCHEMA, CameraAction, CameraDirection, ChatCommand, ContentCatalog,
+    CustomizationKind, DisplayMode, EnemyCampState, GameConfig, GeneratedFoliage, GeneratedWorld,
+    GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef,
+    NameDisplayMode, NativeSaveStore, ObjectiveEvent, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PresentationCatalog, RoleEquipmentDef, RulerVoteKind,
+    RuntimeConsoleAction, RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh,
+    Season, StableId, StationDef, StorageModelDef, StreamUserType, TownEvent, Weather,
+    WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -254,6 +255,37 @@ struct MenuIoRequest {
     save: bool,
     load: bool,
 }
+
+#[derive(Resource)]
+struct RuntimeConsoleRuntime {
+    store: RuntimeConsoleStore,
+    enabled: bool,
+    last_processed_sequence: u64,
+    last_result: String,
+    status_elapsed_seconds: f32,
+}
+
+impl Default for RuntimeConsoleRuntime {
+    fn default() -> Self {
+        let store = RuntimeConsoleStore::from_environment();
+        let last_processed_sequence = store
+            .read_request()
+            .ok()
+            .flatten()
+            .map_or(0, |request| request.sequence);
+        Self {
+            store,
+            enabled: std::env::var_os("STREAM_TOWN_RUNTIME_CONSOLE_DIR").is_some()
+                || std::env::var_os("STREAM_TOWN_RUNTIME_CONSOLE").is_some(),
+            last_processed_sequence,
+            last_result: "Runtime console ready".to_owned(),
+            status_elapsed_seconds: 0.0,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+struct RuntimeCaptureRequest(bool);
 
 #[derive(Resource, Default)]
 struct CameraCommandQueue(VecDeque<CameraRequest>);
@@ -1055,6 +1087,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
             .init_resource::<MenuIoRequest>()
+            .init_resource::<RuntimeConsoleRuntime>()
+            .init_resource::<RuntimeCaptureRequest>()
             .init_resource::<CameraCommandQueue>()
             .init_resource::<AgentCommandQueue>()
             .init_resource::<BuildingCommandQueue>()
@@ -1101,6 +1135,8 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     poll_twitch_transport,
                     twitch_connection_input,
+                    process_runtime_console,
+                    publish_runtime_console_status.after(process_runtime_console),
                     capture_screenshot,
                     report_frame_time_gate,
                 ),
@@ -10003,6 +10039,164 @@ fn handle_twitch_event(
     }
 }
 
+fn process_runtime_console(
+    state: Res<State<GameState>>,
+    mut runtime: ResMut<RuntimeConsoleRuntime>,
+    mut injected: ResMut<InjectedCommands>,
+    mut io: ResMut<MenuIoRequest>,
+    mut capture: ResMut<RuntimeCaptureRequest>,
+    mut next_state: ResMut<NextState<GameState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !runtime.enabled {
+        return;
+    }
+    let request = match runtime.store.read_request() {
+        Ok(Some(request)) if request.sequence > runtime.last_processed_sequence => request,
+        Ok(_) => return,
+        Err(error) => {
+            runtime.last_result = format!("Runtime console request failed: {error}");
+            return;
+        }
+    };
+    runtime.last_processed_sequence = request.sequence;
+    runtime.last_result = match request.action {
+        RuntimeConsoleAction::InjectChat {
+            actor_id,
+            login_name,
+            display_name,
+            command,
+            is_broadcaster,
+            is_moderator,
+            is_subscriber,
+        } => match command.parse::<ChatCommand>() {
+            Ok(command) => {
+                injected.0.push_back(PendingChatCommand {
+                    actor_id,
+                    login_name,
+                    display_name,
+                    command,
+                    is_broadcaster,
+                    is_moderator,
+                    is_subscriber,
+                    origin: CommandOrigin::LocalDebug,
+                });
+                "Injected local debug command".to_owned()
+            }
+            Err(error) => format!("Rejected invalid command: {error}"),
+        },
+        RuntimeConsoleAction::Save if *state.get() == GameState::InGame => {
+            io.save = true;
+            "Save requested".to_owned()
+        }
+        RuntimeConsoleAction::Load if *state.get() == GameState::InGame => {
+            io.load = true;
+            "Load requested".to_owned()
+        }
+        RuntimeConsoleAction::Save | RuntimeConsoleAction::Load => {
+            "Save/load requires an active town".to_owned()
+        }
+        RuntimeConsoleAction::CaptureFrame => {
+            capture.0 = true;
+            "Frame capture requested".to_owned()
+        }
+        RuntimeConsoleAction::ReturnToMainMenu if *state.get() == GameState::InGame => {
+            next_state.set(GameState::MainMenu);
+            "Returning to Main Menu".to_owned()
+        }
+        RuntimeConsoleAction::ReturnToMainMenu => "Already outside the town".to_owned(),
+        RuntimeConsoleAction::Exit => {
+            exit.write(AppExit::Success);
+            "Exit requested".to_owned()
+        }
+    };
+}
+
+fn publish_runtime_console_status(
+    time: Res<Time>,
+    state: Res<State<GameState>>,
+    mut runtime: ResMut<RuntimeConsoleRuntime>,
+    world: Option<Res<WorldRuntime>>,
+    simulation: Option<Res<SimulationRuntime>>,
+    session: Res<SessionStats>,
+    save: Res<SaveRuntime>,
+    twitch: Res<TwitchConnection>,
+    diagnostics: Option<Res<DiagnosticsStore>>,
+) {
+    if !runtime.enabled {
+        return;
+    }
+    runtime.status_elapsed_seconds += time.delta_secs();
+    if runtime.status_elapsed_seconds < 0.25 {
+        return;
+    }
+    runtime.status_elapsed_seconds = 0.0;
+    let town_resources = simulation
+        .as_ref()
+        .map_or_else(BTreeMap::new, |simulation| {
+            simulation
+                .0
+                .town_resources
+                .iter()
+                .map(|(id, amount)| (id.as_str().to_owned(), u64::from(*amount)))
+                .collect()
+        });
+    let frame_times = diagnostics
+        .as_ref()
+        .and_then(|diagnostics| diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME))
+        .map_or_else(Vec::new, |frame_time| {
+            frame_time
+                .values()
+                .copied()
+                .filter(|value| value.is_finite())
+                .collect::<Vec<_>>()
+        });
+    let average_frame_ms = (!frame_times.is_empty()).then(|| {
+        let sample_count = u32::try_from(frame_times.len()).unwrap_or(u32::MAX);
+        frame_times.iter().sum::<f64>() / f64::from(sample_count)
+    });
+    let mut sorted_frame_times = frame_times;
+    sorted_frame_times.sort_by(f64::total_cmp);
+    let p95_frame_ms = (!sorted_frame_times.is_empty()).then(|| {
+        let index = ((sorted_frame_times.len() - 1) * 95) / 100;
+        sorted_frame_times[index]
+    });
+    let status = RuntimeConsoleStatus {
+        schema_version: CURRENT_RUNTIME_CONSOLE_SCHEMA,
+        process_id: std::process::id(),
+        updated_unix_millis: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            }),
+        state: format!("{:?}", state.get()),
+        world_seed: world.as_ref().map(|world| world.generated.seed),
+        world_hash: world
+            .as_ref()
+            .map(|world| world.generated.deterministic_hash.clone()),
+        elapsed_seconds: session.elapsed_seconds,
+        actor_count: simulation
+            .as_ref()
+            .map_or(0, |simulation| simulation.0.actors.len()),
+        building_count: simulation
+            .as_ref()
+            .map_or(0, |simulation| simulation.0.buildings.len()),
+        town_resources,
+        paths_completed: session.paths_completed,
+        commands_processed: session.commands_processed,
+        average_frame_ms,
+        p95_frame_ms,
+        save_exists: save.store.path().is_file(),
+        save_path: save.store.path().display().to_string(),
+        twitch_status: format!("{:?}", twitch.status),
+        last_processed_sequence: runtime.last_processed_sequence,
+        last_result: runtime.last_result.clone(),
+    };
+    if let Err(error) = runtime.store.write_status(&status) {
+        warn!(%error, "could not publish runtime console status");
+    }
+}
+
 fn save_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut io: ResMut<MenuIoRequest>,
@@ -10011,6 +10205,7 @@ fn save_input(
     stats: Res<SessionStats>,
     simulation: Res<SimulationRuntime>,
     agents: Query<(&Agent, &GridLocation)>,
+    mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     let requested = std::mem::take(&mut io.save);
     if !keyboard.just_pressed(KeyCode::F5) && !requested {
@@ -10018,8 +10213,14 @@ fn save_input(
     }
     let snapshot = snapshot_world(&world, &stats, &simulation, &agents);
     match save.store.write(&snapshot) {
-        Ok(()) => info!(path = %save.store.path().display(), "native save written"),
-        Err(error) => error!(%error, "native save failed"),
+        Ok(()) => {
+            runtime_console.last_result = format!("Saved {}", save.store.path().display());
+            info!(path = %save.store.path().display(), "native save written");
+        }
+        Err(error) => {
+            runtime_console.last_result = format!("Save failed: {error}");
+            error!(%error, "native save failed");
+        }
     }
 }
 
@@ -10072,6 +10273,7 @@ fn load_input(
     runtime_buildings: Query<(Entity, &RuntimeBuilding), Without<TownHall>>,
     enemy_camps: Query<(Entity, &EnemyCamp)>,
     mut automatic_complete: Local<bool>,
+    mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     let automatic = !*automatic_complete && std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some();
     let requested = std::mem::take(&mut io.load);
@@ -10082,6 +10284,7 @@ fn load_input(
     let mut snapshot = match save.store.load() {
         Ok(snapshot) => snapshot,
         Err(error) => {
+            runtime_console.last_result = format!("Load failed: {error}");
             error!(%error, "native load failed");
             return;
         }
@@ -10311,6 +10514,7 @@ fn load_input(
     stats.elapsed_seconds = Duration::from_secs(snapshot.elapsed_seconds).as_secs_f64();
     stats.paths_completed = 0;
     simulation.0 = snapshot.simulation;
+    runtime_console.last_result = format!("Loaded {}", save.store.path().display());
     info!(
         path = %save.store.path().display(),
         retained_terrain = snapshot.legacy_terrain_mesh.is_some(),
@@ -10325,12 +10529,14 @@ fn load_input(
 fn capture_screenshot(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut runtime_request: ResMut<RuntimeCaptureRequest>,
     time: Res<Time>,
     mut elapsed: Local<f32>,
     mut automatic_complete: Local<bool>,
     mut counter: Local<u32>,
     mut exit_delay: Local<Option<f32>>,
     mut exit: MessageWriter<AppExit>,
+    mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     if let Some(remaining) = exit_delay.as_mut() {
         *remaining -= time.delta_secs();
@@ -10350,7 +10556,8 @@ fn capture_screenshot(
     } else {
         None
     };
-    let path = if keyboard.just_pressed(KeyCode::F12) {
+    let requested = std::mem::take(&mut runtime_request.0);
+    let path = if keyboard.just_pressed(KeyCode::F12) || requested {
         let directory = PathBuf::from(".stream-town").join("screenshots");
         if let Err(error) = std::fs::create_dir_all(&directory) {
             error!(%error, path = %directory.display(), "failed to create screenshot directory");
@@ -10365,6 +10572,7 @@ fn capture_screenshot(
     let Some(path) = path else {
         return;
     };
+    runtime_console.last_result = format!("Capturing frame to {}", path.display());
     *automatic_complete = true;
     info!(path = %path.display(), "capturing frame");
     commands
