@@ -55,15 +55,15 @@ use stream_town_domain::{
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
     CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
-    ChatCommand, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState, EnemyModelSetDef,
-    EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
-    LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
-    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
-    RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
-    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
-    StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, Weather, WorldSimulation,
-    WorldSnapshot, generate_world_with_content,
+    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
+    EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage,
+    GeneratedWorld, GridPos, LegacyMigrationMetadata, MaterialAlphaMode as AuthoredAlphaMode,
+    MaterialDef, NameDisplayMode, NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings,
+    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
+    PresentationCatalog, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
+    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
+    StationDef, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, Weather,
+    WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -72,6 +72,7 @@ const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
 const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
+const CHIMNEY_ALPHA_STEPS: usize = 8;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
 const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.glb";
@@ -875,6 +876,7 @@ enum ResolvedMaterialHandle {
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
+    chimney_particle: Handle<Mesh>,
     actor_lod: Handle<Mesh>,
     cloud_plane: Handle<Mesh>,
     healing_ring: Handle<Mesh>,
@@ -900,6 +902,7 @@ struct RenderAssets {
     projectile_necrotic: Handle<StandardMaterial>,
     impact_physical: Handle<StandardMaterial>,
     building_smoke: Handle<StandardMaterial>,
+    chimney_smoke: BTreeMap<StableId, [Vec<Handle<StandardMaterial>>; 2]>,
     building_spark: Handle<StandardMaterial>,
     building_fire: Handle<StandardMaterial>,
     building_upgrade: Handle<StandardMaterial>,
@@ -1289,6 +1292,32 @@ struct TownHall;
 #[derive(Component)]
 struct RuntimeBuilding {
     id: StableId,
+}
+
+#[derive(Component)]
+struct ChimneySmokeEmitters {
+    prefab_guid: String,
+    age: u8,
+    emitters: Vec<ChimneySmokeEmitterRuntime>,
+}
+
+struct ChimneySmokeEmitterRuntime {
+    effect: StableId,
+    local_position: Vec3,
+    emission_accumulator: f32,
+    sequence: u32,
+}
+
+#[derive(Component)]
+struct ChimneySmokeParticle {
+    effect: StableId,
+    elapsed_seconds: f32,
+    duration_seconds: f32,
+    origin: Vec3,
+    velocity: Vec3,
+    base_scale: Vec3,
+    size_over_lifetime: [f32; 2],
+    color_variant: usize,
 }
 
 #[derive(Component)]
@@ -1919,6 +1948,7 @@ impl Plugin for StreamTownGamePlugin {
                         .after(tag_authored_rotating_nodes)
                         .after(sync_building_model_nodes),
                     sync_tiled_building_rotation.after(sync_building_presentation),
+                    sync_chimney_smoke_emitters.after(sync_building_presentation),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -1932,6 +1962,8 @@ impl Plugin for StreamTownGamePlugin {
                     emit_damaged_building_effects.after(move_agents),
                     animate_building_effects.after(emit_damaged_building_effects),
                     repeat_building_smoke.after(animate_building_effects),
+                    emit_chimney_smoke.after(sync_chimney_smoke_emitters),
+                    animate_chimney_smoke_particles.after(emit_chimney_smoke),
                     update_enemy_encounters.after(move_combat_projectiles),
                     sync_fish_god_presentation
                         .after(update_enemy_encounters)
@@ -2351,7 +2383,8 @@ fn setup_rendering(
     let resource_closeup = std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some();
     let healing_closeup = std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some();
     let combat_closeup = std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some();
-    let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some();
+    let building_closeup = std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some()
+        || std::env::var_os("STREAM_TOWN_SMOKE_CHIMNEY").is_some();
     let ping_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PING").is_some();
     let foliage_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some();
     let shoreline_closeup = std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some();
@@ -2556,8 +2589,44 @@ fn setup_rendering(
                 ..default()
             })
         });
+    let chimney_smoke = presentation
+        .0
+        .chimney_smoke_effects
+        .iter()
+        .map(|(id, effect)| {
+            let mut gradient = |color: [f32; 4]| {
+                (0..CHIMNEY_ALPHA_STEPS)
+                    .map(|step| {
+                        let progress = chimney_alpha_progress(step);
+                        let alpha = effect.alpha_over_lifetime[0]
+                            + (effect.alpha_over_lifetime[1] - effect.alpha_over_lifetime[0])
+                                * progress;
+                        materials.add(StandardMaterial {
+                            base_color: Color::linear_rgba(
+                                color[0],
+                                color[1],
+                                color[2],
+                                color[3] * alpha,
+                            ),
+                            alpha_mode: AlphaMode::Blend,
+                            perceptual_roughness: 0.5,
+                            ..default()
+                        })
+                    })
+                    .collect()
+            };
+            (
+                id.clone(),
+                [
+                    gradient(effect.start_color_min),
+                    gradient(effect.start_color_max),
+                ],
+            )
+        })
+        .collect();
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
+        chimney_particle: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid icosphere")),
         actor_lod: meshes.add(Capsule3d::new(0.42, 1.45)),
         cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
         healing_ring: meshes.add(healing_ring_mesh(48)),
@@ -2632,6 +2701,7 @@ fn setup_rendering(
             unlit: true,
             ..default()
         }),
+        chimney_smoke,
         building_spark: materials.add(StandardMaterial {
             base_color: Color::srgba(1.0, 0.34, 0.02, 0.96),
             emissive: LinearRgba::new(7.5, 0.48, 0.01, 1.0),
@@ -6090,7 +6160,9 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 34.0, focus.y + 38.0, focus.z + 34.0)
                 .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some() {
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some()
+            || std::env::var_os("STREAM_TOWN_SMOKE_CHIMNEY").is_some()
+        {
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
                 .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
@@ -6661,6 +6733,41 @@ fn generate_and_spawn_world(
             age,
         );
         simulation.buildings.insert(runtime_id, state);
+    }
+
+    if std::env::var_os("STREAM_TOWN_SMOKE_CHIMNEY").is_some() {
+        let house_id = StableId::new("building:house").expect("static house ID");
+        let definition = &content.0.buildings[&house_id];
+        let archetype = &content.0.archetypes[&definition.archetype];
+        if let Some(position) = find_building_site(&generated, centre, definition.footprint) {
+            let runtime_id = StableId::new("building:smoke_chimney").expect("static smoke ID");
+            let state = BuildingState {
+                id: runtime_id.clone(),
+                archetype: definition.archetype.clone(),
+                position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: i32::try_from(building_base_max_health(&content.0, definition))
+                    .unwrap_or(i32::MAX),
+                complete: true,
+            };
+            spawn_runtime_building(
+                &mut commands,
+                &config.0,
+                &generated,
+                &presentation.0,
+                asset_server.as_deref(),
+                &asset_root.0,
+                &render,
+                &state,
+                definition,
+                archetype,
+                position,
+                definition.footprint,
+                building_age(&content.0, &simulation, &house_id),
+            );
+            simulation.buildings.insert(runtime_id, state);
+        }
     }
 
     let recruit_resource = StableId::new("resource:recruit").expect("static ID");
@@ -10983,6 +11090,273 @@ fn sync_building_presentation(
         }
         presentation.applied_stage = construction_stage;
         presentation.applied_level = state.level;
+    }
+}
+
+fn sync_chimney_smoke_emitters(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    simulation: Res<SimulationRuntime>,
+    mut buildings: Query<(Entity, &RuntimeBuilding, Option<&mut ChimneySmokeEmitters>)>,
+) {
+    for (entity, runtime, existing) in &mut buildings {
+        let Some(state) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        let Some((building_id, definition)) = content
+            .0
+            .buildings
+            .iter()
+            .find(|(_, building)| building.archetype == state.archetype)
+        else {
+            continue;
+        };
+        let archetype = &content.0.archetypes[&definition.archetype];
+        let age = building_age(&content.0, &simulation.0, building_id);
+        let matches = existing.as_ref().is_some_and(|emitters| {
+            emitters.prefab_guid == archetype.source_guid && emitters.age == age
+        });
+        if matches {
+            continue;
+        }
+        let emitters = presentation
+            .0
+            .prefab_chimney_emitters
+            .get(&archetype.source_guid)
+            .into_iter()
+            .flatten()
+            .filter(|binding| binding.age == age)
+            .map(|binding| ChimneySmokeEmitterRuntime {
+                effect: binding.effect.clone(),
+                local_position: Vec3::from_array(binding.local_position),
+                emission_accumulator: 0.0,
+                sequence: 0,
+            })
+            .collect::<Vec<_>>();
+        if emitters.is_empty() {
+            commands.entity(entity).remove::<ChimneySmokeEmitters>();
+        } else {
+            commands.entity(entity).insert(ChimneySmokeEmitters {
+                prefab_guid: archetype.source_guid.clone(),
+                age,
+                emitters,
+            });
+        }
+    }
+}
+
+fn chimney_particle_seed(building: &StableId, emitter: usize, sequence: u32, salt: u32) -> u32 {
+    building
+        .as_str()
+        .bytes()
+        .chain(
+            u64::try_from(emitter)
+                .expect("chimney-emitter index fits u64")
+                .to_le_bytes(),
+        )
+        .chain(sequence.to_le_bytes())
+        .chain(salt.to_le_bytes())
+        .fold(2_166_136_261_u32, |hash, byte| {
+            hash.wrapping_mul(16_777_619) ^ u32::from(byte)
+        })
+}
+
+fn chimney_emitter_world_position(transform: &GlobalTransform, local_position: Vec3) -> Vec3 {
+    transform.transform_point(local_position)
+}
+
+fn chimney_emitter_world_scale(transform: &GlobalTransform) -> f32 {
+    let (scale, _, _) = transform.to_scale_rotation_translation();
+    (scale.x.abs() + scale.y.abs() + scale.z.abs()) / 3.0
+}
+
+fn spawn_chimney_smoke_particle(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    effect_id: &StableId,
+    effect: &ChimneySmokeDef,
+    origin: Vec3,
+    building: &StableId,
+    emitter_index: usize,
+    sequence: u32,
+    world_scale: f32,
+    building_entity: Entity,
+) {
+    let angle = deterministic_unit(chimney_particle_seed(building, emitter_index, sequence, 11))
+        * std::f32::consts::TAU;
+    let particle_scale = if effect.world_space { world_scale } else { 1.0 };
+    let radius = effect.cone_radius
+        * particle_scale
+        * deterministic_unit(chimney_particle_seed(building, emitter_index, sequence, 13)).sqrt();
+    let direction_angle = effect.cone_angle_degrees.to_radians()
+        * deterministic_unit(chimney_particle_seed(building, emitter_index, sequence, 17));
+    let horizontal = Vec3::new(angle.cos(), 0.0, angle.sin());
+    let direction = Vec3::Y * direction_angle.cos() + horizontal * direction_angle.sin();
+    let color_variant =
+        usize::from(chimney_particle_seed(building, emitter_index, sequence, 19) & 1 != 0);
+    let Some(materials) = render.chimney_smoke.get(effect_id) else {
+        return;
+    };
+    let base_scale = Vec3::splat(effect.start_size * particle_scale);
+    let mut particle = commands.spawn((
+        WorldEntity,
+        ChimneySmokeParticle {
+            effect: effect_id.clone(),
+            elapsed_seconds: 0.0,
+            duration_seconds: effect.lifetime_seconds,
+            origin: origin + horizontal * radius,
+            velocity: direction * effect.start_speed * particle_scale,
+            base_scale,
+            size_over_lifetime: effect.size_over_lifetime,
+            color_variant,
+        },
+        Mesh3d(render.chimney_particle.clone()),
+        MeshMaterial3d(materials[color_variant][0].clone()),
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
+        Transform::from_translation(origin + horizontal * radius)
+            .with_scale(base_scale * effect.size_over_lifetime[0]),
+    ));
+    if !effect.world_space {
+        particle.insert(ChildOf(building_entity));
+    }
+}
+
+fn chimney_emission_count(
+    accumulator: &mut f32,
+    rate_per_second: f32,
+    delta_seconds: f32,
+    max_particles: u16,
+) -> u16 {
+    *accumulator += rate_per_second * delta_seconds;
+    let mut count = 0_u16;
+    while *accumulator >= 1.0 && count < max_particles {
+        *accumulator -= 1.0;
+        count += 1;
+    }
+    count
+}
+
+fn emit_chimney_smoke(
+    mut commands: Commands,
+    time: Res<Time>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
+    simulation: Res<SimulationRuntime>,
+    mut buildings: Query<(
+        Entity,
+        &RuntimeBuilding,
+        &GlobalTransform,
+        &mut ChimneySmokeEmitters,
+    )>,
+) {
+    for (building_entity, runtime, transform, mut emitters) in &mut buildings {
+        let Some(building) = simulation.0.buildings.get(&runtime.id) else {
+            continue;
+        };
+        if !building.complete || building.health <= 0 {
+            for emitter in &mut emitters.emitters {
+                emitter.emission_accumulator = 0.0;
+            }
+            continue;
+        }
+        for (emitter_index, emitter) in emitters.emitters.iter_mut().enumerate() {
+            let Some(effect) = presentation.0.chimney_smoke_effects.get(&emitter.effect) else {
+                continue;
+            };
+            let count = chimney_emission_count(
+                &mut emitter.emission_accumulator,
+                effect.emission_rate_per_second,
+                time.delta_secs(),
+                effect.max_particles,
+            );
+            let origin = if effect.world_space {
+                chimney_emitter_world_position(transform, emitter.local_position)
+            } else {
+                emitter.local_position
+            };
+            let world_scale = chimney_emitter_world_scale(transform);
+            for _ in 0..count {
+                spawn_chimney_smoke_particle(
+                    &mut commands,
+                    &render,
+                    &emitter.effect,
+                    effect,
+                    origin,
+                    &runtime.id,
+                    emitter_index,
+                    emitter.sequence,
+                    world_scale,
+                    building_entity,
+                );
+                emitter.sequence = emitter.sequence.wrapping_add(1);
+            }
+        }
+    }
+}
+
+fn chimney_particle_scale(effect: &ChimneySmokeParticle, progress: f32) -> Vec3 {
+    let size = effect.size_over_lifetime[0]
+        + (effect.size_over_lifetime[1] - effect.size_over_lifetime[0]) * progress;
+    effect.base_scale * size
+}
+
+fn chimney_alpha_progress(step: usize) -> f32 {
+    match step {
+        0 => 0.0,
+        1 => 1.0 / 7.0,
+        2 => 2.0 / 7.0,
+        3 => 3.0 / 7.0,
+        4 => 4.0 / 7.0,
+        5 => 5.0 / 7.0,
+        6 => 6.0 / 7.0,
+        _ => 1.0,
+    }
+}
+
+fn chimney_alpha_step(progress: f32) -> usize {
+    match progress.clamp(0.0, 1.0) {
+        value if value < 1.0 / 8.0 => 0,
+        value if value < 2.0 / 8.0 => 1,
+        value if value < 3.0 / 8.0 => 2,
+        value if value < 4.0 / 8.0 => 3,
+        value if value < 5.0 / 8.0 => 4,
+        value if value < 6.0 / 8.0 => 5,
+        value if value < 7.0 / 8.0 => 6,
+        _ => 7,
+    }
+}
+
+fn animate_chimney_smoke_particles(
+    mut commands: Commands,
+    time: Res<Time>,
+    render: Res<RenderAssets>,
+    mut particles: Query<(
+        Entity,
+        &mut ChimneySmokeParticle,
+        &mut Transform,
+        &mut MeshMaterial3d<StandardMaterial>,
+    )>,
+) {
+    for (entity, mut particle, mut transform, mut material) in &mut particles {
+        particle.elapsed_seconds += time.delta_secs();
+        let progress = particle.elapsed_seconds / particle.duration_seconds;
+        if progress >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.translation = particle.origin + particle.velocity * particle.elapsed_seconds;
+        transform.scale = chimney_particle_scale(&particle, progress);
+        if let Some(variants) = render.chimney_smoke.get(&particle.effect) {
+            material.0 = variants[particle.color_variant][chimney_alpha_step(progress)].clone();
+        }
+        let rotation_speed = if particle.color_variant == 0 {
+            0.35
+        } else {
+            0.55
+        };
+        transform.rotation *= Quat::from_rotation_y(time.delta_secs() * rotation_speed);
     }
 }
 
@@ -27237,7 +27611,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 15);
+        assert_eq!(presentation.schema_version, 16);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.post_process_profiles.len(), 2);
@@ -28959,6 +29333,83 @@ mod tests {
                 .iter(&world)
                 .any(|particle| particle.kind == CreditsFireworkParticleKind::Spark)
         );
+    }
+
+    #[test]
+    fn embedded_chimney_smoke_preserves_authored_emitters_and_parameters() {
+        let presentation = embedded_presentation();
+        assert_eq!(presentation.chimney_smoke_effects.len(), 1);
+        assert_eq!(
+            presentation
+                .prefab_chimney_emitters
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            7
+        );
+        let effect = presentation.chimney_smoke_effects.values().next().unwrap();
+        assert!((effect.emission_rate_per_second - 5.0).abs() < f32::EPSILON);
+        assert!((effect.lifetime_seconds - 5.0).abs() < f32::EPSILON);
+        assert!((effect.start_speed - 1.0).abs() < f32::EPSILON);
+        assert!((effect.start_size - 0.25).abs() < f32::EPSILON);
+        assert!((effect.cone_radius - 0.11).abs() < f32::EPSILON);
+        assert!((effect.cone_angle_degrees - 6.1).abs() < f32::EPSILON);
+        assert!(
+            effect
+                .alpha_over_lifetime
+                .into_iter()
+                .zip([1.0, 0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(!effect.world_space);
+
+        let house = presentation
+            .prefab_chimney_emitters
+            .get("5939659079433a24db8e34e97f888f7d")
+            .unwrap();
+        assert_eq!(house.len(), 2);
+        assert_eq!(house[0].age, 1);
+        assert!(
+            house[0]
+                .local_position
+                .into_iter()
+                .zip([-0.373_000_14, 2.201, -0.25])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert_eq!(house[1].age, 2);
+    }
+
+    #[test]
+    fn chimney_emission_and_world_transform_are_deterministic() {
+        let mut accumulator = 0.0;
+        assert_eq!(chimney_emission_count(&mut accumulator, 5.0, 0.1, 1_000), 0);
+        assert!((accumulator - 0.5).abs() < f32::EPSILON);
+        assert_eq!(chimney_emission_count(&mut accumulator, 5.0, 0.1, 1_000), 1);
+        assert!(accumulator.abs() < f32::EPSILON);
+        assert_eq!(chimney_emission_count(&mut accumulator, 5.0, 1.0, 3), 3);
+        assert!((accumulator - 2.0).abs() < f32::EPSILON);
+
+        let transform = GlobalTransform::from(
+            Transform::from_xyz(10.0, 20.0, 30.0)
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::splat(2.0)),
+        );
+        let position = chimney_emitter_world_position(&transform, Vec3::new(1.0, 2.0, 3.0));
+        assert!(position.abs_diff_eq(Vec3::new(16.0, 24.0, 28.0), 0.000_01));
+        assert!((chimney_emitter_world_scale(&transform) - 2.0).abs() < f32::EPSILON);
+
+        let building = StableId::new("building:runtime_00000001").unwrap();
+        assert_eq!(
+            chimney_particle_seed(&building, 2, 41, 11),
+            chimney_particle_seed(&building, 2, 41, 11)
+        );
+        assert_ne!(
+            chimney_particle_seed(&building, 2, 41, 11),
+            chimney_particle_seed(&building, 2, 42, 11)
+        );
+        assert_eq!(chimney_alpha_step(0.0), 0);
+        assert_eq!(chimney_alpha_step(0.5), 4);
+        assert_eq!(chimney_alpha_step(1.0), 7);
     }
 
     #[test]

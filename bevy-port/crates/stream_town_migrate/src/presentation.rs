@@ -13,9 +13,10 @@ use stream_town_domain::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
-    PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef, PostProcessProfileDef,
-    PostProcessTonemapping, PostProcessVignetteDef, PrefabPresentationBinding, PresentationCatalog,
+    AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef,
+    PostProcessBloomDef, PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef,
+    PostProcessProfileDef, PostProcessTonemapping, PostProcessVignetteDef,
+    PrefabChimneyEmitterBinding, PrefabPresentationBinding, PresentationCatalog,
     RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding, StableId, TextureDef,
     TextureTransform,
 };
@@ -64,6 +65,8 @@ pub struct PresentationConversionReport {
     pub scene_post_process_bindings: usize,
     pub fireworks_effects: usize,
     pub scene_fireworks_bindings: usize,
+    pub chimney_smoke_effects: usize,
+    pub prefab_chimney_emitters: usize,
     pub outputs: Vec<String>,
 }
 
@@ -181,6 +184,11 @@ type FireworksConversion = (
     BTreeMap<String, Vec<SceneFireworksBinding>>,
 );
 
+type ChimneySmokeConversion = (
+    BTreeMap<StableId, ChimneySmokeDef>,
+    BTreeMap<String, Vec<PrefabChimneyEmitterBinding>>,
+);
+
 pub fn convert(
     export_path: &Path,
     unity_root: &Path,
@@ -222,6 +230,7 @@ pub fn convert(
         convert_prefab_renderer_materials(&export, &assets_by_path, &materials, &model_materials);
     let (post_process_profiles, scene_post_process) = convert_post_process(&export, &root)?;
     let (fireworks_effects, scene_fireworks) = convert_fireworks(&export, &root)?;
+    let (chimney_smoke_effects, prefab_chimney_emitters) = convert_chimney_smoke(&export, &root)?;
     let mut clips = convert_clips(&export, &root)?;
     let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
@@ -236,7 +245,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 15,
+        schema_version: 16,
         textures,
         materials,
         clips,
@@ -250,6 +259,8 @@ pub fn convert(
         scene_post_process,
         fireworks_effects,
         scene_fireworks,
+        chimney_smoke_effects,
+        prefab_chimney_emitters,
     };
     catalog
         .validate()
@@ -260,7 +271,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 15,
+        schema_version: 16,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -377,6 +388,8 @@ pub fn convert(
         scene_post_process_bindings: catalog.scene_post_process.values().map(Vec::len).sum(),
         fireworks_effects: catalog.fireworks_effects.len(),
         scene_fireworks_bindings: catalog.scene_fireworks.values().map(Vec::len).sum(),
+        chimney_smoke_effects: catalog.chimney_smoke_effects.len(),
+        prefab_chimney_emitters: catalog.prefab_chimney_emitters.values().map(Vec::len).sum(),
         outputs: vec![
             normalized_path(&catalog_path),
             normalized_path(&report_path),
@@ -619,6 +632,169 @@ fn convert_fireworks(export: &UnityExport, unity_root: &Path) -> Result<Firework
     Ok((effects, scene_bindings))
 }
 
+fn convert_chimney_smoke(
+    export: &UnityExport,
+    unity_root: &Path,
+) -> Result<ChimneySmokeConversion> {
+    const CHIMNEY_PATH: &str = "Assets/Prefabs/VFX/Environment/VFX_Chimney_Smoke.prefab";
+    let mut effects = BTreeMap::new();
+    let mut prefab_bindings = BTreeMap::new();
+    let Some(asset) = export
+        .assets
+        .iter()
+        .find(|asset| asset.path == CHIMNEY_PATH)
+    else {
+        return Ok((effects, prefab_bindings));
+    };
+    let source = unity_root.join(CHIMNEY_PATH);
+    let contents = fs::read_to_string(&source).with_context(|| {
+        format!(
+            "failed to read chimney particle prefab {}",
+            source.display()
+        )
+    })?;
+    let documents = parse_yaml_documents(&contents)?;
+    let particle = documents
+        .iter()
+        .find(|document| document.class_id == 198)
+        .context("chimney prefab has no ParticleSystem")?;
+    let initial = yaml_section(&particle.lines, "InitialModule:")?;
+    let lifetime = yaml_section(initial, "startLifetime:")?;
+    let speed = yaml_section(initial, "startSpeed:")?;
+    let color = yaml_section(initial, "startColor:")?;
+    let size = yaml_section(initial, "startSize:")?;
+    let shape = yaml_section(&particle.lines, "ShapeModule:")?;
+    let radius = yaml_section(shape, "radius:")?;
+    let emission = yaml_section(&particle.lines, "EmissionModule:")?;
+    let rate = yaml_section(emission, "rateOverTime:")?;
+    let size_module = yaml_section(&particle.lines, "SizeModule:")?;
+    let size_curve = yaml_section(size_module, "curve:")?;
+    let size_max_curve = yaml_section(size_curve, "maxCurve:")?;
+    let color_module = yaml_section(&particle.lines, "ColorModule:")?;
+    let gradient = yaml_section(color_module, "gradient:")?;
+    let max_gradient = yaml_section(gradient, "maxGradient:")?;
+    let size_values = yaml_keyframe_values(size_max_curve);
+    let start_alpha = inline_color(
+        scalar(max_gradient, "key0:").context("chimney color curve has no first key")?,
+        [1.0; 4],
+    )[3];
+    let end_alpha = inline_color(
+        scalar(max_gradient, "key1:").context("chimney color curve has no last key")?,
+        [1.0; 4],
+    )[3];
+    let effect_id = particle_effect_id(&asset.guid)?;
+    effects.insert(
+        effect_id.clone(),
+        ChimneySmokeDef {
+            display_name: asset.name.clone(),
+            source_guid: asset.guid.clone(),
+            source_path: asset.path.clone(),
+            duration_seconds: required_scalar_f32(&particle.lines, "lengthInSec:", "duration")?,
+            emission_rate_per_second: required_scalar_f32(rate, "scalar:", "emission rate")?,
+            lifetime_seconds: required_scalar_f32(lifetime, "scalar:", "lifetime")?,
+            start_speed: required_scalar_f32(speed, "scalar:", "start speed")?,
+            start_size: required_scalar_f32(size, "scalar:", "start size")?,
+            start_color_min: inline_color(
+                scalar(color, "minColor:").context("chimney particle has no minimum color")?,
+                [1.0; 4],
+            ),
+            start_color_max: inline_color(
+                scalar(color, "maxColor:").context("chimney particle has no maximum color")?,
+                [1.0; 4],
+            ),
+            cone_radius: required_scalar_f32(radius, "value:", "cone radius")?,
+            cone_angle_degrees: required_scalar_f32(shape, "angle:", "cone angle")?,
+            size_over_lifetime: [
+                *size_values.first().context("chimney size curve is empty")?,
+                *size_values.last().context("chimney size curve is empty")?,
+            ],
+            alpha_over_lifetime: [start_alpha, end_alpha],
+            max_particles: scalar(initial, "maxNumParticles:")
+                .and_then(|value| value.parse().ok())
+                .context("chimney particle has no maximum count")?,
+            world_space: scalar(&particle.lines, "moveWithTransform:") == Some("1"),
+        },
+    );
+
+    for prefab in export.assets.iter().filter(|candidate| {
+        candidate.path.starts_with("Assets/Prefabs/Buildings/")
+            && candidate
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.guid.as_deref() == Some(asset.guid.as_str()))
+    }) {
+        let mut bindings = prefab
+            .game_object
+            .iter()
+            .flat_map(|game_object| &game_object.components)
+            .filter(|component| {
+                component
+                    .type_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("UnityEngine.Transform,"))
+                    && component
+                        .hierarchy_path
+                        .split('/')
+                        .next_back()
+                        .is_some_and(|name| name.starts_with("VFX_Chimney_Smoke"))
+            })
+            .map(|component| {
+                Ok(PrefabChimneyEmitterBinding {
+                    hierarchy_path: component.hierarchy_path.clone(),
+                    effect: effect_id.clone(),
+                    age: hierarchy_age(&component.hierarchy_path)?,
+                    local_position: field_array(&component.fields, "localPosition").with_context(
+                        || format!("{} has no local position", component.hierarchy_path),
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        bindings.sort_by(|left, right| left.hierarchy_path.cmp(&right.hierarchy_path));
+        if !bindings.is_empty() {
+            prefab_bindings.insert(prefab.guid.clone(), bindings);
+        }
+    }
+    Ok((effects, prefab_bindings))
+}
+
+fn yaml_section<'a>(lines: &'a [String], key: &str) -> Result<&'a [String]> {
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == key)
+        .with_context(|| format!("YAML has no {key} section"))?;
+    let indent = lines[start].len() - lines[start].trim_start().len();
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| !line.trim().is_empty() && line.len() - line.trim_start().len() <= indent)
+        .map_or(lines.len(), |(index, _)| index);
+    Ok(&lines[start + 1..end])
+}
+
+fn required_scalar_f32(lines: &[String], key: &str, field: &str) -> Result<f32> {
+    scalar_f32(lines, key).with_context(|| format!("chimney particle has no {field}"))
+}
+
+fn yaml_keyframe_values(lines: &[String]) -> Vec<f32> {
+    lines
+        .iter()
+        .filter_map(|line| line.trim().strip_prefix("value: "))
+        .filter_map(|value| value.parse().ok())
+        .collect()
+}
+
+fn hierarchy_age(path: &str) -> Result<u8> {
+    path.split('/')
+        .find_map(|component| {
+            component
+                .strip_prefix("Age")
+                .and_then(|suffix| suffix.get(..2))
+                .and_then(|age| age.parse().ok())
+        })
+        .with_context(|| format!("chimney hierarchy {path:?} has no age marker"))
+}
+
 fn vfx_named_scalar_values(documents: &[YamlDocument], name: &str) -> Vec<f32> {
     documents
         .iter()
@@ -836,6 +1012,10 @@ fn post_process_profile_id(guid: &str) -> Result<StableId> {
 
 fn fireworks_effect_id(guid: &str) -> Result<StableId> {
     StableId::new(format!("vfx:{guid}")).map_err(Into::into)
+}
+
+fn particle_effect_id(guid: &str) -> Result<StableId> {
+    StableId::new(format!("particle_effect:{guid}")).map_err(Into::into)
 }
 
 fn convert_textures(
@@ -3108,6 +3288,37 @@ MonoBehaviour:
         let colors = vfx_gradient_colors(&contents, "name: FireworkColour").unwrap();
         assert_eq!(colors.len(), 8);
         assert!((colors[2][0] - 42.722_507).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn parses_authored_chimney_particle_sections() {
+        let contents = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../Assets/Prefabs/VFX/Environment/VFX_Chimney_Smoke.prefab"),
+        )
+        .unwrap();
+        let documents = parse_yaml_documents(&contents).unwrap();
+        let particle = documents
+            .iter()
+            .find(|document| document.class_id == 198)
+            .unwrap();
+        let initial = yaml_section(&particle.lines, "InitialModule:").unwrap();
+        let lifetime = yaml_section(initial, "startLifetime:").unwrap();
+        let shape = yaml_section(&particle.lines, "ShapeModule:").unwrap();
+        let emission = yaml_section(&particle.lines, "EmissionModule:").unwrap();
+        let rate = yaml_section(emission, "rateOverTime:").unwrap();
+        let size = yaml_section(&particle.lines, "SizeModule:").unwrap();
+        let curve = yaml_section(size, "curve:").unwrap();
+        let max_curve = yaml_section(curve, "maxCurve:").unwrap();
+        assert_eq!(scalar_f32(&particle.lines, "lengthInSec:"), Some(5.0));
+        assert_eq!(scalar_f32(lifetime, "scalar:"), Some(5.0));
+        assert_eq!(scalar_f32(rate, "scalar:"), Some(5.0));
+        assert_eq!(scalar_f32(shape, "angle:"), Some(6.1));
+        assert_eq!(yaml_keyframe_values(max_curve), [0.513_157_84, 1.0]);
+        assert_eq!(
+            hierarchy_age("Age02_Forge/Base/VFX_Chimney_Smoke").unwrap(),
+            2
+        );
     }
 
     #[test]

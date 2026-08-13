@@ -374,7 +374,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters)",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters)",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state
@@ -399,6 +399,13 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
             state
                 .presentation
                 .scene_fireworks
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            state.presentation.chimney_smoke_effects.len(),
+            state
+                .presentation
+                .prefab_chimney_emitters
                 .values()
                 .map(Vec::len)
                 .sum::<usize>()

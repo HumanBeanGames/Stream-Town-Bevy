@@ -43,11 +43,12 @@ pub use presentation::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
-    PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef, PostProcessProfileDef,
-    PostProcessTonemapping, PostProcessVignetteDef, PrefabPresentationBinding, PresentationCatalog,
-    PresentationError, RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding,
-    TextureDef, TextureTransform,
+    AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef,
+    PostProcessBloomDef, PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef,
+    PostProcessProfileDef, PostProcessTonemapping, PostProcessVignetteDef,
+    PrefabChimneyEmitterBinding, PrefabPresentationBinding, PresentationCatalog, PresentationError,
+    RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding, TextureDef,
+    TextureTransform,
 };
 pub use runtime_console::{
     CURRENT_RUNTIME_CONSOLE_SCHEMA, RuntimeConsoleAction, RuntimeConsoleRequest,

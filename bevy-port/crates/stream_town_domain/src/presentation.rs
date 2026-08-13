@@ -41,6 +41,12 @@ pub struct PresentationCatalog {
     /// Fireworks instances keyed by the shipping Unity scene path.
     #[serde(default)]
     pub scene_fireworks: BTreeMap<String, Vec<SceneFireworksBinding>>,
+    /// Reachable Unity chimney particle systems converted for building presentation.
+    #[serde(default)]
+    pub chimney_smoke_effects: BTreeMap<StableId, ChimneySmokeDef>,
+    /// Chimney emitters keyed by the source building-prefab GUID.
+    #[serde(default)]
+    pub prefab_chimney_emitters: BTreeMap<String, Vec<PrefabChimneyEmitterBinding>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -67,6 +73,35 @@ pub struct FireworksVfxDef {
 pub struct SceneFireworksBinding {
     pub hierarchy_path: String,
     pub effect: StableId,
+    pub local_position: [f32; 3],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ChimneySmokeDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub duration_seconds: f32,
+    pub emission_rate_per_second: f32,
+    pub lifetime_seconds: f32,
+    pub start_speed: f32,
+    pub start_size: f32,
+    pub start_color_min: [f32; 4],
+    pub start_color_max: [f32; 4],
+    pub cone_radius: f32,
+    pub cone_angle_degrees: f32,
+    pub size_over_lifetime: [f32; 2],
+    pub alpha_over_lifetime: [f32; 2],
+    pub max_particles: u16,
+    /// Unity's particle simulation-space enum (`moveWithTransform == 1` is world space).
+    pub world_space: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PrefabChimneyEmitterBinding {
+    pub hierarchy_path: String,
+    pub effect: StableId,
+    pub age: u8,
     pub local_position: [f32; 3],
 }
 
@@ -733,10 +768,91 @@ pub enum PresentationError {
     },
     #[error("scene {scene} references missing fireworks effect {effect}")]
     MissingFireworksEffect { scene: String, effect: StableId },
+    #[error("chimney-smoke effect {effect} is invalid: {reason}")]
+    InvalidChimneySmokeEffect { effect: StableId, reason: String },
+    #[error("prefab {prefab_guid} references missing chimney-smoke effect {effect}")]
+    MissingChimneySmokeEffect {
+        prefab_guid: String,
+        effect: StableId,
+    },
+    #[error("prefab {prefab_guid} has an invalid chimney emitter at {hierarchy_path}: {reason}")]
+    InvalidChimneyEmitterBinding {
+        prefab_guid: String,
+        hierarchy_path: String,
+        reason: String,
+    },
 }
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (id, effect) in &self.chimney_smoke_effects {
+            let source_valid = effect.source_guid.len() == 32
+                && effect
+                    .source_guid
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+                && effect.source_path.starts_with("Assets/")
+                && Path::new(&effect.source_path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("prefab"))
+                && !effect.source_path.contains('\\')
+                && !effect.source_path.contains("..");
+            let positive = |value: f32| value.is_finite() && value > 0.0;
+            let valid = positive(effect.duration_seconds)
+                && positive(effect.emission_rate_per_second)
+                && positive(effect.lifetime_seconds)
+                && positive(effect.start_speed)
+                && positive(effect.start_size)
+                && effect
+                    .start_color_min
+                    .into_iter()
+                    .chain(effect.start_color_max)
+                    .all(|value| value.is_finite() && value >= 0.0)
+                && positive(effect.cone_radius)
+                && effect.cone_angle_degrees.is_finite()
+                && (0.0..=90.0).contains(&effect.cone_angle_degrees)
+                && effect
+                    .size_over_lifetime
+                    .into_iter()
+                    .chain(effect.alpha_over_lifetime)
+                    .all(|value| value.is_finite() && value >= 0.0)
+                && effect.max_particles > 0;
+            if !source_valid || !valid {
+                return Err(PresentationError::InvalidChimneySmokeEffect {
+                    effect: id.clone(),
+                    reason: "source metadata and particle parameters must be portable and valid"
+                        .into(),
+                });
+            }
+        }
+        for (prefab_guid, bindings) in &self.prefab_chimney_emitters {
+            let prefab_valid =
+                prefab_guid.len() == 32 && prefab_guid.bytes().all(|byte| byte.is_ascii_hexdigit());
+            for binding in bindings {
+                if !self.chimney_smoke_effects.contains_key(&binding.effect) {
+                    return Err(PresentationError::MissingChimneySmokeEffect {
+                        prefab_guid: prefab_guid.clone(),
+                        effect: binding.effect.clone(),
+                    });
+                }
+                if !prefab_valid
+                    || binding.hierarchy_path.trim().is_empty()
+                    || binding.hierarchy_path.contains('\\')
+                    || binding.age == 0
+                    || binding
+                        .local_position
+                        .into_iter()
+                        .any(|value| !value.is_finite())
+                {
+                    return Err(PresentationError::InvalidChimneyEmitterBinding {
+                        prefab_guid: prefab_guid.clone(),
+                        hierarchy_path: binding.hierarchy_path.clone(),
+                        reason: "prefab GUID, hierarchy path, age, and position must be valid"
+                            .into(),
+                    });
+                }
+            }
+        }
         for (id, effect) in &self.fireworks_effects {
             let source_valid = effect.source_guid.len() == 32
                 && effect
@@ -1667,6 +1783,52 @@ mod tests {
         assert!(matches!(
             invalid.validate(),
             Err(PresentationError::InvalidFireworksEffect { .. })
+        ));
+    }
+
+    #[test]
+    fn validates_chimney_smoke_and_rejects_dangling_emitters() {
+        let effect_id = StableId::new("particle_effect:chimney").unwrap();
+        let effect = ChimneySmokeDef {
+            display_name: "Chimney Smoke".into(),
+            source_guid: "b".repeat(32),
+            source_path: "Assets/Prefabs/VFX/Environment/VFX_Chimney_Smoke.prefab".into(),
+            duration_seconds: 5.0,
+            emission_rate_per_second: 5.0,
+            lifetime_seconds: 5.0,
+            start_speed: 1.0,
+            start_size: 0.25,
+            start_color_min: [0.886, 0.886, 0.886, 0.568],
+            start_color_max: [0.584, 0.584, 0.584, 0.537],
+            cone_radius: 0.11,
+            cone_angle_degrees: 6.1,
+            size_over_lifetime: [0.513_157_84, 1.0],
+            alpha_over_lifetime: [1.0, 0.0],
+            max_particles: 1_000,
+            world_space: false,
+        };
+        let binding = PrefabChimneyEmitterBinding {
+            hierarchy_path: "Age01_House/Age01_House_Base/VFX_Chimney_Smoke".into(),
+            effect: effect_id.clone(),
+            age: 1,
+            local_position: [-0.373, 2.201, -0.25],
+        };
+        let catalog = PresentationCatalog {
+            schema_version: 16,
+            chimney_smoke_effects: BTreeMap::from([(effect_id.clone(), effect)]),
+            prefab_chimney_emitters: BTreeMap::from([("a".repeat(32), vec![binding.clone()])]),
+            ..PresentationCatalog::default()
+        };
+        assert_eq!(catalog.validate(), Ok(()));
+
+        let dangling = PresentationCatalog {
+            schema_version: 16,
+            prefab_chimney_emitters: BTreeMap::from([("a".repeat(32), vec![binding])]),
+            ..PresentationCatalog::default()
+        };
+        assert!(matches!(
+            dangling.validate(),
+            Err(PresentationError::MissingChimneySmokeEffect { .. })
         ));
     }
 

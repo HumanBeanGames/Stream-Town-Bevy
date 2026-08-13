@@ -1,5 +1,5 @@
 (
-    schema_version: 15,
+    schema_version: 16,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -100947,6 +100947,80 @@
                 hierarchy_path: "VFX_FireWorks (1)",
                 effect: "vfx:6c66704c63ecdfc4189ea3dc04caf41e",
                 local_position: (-23.94, 12.81, -44.2),
+            ),
+        ],
+    },
+    chimney_smoke_effects: {
+        "particle_effect:bb5331581e5fa8f44ad53933b712895d": (
+            display_name: "VFX_Chimney_Smoke",
+            source_guid: "bb5331581e5fa8f44ad53933b712895d",
+            source_path: "Assets/Prefabs/VFX/Environment/VFX_Chimney_Smoke.prefab",
+            duration_seconds: 5.0,
+            emission_rate_per_second: 5.0,
+            lifetime_seconds: 5.0,
+            start_speed: 1.0,
+            start_size: 0.25,
+            start_color_min: (0.8867924, 0.8867924, 0.8867924, 0.5686275),
+            start_color_max: (0.5849056, 0.5849056, 0.5849056, 0.5372549),
+            cone_radius: 0.11,
+            cone_angle_degrees: 6.1,
+            size_over_lifetime: (0.51315784, 1.0),
+            alpha_over_lifetime: (1.0, 0.0),
+            max_particles: 1000,
+            world_space: false,
+        ),
+    },
+    prefab_chimney_emitters: {
+        "5939659079433a24db8e34e97f888f7d": [
+            (
+                hierarchy_path: "Age01_House/Age01_House_Base/VFX_Chimney_Smoke",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 1,
+                local_position: (-0.37300014, 2.201, -0.25),
+            ),
+            (
+                hierarchy_path: "Age02_House/Age02_House_Base/VFX_Chimney_Smoke",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 2,
+                local_position: (0.562, 3.899, 1.743),
+            ),
+        ],
+        "ad7c0025f53a96e4482b257f62ad974e": [
+            (
+                hierarchy_path: "Age02_Forge/Age02_Forge_Base/VFX_Chimney_Smoke",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 2,
+                local_position: (0.189, 3.047, 0.058),
+            ),
+            (
+                hierarchy_path: "Age02_Forge/Age02_Forge_Upgrade_01_Forge/VFX_Chimney_Smoke (1)",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 2,
+                local_position: (0.816, 3.411, 1.401),
+            ),
+        ],
+        "d0ae85a4ef0e7444582db23cc07f8456": [
+            (
+                hierarchy_path: "Age02_StoneMason/Age02_Stonemason_Base/VFX_Chimney_Smoke",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 2,
+                local_position: (-0.932, 4.444, -0.124),
+            ),
+        ],
+        "d328965b41e5e034790ca7b07c78d3bf": [
+            (
+                hierarchy_path: "Age02_Barracks/Age02_Barracks_Base/VFX_Chimney_Smoke",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 2,
+                local_position: (1.923, 4.146, 2.043),
+            ),
+        ],
+        "e3ed19146e506e2478c672f582230e90": [
+            (
+                hierarchy_path: "Age02_FishingHut/Age02_FishingHut_Base/VFX_Chimney_Smoke",
+                effect: "particle_effect:bb5331581e5fa8f44ad53933b712895d",
+                age: 2,
+                local_position: (0.657, 3.348, -0.021),
             ),
         ],
     },

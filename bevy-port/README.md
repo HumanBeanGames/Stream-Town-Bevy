@@ -429,7 +429,11 @@ and revival cues together for a repeatable gameplay-VFX capture.
 and frames the converted Arrow GLB for a repeatable combat-VFX capture.
 `STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction/repair smoke, the
 spark-emitting construction hit, building-level arrows, and persistent
-damage fire/smoke together. Enemy `TargetSensor` masks are authoritative in
+damage fire/smoke together.
+`STREAM_TOWN_SMOKE_CHIMNEY=1` spawns and frames a completed House so its
+age-specific authored chimney position and looping local-space smoke can be
+captured without issuing construction commands.
+Enemy `TargetSensor` masks are authoritative in
 content schema 21: ordinary enemies choose the nearest allowed actor/building,
 while the battering ram attacks only construction and buildings. Zero-health
 buildings are removed and release their dirty navigation region. Completed
@@ -581,6 +585,12 @@ HDR gradient colors, while both exact Credits scene placements are retained.
 At the Unity-authored 56-second key, a deterministic Bevy UI particle runtime
 launches rockets, delayed flashes, and radial sparks instead of displaying the
 earlier text-glyph placeholder.
+Presentation schema 16 also converts the reachable `VFX_Chimney_Smoke`
+particle prefab and all seven authored placements across House, Forge,
+Stonemason, Barracks, and Fishing Hut models. Completed buildings emit
+deterministic local-space smoke from the exact age-specific chimney locations,
+using Unity's five-particles-per-second rate, five-second lifetime, cone, size,
+color, and fade settings; incomplete or destroyed buildings do not emit.
 Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
 stacked built-in planes directly in Bevy. A typed WGSL material consumes its
 authored texture and exact dual world-space time offsets, cutoff, tint, and
