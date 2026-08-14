@@ -8,6 +8,7 @@
 struct CloudMaterialUniform {
     noise_controls: vec4<f32>,
     surface_transform: vec4<f32>,
+    filter_controls: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -27,9 +28,29 @@ fn fragment(
     let drift = vec2<f32>(view_bindings::globals.time * 0.5);
     let scale = cloud_material.surface_transform.zw;
     let cloud1_uv = fract(cloud_material.noise_controls.x * (world_uv - drift) * scale);
-    let cloud2_uv = fract(cloud_material.noise_controls.y * (world_uv + drift) * scale);
+    let cloud2_unwrapped_uv = cloud_material.noise_controls.y * (world_uv + drift) * scale;
+    let cloud2_uv = fract(cloud2_unwrapped_uv);
     let cloud1 = textureSample(cloud_texture, cloud_sampler, cloud1_uv).a;
-    let cloud2 = textureSample(cloud_texture, cloud_sampler, cloud2_uv).a;
+    let cloud2_unfiltered = textureSample(cloud_texture, cloud_sampler, cloud2_uv).a;
+    // Unity generated mipmaps for this TGA. Bevy preserves the source image,
+    // which has only its base level, so the authored 20x layer otherwise
+    // aliases into moving white static. Blend to the texture's alpha mean when
+    // a pixel covers multiple source texels, matching the lowest mip level.
+    let texture_size = vec2<f32>(textureDimensions(cloud_texture));
+    let footprint = max(
+        length(dpdx(cloud2_unwrapped_uv) * texture_size),
+        length(dpdy(cloud2_unwrapped_uv) * texture_size),
+    );
+    let detail_weight = 1.0 - smoothstep(
+        cloud_material.filter_controls.y,
+        cloud_material.filter_controls.z,
+        footprint,
+    );
+    let cloud2 = mix(
+        cloud_material.filter_controls.x,
+        cloud2_unfiltered,
+        detail_weight,
+    );
     let color_sample = clamp(
         (cloud1 - cloud_material.noise_controls.z)
             / max(1.0 - cloud_material.noise_controls.z, 0.001),

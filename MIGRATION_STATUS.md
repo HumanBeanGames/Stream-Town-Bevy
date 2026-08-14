@@ -28,11 +28,12 @@ mistaken for production-ready systems.
   Escape panel expose every persisted setting through an apply/default/cancel
   draft workflow plus new/load/save/credits/quit actions. The tools application
   has the same dedicated settings editor, reset, validation, and save workflow.
-  Bevy 0.19's exclusive-fullscreen startup requires an already-associated
-  monitor, so the game now creates its primary window in windowed mode and
-  applies the saved borderless/exclusive mode only after winit reports that
-  association. A missing or disconnected display falls back to windowed mode
-  instead of panicking during startup.
+  Bevy 0.19 cannot safely enter exclusive fullscreen during either window
+  creation or DX12 surface reconfiguration on all Windows drivers. The retained
+  Unity `Fullscreen` preference therefore uses borderless-fullscreen
+  compatibility, selected before renderer surface creation, while `Windowed`
+  remains distinct. This avoids both the missing-current-monitor panic and the
+  subsequent DX12 swapchain/device-loss cascade.
 - Unity's name-display index semantics now drive camera-projected player labels,
   including the privileged-user-only mode and the original game-master,
   broadcaster, moderator, subscriber, and normal-user colors. Twitch privilege
@@ -44,7 +45,14 @@ mistaken for production-ready systems.
   wind/birds entirely at runtime. The jukebox reselects on season and day/night
   boundaries, uses Unity's 600–900-second deterministic inter-track window and
   ten-second fade-out, and applies master/music/ambience/SFX settings through
-  independent gain paths.
+  independent gain paths. Ambience and music entities now exist only while a
+  town simulation is active, so the Main Menu remains silent. The ambient wind
+  is a seamless band-limited oscillator loop rather than sample-rate white
+  noise, removing the static-like hiss from the earlier placeholder.
+- The cloud WGSL material now analytically filters the authored 20x noise layer
+  when it is smaller than a screen pixel. This recreates Unity's mipmapped TGA
+  sampling without the prior moving white-static aliasing on menu and credits
+  cloud planes.
 - Validated, versioned RON configuration (schema 5) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero

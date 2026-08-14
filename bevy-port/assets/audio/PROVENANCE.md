@@ -10,10 +10,11 @@ media and require no external attribution.
 
 Seasonal day/night music beds and the ambient wind loop are also generated
 entirely at runtime by `stream_town_game`. The synthesizer writes mono 16-bit PCM
-WAV data from deterministic oscillators and pseudorandom noise; it does not use,
-derive from, or redistribute any recording or third-party composition. The code
-is GPL-3.0-only with the rest of this repository and requires no separate media
-attribution.
+WAV data from deterministic oscillators. The wind uses low-frequency integer
+harmonics over the loop duration so it is band-limited and seam-free; it does
+not use, derive from, or redistribute any recording or third-party composition.
+The code is GPL-3.0-only with the rest of this repository and requires no
+separate media attribution.
 
 The three seagull-call variants are likewise generated at runtime from swept
 oscillators and envelopes. They replace the unavailable source recordings used

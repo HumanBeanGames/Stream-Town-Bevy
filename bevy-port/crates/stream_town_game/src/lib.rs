@@ -43,8 +43,7 @@ use bevy::{
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
     window::{
-        MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, VideoModeSelection, WindowMode,
-        WindowResolution,
+        MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode, WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
 };
@@ -106,6 +105,11 @@ const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
 const CLOUD_MATERIAL_PATH: &str = "Assets/Materials/VFX/Clouds.mat";
+// Mean alpha of MainGameTexture_01.tga. Unity's texture importer supplied a
+// mip chain for this authored noise atlas; the migrated source TGA does not.
+// The cloud shader uses this value as the correctly box-filtered limit when
+// its 20x world-space noise layer is too small to resolve on screen.
+const CLOUD_NOISE_ALPHA_MEAN: f32 = 67.635_544 / 255.0;
 const GODRAY_SHADER_ASSET_PATH: &str = "shaders/godray_material.wgsl";
 const GODRAY_MATERIAL_PATH: &str = "Assets/Materials/VFX/VFX_Godrays.mat";
 const GIRAFFE_SHADER_ASSET_PATH: &str = "shaders/giraffe_material.wgsl";
@@ -684,6 +688,7 @@ type BuildingMaterial = ExtendedMaterial<StandardMaterial, BuildingMaterialExten
 struct CloudMaterialUniform {
     noise_controls: Vec4,
     surface_transform: Vec4,
+    filter_controls: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -2305,10 +2310,7 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                (
-                    apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
-                    apply_deferred_display_mode.after(apply_player_settings),
-                ),
+                apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
             )
             .add_systems(
                 Update,
@@ -2372,11 +2374,11 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                         } else {
                             PresentMode::AutoNoVsync
                         },
-                        // `MonitorSelection::Current` cannot resolve while winit is creating
-                        // the first window and Bevy 0.19 panics for exclusive fullscreen in
-                        // that state. Create a window safely; `apply_player_settings` selects
-                        // a discovered monitor before applying the persisted display mode.
-                        mode: WindowMode::Windowed,
+                        // Bevy 0.19 panics when exclusive fullscreen asks for the current
+                        // monitor during window creation, while changing into exclusive mode
+                        // after renderer setup can invalidate the DX12 swapchain on some
+                        // drivers. Preserve the setting but use borderless compatibility.
+                        mode: startup_window_mode(player_settings.video.display_mode),
                         ..default()
                     }),
                     ..default()
@@ -2457,17 +2459,19 @@ fn player_window_mode(
 ) -> WindowMode {
     match mode {
         stream_town_domain::DisplayMode::Windowed => WindowMode::Windowed,
-        stream_town_domain::DisplayMode::Borderless => monitor
-            .map_or(WindowMode::Windowed, |monitor| {
-                WindowMode::BorderlessFullscreen(MonitorSelection::Entity(monitor))
-            }),
-        stream_town_domain::DisplayMode::Fullscreen => {
-            monitor.map_or(WindowMode::Windowed, |monitor| {
-                WindowMode::Fullscreen(
-                    MonitorSelection::Entity(monitor),
-                    VideoModeSelection::Current,
-                )
-            })
+        stream_town_domain::DisplayMode::Borderless
+        | stream_town_domain::DisplayMode::Fullscreen => WindowMode::BorderlessFullscreen(
+            monitor.map_or(MonitorSelection::Primary, MonitorSelection::Entity),
+        ),
+    }
+}
+
+fn startup_window_mode(mode: stream_town_domain::DisplayMode) -> WindowMode {
+    match mode {
+        stream_town_domain::DisplayMode::Windowed => WindowMode::Windowed,
+        stream_town_domain::DisplayMode::Borderless
+        | stream_town_domain::DisplayMode::Fullscreen => {
+            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
         }
     }
 }
@@ -3081,34 +3085,6 @@ fn apply_player_settings(
     }
 }
 
-fn apply_deferred_display_mode(
-    settings: Res<RuntimePlayerSettings>,
-    mut windows: Query<(&mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
-    mut applied_mode: Local<Option<DisplayMode>>,
-) {
-    let requested_mode = settings.0.video.display_mode;
-    let Ok((mut window, current_monitor)) = windows.single_mut() else {
-        return;
-    };
-    if requested_mode == DisplayMode::Windowed {
-        *applied_mode = Some(requested_mode);
-        return;
-    }
-    let Some(current_monitor) = current_monitor else {
-        if window.mode != WindowMode::Windowed {
-            window.mode = WindowMode::Windowed;
-        }
-        *applied_mode = None;
-        return;
-    };
-    if *applied_mode == Some(requested_mode) {
-        return;
-    }
-    let monitor = current_monitor.0;
-    window.mode = player_window_mode(requested_mode, Some(monitor));
-    *applied_mode = Some(requested_mode);
-}
-
 fn sync_authored_post_processing(
     mut commands: Commands,
     state: Res<State<GameState>>,
@@ -3298,8 +3274,6 @@ fn player_msaa(settings: &PlayerSettings) -> Msaa {
 }
 
 fn setup_procedural_jukebox(
-    mut commands: Commands,
-    player_settings: Res<RuntimePlayerSettings>,
     audio_sources: Option<ResMut<Assets<AudioSource>>>,
     mut jukebox: ResMut<JukeboxRuntime>,
 ) {
@@ -3336,14 +3310,6 @@ fn setup_procedural_jukebox(
             })
         })
         .collect();
-    commands.spawn((
-        Name::new("Procedural seasonal ambience"),
-        AmbienceAudio,
-        AudioPlayer(ambience.clone()),
-        PlaybackSettings::LOOP.with_volume(Volume::Linear(
-            AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
-        )),
-    ));
     jukebox.ambience = Some(ambience);
     jukebox.seasonal_music = seasonal_music;
     jukebox.seagull_calls = seagull_calls;
@@ -3358,16 +3324,42 @@ fn drive_procedural_jukebox(
     config: Res<RuntimeConfig>,
     mut jukebox: ResMut<JukeboxRuntime>,
     mut music_sinks: Query<&mut AudioSink, With<MusicAudio>>,
+    music_players: Query<Entity, With<MusicAudio>>,
+    ambience_players: Query<Entity, With<AmbienceAudio>>,
     mut ambience_sinks: Query<&mut AudioSink, (With<AmbienceAudio>, Without<MusicAudio>)>,
 ) {
+    let Some(simulation) = simulation else {
+        for entity in &ambience_players {
+            commands.entity(entity).despawn();
+        }
+        for entity in &music_players {
+            commands.entity(entity).despawn();
+        }
+        jukebox.active_music = None;
+        jukebox.active_season = None;
+        jukebox.active_daytime = None;
+        jukebox.elapsed_seconds = 0.0;
+        jukebox.cooldown_seconds = 0.0;
+        return;
+    };
     for mut sink in &mut ambience_sinks {
         sink.set_volume(Volume::Linear(
             AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
         ));
     }
-    let Some(simulation) = simulation else {
-        return;
-    };
+    if ambience_players.is_empty()
+        && let Some(source) = jukebox.ambience.clone()
+    {
+        commands.spawn((
+            Name::new("Procedural seasonal ambience"),
+            WorldEntity,
+            AmbienceAudio,
+            AudioPlayer(source),
+            PlaybackSettings::LOOP.with_volume(Volume::Linear(
+                AMBIENCE_GAIN * player_settings.0.audio.master * player_settings.0.audio.ambience,
+            )),
+        ));
+    }
     jukebox.elapsed_seconds += time.delta_secs();
     jukebox.cooldown_seconds = (jukebox.cooldown_seconds - time.delta_secs()).max(0.0);
     let season = simulation.0.season;
@@ -3417,6 +3409,7 @@ fn drive_procedural_jukebox(
     let entity = commands
         .spawn((
             Name::new(format!("Procedural {season:?} music")),
+            WorldEntity,
             MusicAudio,
             AudioPlayer(source),
             PlaybackSettings::DESPAWN.with_volume(Volume::Linear(0.0)),
@@ -3774,12 +3767,21 @@ fn jukebox_music_fade(elapsed_seconds: f32, duration_seconds: f32) -> f32 {
     fade_in.min(fade_out)
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn procedural_ambience_wav(sample_rate: u32, seconds: f32) -> Vec<u8> {
-    synthesize_wav(sample_rate, seconds, |time, sample| {
-        let wind = (time * std::f32::consts::TAU * 0.075).sin() * 0.32
-            + (time * std::f32::consts::TAU * 0.13).sin() * 0.18;
-        let noise = pseudo_noise(sample) * (0.18 + wind.abs() * 0.2);
-        (wind * 0.09 + noise * 0.12).clamp(-0.25, 0.25)
+    let duration = seconds.max(1.0 / sample_rate.max(1) as f32);
+    synthesize_wav(sample_rate, seconds, move |time, _| {
+        // Integer harmonics over the clip duration make the loop seamless. The
+        // previous sample-by-sample white-noise layer was technically valid PCM,
+        // but sounded like static on headphones and some resamplers.
+        let phase = time / duration * std::f32::consts::TAU;
+        let gust = (phase * 2.0).sin() * 0.55
+            + (phase * 5.0 + 0.8).sin() * 0.28
+            + (phase * 11.0 + 2.1).sin() * 0.14;
+        let air = (phase * 23.0 + 1.4).sin() * 0.08
+            + (phase * 41.0 + 0.3).sin() * 0.05
+            + (phase * 67.0 + 2.7).sin() * 0.025;
+        (gust * 0.085 + air * 0.04).clamp(-0.12, 0.12)
     })
 }
 
@@ -4238,6 +4240,7 @@ fn cloud_material(
                     transform.scale[0],
                     transform.scale[1],
                 ),
+                filter_controls: Vec4::new(CLOUD_NOISE_ALPHA_MEAN, 0.75, 2.0, 0.0),
             },
             noise_texture: texture,
         },
@@ -24980,28 +24983,33 @@ mod tests {
     use stream_town_domain::generate_world;
 
     #[test]
-    fn display_mode_waits_for_a_real_monitor_before_entering_fullscreen() {
+    fn fullscreen_uses_startup_safe_borderless_compatibility() {
         assert_eq!(
             player_window_mode(DisplayMode::Fullscreen, None),
-            WindowMode::Windowed
+            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
         );
         assert_eq!(
             player_window_mode(DisplayMode::Borderless, None),
-            WindowMode::Windowed
+            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
         );
 
         let mut world = World::new();
         let monitor = world.spawn_empty().id();
         assert_eq!(
             player_window_mode(DisplayMode::Fullscreen, Some(monitor)),
-            WindowMode::Fullscreen(
-                MonitorSelection::Entity(monitor),
-                VideoModeSelection::Current,
-            )
+            WindowMode::BorderlessFullscreen(MonitorSelection::Entity(monitor))
         );
         assert_eq!(
             player_window_mode(DisplayMode::Borderless, Some(monitor)),
             WindowMode::BorderlessFullscreen(MonitorSelection::Entity(monitor))
+        );
+        assert_eq!(
+            startup_window_mode(DisplayMode::Fullscreen),
+            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+        );
+        assert_eq!(
+            startup_window_mode(DisplayMode::Windowed),
+            WindowMode::Windowed
         );
     }
 
@@ -26087,6 +26095,26 @@ mod tests {
         assert_eq!(&ambience[8..12], b"WAVE");
         assert_eq!(ambience.len(), 44 + 8_000 * 2);
         assert_eq!(ambience, procedural_ambience_wav(8_000, 1.0));
+        let ambience_samples: Vec<_> = ambience[44..]
+            .chunks_exact(2)
+            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+            .collect();
+        let peak = ambience_samples
+            .iter()
+            .map(|sample| i32::from(*sample).abs())
+            .max()
+            .unwrap_or_default();
+        let maximum_step = ambience_samples
+            .windows(2)
+            .map(|samples| (i32::from(samples[1]) - i32::from(samples[0])).abs())
+            .max()
+            .unwrap_or_default();
+        let loop_step = (i32::from(ambience_samples[0])
+            - i32::from(*ambience_samples.last().expect("ambience has samples")))
+        .abs();
+        assert!(peak > 512, "ambience must remain audible");
+        assert!(maximum_step < 128, "ambience contains static-like jumps");
+        assert!(loop_step < 128, "ambience loop contains an audible seam");
 
         let spring_day = procedural_music_wav(Season::Spring, true, 8_000, 1.0);
         let spring_night = procedural_music_wav(Season::Spring, false, 8_000, 1.0);
@@ -30360,6 +30388,10 @@ mod tests {
         assert_eq!(
             clouds.extension.parameters.surface_transform,
             Vec4::new(200.0, 1.4, 1.0, 1.0)
+        );
+        assert_eq!(
+            clouds.extension.parameters.filter_controls,
+            Vec4::new(CLOUD_NOISE_ALPHA_MEAN, 0.75, 2.0, 0.0)
         );
         let water_definition = presentation
             .materials

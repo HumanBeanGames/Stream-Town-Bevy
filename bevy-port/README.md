@@ -147,11 +147,19 @@ Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
 all camera controls/sensitivities, name/building-health overlays, and the Unity
 0/5/10/30/60-minute autosave choices are applied by the runtime.
+On Bevy 0.19, the saved Unity `Fullscreen` choice is implemented as borderless
+fullscreen compatibility. This mode is selected before DX12 surface creation,
+avoiding Bevy's missing-current-monitor panic and driver-dependent device loss
+from switching into exclusive fullscreen after renderer initialization.
 Because the Unity repository contains no redistributable soundtrack files, the
-runtime synthesizes four seasonal day/night music beds and a continuous ambient
-wind/bird loop. Unity's separate master, music, ambience, and sound-effect gains,
+runtime synthesizes four seasonal day/night music beds and an in-game-only,
+seamless band-limited ambient wind/bird loop. Unity's separate master, music,
+ambience, and sound-effect gains,
 fade behavior, day/night and season reselection, and deterministic 600–900 second
 inter-track waits are preserved without adding licensed media.
+
+The cloud material also filters its high-frequency authored noise at subpixel
+sizes, matching Unity's generated mipmaps and preventing menu/credits shimmer.
 
 Twitch is disabled in the checked-in configuration. The tools application writes
 public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
