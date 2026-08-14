@@ -43,7 +43,7 @@ use bevy::{
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
     window::{
-        MonitorSelection, PresentMode, PrimaryWindow, VideoModeSelection, WindowMode,
+        MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, VideoModeSelection, WindowMode,
         WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
@@ -2305,7 +2305,10 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
+                (
+                    apply_player_settings.run_if(resource_changed::<RuntimePlayerSettings>),
+                    apply_deferred_display_mode.after(apply_player_settings),
+                ),
             )
             .add_systems(
                 Update,
@@ -2369,7 +2372,11 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                         } else {
                             PresentMode::AutoNoVsync
                         },
-                        mode: player_window_mode(player_settings.video.display_mode),
+                        // `MonitorSelection::Current` cannot resolve while winit is creating
+                        // the first window and Bevy 0.19 panics for exclusive fullscreen in
+                        // that state. Create a window safely; `apply_player_settings` selects
+                        // a discovered monitor before applying the persisted display mode.
+                        mode: WindowMode::Windowed,
                         ..default()
                     }),
                     ..default()
@@ -2444,14 +2451,23 @@ fn legacy_unity_settings_path() -> Option<PathBuf> {
     })
 }
 
-fn player_window_mode(mode: stream_town_domain::DisplayMode) -> WindowMode {
+fn player_window_mode(
+    mode: stream_town_domain::DisplayMode,
+    monitor: Option<Entity>,
+) -> WindowMode {
     match mode {
         stream_town_domain::DisplayMode::Windowed => WindowMode::Windowed,
-        stream_town_domain::DisplayMode::Borderless => {
-            WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-        }
+        stream_town_domain::DisplayMode::Borderless => monitor
+            .map_or(WindowMode::Windowed, |monitor| {
+                WindowMode::BorderlessFullscreen(MonitorSelection::Entity(monitor))
+            }),
         stream_town_domain::DisplayMode::Fullscreen => {
-            WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Current)
+            monitor.map_or(WindowMode::Windowed, |monitor| {
+                WindowMode::Fullscreen(
+                    MonitorSelection::Entity(monitor),
+                    VideoModeSelection::Current,
+                )
+            })
         }
     }
 }
@@ -3005,14 +3021,15 @@ fn setup_rendering(
 fn apply_player_settings(
     settings: Res<RuntimePlayerSettings>,
     mut commands: Commands,
-    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut windows: Query<(&mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
     mut cameras: Query<(Entity, &mut Projection), With<TownCamera>>,
     mut lights: Query<&mut DirectionalLight>,
     mut shadow_map: Option<ResMut<DirectionalLightShadowMap>>,
     mut winit: Option<ResMut<WinitSettings>>,
 ) {
-    if let Ok(mut window) = windows.single_mut() {
-        window.mode = player_window_mode(settings.0.video.display_mode);
+    if let Ok((mut window, current_monitor)) = windows.single_mut() {
+        let monitor = current_monitor.map(|monitor| monitor.0);
+        window.mode = player_window_mode(settings.0.video.display_mode, monitor);
         window.present_mode = if settings.0.video.vsync {
             PresentMode::AutoVsync
         } else {
@@ -3062,6 +3079,34 @@ fn apply_player_settings(
                 UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
             });
     }
+}
+
+fn apply_deferred_display_mode(
+    settings: Res<RuntimePlayerSettings>,
+    mut windows: Query<(&mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
+    mut applied_mode: Local<Option<DisplayMode>>,
+) {
+    let requested_mode = settings.0.video.display_mode;
+    let Ok((mut window, current_monitor)) = windows.single_mut() else {
+        return;
+    };
+    if requested_mode == DisplayMode::Windowed {
+        *applied_mode = Some(requested_mode);
+        return;
+    }
+    let Some(current_monitor) = current_monitor else {
+        if window.mode != WindowMode::Windowed {
+            window.mode = WindowMode::Windowed;
+        }
+        *applied_mode = None;
+        return;
+    };
+    if *applied_mode == Some(requested_mode) {
+        return;
+    }
+    let monitor = current_monitor.0;
+    window.mode = player_window_mode(requested_mode, Some(monitor));
+    *applied_mode = Some(requested_mode);
 }
 
 fn sync_authored_post_processing(
@@ -24933,6 +24978,32 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 mod tests {
     use super::*;
     use stream_town_domain::generate_world;
+
+    #[test]
+    fn display_mode_waits_for_a_real_monitor_before_entering_fullscreen() {
+        assert_eq!(
+            player_window_mode(DisplayMode::Fullscreen, None),
+            WindowMode::Windowed
+        );
+        assert_eq!(
+            player_window_mode(DisplayMode::Borderless, None),
+            WindowMode::Windowed
+        );
+
+        let mut world = World::new();
+        let monitor = world.spawn_empty().id();
+        assert_eq!(
+            player_window_mode(DisplayMode::Fullscreen, Some(monitor)),
+            WindowMode::Fullscreen(
+                MonitorSelection::Entity(monitor),
+                VideoModeSelection::Current,
+            )
+        );
+        assert_eq!(
+            player_window_mode(DisplayMode::Borderless, Some(monitor)),
+            WindowMode::BorderlessFullscreen(MonitorSelection::Entity(monitor))
+        );
+    }
 
     #[test]
     fn game_menu_exposes_state_appropriate_actions_and_save_availability() {

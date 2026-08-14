@@ -28,6 +28,11 @@ mistaken for production-ready systems.
   Escape panel expose every persisted setting through an apply/default/cancel
   draft workflow plus new/load/save/credits/quit actions. The tools application
   has the same dedicated settings editor, reset, validation, and save workflow.
+  Bevy 0.19's exclusive-fullscreen startup requires an already-associated
+  monitor, so the game now creates its primary window in windowed mode and
+  applies the saved borderless/exclusive mode only after winit reports that
+  association. A missing or disconnected display falls back to windowed mode
+  instead of panicking during startup.
 - Unity's name-display index semantics now drive camera-projected player labels,
   including the privileged-user-only mode and the original game-master,
   broadcaster, moderator, subscriber, and normal-user colors. Twitch privilege
