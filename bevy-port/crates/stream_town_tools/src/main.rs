@@ -374,7 +374,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters) / {} raining-fish effects",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters) / {} raining-fish effects / {} healing-channel effects / {} healing-burst effects",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state
@@ -409,7 +409,9 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 .values()
                 .map(Vec::len)
                 .sum::<usize>(),
-            state.presentation.raining_fish_effects.len()
+            state.presentation.raining_fish_effects.len(),
+            state.presentation.healing_channel_effects.len(),
+            state.presentation.healing_burst_effects.len()
         ));
     });
     ui.separator();

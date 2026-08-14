@@ -622,6 +622,15 @@ bounce, collision lifetime loss, prewarm, and 5,000-particle ceiling. The Bevy
 renderer deterministically samples that logical effect into a 320-fish visual
 budget, preserving the authored coverage and timing while keeping the 300-agent
 performance gate bounded.
+Presentation schema 18 replaces the earlier hand-tuned healing visuals with two
+typed Unity VFX Graph records. `VFX_Healing_Channeling` retains its 32-particle
+capacity, 16-per-second rate, 1-3 second particle lifetime, prefab size override,
+four-key five-second curve, and HDR color/alpha gradient. `VFX_healing` retains
+its 1.2-second disable contract, eight-capacity/100-count plus burst, converted
+`VFX_Plus.glb`, 128-capacity/one-count disc, both particle-age size curves, the
+two prefab HDR gradients, and `Particle_02` texture provenance. Bevy samples
+those budgets, curves, and gradients into short-lived ECS effects and uses the
+converted plus mesh when assets are available.
 Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
 stacked built-in planes directly in Bevy. A typed WGSL material consumes its
 authored texture and exact dual world-space time offsets, cutoff, tint, and

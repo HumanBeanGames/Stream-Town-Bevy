@@ -452,11 +452,15 @@ mistaken for production-ready systems.
   DirectX 12 castle close-up exercises every converted flag slot.
 - Priest heals now drive a purpose-built ECS replacement for the reachable
   `VFX_healing` and `VFX_Healing_Channeling` graphs. The target receives the
-  Unity-authored 1.2-second green/gold healed burst, while the healer emits the
-  serialized five-second channel field with its 0/0.289/1/0 size keys. Automatic
-  respawns, paid `!revive`, and game-master revival emit the larger gold-accented
-  variant. All three use short-lived shared meshes/materials rather than a
-  prewarmed pool, and a deterministic DirectX 12 smoke scene covers them.
+  Unity-authored 1.2-second healed burst, while the healer emits the serialized
+  five-second channel field. Presentation schema 18 now converts both graphs and
+  their prefab overrides: capacities, rate, lifetime ranges, burst counts,
+  particle-age and five-second size curves, HDR color/alpha gradients, converted
+  plus mesh, and disc texture provenance. The runtime samples those records for
+  ECS particle budgets, curve motion, mesh selection, and gradient materials;
+  automatic respawns, paid `!revive`, and game-master revival use a larger
+  revival treatment built from the authored burst geometry. All three remain short-lived shared render entities,
+  and a deterministic DirectX 12 smoke scene covers them.
 - Combat presentation now preserves role identity instead of rendering every
   ranged attack as the same cube. Rangers and Towers use the converted
   `Arrow.glb`, Wizards use the serialized orange `VFX_Fireball` size/trail

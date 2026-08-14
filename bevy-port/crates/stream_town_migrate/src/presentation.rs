@@ -13,12 +13,13 @@ use stream_town_domain::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, MaterialAlphaMode, MaterialDef,
-    PostProcessBloomDef, PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef,
-    PostProcessProfileDef, PostProcessTonemapping, PostProcessVignetteDef,
-    PrefabChimneyEmitterBinding, PrefabPresentationBinding, PresentationCatalog, RainingFishVfxDef,
-    RendererMaterialBinding, SceneFireworksBinding, ScenePostProcessBinding, StableId, TextureDef,
-    TextureTransform,
+    AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, HealingBurstVfxDef, HealingChannelVfxDef,
+    MaterialAlphaMode, MaterialDef, PostProcessBloomDef, PostProcessColorAdjustmentsDef,
+    PostProcessMotionBlurDef, PostProcessProfileDef, PostProcessTonemapping,
+    PostProcessVignetteDef, PrefabChimneyEmitterBinding, PrefabPresentationBinding,
+    PresentationCatalog, RainingFishVfxDef, RendererMaterialBinding, SceneFireworksBinding,
+    ScenePostProcessBinding, StableId, TextureDef, TextureTransform, VfxAlphaKeyframe,
+    VfxColorKeyframe, VfxGradientDef,
 };
 
 const SHIPPING_SCENES: [&str; 4] = [
@@ -68,6 +69,8 @@ pub struct PresentationConversionReport {
     pub chimney_smoke_effects: usize,
     pub prefab_chimney_emitters: usize,
     pub raining_fish_effects: usize,
+    pub healing_channel_effects: usize,
+    pub healing_burst_effects: usize,
     pub outputs: Vec<String>,
 }
 
@@ -233,6 +236,7 @@ pub fn convert(
     let (fireworks_effects, scene_fireworks) = convert_fireworks(&export, &root)?;
     let (chimney_smoke_effects, prefab_chimney_emitters) = convert_chimney_smoke(&export, &root)?;
     let raining_fish_effects = convert_raining_fish(&export, &root)?;
+    let (healing_channel_effects, healing_burst_effects) = convert_healing_vfx(&export, &root)?;
     let mut clips = convert_clips(&export, &root)?;
     let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
     let avatar_masks = convert_avatar_masks(&export, &root)?;
@@ -247,7 +251,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 17,
+        schema_version: 18,
         textures,
         materials,
         clips,
@@ -264,6 +268,8 @@ pub fn convert(
         chimney_smoke_effects,
         prefab_chimney_emitters,
         raining_fish_effects,
+        healing_channel_effects,
+        healing_burst_effects,
     };
     catalog
         .validate()
@@ -274,7 +280,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 17,
+        schema_version: 18,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -394,6 +400,8 @@ pub fn convert(
         chimney_smoke_effects: catalog.chimney_smoke_effects.len(),
         prefab_chimney_emitters: catalog.prefab_chimney_emitters.values().map(Vec::len).sum(),
         raining_fish_effects: catalog.raining_fish_effects.len(),
+        healing_channel_effects: catalog.healing_channel_effects.len(),
+        healing_burst_effects: catalog.healing_burst_effects.len(),
         outputs: vec![
             normalized_path(&catalog_path),
             normalized_path(&report_path),
@@ -889,6 +897,101 @@ fn convert_raining_fish(
     Ok(effects)
 }
 
+fn convert_healing_vfx(
+    export: &UnityExport,
+    unity_root: &Path,
+) -> Result<(
+    BTreeMap<StableId, HealingChannelVfxDef>,
+    BTreeMap<StableId, HealingBurstVfxDef>,
+)> {
+    const CHANNEL_PREFAB: &str = "Assets/Prefabs/VFX/Player/VFX_Healing_Channeling.prefab";
+    const CHANNEL_GRAPH: &str = "Assets/VFX/vfx_channeling.vfx";
+    const BURST_PREFAB: &str = "Assets/Prefabs/VFX/Player/VFX_healing.prefab";
+    const BURST_GRAPH: &str = "Assets/VFX/vfx_healed.vfx";
+    const PLUS_MODEL: &str = "Assets/Models/VFX/VFX_Plus.fbx";
+    const DISC_TEXTURE: &str = "Assets/Sprites/VFX/Particle_02.png";
+
+    let mut channels = BTreeMap::new();
+    let mut bursts = BTreeMap::new();
+    let find = |path: &str| export.assets.iter().find(|asset| asset.path == path);
+
+    if let (Some(prefab), Some(graph)) = (find(CHANNEL_PREFAB), find(CHANNEL_GRAPH)) {
+        let prefab_contents = fs::read_to_string(unity_root.join(CHANNEL_PREFAB))?;
+        let graph_contents = fs::read_to_string(unity_root.join(CHANNEL_GRAPH))?;
+        let documents = parse_yaml_documents(&graph_contents)?;
+        let particle_capacity = vfx_capacity(&documents, 32)?;
+        let particle_lifetime_seconds = vfx_attribute_range(&documents, "lifetime", 32)?;
+        let emission_rate_per_second = *vfx_named_scalar_values(&documents, "Rate")
+            .first()
+            .context("healing-channel graph has no emission Rate")?;
+        channels.insert(
+            vfx_effect_id(&prefab.guid)?,
+            HealingChannelVfxDef {
+                display_name: prefab.name.clone(),
+                source_guid: prefab.guid.clone(),
+                source_path: prefab.path.clone(),
+                graph_guid: graph.guid.clone(),
+                graph_source: graph.path.clone(),
+                particle_capacity: u16::try_from(particle_capacity)?,
+                emission_rate_per_second,
+                particle_lifetime_seconds,
+                exposed_size: vfx_prefab_scalar(&prefab_contents, "Size")?,
+                size_over_lifetime: vfx_prefab_curve(&prefab_contents, "Size overlife")?,
+                color: vfx_prefab_gradient(&prefab_contents, "ColourGradient")?,
+            },
+        );
+    }
+
+    if let (Some(prefab), Some(graph), Some(model), Some(texture)) = (
+        find(BURST_PREFAB),
+        find(BURST_GRAPH),
+        find(PLUS_MODEL),
+        find(DISC_TEXTURE),
+    ) {
+        let prefab_contents = fs::read_to_string(unity_root.join(BURST_PREFAB))?;
+        let graph_contents = fs::read_to_string(unity_root.join(BURST_GRAPH))?;
+        let documents = parse_yaml_documents(&graph_contents)?;
+        let plus_capacity = vfx_capacity(&documents, 8)?;
+        let disc_capacity = vfx_capacity(&documents, 128)?;
+        bursts.insert(
+            vfx_effect_id(&prefab.guid)?,
+            HealingBurstVfxDef {
+                display_name: prefab.name.clone(),
+                source_guid: prefab.guid.clone(),
+                source_path: prefab.path.clone(),
+                graph_guid: graph.guid.clone(),
+                graph_source: graph.path.clone(),
+                duration_seconds: prefab_disable_lifetime(&prefab_contents)?,
+                plus_capacity: u16::try_from(plus_capacity)?,
+                plus_burst_count: f32_to_u16(
+                    vfx_burst_count(&documents, plus_capacity)?,
+                    "healing plus burst count",
+                )?,
+                plus_lifetime_seconds: vfx_attribute_range(&documents, "lifetime", plus_capacity)?,
+                plus_size_over_lifetime: vfx_attribute_curve(&documents, "size", plus_capacity)?,
+                plus_color: vfx_prefab_gradient(&prefab_contents, "PlusColour")?,
+                plus_model_source: model.path.clone(),
+                plus_model_asset_path: glb_asset_path(&model.path),
+                disc_capacity: u16::try_from(disc_capacity)?,
+                disc_burst_count: f32_to_u16(
+                    vfx_burst_count(&documents, disc_capacity)?,
+                    "healing disc burst count",
+                )?,
+                disc_lifetime_seconds: vfx_attribute_values(&documents, "lifetime", disc_capacity)?
+                    .first()
+                    .copied()
+                    .context("healing disc system has no lifetime")?,
+                disc_size_multiplier: vfx_attribute_scalar(&documents, "size", disc_capacity, 2)?,
+                disc_size_over_lifetime: vfx_attribute_curve(&documents, "size", disc_capacity)?,
+                disc_color: vfx_prefab_gradient(&prefab_contents, "DiscColour")?,
+                disc_texture: texture_id(&texture.guid)?,
+            },
+        );
+    }
+
+    Ok((channels, bursts))
+}
+
 fn yaml_section<'a>(lines: &'a [String], key: &str) -> Result<&'a [String]> {
     let start = lines
         .iter()
@@ -981,6 +1084,218 @@ fn vfx_named_scalar_values(documents: &[YamlDocument], name: &str) -> Vec<f32> {
         .filter(|document| scalar(&document.lines, "name:") == Some(name))
         .filter_map(|document| scalar_f32(&document.lines, "m_SerializableObject:"))
         .collect()
+}
+
+fn vfx_capacity(documents: &[YamlDocument], expected: u32) -> Result<u32> {
+    documents
+        .iter()
+        .filter_map(|document| scalar(&document.lines, "capacity:")?.parse().ok())
+        .find(|capacity| *capacity == expected)
+        .with_context(|| format!("VFX graph has no particle capacity {expected}"))
+}
+
+fn vfx_burst_count(documents: &[YamlDocument], capacity: u32) -> Result<f32> {
+    documents
+        .iter()
+        .filter(|document| scalar(&document.lines, "spawnMode:").is_some())
+        .filter(|document| vfx_spawn_capacity(documents, document) == Some(capacity))
+        .find_map(|document| {
+            yaml_reference_list(&document.lines, "m_InputSlots:")
+                .into_iter()
+                .filter_map(|id| documents.iter().find(|candidate| candidate.file_id == id))
+                .find(|slot| scalar(&slot.lines, "name:") == Some("Count"))
+                .and_then(|slot| scalar_f32(&slot.lines, "m_SerializableObject:"))
+        })
+        .with_context(|| format!("VFX graph has no burst Count for capacity {capacity}"))
+}
+
+fn vfx_spawn_capacity(documents: &[YamlDocument], burst: &YamlDocument) -> Option<u32> {
+    let spawn_context = reference_id(&burst.lines, "m_Parent:")?;
+    let spawn_context = documents
+        .iter()
+        .find(|document| document.file_id == spawn_context)?;
+    let initialize_context = spawn_context.lines.iter().find_map(|line| {
+        line.trim_start()
+            .strip_prefix("- context:")
+            .and_then(|_| inline_file_id(line))
+    })?;
+    let initialize_context = documents
+        .iter()
+        .find(|document| document.file_id == initialize_context)?;
+    let data = reference_id(&initialize_context.lines, "m_Data:")?;
+    let data = documents.iter().find(|document| document.file_id == data)?;
+    scalar(&data.lines, "capacity:")?.parse().ok()
+}
+
+fn vfx_attribute_documents<'a>(
+    documents: &'a [YamlDocument],
+    attribute: &str,
+    capacity: u32,
+) -> impl Iterator<Item = &'a YamlDocument> {
+    documents
+        .iter()
+        .filter(move |document| scalar(&document.lines, "attribute:") == Some(attribute))
+        .filter(move |document| vfx_owner_capacity(documents, document) == Some(capacity))
+}
+
+fn vfx_attribute_scalar(
+    documents: &[YamlDocument],
+    attribute: &str,
+    capacity: u32,
+    composition: u32,
+) -> Result<f32> {
+    vfx_attribute_documents(documents, attribute, capacity)
+        .find(|document| {
+            scalar(&document.lines, "Composition:").and_then(|value| value.parse().ok())
+                == Some(composition)
+        })
+        .and_then(|document| {
+            yaml_reference_list(&document.lines, "m_InputSlots:")
+                .into_iter()
+                .filter_map(|id| documents.iter().find(|candidate| candidate.file_id == id))
+                .find_map(|slot| scalar_f32(&slot.lines, "m_SerializableObject:"))
+        })
+        .with_context(|| format!("VFX graph has no {attribute} scalar for capacity {capacity}"))
+}
+
+fn vfx_attribute_curve(
+    documents: &[YamlDocument],
+    attribute: &str,
+    capacity: u32,
+) -> Result<Vec<AnimationFloatKeyframe>> {
+    let encoded = vfx_attribute_documents(documents, attribute, capacity)
+        .find_map(|document| {
+            yaml_reference_list(&document.lines, "m_InputSlots:")
+                .into_iter()
+                .filter_map(|id| documents.iter().find(|candidate| candidate.file_id == id))
+                .find_map(|slot| {
+                    scalar(&slot.lines, "m_SerializableObject:")
+                        .filter(|value| value.contains("\"frames\""))
+                })
+        })
+        .with_context(|| format!("VFX graph has no {attribute} curve for capacity {capacity}"))?;
+    vfx_json_curve(encoded)
+}
+
+fn vfx_prefab_scalar(contents: &str, name: &str) -> Result<f32> {
+    let tail = contents
+        .split_once(&format!("m_Name: {name}"))
+        .with_context(|| format!("VFX prefab has no {name} override"))?
+        .0;
+    tail.lines()
+        .rev()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("- m_Value: ")
+                .or_else(|| line.trim().strip_prefix("m_Value: "))
+        })
+        .and_then(|value| value.parse().ok())
+        .with_context(|| format!("VFX prefab {name} override has no scalar value"))
+}
+
+fn vfx_prefab_curve(contents: &str, name: &str) -> Result<Vec<AnimationFloatKeyframe>> {
+    let tail = contents
+        .split_once(&format!("m_Name: {name}"))
+        .with_context(|| format!("VFX prefab has no {name} override"))?
+        .0;
+    let curve_start = tail
+        .rfind("          m_Curve:")
+        .context("VFX prefab curve has no key list")?;
+    yaml_float_keyframes(
+        &tail[curve_start..]
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn vfx_prefab_gradient(contents: &str, name: &str) -> Result<VfxGradientDef> {
+    let before_name = contents
+        .split_once(&format!("        m_Name: {name}"))
+        .with_context(|| format!("VFX prefab has no {name} gradient override"))?
+        .0;
+    let start = before_name
+        .rfind("          serializedVersion: 2")
+        .context("VFX prefab gradient has no serialized value")?;
+    let lines = before_name[start..]
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let color_count: usize = scalar(&lines, "m_NumColorKeys:")
+        .context("VFX gradient has no color-key count")?
+        .parse()?;
+    let alpha_count: usize = scalar(&lines, "m_NumAlphaKeys:")
+        .context("VFX gradient has no alpha-key count")?
+        .parse()?;
+    let color_keys = (0..color_count)
+        .map(|index| {
+            let encoded = scalar(&lines, &format!("key{index}:"))
+                .with_context(|| format!("VFX gradient has no color key {index}"))?;
+            let color = inline_color(encoded, [0.0; 4]);
+            let time = scalar_f32(&lines, &format!("ctime{index}:"))
+                .with_context(|| format!("VFX gradient has no color time {index}"))?
+                / 65_535.0;
+            Ok(VfxColorKeyframe {
+                time,
+                color: [color[0], color[1], color[2]],
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let alpha_keys = (0..alpha_count)
+        .map(|index| {
+            let alpha = inline_color(
+                scalar(&lines, &format!("key{index}:"))
+                    .with_context(|| format!("VFX gradient has no alpha key {index}"))?,
+                [0.0; 4],
+            )[3];
+            let time = scalar_f32(&lines, &format!("atime{index}:"))
+                .with_context(|| format!("VFX gradient has no alpha time {index}"))?
+                / 65_535.0;
+            Ok(VfxAlphaKeyframe { time, alpha })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(VfxGradientDef {
+        color_keys,
+        alpha_keys,
+    })
+}
+
+fn vfx_json_curve(encoded: &str) -> Result<Vec<AnimationFloatKeyframe>> {
+    let value: Value = serde_json::from_str(encoded.trim_matches('\''))?;
+    value
+        .get("frames")
+        .and_then(Value::as_array)
+        .context("VFX curve has no frames")?
+        .iter()
+        .map(|frame| {
+            let tangent_mode = frame
+                .get("tangentMode")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            Ok(AnimationFloatKeyframe {
+                time: json_f32(frame, "time").context("VFX curve key has no time")?,
+                value: json_f32(frame, "value").context("VFX curve key has no value")?,
+                in_slope: AnimationTangent::Finite(
+                    json_f32(frame, "inTangent").context("VFX curve key has no in tangent")?,
+                ),
+                out_slope: AnimationTangent::Finite(
+                    json_f32(frame, "outTangent").context("VFX curve key has no out tangent")?,
+                ),
+                tangent_mode: u32::try_from(tangent_mode)?,
+                weighted_mode: 0,
+                in_weight: 0.0,
+                out_weight: 0.0,
+            })
+        })
+        .collect()
+}
+
+fn prefab_disable_lifetime(contents: &str) -> Result<f32> {
+    contents
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("_lifeTime: "))
+        .and_then(|value| value.parse().ok())
+        .context("healing prefab has no disable lifetime")
 }
 
 fn vfx_named_vec2(documents: &[YamlDocument], name: &str) -> Result<[f32; 2]> {
@@ -1199,6 +1514,10 @@ fn post_process_profile_id(guid: &str) -> Result<StableId> {
 }
 
 fn fireworks_effect_id(guid: &str) -> Result<StableId> {
+    StableId::new(format!("vfx:{guid}")).map_err(Into::into)
+}
+
+fn vfx_effect_id(guid: &str) -> Result<StableId> {
     StableId::new(format!("vfx:{guid}")).map_err(Into::into)
 }
 
@@ -3547,6 +3866,53 @@ MonoBehaviour:
         assert!((keys[1].time - 0.876_676_3).abs() < f32::EPSILON);
         assert!((keys[1].value - 0.860_819_2).abs() < f32::EPSILON);
         assert_eq!(keys.last().map(|key| key.value), Some(0.0));
+    }
+
+    #[test]
+    fn converts_authored_healing_graphs_and_prefab_overrides() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let export: UnityExport = serde_json::from_str(
+            &fs::read_to_string(root.join("bevy-port/generated/unity-export.json")).unwrap(),
+        )
+        .unwrap();
+        let (channels, bursts) = convert_healing_vfx(&export, &root).unwrap();
+        let channel = channels.values().next().unwrap();
+        assert_eq!(channel.particle_capacity, 32);
+        assert!((channel.emission_rate_per_second - 16.0).abs() < f32::EPSILON);
+        assert!(
+            channel
+                .particle_lifetime_seconds
+                .into_iter()
+                .zip([1.0, 3.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!((channel.exposed_size - 10.0).abs() < f32::EPSILON);
+        assert_eq!(channel.size_over_lifetime.len(), 4);
+        assert_eq!(channel.duration_seconds(), Some(5.0));
+        assert!((channel.color.color_keys[0].color[1] - 16.948_38).abs() < 0.000_01);
+
+        let burst = bursts.values().next().unwrap();
+        assert!((burst.duration_seconds - 1.2).abs() < f32::EPSILON);
+        assert_eq!((burst.plus_capacity, burst.plus_burst_count), (8, 100));
+        assert!(
+            burst
+                .plus_lifetime_seconds
+                .into_iter()
+                .zip([0.5, 1.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert_eq!((burst.disc_capacity, burst.disc_burst_count), (128, 1));
+        assert!((burst.disc_lifetime_seconds - 1.0).abs() < f32::EPSILON);
+        assert_eq!(burst.plus_size_over_lifetime.len(), 3);
+        assert_eq!(burst.disc_size_over_lifetime.len(), 2);
+        assert_eq!(
+            burst.plus_model_asset_path,
+            "migrated/models/Models/VFX/VFX_Plus.glb"
+        );
+        assert_eq!(
+            burst.disc_texture.as_str(),
+            "texture:d66db54b89d0e934398d6e933169a6c5"
+        );
     }
 
     #[test]

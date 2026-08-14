@@ -50,6 +50,12 @@ pub struct PresentationCatalog {
     /// Reachable Fish God mesh-particle effect converted from Unity's built-in particle system.
     #[serde(default)]
     pub raining_fish_effects: BTreeMap<StableId, RainingFishVfxDef>,
+    /// Reachable player-healing channel graphs with prefab-exposed overrides applied.
+    #[serde(default)]
+    pub healing_channel_effects: BTreeMap<StableId, HealingChannelVfxDef>,
+    /// Reachable completed-heal graphs with both authored particle systems retained.
+    #[serde(default)]
+    pub healing_burst_effects: BTreeMap<StableId, HealingBurstVfxDef>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -141,6 +147,141 @@ impl RainingFishVfxDef {
     pub fn size_multiplier(&self, normalized_age: f32) -> Option<f32> {
         sample_float_keys(&self.size_over_lifetime, normalized_age.clamp(0.0, 1.0))
     }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct VfxGradientDef {
+    pub color_keys: Vec<VfxColorKeyframe>,
+    pub alpha_keys: Vec<VfxAlphaKeyframe>,
+}
+
+impl VfxGradientDef {
+    /// Samples Unity's linear gradient representation in linear HDR color space.
+    #[must_use]
+    pub fn sample(&self, normalized_time: f32) -> Option<[f32; 4]> {
+        let time = normalized_time.clamp(0.0, 1.0);
+        let color = sample_vfx_color_keys(&self.color_keys, time)?;
+        let alpha = sample_vfx_alpha_keys(&self.alpha_keys, time)?;
+        Some([color[0], color[1], color[2], alpha])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct VfxColorKeyframe {
+    pub time: f32,
+    /// Unity VFX Graph colors are retained as linear HDR values.
+    pub color: [f32; 3],
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct VfxAlphaKeyframe {
+    pub time: f32,
+    pub alpha: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct HealingChannelVfxDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub graph_guid: String,
+    pub graph_source: String,
+    pub particle_capacity: u16,
+    pub emission_rate_per_second: f32,
+    pub particle_lifetime_seconds: [f32; 2],
+    pub exposed_size: f32,
+    /// Prefab override curve; unlike particle-age curves, its keys are authored in seconds.
+    pub size_over_lifetime: Vec<AnimationFloatKeyframe>,
+    pub color: VfxGradientDef,
+}
+
+impl HealingChannelVfxDef {
+    #[must_use]
+    pub fn duration_seconds(&self) -> Option<f32> {
+        self.size_over_lifetime.last().map(|key| key.time)
+    }
+
+    #[must_use]
+    pub fn size_multiplier(&self, elapsed_seconds: f32) -> Option<f32> {
+        sample_float_keys(&self.size_over_lifetime, elapsed_seconds.max(0.0))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct HealingBurstVfxDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub graph_guid: String,
+    pub graph_source: String,
+    pub duration_seconds: f32,
+    pub plus_capacity: u16,
+    pub plus_burst_count: u16,
+    pub plus_lifetime_seconds: [f32; 2],
+    pub plus_size_over_lifetime: Vec<AnimationFloatKeyframe>,
+    pub plus_color: VfxGradientDef,
+    pub plus_model_source: String,
+    pub plus_model_asset_path: String,
+    pub disc_capacity: u16,
+    pub disc_burst_count: u16,
+    pub disc_lifetime_seconds: f32,
+    pub disc_size_multiplier: f32,
+    pub disc_size_over_lifetime: Vec<AnimationFloatKeyframe>,
+    pub disc_color: VfxGradientDef,
+    pub disc_texture: StableId,
+}
+
+impl HealingBurstVfxDef {
+    #[must_use]
+    pub fn plus_size_multiplier(&self, normalized_age: f32) -> Option<f32> {
+        sample_float_keys(
+            &self.plus_size_over_lifetime,
+            normalized_age.clamp(0.0, 1.0),
+        )
+    }
+
+    #[must_use]
+    pub fn disc_size_multiplier_at(&self, normalized_age: f32) -> Option<f32> {
+        sample_float_keys(
+            &self.disc_size_over_lifetime,
+            normalized_age.clamp(0.0, 1.0),
+        )
+        .map(|value| value * self.disc_size_multiplier)
+    }
+}
+
+fn sample_vfx_color_keys(keys: &[VfxColorKeyframe], time: f32) -> Option<[f32; 3]> {
+    let first = keys.first()?;
+    if time <= first.time {
+        return Some(first.color);
+    }
+    let last = keys.last()?;
+    if time >= last.time {
+        return Some(last.color);
+    }
+    let pair = keys
+        .windows(2)
+        .find(|pair| time >= pair[0].time && time < pair[1].time)?;
+    let progress = (time - pair[0].time) / (pair[1].time - pair[0].time);
+    Some(std::array::from_fn(|axis| {
+        pair[0].color[axis] + (pair[1].color[axis] - pair[0].color[axis]) * progress
+    }))
+}
+
+fn sample_vfx_alpha_keys(keys: &[VfxAlphaKeyframe], time: f32) -> Option<f32> {
+    let first = keys.first()?;
+    if time <= first.time {
+        return Some(first.alpha);
+    }
+    let last = keys.last()?;
+    if time >= last.time {
+        return Some(last.alpha);
+    }
+    let pair = keys
+        .windows(2)
+        .find(|pair| time >= pair[0].time && time < pair[1].time)?;
+    let progress = (time - pair[0].time) / (pair[1].time - pair[0].time);
+    Some(pair[0].alpha + (pair[1].alpha - pair[0].alpha) * progress)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -829,10 +970,72 @@ pub enum PresentationError {
         effect: StableId,
         material: StableId,
     },
+    #[error("healing-channel effect {effect} is invalid: {reason}")]
+    InvalidHealingChannelEffect { effect: StableId, reason: String },
+    #[error("healing-burst effect {effect} is invalid: {reason}")]
+    InvalidHealingBurstEffect { effect: StableId, reason: String },
+    #[error("healing-burst effect {effect} references missing texture {texture}")]
+    MissingHealingBurstTexture { effect: StableId, texture: StableId },
 }
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (id, effect) in &self.healing_channel_effects {
+            let valid = valid_unity_source(&effect.source_guid, &effect.source_path, "prefab")
+                && valid_unity_source(&effect.graph_guid, &effect.graph_source, "vfx")
+                && effect.particle_capacity > 0
+                && finite_positive(effect.emission_rate_per_second)
+                && ordered_positive_range(effect.particle_lifetime_seconds)
+                && finite_positive(effect.exposed_size)
+                && valid_float_curve(&effect.size_over_lifetime, false)
+                && effect
+                    .size_over_lifetime
+                    .first()
+                    .is_some_and(|key| key.time.abs() < f32::EPSILON)
+                && effect.duration_seconds().is_some_and(finite_positive)
+                && valid_vfx_gradient(&effect.color);
+            if !valid {
+                return Err(PresentationError::InvalidHealingChannelEffect {
+                    effect: id.clone(),
+                    reason: "source metadata, emission, lifetime, size curve, and gradient must be portable and valid".into(),
+                });
+            }
+        }
+        for (id, effect) in &self.healing_burst_effects {
+            if !self.textures.contains_key(&effect.disc_texture) {
+                return Err(PresentationError::MissingHealingBurstTexture {
+                    effect: id.clone(),
+                    texture: effect.disc_texture.clone(),
+                });
+            }
+            let portable_path = |path: &str| {
+                !path.contains('\\') && !path.split('/').any(|component| component == "..")
+            };
+            let valid = valid_unity_source(&effect.source_guid, &effect.source_path, "prefab")
+                && valid_unity_source(&effect.graph_guid, &effect.graph_source, "vfx")
+                && effect.plus_model_source.starts_with("Assets/")
+                && effect.plus_model_asset_path.starts_with("migrated/models/")
+                && portable_path(&effect.plus_model_source)
+                && portable_path(&effect.plus_model_asset_path)
+                && finite_positive(effect.duration_seconds)
+                && effect.plus_capacity > 0
+                && effect.plus_burst_count > 0
+                && ordered_positive_range(effect.plus_lifetime_seconds)
+                && valid_float_curve(&effect.plus_size_over_lifetime, true)
+                && valid_vfx_gradient(&effect.plus_color)
+                && effect.disc_capacity > 0
+                && effect.disc_burst_count > 0
+                && finite_positive(effect.disc_lifetime_seconds)
+                && finite_positive(effect.disc_size_multiplier)
+                && valid_float_curve(&effect.disc_size_over_lifetime, true)
+                && valid_vfx_gradient(&effect.disc_color);
+            if !valid {
+                return Err(PresentationError::InvalidHealingBurstEffect {
+                    effect: id.clone(),
+                    reason: "source metadata, converted dependencies, budgets, lifetimes, curves, and gradients must be portable and valid".into(),
+                });
+            }
+        }
         for (id, effect) in &self.raining_fish_effects {
             if !self.materials.contains_key(&effect.material) {
                 return Err(PresentationError::MissingRainingFishMaterial {
@@ -1662,6 +1865,66 @@ fn valid_curve_times(times: impl Iterator<Item = f32>) -> bool {
     true
 }
 
+fn finite_positive(value: f32) -> bool {
+    value.is_finite() && value > 0.0
+}
+
+fn ordered_positive_range(range: [f32; 2]) -> bool {
+    range.into_iter().all(finite_positive) && range[1] >= range[0]
+}
+
+fn valid_unity_source(guid: &str, path: &str, extension: &str) -> bool {
+    guid.len() == 32
+        && guid.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && path.starts_with("Assets/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(extension))
+        && !path.contains('\\')
+        && !path.split('/').any(|component| component == "..")
+}
+
+fn valid_float_curve(keys: &[AnimationFloatKeyframe], normalized: bool) -> bool {
+    !keys.is_empty()
+        && keys.windows(2).all(|pair| pair[1].time > pair[0].time)
+        && keys.iter().all(|key| {
+            key.time.is_finite()
+                && key.time >= 0.0
+                && (!normalized || key.time <= 1.0)
+                && key.value.is_finite()
+                && key.value >= 0.0
+                && key.in_slope.is_finite()
+                && key.out_slope.is_finite()
+                && key.in_weight.is_finite()
+                && key.out_weight.is_finite()
+        })
+}
+
+fn valid_vfx_gradient(gradient: &VfxGradientDef) -> bool {
+    !gradient.color_keys.is_empty()
+        && !gradient.alpha_keys.is_empty()
+        && gradient
+            .color_keys
+            .windows(2)
+            .all(|pair| pair[1].time > pair[0].time)
+        && gradient
+            .alpha_keys
+            .windows(2)
+            .all(|pair| pair[1].time > pair[0].time)
+        && gradient.color_keys.iter().all(|key| {
+            (0.0..=1.0).contains(&key.time)
+                && key
+                    .color
+                    .into_iter()
+                    .all(|value| value.is_finite() && value >= 0.0)
+        })
+        && gradient.alpha_keys.iter().all(|key| {
+            (0.0..=1.0).contains(&key.time)
+                && key.alpha.is_finite()
+                && (0.0..=1.0).contains(&key.alpha)
+        })
+}
+
 fn is_glb_path(path: &str) -> bool {
     Path::new(path)
         .extension()
@@ -2021,6 +2284,38 @@ mod tests {
         assert_eq!(catalog.validate(), Ok(()));
         assert_eq!(effect.size_multiplier(0.0), Some(1.0));
         assert_eq!(effect.size_multiplier(1.0), Some(0.0));
+    }
+
+    #[test]
+    fn vfx_gradient_samples_hdr_color_and_independent_alpha() {
+        let gradient = VfxGradientDef {
+            color_keys: vec![
+                VfxColorKeyframe {
+                    time: 0.0,
+                    color: [2.0, 4.0, 0.0],
+                },
+                VfxColorKeyframe {
+                    time: 1.0,
+                    color: [4.0, 2.0, 0.0],
+                },
+            ],
+            alpha_keys: vec![
+                VfxAlphaKeyframe {
+                    time: 0.0,
+                    alpha: 0.0,
+                },
+                VfxAlphaKeyframe {
+                    time: 0.5,
+                    alpha: 1.0,
+                },
+                VfxAlphaKeyframe {
+                    time: 1.0,
+                    alpha: 0.0,
+                },
+            ],
+        };
+        assert_eq!(gradient.sample(0.5), Some([3.0, 3.0, 0.0, 1.0]));
+        assert_eq!(gradient.sample(1.0), Some([4.0, 2.0, 0.0, 0.0]));
     }
 
     #[test]

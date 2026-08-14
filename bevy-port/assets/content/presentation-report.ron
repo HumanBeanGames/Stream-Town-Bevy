@@ -1,5 +1,5 @@
 (
-    schema_version: 17,
+    schema_version: 18,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -37,6 +37,8 @@
     chimney_smoke_effects: 1,
     prefab_chimney_emitters: 7,
     raining_fish_effects: 1,
+    healing_channel_effects: 1,
+    healing_burst_effects: 1,
     outputs: [
         "assets/content/presentation.ron",
         "assets/content/presentation-report.ron",

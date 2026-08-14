@@ -2765,8 +2765,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/lib.rs": {
-    "mtime": 1786660587.3829348,
-    "ast_hash": "d0b80ceebbdf9559c54ebd2ed74343f2",
+    "mtime": 1786665880.7889037,
+    "ast_hash": "3e6216f3126ddb3e33f3b5c2db4d2606",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/navigation.rs": {
@@ -2790,8 +2790,8 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/lib.rs": {
-    "mtime": 1786663875.3526945,
-    "ast_hash": "fe95dd1f2a08c5704ebfa1dc66f0192a",
+    "mtime": 1786667180.6218636,
+    "ast_hash": "94907bb6cda1492f9a1deb40bb073380",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_game/src/main.rs": {
@@ -2805,13 +2805,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_tools/src/main.rs": {
-    "mtime": 1786661051.8494813,
-    "ast_hash": "d0617f9bc00815fb3a9e20dc287871b6",
+    "mtime": 1786666662.9089062,
+    "ast_hash": "7ed2bcfc9617c323076998791eb64791",
     "semantic_hash": ""
   },
   "bevy-port/xtask/src/main.rs": {
-    "mtime": 1786661051.847975,
-    "ast_hash": "d23be36ce0a007c73a700a030ca85be2",
+    "mtime": 1786666662.909906,
+    "ast_hash": "46011645f0de367ed9ac2bbcd0c6f0eb",
     "semantic_hash": ""
   },
   ".codex/skills/graphify/SKILL.md": {
@@ -2955,8 +2955,8 @@
     "semantic_hash": ""
   },
   "bevy-port/README.md": {
-    "mtime": 1786664057.873852,
-    "ast_hash": "150d2be72249a1767e85cc42952d29f5",
+    "mtime": 1786666787.1717722,
+    "ast_hash": "7d8f1095c03bf08c5d04cab3a3afc400",
     "semantic_hash": ""
   },
   "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
@@ -3605,8 +3605,8 @@
     "semantic_hash": ""
   },
   "MIGRATION_STATUS.md": {
-    "mtime": 1786664065.1425028,
-    "ast_hash": "b329865cffdc4625454f6737d9ddb4f8",
+    "mtime": 1786667552.0685413,
+    "ast_hash": "bc34d6c8d22b54c3025ef2d1cda57923",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/legacy.rs": {
@@ -3660,13 +3660,13 @@
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_domain/src/presentation.rs": {
-    "mtime": 1786661087.552694,
-    "ast_hash": "9e2dc64782a71acb167459be5c31515a",
+    "mtime": 1786666770.419756,
+    "ast_hash": "79dcd3c73570bfedaa993c309bc2de88",
     "semantic_hash": ""
   },
   "bevy-port/crates/stream_town_migrate/src/presentation.rs": {
-    "mtime": 1786661288.7084665,
-    "ast_hash": "1f98dfde8c157875d73727bf3543322c",
+    "mtime": 1786667180.6228685,
+    "ast_hash": "d59ddc77388ebc0359bceec3fc7a642b",
     "semantic_hash": ""
   },
   "bevy-port/assets/migrated/textures/Resources/Icons/Buildings/UI_Icon_Building_Age01_FoodStorage.png": {
