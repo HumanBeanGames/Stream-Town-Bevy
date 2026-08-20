@@ -1,5 +1,5 @@
 (
-    schema_version: 18,
+    schema_version: 19,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -101080,6 +101080,192 @@
             collision_lifetime_loss: 0.25,
             world_space: true,
             prewarm: true,
+        ),
+    },
+    fish_school_effects: {
+        "particle_effect:c42ac9a94d8790a4586d3dfb41609ed3": (
+            display_name: "Fish",
+            source_guid: "c42ac9a94d8790a4586d3dfb41609ed3",
+            source_path: "Assets/Prefabs/VFX/Environment/Fish.prefab",
+            model_source: "Assets/Models/Critters/Critter_Fish3.fbx",
+            model_asset_path: "migrated/models/Models/Critters/Critter_Fish3.glb",
+            material: "material:56cfb478fa4b9e8469bcbbf9cf077701",
+            duration_seconds: 120.0,
+            emission_rate_per_second: 40.0,
+            lifetime_seconds: 120.0,
+            start_size: (0.2, 1.0),
+            max_particles: 2000,
+            particle_local_position: (0.0, -2.0, 0.0),
+            shape_scale: (300.0, 300.0, 5.0),
+            noise_strength: (10.0, 0.02, 10.0),
+            noise_frequency: 0.22,
+            world_space: true,
+            prewarm: true,
+        ),
+    },
+    scene_fish_schools: {
+        "Assets/Scenes/Menu/Main_Menu_02.unity": [
+            (
+                hierarchy_path: "Fish",
+                effect: "particle_effect:c42ac9a94d8790a4586d3dfb41609ed3",
+                local_position: (0.0, 0.0, 0.0),
+                max_particles: 800,
+                emission_rate_per_second: 40.0,
+                noise_strength: (10.0, 0.02, 10.0),
+            ),
+        ],
+        "Assets/Scenes/Worlds/World_Town.unity": [
+            (
+                hierarchy_path: "Fish",
+                effect: "particle_effect:c42ac9a94d8790a4586d3dfb41609ed3",
+                local_position: (0.0, 0.0, 0.0),
+                max_particles: 2000,
+                emission_rate_per_second: 40.0,
+                noise_strength: (10.0, 0.02, 10.0),
+            ),
+            (
+                hierarchy_path: "Fish (1)",
+                effect: "particle_effect:c42ac9a94d8790a4586d3dfb41609ed3",
+                local_position: (0.0, -46.2, 0.0),
+                max_particles: 2000,
+                emission_rate_per_second: 40.0,
+                noise_strength: (10.0, 5.0, 10.0),
+            ),
+        ],
+    },
+    role_action_audio: {
+        "role:builder": (
+            display_name: "Builder",
+            source_guid: "0ec3ccb134a3bb642aeed1f209834413",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Builder.asset",
+            clip_guids: [
+                "5c4b92ca70c7f9a4c88e5b51a0b8abb1",
+                "754682fd26d48244493b7c5816250c95",
+                "ae82e839e31a7fe41a579676c769b58d",
+            ],
+        ),
+        "role:defender": (
+            display_name: "Defender",
+            source_guid: "097064a68fe88534db484ca4474a4037",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Defender.asset",
+            clip_guids: [
+                "f31caabd2244f9246ac65171604347c6",
+                "a1f2fdfd743a926408f2cc87a473190d",
+                "4bc4b0c135a9d2145972f5d25e4c150a",
+            ],
+        ),
+        "role:farmer": (
+            display_name: "Farmer",
+            source_guid: "4596dd0bc695f7745a4462cac92e5bb5",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Farmer.asset",
+            clip_guids: [
+                "738f0bab70632f642966ea0d35df5afc",
+                "3f2b3012951505a40a9811a492ccc09e",
+                "c3f822135f6854a44a3edc42d4995218",
+            ],
+        ),
+        "role:fisher": (
+            display_name: "Fisher",
+            source_guid: "9255ed4a148774848b2d75d5f0a1e599",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Fisher.asset",
+            clip_guids: [
+                "4288618f081acc041be0f865068a7b26",
+            ],
+        ),
+        "role:gatherer": (
+            display_name: "Gatherer",
+            source_guid: "8b484764d8164d340b55ec95fa8bd590",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Gatherer.asset",
+            clip_guids: [
+                "151d48304cdf2410e912e99569629f5c",
+                "17dfe90853dd544c8b573ec4261ee62f",
+                "9b7dc8c576a6f49c393c35713cd02064",
+            ],
+        ),
+        "role:logger": (
+            display_name: "Logger",
+            source_guid: "e478b6a2b5135bd42a0e09090be111cc",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Logger.asset",
+            clip_guids: [
+                "72957ac88de08f444addf952d61c3699",
+                "1908e6d2fcf01294c821c8d3f67e14d8",
+                "e299b804db2202e49b24beadb1ff5b43",
+            ],
+        ),
+        "role:miner": (
+            display_name: "Miner",
+            source_guid: "9dfa415c64ecc6f47a6753721bace6bc",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Miner.asset",
+            clip_guids: [
+                "c7aa71b580ef461448d1a0a6b1c829da",
+                "67f57287a42f7584ea20761350aba802",
+                "356cf77d5271def448d622053c109121",
+                "cd67aca6b6991d544b1b6cef4f252066",
+                "485024d2ce1d8cc4f8c9f9fdf1d840d2",
+            ],
+        ),
+        "role:necromancer": (
+            display_name: "Necromancer",
+            source_guid: "d27187e76285fe344b6fec8e25770b09",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Necromancer.asset",
+            clip_guids: [
+                "ef16ad5f757841e49a2955f49860b703",
+                "8368a41469654412f99d85c34f207641",
+            ],
+        ),
+        "role:paladin": (
+            display_name: "Paladin",
+            source_guid: "f62a06bb71929c84292a220f7dbcce8e",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Paladin.asset",
+            clip_guids: [
+                "ccb15f280d4e2d24aaaf8f11b1bc47f2",
+                "1268d243435d8f14c9d2c67d9e57b482",
+            ],
+        ),
+        "role:priest": (
+            display_name: "Priest",
+            source_guid: "b618ef1dfb6c2c14b94a52bb2c647053",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Priest.asset",
+            clip_guids: [
+                "dc86107cb281d9841bab25118c2e32b0",
+                "19e4cb6d38e7c3e499d7b8524ba4c672",
+            ],
+        ),
+        "role:ranger": (
+            display_name: "Ranger",
+            source_guid: "6ef2f4e54a801994abfc42a217717261",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Ranger.asset",
+            clip_guids: [
+                "e98c1b1c416e3454487d7ad6932a0d62",
+                "c05e3686baf080e4a99acf21144934e8",
+            ],
+        ),
+        "role:ruler": (
+            display_name: "Ruler",
+            source_guid: "3f884e1a958f43e43b8c501d39883c9f",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Ruler.asset",
+            clip_guids: [
+                "fcb4ee811e814d24bad95545d74155a3",
+                "416ad1ad8ae95cb48ac63c93bc3e18b6",
+            ],
+        ),
+        "role:soldier": (
+            display_name: "Soldier",
+            source_guid: "03537864acccdcd47b1543a1f8cbe3a6",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Soldier.asset",
+            clip_guids: [
+                "fcb4ee811e814d24bad95545d74155a3",
+                "416ad1ad8ae95cb48ac63c93bc3e18b6",
+            ],
+        ),
+        "role:wizard": (
+            display_name: "Wizard",
+            source_guid: "ffa1eaa3424e6774bbcc1f6dd3197e3f",
+            source_path: "Assets/Resources/ScriptableObjects/Roles/RoleData_Wizard.asset",
+            clip_guids: [
+                "6b1e456970dac4b4dad7a05b134e507a",
+                "f1668ece23161491dbbd5abdef8bb8d2",
+            ],
         ),
     },
     healing_channel_effects: {

@@ -50,6 +50,15 @@ pub struct PresentationCatalog {
     /// Reachable Fish God mesh-particle effect converted from Unity's built-in particle system.
     #[serde(default)]
     pub raining_fish_effects: BTreeMap<StableId, RainingFishVfxDef>,
+    /// Long-lived swimming-fish particle field used by the shipping town and main-menu scenes.
+    #[serde(default)]
+    pub fish_school_effects: BTreeMap<StableId, FishSchoolVfxDef>,
+    /// Swimming-fish instances keyed by their shipping Unity scene path.
+    #[serde(default)]
+    pub scene_fish_schools: BTreeMap<String, Vec<SceneFishSchoolBinding>>,
+    /// Unity role clip references retained even when the licensed source media is unavailable.
+    #[serde(default)]
+    pub role_action_audio: BTreeMap<StableId, RoleActionAudioDef>,
     /// Reachable player-healing channel graphs with prefab-exposed overrides applied.
     #[serde(default)]
     pub healing_channel_effects: BTreeMap<StableId, HealingChannelVfxDef>,
@@ -139,6 +148,46 @@ pub struct RainingFishVfxDef {
     pub collision_lifetime_loss: f32,
     pub world_space: bool,
     pub prewarm: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct FishSchoolVfxDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    pub model_source: String,
+    pub model_asset_path: String,
+    pub material: StableId,
+    pub duration_seconds: f32,
+    pub emission_rate_per_second: f32,
+    pub lifetime_seconds: f32,
+    pub start_size: [f32; 2],
+    pub max_particles: u16,
+    pub particle_local_position: [f32; 3],
+    pub shape_scale: [f32; 3],
+    pub noise_strength: [f32; 3],
+    pub noise_frequency: f32,
+    pub world_space: bool,
+    pub prewarm: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SceneFishSchoolBinding {
+    pub hierarchy_path: String,
+    pub effect: StableId,
+    pub local_position: [f32; 3],
+    pub max_particles: u16,
+    pub emission_rate_per_second: f32,
+    pub noise_strength: [f32; 3],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RoleActionAudioDef {
+    pub display_name: String,
+    pub source_guid: String,
+    pub source_path: String,
+    /// GUIDs of Unity `AudioClip` references. They remain useful as deterministic variant IDs.
+    pub clip_guids: Vec<String>,
 }
 
 impl RainingFishVfxDef {
@@ -970,6 +1019,23 @@ pub enum PresentationError {
         effect: StableId,
         material: StableId,
     },
+    #[error("fish-school effect {effect} is invalid: {reason}")]
+    InvalidFishSchoolEffect { effect: StableId, reason: String },
+    #[error("fish-school effect {effect} references missing material {material}")]
+    MissingFishSchoolMaterial {
+        effect: StableId,
+        material: StableId,
+    },
+    #[error("scene {scene} has an invalid fish-school binding at {hierarchy_path}: {reason}")]
+    InvalidFishSchoolBinding {
+        scene: String,
+        hierarchy_path: String,
+        reason: String,
+    },
+    #[error("scene {scene} references missing fish-school effect {effect}")]
+    MissingFishSchoolEffect { scene: String, effect: StableId },
+    #[error("role action audio {role} is invalid: {reason}")]
+    InvalidRoleActionAudio { role: StableId, reason: String },
     #[error("healing-channel effect {effect} is invalid: {reason}")]
     InvalidHealingChannelEffect { effect: StableId, reason: String },
     #[error("healing-burst effect {effect} is invalid: {reason}")]
@@ -980,6 +1046,91 @@ pub enum PresentationError {
 
 impl PresentationCatalog {
     pub fn validate(&self) -> Result<(), PresentationError> {
+        for (role, audio) in &self.role_action_audio {
+            let valid = role.as_str().starts_with("role:")
+                && valid_unity_source(&audio.source_guid, &audio.source_path, "asset")
+                && !audio.display_name.trim().is_empty()
+                && !audio.clip_guids.is_empty()
+                && audio.clip_guids.iter().all(|guid| {
+                    guid.len() == 32 && guid.bytes().all(|byte| byte.is_ascii_hexdigit())
+                });
+            if !valid {
+                return Err(PresentationError::InvalidRoleActionAudio {
+                    role: role.clone(),
+                    reason: "role ID, source asset, and clip GUIDs must be portable and valid"
+                        .into(),
+                });
+            }
+        }
+        for (id, effect) in &self.fish_school_effects {
+            if !self.materials.contains_key(&effect.material) {
+                return Err(PresentationError::MissingFishSchoolMaterial {
+                    effect: id.clone(),
+                    material: effect.material.clone(),
+                });
+            }
+            let portable = |path: &str| {
+                !path.contains('\\') && !path.split('/').any(|component| component == "..")
+            };
+            let valid = valid_unity_source(&effect.source_guid, &effect.source_path, "prefab")
+                && effect.model_source.starts_with("Assets/")
+                && effect.model_asset_path.starts_with("migrated/models/")
+                && portable(&effect.model_source)
+                && portable(&effect.model_asset_path)
+                && finite_positive(effect.duration_seconds)
+                && finite_positive(effect.emission_rate_per_second)
+                && finite_positive(effect.lifetime_seconds)
+                && effect.start_size.into_iter().all(finite_positive)
+                && effect.start_size[1] >= effect.start_size[0]
+                && effect.max_particles > 0
+                && effect
+                    .particle_local_position
+                    .into_iter()
+                    .chain(effect.noise_strength)
+                    .all(f32::is_finite)
+                && effect.shape_scale.into_iter().all(finite_positive)
+                && finite_positive(effect.noise_frequency);
+            if !valid {
+                return Err(PresentationError::InvalidFishSchoolEffect {
+                    effect: id.clone(),
+                    reason: "source metadata, model, material, lifetime, shape, and noise must be portable and valid".into(),
+                });
+            }
+        }
+        for (scene, bindings) in &self.scene_fish_schools {
+            let scene_valid = scene.starts_with("Assets/")
+                && Path::new(scene)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("unity"))
+                && !scene.contains('\\')
+                && !scene.contains("..");
+            for binding in bindings {
+                if !self.fish_school_effects.contains_key(&binding.effect) {
+                    return Err(PresentationError::MissingFishSchoolEffect {
+                        scene: scene.clone(),
+                        effect: binding.effect.clone(),
+                    });
+                }
+                if !scene_valid
+                    || binding.hierarchy_path.trim().is_empty()
+                    || binding.hierarchy_path.contains('\\')
+                    || binding.max_particles == 0
+                    || !finite_positive(binding.emission_rate_per_second)
+                    || binding
+                        .local_position
+                        .into_iter()
+                        .chain(binding.noise_strength)
+                        .any(|value| !value.is_finite())
+                {
+                    return Err(PresentationError::InvalidFishSchoolBinding {
+                        scene: scene.clone(),
+                        hierarchy_path: binding.hierarchy_path.clone(),
+                        reason: "scene path, hierarchy path, position, and capacity must be valid"
+                            .into(),
+                    });
+                }
+            }
+        }
         for (id, effect) in &self.healing_channel_effects {
             let valid = valid_unity_source(&effect.source_guid, &effect.source_path, "prefab")
                 && valid_unity_source(&effect.graph_guid, &effect.graph_source, "vfx")

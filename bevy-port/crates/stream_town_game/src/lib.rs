@@ -20,7 +20,7 @@ use bevy::{
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
-    audio::{AudioSink, AudioSinkPlayback, AudioSource, Pitch, SpatialScale, Volume},
+    audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
     camera::{Hdr, ScalingMode},
     color::LinearRgba,
     core_pipeline::tonemapping::Tonemapping,
@@ -73,6 +73,7 @@ const MAX_TOWN_GOALS: usize = 2;
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
+const MAIN_MENU_SCENE_PATH: &str = "Assets/Scenes/Menu/Main_Menu_02.unity";
 const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const CHIMNEY_ALPHA_STEPS: usize = 8;
@@ -89,6 +90,9 @@ const PING_POINTER_MODEL_HEIGHT: f32 = 314.468_26;
 const FISH_GOD_EXIT_DELAY_SECONDS: f32 = 2.5;
 const RAINING_FISH_PREFAB_SUFFIX: &str = "VFX/Environment/VFX_RainingFish.prefab";
 const RAINING_FISH_RENDER_BUDGET: usize = 320;
+const FISH_SCHOOL_PREFAB_SUFFIX: &str = "VFX/Environment/Fish.prefab";
+const FISH_SCHOOL_RENDER_BUDGET_PER_BINDING: usize = 160;
+const ROLE_ACTION_AUDIO_MAX_DISTANCE: f32 = 20.0;
 const SELECTION_MASK_MATERIAL_ID: &str = "material:631afbf4de8b7ad4eabc5e30e0b2c778";
 #[cfg(test)]
 const SELECTION_MASK_TEXTURE_PATH: &str = "Assets/Textures/SelectionMask.png";
@@ -968,6 +972,8 @@ struct RenderAssets {
     cloud_plane: Handle<Mesh>,
     healing_ring: Handle<Mesh>,
     healing_plus: Option<Handle<Mesh>>,
+    fish_school_mesh: Option<Handle<Mesh>>,
+    fish_school_material: Handle<CritterMaterial>,
     projectile_arrow_scene: Option<Handle<bevy::world_serialization::WorldAsset>>,
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
@@ -1570,6 +1576,15 @@ struct FallingFishEmitter {
 }
 
 #[derive(Component)]
+struct FishSchoolParticle {
+    centre: Vec3,
+    half_extents: Vec3,
+    phase: Vec3,
+    speed: f32,
+    turn_rate: f32,
+}
+
+#[derive(Component)]
 struct TowerShooter {
     building: StableId,
     cooldown_seconds: f32,
@@ -1850,7 +1865,7 @@ struct CosmeticBaseMaterialVariant {
 struct CosmeticBaseMaterialCache(Vec<CosmeticBaseMaterialVariant>);
 
 #[derive(Resource, Default)]
-struct RoleActionAudioCache(BTreeMap<StableId, Handle<Pitch>>);
+struct RoleActionAudioCache(BTreeMap<String, Handle<AudioSource>>);
 
 #[derive(Component)]
 struct MusicAudio;
@@ -1998,6 +2013,7 @@ struct PendingRoleActionAudio {
     actor: StableId,
     clip: StableId,
     display_name: String,
+    position: Vec3,
 }
 
 #[derive(Component, Clone)]
@@ -2123,6 +2139,7 @@ impl Plugin for StreamTownGamePlugin {
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
+                    animate_fish_school,
                 )
                     .chain()
                     .run_if(in_state(GameState::MainMenu)),
@@ -2225,6 +2242,10 @@ impl Plugin for StreamTownGamePlugin {
                     update_hud,
                 )
                     .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                animate_fish_school.run_if(in_state(GameState::InGame)),
             )
             .add_systems(
                 Update,
@@ -2669,6 +2690,8 @@ fn setup_rendering(
     let godray_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some();
     let giraffe_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some();
     let placement_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some();
+    let fish_school_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some();
+    let role_audio_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ROLE_AUDIO").is_some();
     commands.spawn((
         TownCamera,
         Camera3d::default(),
@@ -2705,6 +2728,10 @@ fn setup_rendering(
                     42.0
                 } else if placement_closeup {
                     52.0
+                } else if fish_school_closeup {
+                    42.0
+                } else if role_audio_closeup {
+                    30.0
                 } else {
                     520.0
                 },
@@ -2963,6 +2990,22 @@ fn setup_rendering(
                 )
             })
         });
+    let fish_school_mesh = presentation
+        .0
+        .fish_school_effects
+        .values()
+        .find(|effect| effect.source_path.ends_with(FISH_SCHOOL_PREFAB_SUFFIX))
+        .and_then(|effect| {
+            asset_server.as_deref().map(|server| {
+                server.load(
+                    GltfAssetLabel::Primitive {
+                        mesh: 0,
+                        primitive: 0,
+                    }
+                    .from_asset(effect.model_asset_path.clone()),
+                )
+            })
+        });
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         chimney_particle: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid icosphere")),
@@ -2970,6 +3013,8 @@ fn setup_rendering(
         cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
         healing_ring: meshes.add(healing_ring_mesh(48)),
         healing_plus,
+        fish_school_mesh,
+        fish_school_material: critter,
         projectile_arrow_scene: asset_server.as_deref().map(|asset_server| {
             asset_server.load(
                 GltfAssetLabel::Scene(0).from_asset("migrated/models/Models/Combat/Arrow.glb"),
@@ -4001,6 +4046,13 @@ fn standard_material(
     }
 }
 
+fn unity_shader_color(value: [f32; 4]) -> Vec4 {
+    Color::srgba(value[0], value[1], value[2], value[3])
+        .to_linear()
+        .to_f32_array()
+        .into()
+}
+
 fn character_material(
     material: &MaterialDef,
     presentation: &PresentationCatalog,
@@ -4082,16 +4134,16 @@ fn terrain_material(
         },
         extension: TerrainMaterialExtension {
             parameters: TerrainMaterialUniform {
-                sand_color_a: Vec4::from_array(vector(
+                sand_color_a: unity_shader_color(vector(
                     "_SandGridColor1",
                     [0.934, 0.773, 0.084, 1.0],
                 )),
-                sand_color_b: Vec4::from_array(vector(
+                sand_color_b: unity_shader_color(vector(
                     "_SandGridColor2",
                     [0.823, 0.681, 0.071, 1.0],
                 )),
-                grass_color_a: Vec4::from_array(vector("_color1", [0.422, 0.498, 0.153, 1.0])),
-                grass_color_b: Vec4::from_array(vector("_color2", [0.406, 0.471, 0.141, 1.0])),
+                grass_color_a: unity_shader_color(vector("_color1", [0.422, 0.498, 0.153, 1.0])),
+                grass_color_b: unity_shader_color(vector("_color2", [0.406, 0.471, 0.141, 1.0])),
                 season_tint: Vec4::new(1.0, 1.0, 1.0, scalar("_Tint", 0.0)),
                 texture_uv_blend_tint: Vec4::new(
                     texture_uv[0],
@@ -4151,7 +4203,7 @@ fn water_material(
         .and_then(|material| material.texture_transforms.get("_NoiseTexture"))
         .copied()
         .unwrap_or_default();
-    let surface = Vec4::from_array(vector("_SurfaceColor", [0.071, 0.867, 0.886, 1.0]));
+    let surface = unity_shader_color(vector("_SurfaceColor", [0.071, 0.867, 0.886, 1.0]));
     WaterMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
@@ -4162,9 +4214,9 @@ fn water_material(
         extension: WaterMaterialExtension {
             parameters: WaterMaterialUniform {
                 surface_color: surface,
-                deep_color: Vec4::from_array(vector("_DeepColor", [0.063, 0.361, 0.565, 1.0])),
-                foam_color: Vec4::from_array(vector("_FoamColor", [1.0; 4])),
-                ice_color: Vec4::from_array(vector("_IceColor", [0.8, 0.93, 1.0, 1.0])),
+                deep_color: unity_shader_color(vector("_DeepColor", [0.063, 0.361, 0.565, 1.0])),
+                foam_color: unity_shader_color(vector("_FoamColor", [1.0; 4])),
+                ice_color: unity_shader_color(vector("_IceColor", [0.8, 0.93, 1.0, 1.0])),
                 wind_speed_noise_alpha: Vec4::new(
                     wind[0],
                     wind[1],
@@ -4245,11 +4297,11 @@ fn building_material(
         },
         extension: BuildingMaterialExtension {
             parameters: BuildingMaterialUniform {
-                detail_color: Vec4::from_array(vector(
+                detail_color: unity_shader_color(vector(
                     "_DetailColor",
                     [0.521_568_7, 0.521_568_7, 0.521_568_7, 1.0],
                 )),
-                emissive_color: Vec4::from_array(vector(
+                emissive_color: unity_shader_color(vector(
                     "_EmissiveColour",
                     [0.521_568_7, 0.521_568_7, 0.521_568_7, 1.0],
                 )),
@@ -4449,7 +4501,7 @@ fn bounds_material(
         },
         extension: BoundsMaterialExtension {
             parameters: BoundsMaterialUniform {
-                color_alpha: Vec4::new(color[0], color[1], color[2], alpha),
+                color_alpha: unity_shader_color([color[0], color[1], color[2], alpha]),
             },
         },
     }
@@ -4561,7 +4613,7 @@ fn grass_material(
         .and_then(|material| material.texture_transforms.get("_MainTexture"))
         .copied()
         .unwrap_or_default();
-    let color = |name: &str, fallback: [f32; 4]| Vec4::from_array(vector(name, fallback));
+    let color = |name: &str, fallback: [f32; 4]| unity_shader_color(vector(name, fallback));
     let direction = vector("_windDirection", [1.0, 0.0, 0.0, 0.0]);
     let smoothness = vector("_WindTextureSmoothStep", [-0.28, 0.66, 0.0, 0.0]);
     let world_strength = vector("_WorldPositionStrength", [0.5, 0.5, 0.0, 0.0]);
@@ -4714,8 +4766,8 @@ fn flag_material(
         },
         extension: FlagMaterialExtension {
             parameters: FlagMaterialUniform {
-                colour_1: Vec4::from_array(vector("_Colour1", [1.0, 0.835_294_1, 0.0, 0.0])),
-                colour_2: Vec4::from_array(vector(
+                colour_1: unity_shader_color(vector("_Colour1", [1.0, 0.835_294_1, 0.0, 0.0])),
+                colour_2: unity_shader_color(vector(
                     "_Colour2",
                     [1.0, 0.023_529_41, 0.023_529_41, 0.0],
                 )),
@@ -4788,8 +4840,21 @@ fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
     }
 }
 
-fn spawn_main_menu(mut commands: Commands, render: Res<RenderAssets>) {
+fn spawn_main_menu(
+    mut commands: Commands,
+    render: Res<RenderAssets>,
+    presentation: Res<RuntimePresentation>,
+) {
     spawn_cloud_field(&mut commands, &render, 72.0);
+    spawn_fish_school_scene(
+        &mut commands,
+        &presentation.0,
+        &render,
+        MAIN_MENU_SCENE_PATH,
+        0,
+        0.0,
+        true,
+    );
     commands.spawn((
         StateEntity,
         Name::new("Shipping Main Menu backdrop"),
@@ -5177,6 +5242,137 @@ fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height
             Transform::from_xyz(0.0, height, 0.0).with_scale(Vec3::new(900.0, 1.0, 900.0)),
         ));
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_fish_school_scene(
+    commands: &mut Commands,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    scene_path: &str,
+    world_seed: u64,
+    water_height: f32,
+    state_entity: bool,
+) {
+    let Some(bindings) = presentation.scene_fish_schools.get(scene_path) else {
+        return;
+    };
+    for (binding_index, binding) in bindings.iter().enumerate() {
+        let Some(effect) = presentation.fish_school_effects.get(&binding.effect) else {
+            continue;
+        };
+        let count = usize::from(binding.max_particles).min(FISH_SCHOOL_RENDER_BUDGET_PER_BINDING);
+        let half_extents = Vec3::new(
+            effect.shape_scale[0] * 0.5,
+            effect.shape_scale[2] * 0.5,
+            effect.shape_scale[1] * 0.5,
+        );
+        // Unity parents these world-space systems under different water/VFX roots. The roots are
+        // intentionally not recreated, so retain their horizontal offset and layer the second
+        // town school slightly deeper rather than applying its parent-relative -46.2 Y directly.
+        let centre = Vec3::new(
+            binding.local_position[0],
+            water_height
+                + effect.particle_local_position[1]
+                + binding.local_position[1].clamp(-60.0, 0.0) * 0.025,
+            binding.local_position[2],
+        );
+        for sequence in 0..count {
+            let seed = fish_school_seed(
+                world_seed,
+                scene_path,
+                binding_index,
+                u32::try_from(sequence).expect("fish render budget fits u32"),
+            );
+            let phase = Vec3::new(
+                deterministic_unit(seed) * std::f32::consts::TAU,
+                deterministic_unit(seed.rotate_left(11)) * std::f32::consts::TAU,
+                deterministic_unit(seed.rotate_left(23)) * std::f32::consts::TAU,
+            );
+            let size = deterministic_f32_range(effect.start_size, seed.rotate_left(7)) * 0.01;
+            let movement_rate = (0.12
+                + (binding.noise_strength[0].abs() + binding.noise_strength[2].abs()) * 0.012)
+                .clamp(0.08, 0.8);
+            let turn_rate = 0.45 + deterministic_unit(seed.rotate_left(17)) * 0.75;
+            let particle = FishSchoolParticle {
+                centre,
+                half_extents,
+                phase,
+                speed: movement_rate,
+                turn_rate,
+            };
+            let mut transform = fish_school_transform(&particle, 0.0);
+            transform.scale = Vec3::splat(size);
+            let mut entity = commands.spawn((
+                Name::new(format!("{} fish {:03}", binding.hierarchy_path, sequence)),
+                particle,
+                transform,
+                bevy::light::NotShadowCaster,
+                bevy::light::NotShadowReceiver,
+            ));
+            if state_entity {
+                entity.insert(StateEntity);
+            } else {
+                entity.insert(WorldEntity);
+            }
+            if let Some(mesh) = &render.fish_school_mesh {
+                entity.insert((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(render.fish_school_material.clone()),
+                ));
+            } else {
+                entity.insert((
+                    Mesh3d(render.cube.clone()),
+                    MeshMaterial3d(render.food.clone()),
+                ));
+            }
+        }
+    }
+}
+
+fn animate_fish_school(time: Res<Time>, mut fish: Query<(&FishSchoolParticle, &mut Transform)>) {
+    let elapsed = time.elapsed_secs();
+    for (fish, mut transform) in &mut fish {
+        let scale = transform.scale;
+        *transform = fish_school_transform(fish, elapsed);
+        transform.scale = scale;
+    }
+}
+
+fn fish_school_transform(fish: &FishSchoolParticle, elapsed_seconds: f32) -> Transform {
+    let time = elapsed_seconds * fish.speed;
+    let angles = Vec3::new(
+        fish.phase.x + time * fish.turn_rate,
+        fish.phase.y + time * (fish.turn_rate * 0.43 + 0.17),
+        fish.phase.z + time * (fish.turn_rate * 0.79 + 0.11),
+    );
+    let local = Vec3::new(
+        angles.x.sin() * fish.half_extents.x,
+        angles.y.sin() * fish.half_extents.y,
+        angles.z.cos() * fish.half_extents.z,
+    );
+    let velocity = Vec3::new(
+        angles.x.cos() * fish.half_extents.x * fish.turn_rate,
+        angles.y.cos() * fish.half_extents.y * (fish.turn_rate * 0.43 + 0.17),
+        -angles.z.sin() * fish.half_extents.z * (fish.turn_rate * 0.79 + 0.11),
+    );
+    let rotation = if velocity.length_squared() > 1.0e-8 {
+        Quat::from_rotation_arc(Vec3::Z, velocity.normalize())
+    } else {
+        Quat::IDENTITY
+    };
+    Transform::from_translation(fish.centre + local).with_rotation(rotation)
+}
+
+fn fish_school_seed(world_seed: u64, scene_path: &str, binding: usize, sequence: u32) -> u32 {
+    let mut hash = u32::try_from(world_seed & u64::from(u32::MAX)).expect("masked seed fits u32");
+    for byte in scene_path.bytes() {
+        hash = hash.wrapping_mul(16_777_619) ^ u32::from(byte);
+    }
+    hash ^ u32::try_from(binding)
+        .unwrap_or(u32::MAX)
+        .wrapping_mul(0x9E37_79B9)
+        ^ sequence.wrapping_mul(0x85EB_CA6B)
 }
 
 fn top_bar_texture(render: &RenderAssets, source_path: &str) -> Option<Handle<Image>> {
@@ -7762,7 +7958,19 @@ fn generate_and_spawn_world(
     let town_hall_placement =
         town_hall_placement_position(&config.0, town_hall_definition.footprint);
     if let Ok(mut camera) = cameras.single_mut() {
-        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some() {
+        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some() {
+            let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
+            let focus = Vec3::new(145.0, water_height - 2.0, 0.0);
+            Transform::from_translation(focus + Vec3::new(0.0, 45.0, 0.01))
+                .looking_at(focus, Vec3::Z)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_ROLE_AUDIO").is_some() {
+            let focus = initial_actor_position(&generated, town_hall_position, 1)
+                .map_or(Vec3::ZERO, |position| {
+                    grid_to_world_on_surface(position, &config.0, &generated)
+                });
+            Transform::from_translation(focus + Vec3::new(7.0, 7.0, 7.0))
+                .looking_at(focus + Vec3::Y * 2.0, Vec3::Y)
+        } else if std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some() {
             let requested_kind = std::env::var("STREAM_TOWN_SMOKE_RESOURCE_KIND")
                 .unwrap_or_else(|_| "resource:wood".to_owned());
             let focus = generated
@@ -7964,6 +8172,15 @@ fn generate_and_spawn_world(
             )),
         ));
     }
+    spawn_fish_school_scene(
+        &mut commands,
+        &presentation.0,
+        &render,
+        WORLD_SCENE_PATH,
+        generated.seed,
+        f32::from(config.0.world.water_level_centimetres) * 0.01,
+        false,
+    );
 
     for resource in &generated.resources {
         let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
@@ -14382,11 +14599,12 @@ fn water_ice_strength(season: Season) -> f32 {
 }
 
 fn water_color_tint(surface: Vec4, target: [f32; 4]) -> Vec4 {
+    let target = unity_shader_color(target);
     Vec4::new(
-        target[0] / surface.x.max(0.1),
-        target[1] / surface.y.max(0.1),
-        target[2] / surface.z.max(0.1),
-        target[3],
+        target.x / surface.x.max(0.1),
+        target.y / surface.y.max(0.1),
+        target.z / surface.z.max(0.1),
+        target.w,
     )
 }
 
@@ -14404,7 +14622,7 @@ fn tree_season_controls(season: Season) -> Vec4 {
 }
 
 fn grass_season_controls(season: Season) -> (Vec4, Vec4, Vec4, f32, f32) {
-    match season {
+    let (grid_1, grid_2, wind, spring, tint) = match season {
         Season::Spring => (
             Vec4::new(0.282_352_95, 0.482_352_94, 0.149_019_61, 0.0),
             Vec4::new(0.262_745_1, 0.431_372_55, 0.129_411_77, 0.0),
@@ -14433,7 +14651,14 @@ fn grass_season_controls(season: Season) -> (Vec4, Vec4, Vec4, f32, f32) {
             0.0,
             0.42,
         ),
-    }
+    };
+    (
+        unity_shader_color(grid_1.to_array()),
+        unity_shader_color(grid_2.to_array()),
+        unity_shader_color(wind.to_array()),
+        spring,
+        tint,
+    )
 }
 
 fn weather_particle_seed(world_seed: u64, index: u16) -> u32 {
@@ -16025,11 +16250,13 @@ fn drive_converted_animations(
     presentation: Res<RuntimePresentation>,
     simulation: Res<SimulationRuntime>,
     agents: Query<&Agent>,
+    agent_transforms: Query<&GlobalTransform, With<Agent>>,
+    camera: Query<&GlobalTransform, (With<TownCamera>, Without<Agent>)>,
     pets: Query<&ActivePetVisual>,
     fish_gods: Query<(), With<FishGodAnimation>>,
     mut players: Query<(&mut AnimationPlayer, &mut ConvertedAnimationDriver)>,
     mut audio_cache: ResMut<RoleActionAudioCache>,
-    mut procedural_pitches: Option<ResMut<Assets<Pitch>>>,
+    mut procedural_audio: Option<ResMut<Assets<AudioSource>>>,
 ) {
     let mut audio_cues = Vec::new();
     for (mut player, mut driver) in &mut players {
@@ -16206,13 +16433,16 @@ fn drive_converted_animations(
                     restarts.push((*node, offset_seconds));
                 }
             }
-            if let Some(agent) = agent {
+            if let Some(agent) = agent
+                && let Ok(transform) = agent_transforms.get(actor_root)
+            {
                 collect_animation_audio_events(
                     &player,
                     layer,
                     &selection,
                     &presentation.0,
                     &agent.id,
+                    transform.translation(),
                     &mut audio_cues,
                 );
             }
@@ -16242,23 +16472,52 @@ fn drive_converted_animations(
         }
         apply_animation_blend(&mut player, &combined, &restarts);
     }
-    if let Some(pitches) = procedural_pitches.as_mut() {
+    if let Some(audio_sources) = procedural_audio.as_mut() {
+        let camera_position = camera.single().ok().map(GlobalTransform::translation);
         for cue in audio_cues {
-            let frequency = procedural_role_action_frequency(&cue.display_name, &cue.clip);
+            let Some(role) = simulation.0.actors.get(&cue.actor).map(|actor| &actor.role) else {
+                continue;
+            };
+            let Some(variant_guid) =
+                role_action_audio_variant(&presentation.0, &cue.actor, role, &cue.clip)
+            else {
+                continue;
+            };
+            if camera_position.is_some_and(|camera| {
+                camera.distance(cue.position) > ROLE_ACTION_AUDIO_MAX_DISTANCE
+            }) {
+                continue;
+            }
             let source = audio_cache
                 .0
-                .entry(cue.clip.clone())
-                .or_insert_with(|| pitches.add(Pitch::new(frequency, Duration::from_millis(85))))
+                .entry(variant_guid.to_owned())
+                .or_insert_with(|| {
+                    audio_sources.add(AudioSource {
+                        bytes: procedural_role_action_wav(
+                            role,
+                            &cue.display_name,
+                            variant_guid,
+                            PROCEDURAL_AUDIO_SAMPLE_RATE,
+                        )
+                        .into(),
+                    })
+                })
                 .clone();
             commands.spawn((
+                WorldEntity,
                 Name::new(format!(
-                    "Role action audio: {} ({})",
-                    cue.display_name, cue.actor
+                    "Role action audio: {} / {} ({})",
+                    role, cue.display_name, cue.actor
                 )),
                 AudioPlayer(source),
-                PlaybackSettings::DESPAWN.with_volume(Volume::Linear(
-                    0.08 * player_settings.0.audio.master * player_settings.0.audio.sound_effects,
-                )),
+                PlaybackSettings::DESPAWN
+                    .with_volume(Volume::Linear(
+                        0.24 * player_settings.0.audio.master
+                            * player_settings.0.audio.sound_effects,
+                    ))
+                    .with_spatial(true)
+                    .with_spatial_scale(SpatialScale::new(1.0 / ROLE_ACTION_AUDIO_MAX_DISTANCE)),
+                Transform::from_translation(cue.position),
             ));
         }
     }
@@ -16270,6 +16529,7 @@ fn collect_animation_audio_events(
     selection: &AnimationBlendSelection,
     presentation: &PresentationCatalog,
     actor: &StableId,
+    position: Vec3,
     output: &mut Vec<PendingRoleActionAudio>,
 ) {
     let mut selected = BTreeSet::new();
@@ -16302,6 +16562,7 @@ fn collect_animation_audio_events(
                     actor: actor.clone(),
                     clip: motion.clip.clone(),
                     display_name: clip.display_name.clone(),
+                    position,
                 });
             }
         }
@@ -16354,27 +16615,72 @@ fn animation_event_occurrences(
     }
 }
 
-fn procedural_role_action_frequency(display_name: &str, clip: &StableId) -> f32 {
-    let name = display_name.to_ascii_lowercase();
-    if name.contains("bow") {
-        493.88
-    } else if name.contains("heal") || name.contains("pray") {
-        659.25
-    } else if name.contains("build") || name.contains("hammer") {
-        246.94
-    } else if name.contains("mine") || name.contains("mining") {
-        185.00
-    } else if name.contains("wood") || name.contains("cut") || name.contains("axe") {
-        220.00
-    } else if name.contains("sword") || name.contains("attack") {
-        146.83
-    } else {
-        let hash = clip.as_str().bytes().fold(2_166_136_261_u32, |hash, byte| {
+fn role_action_audio_variant<'a>(
+    presentation: &'a PresentationCatalog,
+    actor: &StableId,
+    role: &StableId,
+    animation_clip: &StableId,
+) -> Option<&'a str> {
+    let definition = presentation.role_action_audio.get(role)?;
+    let hash = actor
+        .as_str()
+        .bytes()
+        .chain(animation_clip.as_str().bytes())
+        .fold(2_166_136_261_u32, |hash, byte| {
             hash.wrapping_mul(16_777_619) ^ u32::from(byte)
         });
-        let semitone = u8::try_from(hash % 18).expect("modulo 18 fits u8");
-        196.0 * 2.0_f32.powf(f32::from(semitone) / 12.0)
-    }
+    let index = usize::try_from(hash).unwrap_or_default() % definition.clip_guids.len();
+    Some(&definition.clip_guids[index])
+}
+
+fn procedural_role_action_wav(
+    role: &StableId,
+    display_name: &str,
+    variant_guid: &str,
+    sample_rate: u32,
+) -> Vec<u8> {
+    let role_name = role.as_str();
+    let clip_name = display_name.to_ascii_lowercase();
+    let variant_hash = variant_guid.bytes().fold(2_166_136_261_u32, |hash, byte| {
+        hash.wrapping_mul(16_777_619) ^ u32::from(byte)
+    });
+    let detune = 2.0_f32.powf((deterministic_unit(variant_hash) - 0.5) / 8.0);
+    let (duration, fundamental, brightness, sweep) = if role_name.ends_with("miner") {
+        (0.24, 760.0, 1.85, -180.0)
+    } else if role_name.ends_with("logger") {
+        (0.19, 138.0, 0.72, -48.0)
+    } else if role_name.ends_with("builder") {
+        (0.22, 310.0, 1.42, -115.0)
+    } else if role_name.ends_with("fisher") || clip_name.contains("fish") {
+        (0.36, 430.0, 0.64, -210.0)
+    } else if role_name.ends_with("ranger") || clip_name.contains("bow") {
+        (0.21, 520.0, 1.18, -320.0)
+    } else if role_name.ends_with("priest") || role_name.ends_with("paladin") {
+        (0.48, 660.0, 1.52, 110.0)
+    } else if role_name.ends_with("wizard") || role_name.ends_with("necromancer") {
+        (0.52, 245.0, 1.26, 260.0)
+    } else if role_name.ends_with("farmer") || role_name.ends_with("gatherer") {
+        (0.25, 205.0, 0.52, 85.0)
+    } else {
+        (0.23, 175.0, 1.06, 240.0)
+    };
+    synthesize_wav(sample_rate, duration, move |time, _| {
+        let progress = (time / duration).clamp(0.0, 1.0);
+        let attack = (progress / 0.08).clamp(0.0, 1.0);
+        let release = (1.0 - progress).powf(1.7);
+        let envelope = attack * release;
+        let frequency = (fundamental + sweep * progress) * detune;
+        let phase = time * std::f32::consts::TAU * frequency;
+        let carrier = phase.sin();
+        let overtone = (phase * brightness + 0.4).sin() * 0.34;
+        // A low-amplitude deterministic partial adds texture without broadband white noise.
+        let textured = (time
+            * std::f32::consts::TAU
+            * (fundamental * (2.1 + deterministic_unit(variant_hash.rotate_left(9)))))
+        .sin()
+            * (0.07 + 0.025 * pseudo_noise(variant_hash.rotate_left(21)));
+        (carrier * 0.34 + overtone * 0.19 + textured) * envelope
+    })
 }
 
 fn agent_action_animation(
@@ -26886,7 +27192,7 @@ mod tests {
     }
 
     #[test]
-    fn converted_role_audio_events_have_deterministic_procedural_cues() {
+    fn converted_role_audio_events_use_source_guided_spatial_procedural_cues() {
         let presentation = embedded_presentation();
         let clips: Vec<_> = presentation
             .clips
@@ -26898,14 +27204,94 @@ mod tests {
             })
             .collect();
         assert_eq!(clips.len(), 10);
-        for (id, clip) in clips {
-            let frequency = procedural_role_action_frequency(&clip.display_name, id);
-            assert!(frequency.is_finite());
-            assert!((140.0..=660.0).contains(&frequency));
+        assert_eq!(presentation.role_action_audio.len(), 14);
+        assert_eq!(
+            presentation
+                .role_action_audio
+                .values()
+                .map(|audio| audio.clip_guids.len())
+                .sum::<usize>(),
+            35
+        );
+        let actor = StableId::new("actor:audio-test").unwrap();
+        let role = StableId::new("role:miner").unwrap();
+        let (clip_id, clip) = clips[0];
+        let guid = role_action_audio_variant(&presentation, &actor, &role, clip_id).unwrap();
+        assert_eq!(
+            guid,
+            role_action_audio_variant(&presentation, &actor, &role, clip_id).unwrap()
+        );
+        let wav = procedural_role_action_wav(
+            &role,
+            &clip.display_name,
+            guid,
+            PROCEDURAL_AUDIO_SAMPLE_RATE,
+        );
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(
+            wav,
+            procedural_role_action_wav(
+                &role,
+                &clip.display_name,
+                guid,
+                PROCEDURAL_AUDIO_SAMPLE_RATE,
+            )
+        );
+        let samples: Vec<_> = wav[44..]
+            .chunks_exact(2)
+            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+            .collect();
+        assert!(samples.iter().any(|sample| sample.abs() > 512));
+        assert!(i32::from(*samples.last().unwrap()).abs() < 256);
+        assert!(
+            samples
+                .windows(2)
+                .map(|pair| (i32::from(pair[1]) - i32::from(pair[0])).abs())
+                .max()
+                .unwrap_or_default()
+                < 12_000,
+            "role cue contains a static-like discontinuity"
+        );
+    }
+
+    #[test]
+    fn fish_school_motion_is_repeatable_and_stays_inside_authored_shape() {
+        let presentation = embedded_presentation();
+        let effect = presentation.fish_school_effects.values().next().unwrap();
+        assert!(
+            effect
+                .shape_scale
+                .into_iter()
+                .zip([300.0, 300.0, 5.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert_eq!(
+            presentation
+                .scene_fish_schools
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            3
+        );
+        let particle = FishSchoolParticle {
+            centre: Vec3::new(2.0, -2.0, 3.0),
+            half_extents: Vec3::new(150.0, 2.5, 150.0),
+            phase: Vec3::new(0.4, 1.7, 2.8),
+            speed: 0.3,
+            turn_rate: 0.8,
+        };
+        for elapsed in [0.0, 1.0, 30.0, 120.0] {
+            let transform = fish_school_transform(&particle, elapsed);
             assert_eq!(
-                frequency.to_bits(),
-                procedural_role_action_frequency(&clip.display_name, id).to_bits()
+                transform,
+                fish_school_transform(&particle, elapsed),
+                "fish transform must be deterministic"
             );
+            let offset = transform.translation - particle.centre;
+            assert!(offset.x.abs() <= particle.half_extents.x);
+            assert!(offset.y.abs() <= particle.half_extents.y);
+            assert!(offset.z.abs() <= particle.half_extents.z);
         }
     }
 
@@ -29455,13 +29841,16 @@ mod tests {
             grass_season_controls(Season::Spring);
         assert_eq!(
             spring_1,
-            Vec4::new(0.282_352_95, 0.482_352_94, 0.149_019_61, 0.0)
+            unity_shader_color([0.282_352_95, 0.482_352_94, 0.149_019_61, 0.0])
         );
         assert_eq!(
             spring_2,
-            Vec4::new(0.262_745_1, 0.431_372_55, 0.129_411_77, 0.0)
+            unity_shader_color([0.262_745_1, 0.431_372_55, 0.129_411_77, 0.0])
         );
-        assert_eq!(spring_wind, Vec4::new(0.315_821_56, 0.518, 0.187_516, 0.0));
+        assert_eq!(
+            spring_wind,
+            unity_shader_color([0.315_821_56, 0.518, 0.187_516, 0.0])
+        );
         assert_eq!(spring_power.to_bits(), 0.1_f32.to_bits());
         assert_eq!(spring_tint.to_bits(), 0.0_f32.to_bits());
 
@@ -29469,13 +29858,13 @@ mod tests {
             grass_season_controls(Season::Winter);
         assert_eq!(
             winter_1,
-            Vec4::new(0.849_056_6, 0.849_056_6, 0.849_056_6, 0.0)
+            unity_shader_color([0.849_056_6, 0.849_056_6, 0.849_056_6, 0.0])
         );
         assert_eq!(
             winter_2,
-            Vec4::new(0.772_549_03, 0.772_549_03, 0.772_549_03, 0.0)
+            unity_shader_color([0.772_549_03, 0.772_549_03, 0.772_549_03, 0.0])
         );
-        assert_eq!(winter_wind, Vec4::new(0.965, 0.965, 0.965, 0.0));
+        assert_eq!(winter_wind, unity_shader_color([0.965, 0.965, 0.965, 0.0]));
         assert_eq!(winter_power.to_bits(), 0.0_f32.to_bits());
         assert_eq!(winter_tint.to_bits(), 0.42_f32.to_bits());
 
@@ -29571,11 +29960,11 @@ mod tests {
         let material = flag_material(&embedded_presentation(), None);
         assert_eq!(
             material.extension.parameters.colour_1,
-            Vec4::new(1.0, 0.835_294_1, 0.0, 0.0)
+            unity_shader_color([1.0, 0.835_294_1, 0.0, 0.0])
         );
         assert_eq!(
             material.extension.parameters.colour_2,
-            Vec4::new(1.0, 0.023_529_41, 0.023_529_41, 0.0)
+            unity_shader_color([1.0, 0.023_529_41, 0.023_529_41, 0.0])
         );
         assert_eq!(
             material.extension.parameters.controls,
@@ -29638,18 +30027,28 @@ mod tests {
         let authored = bounds_material(&presentation, None);
         assert_eq!(
             authored.extension.parameters.color_alpha,
-            Vec4::new(0.0, 0.867_924_5, 0.137_292_03, 0.568)
+            unity_shader_color([0.0, 0.867_924_5, 0.137_292_03, 0.568])
         );
         assert_eq!(authored.base.alpha_mode, AlphaMode::Blend);
         let valid = bounds_material(&presentation, Some(BUILDING_PLACEMENT_SUCCESS_COLOR));
         let blocked = bounds_material(&presentation, Some(BUILDING_PLACEMENT_FAIL_COLOR));
         assert_eq!(
             valid.extension.parameters.color_alpha,
-            Vec4::new(0.242_250_26, 0.896_226_4, 0.054_957_304, 0.568)
+            unity_shader_color([
+                BUILDING_PLACEMENT_SUCCESS_COLOR[0],
+                BUILDING_PLACEMENT_SUCCESS_COLOR[1],
+                BUILDING_PLACEMENT_SUCCESS_COLOR[2],
+                0.568,
+            ])
         );
         assert_eq!(
             blocked.extension.parameters.color_alpha,
-            Vec4::new(0.933_962_3, 0.0, 0.0, 0.568)
+            unity_shader_color([
+                BUILDING_PLACEMENT_FAIL_COLOR[0],
+                BUILDING_PLACEMENT_FAIL_COLOR[1],
+                BUILDING_PLACEMENT_FAIL_COLOR[2],
+                0.568,
+            ])
         );
         let shader = include_str!("../../../assets/shaders/bounds_material.wgsl");
         assert!(shader.contains("bounds_material.color_alpha"));
@@ -31252,7 +31651,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 18);
+        assert_eq!(presentation.schema_version, 19);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.post_process_profiles.len(), 2);
@@ -31325,7 +31724,7 @@ mod tests {
                 .sand_color_a
                 .to_array()
                 .into_iter()
-                .zip([1.0, 0.827_731, 0.088_235_21, 0.0])
+                .zip(unity_shader_color([1.0, 0.827_731, 0.088_235_21, 0.0]).to_array())
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
         let water = water_material(&presentation, None);
@@ -31338,7 +31737,7 @@ mod tests {
                 .surface_color
                 .to_array()
                 .into_iter()
-                .zip([0.0, 0.764_705_9, 1.0, 1.0])
+                .zip(unity_shader_color([0.0, 0.764_705_9, 1.0, 1.0]).to_array())
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
         assert!((water.extension.parameters.wind_speed_noise_alpha.z - 0.02).abs() < f32::EPSILON);
@@ -31347,12 +31746,16 @@ mod tests {
             water.extension.parameters.depth_foam_controls,
             Vec4::new(10.0, 0.8, 7.81, 0.94)
         );
+        let surface = unity_shader_color([0.0, 0.764_705_9, 1.0, 1.0]);
+        let target = unity_shader_color([0.05, 0.29, 0.47, 0.62]);
         assert_eq!(
-            water_color_tint(
-                Vec4::new(0.0, 0.764_705_9, 1.0, 1.0),
-                [0.05, 0.29, 0.47, 0.62]
-            ),
-            Vec4::new(0.5, 0.29 / 0.764_705_9, 0.47, 0.62)
+            water_color_tint(surface, [0.05, 0.29, 0.47, 0.62]),
+            Vec4::new(
+                target.x / 0.1,
+                target.y / surface.y,
+                target.z / surface.z,
+                target.w
+            )
         );
         assert_eq!(
             water.extension.parameters.main_scale_offset,
@@ -31362,7 +31765,7 @@ mod tests {
         assert!(building.extension.main_texture.is_none());
         assert_eq!(
             building.extension.parameters.detail_color,
-            Vec4::new(0.521_568_5, 0.521_568_5, 0.521_568_5, 1.0)
+            unity_shader_color([0.521_568_5, 0.521_568_5, 0.521_568_5, 1.0])
         );
         assert_eq!(
             building.extension.parameters.ambient_occlusion,

@@ -374,7 +374,7 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ));
         ui.separator();
         ui.label(format!(
-            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters) / {} raining-fish effects / {} healing-channel effects / {} healing-burst effects",
+            "Presentation: {} textures / {} materials / {} renderer bindings / {} clips ({} native transform, {} property curves, {} events) / {} controllers / {} post-process profiles ({} scene bindings) / {} fireworks effects ({} scene emitters) / {} chimney effects ({} prefab emitters) / {} raining-fish effects / {} healing-channel effects / {} healing-burst effects / {} fish-school effects ({} scene bindings) / {} role-audio contracts ({} original clip variants)",
             state.presentation.textures.len(),
             state.presentation.materials.len(),
             state
@@ -411,7 +411,21 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
                 .sum::<usize>(),
             state.presentation.raining_fish_effects.len(),
             state.presentation.healing_channel_effects.len(),
-            state.presentation.healing_burst_effects.len()
+            state.presentation.healing_burst_effects.len(),
+            state.presentation.fish_school_effects.len(),
+            state
+                .presentation
+                .scene_fish_schools
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            state.presentation.role_action_audio.len(),
+            state
+                .presentation
+                .role_action_audio
+                .values()
+                .map(|audio| audio.clip_guids.len())
+                .sum::<usize>()
         ));
     });
     ui.separator();

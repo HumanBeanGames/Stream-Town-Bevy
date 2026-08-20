@@ -618,7 +618,9 @@ Necromancer Tower's reachable `Env_Godrays_08` renderer now resolves its exact
 `VFX_Godrays` material slot to a dedicated transparent, double-sided WGSL port.
 It preserves the source mesh's vertex-color albedo, the authored 0.06 emission
 strength, and 1.64 vertex-alpha multiplier instead of receiving a generic PBR
-fallback. The remaining reachable WGSL shader ports remain presentation work.
+fallback. A shipping-scene source audit found no additional reachable custom
+shader or VFX prefab to port; the remaining shader/VFX assets belong to
+Necrolands or development test scenes.
 Property curves
 support Unity's constant, unweighted Hermite, and weighted Bezier segments; the
 shipping catalog currently contains 261 unweighted keys. The Credits panels/end
@@ -654,6 +656,27 @@ its 1.2-second disable contract, eight-capacity/100-count plus burst, converted
 two prefab HDR gradients, and `Particle_02` texture provenance. Bevy samples
 those budgets, curves, and gradients into short-lived ECS effects and uses the
 converted plus mesh when assets are available.
+Presentation schema 19 also converts the shipping `Fish.prefab` field instead
+of omitting it. The catalog retains its Fish3 mesh, Critters material,
+120-second lifetime, 40-per-second logical emission, 0.2-1.0 size range,
+300x300x5 shape, noise, world-space/prewarm flags, all three scene bindings,
+the Main Menu's 800-particle capacity, and both 2,000-particle town overrides.
+Bevy deterministically prewarms 160 shared-mesh representatives per binding.
+Use `STREAM_TOWN_AUTOSTART=1` with `STREAM_TOWN_SMOKE_FISH_SCHOOL=1` for the
+focused town capture.
+
+All Unity color properties consumed by custom WGSL/PBR materials are converted
+from sRGB to linear values before upload. This keeps terrain, water, grass,
+building detail/emission, placement bounds, and flags within the authored
++1.1 EV/ACES daytime range instead of washing the world into yellow-white.
+
+The same schema retains all 35 Unity role-action `AudioClip` GUIDs across the
+14 roles that authored them. The ten reachable animation events now choose an
+original variant deterministically and play smooth role-specific procedural WAV
+cues spatially at the actor, using Unity's 20-unit enable distance and the live
+master/SFX mix. No missing recording is redistributed. Use
+`STREAM_TOWN_AUTOSTART=1` with `STREAM_TOWN_SMOKE_ROLE_AUDIO=1` to keep the
+camera/listener near the starting Logger while workers enter authored actions.
 Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
 stacked built-in planes directly in Bevy. A typed WGSL material consumes its
 authored texture and exact dual world-space time offsets, cutoff, tint, and

@@ -49,10 +49,21 @@ mistaken for production-ready systems.
   town simulation is active, so the Main Menu remains silent. The ambient wind
   is a seamless band-limited oscillator loop rather than sample-rate white
   noise, removing the static-like hiss from the earlier placeholder.
+- Presentation schema 19 retains all 35 original Unity `ActionClips` GUID
+  references across the 14 roles that authored them (Blacksmith authored none).
+  Each reachable animation event selects its original variant deterministically
+  and plays a role-shaped, smooth-envelope procedural WAV at the actor's world
+  position with Unity's 20-unit enable distance. These cues contain no source
+  recording or broadband-noise placeholder, respect the SFX/master mix, and
+  are cached by original clip GUID.
 - The cloud WGSL material now analytically filters the authored 20x noise layer
   when it is smaller than a screen pixel. This recreates Unity's mipmapped TGA
   sampling without the prior moving white-static aliasing on menu and credits
   cloud planes.
+- Unity shader color properties are now converted from authored sRGB into the
+  linear values Bevy's PBR passes require. Terrain, water, grass, building
+  detail/emission, placement bounds, and flags therefore retain detail under
+  the shipping +1.1 EV/ACES profile instead of clipping into yellow-white.
 - Validated, versioned RON configuration (schema 5) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
@@ -323,11 +334,11 @@ mistaken for production-ready systems.
   states, 166 transitions, parameter schemas, layer defaults, and 75 referenced
   clip records. The YAML fallback converts 57 of the 61 standalone `.anim`
   files into 1,196 stable transform tracks with rig-relative reference poses.
-  Presentation schema 11 additionally retains all 110 component/UI property
+  Presentation schema 19 additionally retains all 110 component/UI property
   curves (261 keys) across 18 clips—including the four transform-free clips—and
   all ten authored animation events. The runtime dispatches each converted
-  `PlayRoleActionAudio` event exactly once per crossed clip cycle and plays a
-  deterministic 85 ms procedural cue with documented no-sample provenance.
+  `PlayRoleActionAudio` event exactly once per crossed clip cycle and plays the
+  deterministic source-GUID-guided spatial replacement described above.
   All 166 transitions preserve their fixed/normalized duration mode and
   destination offset; runtime crossfades preserve the source/destination
   blend-tree weights and layer masking.
@@ -412,6 +423,14 @@ mistaken for production-ready systems.
   Settings, Credits, and Quit buttons appear in authored order. Mouse actions
   share the existing typed state/settings paths, and Load Game uses Unity's
   disabled sprite and rejects activation until a native save exists.
+- Presentation schema 19 converts the reachable `Fish.prefab` field used by the
+  Main Menu and town: Fish3 mesh, Critters material, 120-second lifetime,
+  40-per-second logical emission, 0.2-1.0 size range, 300x300x5 box, noise,
+  prewarm, world-space simulation, all three scene instances, the Main Menu's
+  800-particle override, and the town's 2,000-particle/vertical-noise overrides.
+  Bevy renders a deterministic prewarmed representative budget of 160 shared-
+  mesh fish per binding, preserving coverage and motion without adding the full
+  4,800 logical particles to the 300-agent performance gate.
 - Credits now recreates both reachable `VFX_FireWorks` instances as a
   deterministic purpose-built particle effect driven by presentation schema 15.
   The converter resolves their exact Unity scene positions and graph GUID, the
@@ -690,11 +709,14 @@ mistaken for production-ready systems.
   the remaining `!stdiscord` utility command are implemented behind an explicit
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
-- Remaining reachable WGSL shader ports, particle fields and VFX, remaining
-  HUD/menu art parity, rare action/UI sound cues, and screen-reader/accessibility
-  verification. Authored global post-processing and the Credits fireworks are
-  live, alongside the functional Main Menu, in-game menu, save/load actions,
-  and complete persisted-settings workflow.
+- Final art-direction polish, curated screenshot/audio acceptance baselines,
+  screen-reader/accessibility verification, and source-diff closure for any
+  presentation behavior only reachable through missing media. A shipping-scene
+  reachability audit found no additional custom shaders, VFX prefabs, or UI
+  sound bindings to port: the remaining custom shader/VFX assets belong to
+  Necrolands or development test scenes, and the repository contains no audio
+  media files. Authored global post-processing, menus/HUD, particles, procedural
+  replacement audio, and persisted presentation settings are live.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation. Pet locomotion and per-model animation are
   live; remaining pet work is presentation polish rather than static follow.
@@ -764,8 +786,9 @@ camera-projected player/building overlays. The shipping town seagull also flies
 its authored 32-second boundary route using the converted model and emits three
 generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
-ports backed by converted renderer bindings. It is still missing foliage
-batching/impostors, particle fields, remaining custom-shader parity, and broader
-curated screenshot coverage required to close the milestone.
+ports backed by converted renderer bindings. Shipping-scene particle and custom
+shader reachability is closed; remaining presentation work is final art tuning,
+foliage batching/impostors, accessibility verification, and broader curated
+screenshot/audio acceptance coverage.
 Gameplay parity is materially advanced but still needs final source-diff closure;
 presentation and hardening remain long-term work.

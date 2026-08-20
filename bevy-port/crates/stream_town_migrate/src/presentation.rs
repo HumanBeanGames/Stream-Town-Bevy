@@ -13,13 +13,13 @@ use stream_town_domain::{
     AnimationMotionDef, AnimationObjectReference, AnimationParameterDef, AnimationParameterKind,
     AnimationPropertyCurve, AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef,
     AnimationTangent, AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe,
-    AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, HealingBurstVfxDef, HealingChannelVfxDef,
-    MaterialAlphaMode, MaterialDef, PostProcessBloomDef, PostProcessColorAdjustmentsDef,
-    PostProcessMotionBlurDef, PostProcessProfileDef, PostProcessTonemapping,
-    PostProcessVignetteDef, PrefabChimneyEmitterBinding, PrefabPresentationBinding,
-    PresentationCatalog, RainingFishVfxDef, RendererMaterialBinding, SceneFireworksBinding,
-    ScenePostProcessBinding, StableId, TextureDef, TextureTransform, VfxAlphaKeyframe,
-    VfxColorKeyframe, VfxGradientDef,
+    AvatarMaskDef, ChimneySmokeDef, FireworksVfxDef, FishSchoolVfxDef, HealingBurstVfxDef,
+    HealingChannelVfxDef, MaterialAlphaMode, MaterialDef, PostProcessBloomDef,
+    PostProcessColorAdjustmentsDef, PostProcessMotionBlurDef, PostProcessProfileDef,
+    PostProcessTonemapping, PostProcessVignetteDef, PrefabChimneyEmitterBinding,
+    PrefabPresentationBinding, PresentationCatalog, RainingFishVfxDef, RendererMaterialBinding,
+    RoleActionAudioDef, SceneFireworksBinding, SceneFishSchoolBinding, ScenePostProcessBinding,
+    StableId, TextureDef, TextureTransform, VfxAlphaKeyframe, VfxColorKeyframe, VfxGradientDef,
 };
 
 const SHIPPING_SCENES: [&str; 4] = [
@@ -69,6 +69,10 @@ pub struct PresentationConversionReport {
     pub chimney_smoke_effects: usize,
     pub prefab_chimney_emitters: usize,
     pub raining_fish_effects: usize,
+    pub fish_school_effects: usize,
+    pub scene_fish_school_bindings: usize,
+    pub role_action_audio_roles: usize,
+    pub role_action_audio_variants: usize,
     pub healing_channel_effects: usize,
     pub healing_burst_effects: usize,
     pub outputs: Vec<String>,
@@ -192,6 +196,10 @@ type ChimneySmokeConversion = (
     BTreeMap<StableId, ChimneySmokeDef>,
     BTreeMap<String, Vec<PrefabChimneyEmitterBinding>>,
 );
+type FishSchoolConversion = (
+    BTreeMap<StableId, FishSchoolVfxDef>,
+    BTreeMap<String, Vec<SceneFishSchoolBinding>>,
+);
 
 pub fn convert(
     export_path: &Path,
@@ -236,6 +244,8 @@ pub fn convert(
     let (fireworks_effects, scene_fireworks) = convert_fireworks(&export, &root)?;
     let (chimney_smoke_effects, prefab_chimney_emitters) = convert_chimney_smoke(&export, &root)?;
     let raining_fish_effects = convert_raining_fish(&export, &root)?;
+    let (fish_school_effects, scene_fish_schools) = convert_fish_schools(&export, &root)?;
+    let role_action_audio = convert_role_action_audio(&export, &root)?;
     let (healing_channel_effects, healing_burst_effects) = convert_healing_vfx(&export, &root)?;
     let mut clips = convert_clips(&export, &root)?;
     let embedded_clips = convert_embedded_model_clips(&export, &root, &mut clips)?;
@@ -251,7 +261,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 18,
+        schema_version: 19,
         textures,
         materials,
         clips,
@@ -268,6 +278,9 @@ pub fn convert(
         chimney_smoke_effects,
         prefab_chimney_emitters,
         raining_fish_effects,
+        fish_school_effects,
+        scene_fish_schools,
+        role_action_audio,
         healing_channel_effects,
         healing_burst_effects,
     };
@@ -280,7 +293,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 18,
+        schema_version: 19,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -400,6 +413,14 @@ pub fn convert(
         chimney_smoke_effects: catalog.chimney_smoke_effects.len(),
         prefab_chimney_emitters: catalog.prefab_chimney_emitters.values().map(Vec::len).sum(),
         raining_fish_effects: catalog.raining_fish_effects.len(),
+        fish_school_effects: catalog.fish_school_effects.len(),
+        scene_fish_school_bindings: catalog.scene_fish_schools.values().map(Vec::len).sum(),
+        role_action_audio_roles: catalog.role_action_audio.len(),
+        role_action_audio_variants: catalog
+            .role_action_audio
+            .values()
+            .map(|audio| audio.clip_guids.len())
+            .sum(),
         healing_channel_effects: catalog.healing_channel_effects.len(),
         healing_burst_effects: catalog.healing_burst_effects.len(),
         outputs: vec![
@@ -895,6 +916,228 @@ fn convert_raining_fish(
         },
     );
     Ok(effects)
+}
+
+fn convert_fish_schools(export: &UnityExport, unity_root: &Path) -> Result<FishSchoolConversion> {
+    const EFFECT_PATH: &str = "Assets/Prefabs/VFX/Environment/Fish.prefab";
+    let mut effects = BTreeMap::new();
+    let mut scene_bindings = BTreeMap::new();
+    let Some(asset) = export.assets.iter().find(|asset| asset.path == EFFECT_PATH) else {
+        return Ok((effects, scene_bindings));
+    };
+    let source = unity_root.join(EFFECT_PATH);
+    let contents = fs::read_to_string(&source)
+        .with_context(|| format!("failed to read fish-school prefab {}", source.display()))?;
+    let documents = parse_yaml_documents(&contents)?;
+    let particle = documents
+        .iter()
+        .find(|document| document.class_id == 198)
+        .context("fish-school prefab has no ParticleSystem")?;
+    let particle_transform = documents
+        .iter()
+        .find(|document| {
+            document.class_id == 4
+                && scalar(&document.lines, "m_Father:")
+                    .is_some_and(|father| father != "{fileID: 0}")
+        })
+        .context("fish-school prefab has no particle Transform")?;
+    let renderer = documents
+        .iter()
+        .find(|document| document.class_id == 199)
+        .context("fish-school prefab has no ParticleSystemRenderer")?;
+    let initial = yaml_section(&particle.lines, "InitialModule:")?;
+    let lifetime = yaml_section(initial, "startLifetime:")?;
+    let size = yaml_section(initial, "startSize:")?;
+    let shape = yaml_section(&particle.lines, "ShapeModule:")?;
+    let emission = yaml_section(&particle.lines, "EmissionModule:")?;
+    let rate = yaml_section(emission, "rateOverTime:")?;
+    let noise = yaml_section(&particle.lines, "NoiseModule:")?;
+    let strength_x = yaml_section(noise, "strength:")?;
+    let strength_y = yaml_section(noise, "strengthY:")?;
+    let strength_z = yaml_section(noise, "strengthZ:")?;
+    let material_guid = renderer
+        .lines
+        .iter()
+        .take_while(|line| !line.trim_start().starts_with("m_Mesh:"))
+        .find_map(|line| reference_guid(line))
+        .context("fish-school renderer has no material GUID")?;
+    let model_guid = renderer
+        .lines
+        .iter()
+        .find(|line| line.trim_start().starts_with("m_Mesh:"))
+        .and_then(|line| reference_guid(line))
+        .context("fish-school renderer has no mesh GUID")?;
+    let model_source = export
+        .assets
+        .iter()
+        .find(|candidate| candidate.guid == model_guid)
+        .map(|candidate| candidate.path.clone())
+        .with_context(|| format!("fish-school mesh GUID {model_guid} is missing from export"))?;
+    let effect_id = particle_effect_id(&asset.guid)?;
+    let effect = FishSchoolVfxDef {
+        display_name: asset.name.clone(),
+        source_guid: asset.guid.clone(),
+        source_path: asset.path.clone(),
+        model_asset_path: glb_asset_path(&model_source),
+        model_source,
+        material: material_id(material_guid)?,
+        duration_seconds: required_particle_scalar_f32(
+            &particle.lines,
+            "lengthInSec:",
+            "duration",
+        )?,
+        emission_rate_per_second: required_particle_scalar_f32(rate, "scalar:", "emission rate")?,
+        lifetime_seconds: required_particle_scalar_f32(lifetime, "scalar:", "lifetime")?,
+        start_size: [
+            required_particle_scalar_f32(size, "minScalar:", "minimum start size")?,
+            required_particle_scalar_f32(size, "scalar:", "maximum start size")?,
+        ],
+        max_particles: scalar(initial, "maxNumParticles:")
+            .and_then(|value| value.parse().ok())
+            .context("fish-school particle has no maximum count")?,
+        particle_local_position: inline_vec3(
+            scalar(&particle_transform.lines, "m_LocalPosition:")
+                .context("fish-school transform has no local position")?,
+            [0.0; 3],
+        ),
+        shape_scale: inline_vec3(
+            scalar(shape, "m_Scale:").context("fish-school shape has no scale")?,
+            [1.0; 3],
+        ),
+        noise_strength: [
+            required_particle_scalar_f32(strength_x, "scalar:", "noise strength X")?,
+            required_particle_scalar_f32(strength_y, "scalar:", "noise strength Y")?,
+            required_particle_scalar_f32(strength_z, "scalar:", "noise strength Z")?,
+        ],
+        noise_frequency: required_particle_scalar_f32(noise, "frequency:", "noise frequency")?,
+        world_space: scalar(&particle.lines, "moveWithTransform:") == Some("0"),
+        prewarm: scalar(&particle.lines, "prewarm:") == Some("1"),
+    };
+    effects.insert(effect_id.clone(), effect.clone());
+
+    for scene_path in [
+        "Assets/Scenes/Menu/Main_Menu_02.unity",
+        "Assets/Scenes/Worlds/World_Town.unity",
+    ] {
+        let Some(scene_asset) = export.assets.iter().find(|asset| asset.path == scene_path) else {
+            continue;
+        };
+        let scene_contents = fs::read_to_string(unity_root.join(scene_path))?;
+        let scene_documents = parse_yaml_documents(&scene_contents)?;
+        let mut bindings = Vec::new();
+        for document in scene_documents.iter().filter(|document| {
+            document.class_id == 1001
+                && document.lines.iter().any(|line| {
+                    line.trim_start().starts_with("m_SourcePrefab:")
+                        && reference_guid(line) == Some(asset.guid.as_str())
+                })
+        }) {
+            let value = |property: &str| prefab_modification_value(&document.lines, property);
+            let position = [
+                value("m_LocalPosition.x")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0),
+                value("m_LocalPosition.y")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0),
+                value("m_LocalPosition.z")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0),
+            ];
+            let mut noise_strength = effect.noise_strength;
+            for (index, property) in [
+                "NoiseModule.strength.scalar",
+                "NoiseModule.strengthY.scalar",
+                "NoiseModule.strengthZ.scalar",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if let Some(override_value) = value(property).and_then(|value| value.parse().ok()) {
+                    noise_strength[index] = override_value;
+                }
+            }
+            bindings.push(SceneFishSchoolBinding {
+                hierarchy_path: value("m_Name").unwrap_or("Fish").to_owned(),
+                effect: effect_id.clone(),
+                local_position: position,
+                max_particles: value("InitialModule.maxNumParticles")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(effect.max_particles),
+                emission_rate_per_second: value("EmissionModule.rateOverTime.scalar")
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(effect.emission_rate_per_second),
+                noise_strength,
+            });
+        }
+        bindings.sort_by(|left, right| left.hierarchy_path.cmp(&right.hierarchy_path));
+        if !bindings.is_empty() {
+            scene_bindings.insert(scene_asset.path.clone(), bindings);
+        }
+    }
+    Ok((effects, scene_bindings))
+}
+
+fn prefab_modification_value<'a>(lines: &'a [String], property: &str) -> Option<&'a str> {
+    lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.trim() == format!("propertyPath: {property}"))
+        .and_then(|(index, _)| {
+            lines
+                .iter()
+                .skip(index + 1)
+                .take(2)
+                .find_map(|line| line.trim().strip_prefix("value: "))
+        })
+}
+
+fn convert_role_action_audio(
+    export: &UnityExport,
+    unity_root: &Path,
+) -> Result<BTreeMap<StableId, RoleActionAudioDef>> {
+    const PREFIX: &str = "Assets/Resources/ScriptableObjects/Roles/RoleData_";
+    let mut roles = BTreeMap::new();
+    for asset in export.assets.iter().filter(|asset| {
+        asset.path.starts_with(PREFIX)
+            && Path::new(&asset.path)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("asset"))
+    }) {
+        let contents = fs::read_to_string(unity_root.join(&asset.path))?;
+        let Some(action_clips) = contents
+            .lines()
+            .position(|line| line.trim() == "ActionClips:")
+        else {
+            continue;
+        };
+        let clip_guids = contents
+            .lines()
+            .skip(action_clips + 1)
+            .take_while(|line| line.starts_with("  - "))
+            .filter_map(reference_guid)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if clip_guids.is_empty() {
+            continue;
+        }
+        let role_name = asset
+            .path
+            .strip_prefix(PREFIX)
+            .and_then(|name| name.strip_suffix(".asset"))
+            .context("role action-audio asset has an invalid path")?;
+        let role = StableId::new(format!("role:{}", role_name.to_ascii_lowercase()))?;
+        roles.insert(
+            role,
+            RoleActionAudioDef {
+                display_name: role_name.to_owned(),
+                source_guid: asset.guid.clone(),
+                source_path: asset.path.clone(),
+                clip_guids,
+            },
+        );
+    }
+    Ok(roles)
 }
 
 fn convert_healing_vfx(
@@ -3105,7 +3348,11 @@ fn parse_yaml_documents(contents: &str) -> Result<Vec<YamlDocument>> {
                 .with_context(|| format!("invalid Unity YAML header {line}"))?;
             current = Some(YamlDocument {
                 class_id: class_id.parse()?,
-                file_id: file_id.parse()?,
+                file_id: file_id
+                    .split_whitespace()
+                    .next()
+                    .context("Unity YAML header has no file ID")?
+                    .parse()?,
                 lines: Vec::new(),
             });
         } else if let Some(document) = &mut current {
@@ -3866,6 +4113,63 @@ MonoBehaviour:
         assert!((keys[1].time - 0.876_676_3).abs() < f32::EPSILON);
         assert!((keys[1].value - 0.860_819_2).abs() < f32::EPSILON);
         assert_eq!(keys.last().map(|key| key.value), Some(0.0));
+    }
+
+    #[test]
+    fn converts_shipping_fish_schools_and_role_audio_references() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let export: UnityExport = serde_json::from_str(
+            &fs::read_to_string(root.join("bevy-port/generated/unity-export.json")).unwrap(),
+        )
+        .unwrap();
+        let (effects, bindings) = convert_fish_schools(&export, &root).unwrap();
+        let effect = effects.values().next().unwrap();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effect.max_particles, 2_000);
+        assert!(
+            effect
+                .shape_scale
+                .into_iter()
+                .zip([300.0, 300.0, 5.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            effect
+                .particle_local_position
+                .into_iter()
+                .zip([0.0, -2.0, 0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!((effect.noise_frequency - 0.22).abs() < f32::EPSILON);
+        assert!(effect.world_space && effect.prewarm);
+        assert_eq!(bindings.values().map(Vec::len).sum::<usize>(), 3);
+        assert_eq!(
+            bindings["Assets/Scenes/Menu/Main_Menu_02.unity"][0].max_particles,
+            800
+        );
+        assert!(
+            bindings["Assets/Scenes/Worlds/World_Town.unity"][1]
+                .noise_strength
+                .into_iter()
+                .zip([10.0, 5.0, 10.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+
+        let roles = convert_role_action_audio(&export, &root).unwrap();
+        assert_eq!(roles.len(), 14);
+        assert_eq!(
+            roles
+                .values()
+                .map(|role| role.clip_guids.len())
+                .sum::<usize>(),
+            35
+        );
+        assert_eq!(
+            roles[&StableId::new("role:miner").unwrap()]
+                .clip_guids
+                .len(),
+            5
+        );
     }
 
     #[test]

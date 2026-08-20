@@ -2,11 +2,16 @@
 
 The Bevy migration does not redistribute the Unity project's removed audio files.
 
-Role-action cues are generated at runtime by `stream_town_game` with Bevy's
-`Pitch` sine-wave source. The cue frequency is chosen deterministically from the
-converted animation name (or stable clip ID as a fallback), lasts 85 milliseconds,
-and is played at 8% linear volume. These sounds contain no sampled or third-party
-media and require no external attribution.
+Role-action cues are generated at runtime by `stream_town_game` as mono 16-bit
+PCM WAV data. Presentation schema 19 retains the 35 original `AudioClip` GUID
+references across the 14 role assets that authored clips; those GUIDs select a
+deterministic variant but no source recording is present or copied. Smooth
+oscillator/envelope profiles distinguish mining, logging, building, fishing,
+archery, healing, magic, farming/gathering, and melee actions. Playback is
+spatial at the actor, preserves Unity's 20-unit enable distance, and follows the
+master/SFX mix. The signals use harmonic partials rather than sample-by-sample
+noise, avoiding static-like hiss or discontinuities. These sounds contain no
+sampled or third-party media and require no external attribution.
 
 Seasonal day/night music beds and the ambient wind loop are also generated
 entirely at runtime by `stream_town_game`. The synthesizer writes mono 16-bit PCM

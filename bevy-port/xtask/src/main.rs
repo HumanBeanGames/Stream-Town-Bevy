@@ -563,7 +563,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (18, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
+    ) != (19, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || embedded_animation_clips != 122
         || (blend_states, inferred_parameters) != (11, 2)
@@ -595,6 +595,20 @@ fn validate() -> Result<()> {
             .sum::<usize>()
             != 7
         || presentation.raining_fish_effects.len() != 1
+        || presentation.fish_school_effects.len() != 1
+        || presentation
+            .scene_fish_schools
+            .values()
+            .map(Vec::len)
+            .sum::<usize>()
+            != 3
+        || presentation.role_action_audio.len() != 14
+        || presentation
+            .role_action_audio
+            .values()
+            .map(|audio| audio.clip_guids.len())
+            .sum::<usize>()
+            != 35
         || presentation.healing_channel_effects.len() != 1
         || presentation.healing_burst_effects.len() != 1
         || presentation
@@ -728,7 +742,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, and 1 unit health-bar contract, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, and 1 unit health-bar contract, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 3 fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }
