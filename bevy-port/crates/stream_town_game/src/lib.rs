@@ -2,13 +2,15 @@ pub mod twitch;
 mod unity_color_filter;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result as AnyResult};
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody, SpatialQuery, SpatialQueryFilter};
+#[cfg(target_os = "windows")]
+use bevy::render::settings::Backends;
 use bevy::{
     animation::{
         AnimatedBy, AnimationClip, AnimationTargetId, animated_field,
@@ -40,6 +42,7 @@ use bevy::{
     render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
     render::view::screenshot::{Screenshot, save_to_disk},
     render::view::{ColorGrading, Msaa},
+    render::{RenderPlugin, settings::WgpuSettings},
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
     window::{
@@ -74,6 +77,9 @@ const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const CHIMNEY_ALPHA_STEPS: usize = 8;
 const TERRAIN_CHUNK_CELLS: u16 = 16;
+const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
+const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
+const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
 const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.glb";
@@ -199,7 +205,11 @@ const CURRENT_EVENT_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Unfilled.png",
     "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Filled.png",
 ];
-const FOLIAGE_VISIBILITY_RANGE: f32 = 420.0;
+const FOLIAGE_VISIBILITY_MIN_RANGE: f32 = 280.0;
+const FOLIAGE_VISIBILITY_MAX_RANGE: f32 = 560.0;
+const FOLIAGE_VISIBILITY_FADE: f32 = 36.0;
+const CROWD_SEPARATION_RADIUS_CELLS: f32 = 0.42;
+const CROWD_SEPARATION_MAX_CELLS: f32 = 0.28;
 const CHARACTER_HIT_SECONDS: f32 = 0.25;
 const TOWER_TRAIL_SECONDS: f32 = 2.0;
 const TOWER_TRAIL_WIDTH: f32 = 0.1;
@@ -361,6 +371,20 @@ struct SessionStats {
     elapsed_seconds: f64,
     paths_completed: u64,
     commands_processed: u64,
+}
+
+#[derive(Resource, Default)]
+struct WorldRenderStats {
+    terrain_high_chunks: usize,
+    terrain_medium_chunks: usize,
+    terrain_low_chunks: usize,
+    foliage_instances: usize,
+    crowd_adjusted_agents: usize,
+}
+
+#[derive(Resource, Default)]
+struct CrowdSeparationRuntime {
+    applied_offsets: HashMap<Entity, Vec3>,
 }
 
 #[derive(Clone, Debug)]
@@ -1187,6 +1211,23 @@ struct SeagullFlight {
 #[derive(Component)]
 struct TerrainSurface;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum TerrainLodLevel {
+    #[default]
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Component)]
+struct TerrainChunkLod {
+    centre: Vec2,
+    high: Handle<Mesh>,
+    medium: Handle<Mesh>,
+    low: Handle<Mesh>,
+    current: TerrainLodLevel,
+}
+
 #[derive(Component)]
 struct Agent {
     id: StableId,
@@ -2000,6 +2041,8 @@ impl Plugin for StreamTownGamePlugin {
         }
         app.init_state::<GameState>()
             .init_resource::<SessionStats>()
+            .init_resource::<WorldRenderStats>()
+            .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
@@ -2151,7 +2194,7 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
-                    move_agents,
+                    (reset_crowd_separation, move_agents, apply_crowd_separation).chain(),
                     sync_resource_nodes.after(move_agents),
                     sync_building_presentation.after(move_agents),
                     animate_agents,
@@ -2181,6 +2224,12 @@ impl Plugin for StreamTownGamePlugin {
                     drive_level_up_presentation.after(move_agents),
                     update_hud,
                 )
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                sync_world_render_lod
+                    .after(camera_controls)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -2358,6 +2407,10 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .insert_resource(RuntimeAssetRoot(asset_root.clone()))
         .add_plugins(
             DefaultPlugins
+                .set(RenderPlugin {
+                    render_creation: runtime_wgpu_settings().into(),
+                    ..default()
+                })
                 .set(AssetPlugin {
                     file_path: asset_root.to_string_lossy().into_owned(),
                     ..default()
@@ -2368,7 +2421,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                         resolution,
                         present_mode: if std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some()
                         {
-                            PresentMode::AutoNoVsync
+                            PresentMode::Immediate
                         } else if player_settings.video.vsync {
                             PresentMode::AutoVsync
                         } else {
@@ -2378,7 +2431,10 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                         // monitor during window creation, while changing into exclusive mode
                         // after renderer setup can invalidate the DX12 swapchain on some
                         // drivers. Preserve the setting but use borderless compatibility.
-                        mode: startup_window_mode(player_settings.video.display_mode),
+                        mode: startup_window_mode(
+                            player_settings.video.display_mode,
+                            std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some(),
+                        ),
                         ..default()
                     }),
                     ..default()
@@ -2400,6 +2456,17 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<CharacterMaterial>::default())
         .add_plugins(StreamTownGamePlugin)
         .run();
+}
+
+fn runtime_wgpu_settings() -> WgpuSettings {
+    let mut settings = WgpuSettings::default();
+    #[cfg(target_os = "windows")]
+    {
+        // Vulkan swapchain validation is unreliable on the current Windows
+        // driver. DX12 is the supported shipping backend for the first release.
+        settings.backends = Some(Backends::DX12);
+    }
+    settings
 }
 
 #[must_use]
@@ -2466,7 +2533,10 @@ fn player_window_mode(
     }
 }
 
-fn startup_window_mode(mode: stream_town_domain::DisplayMode) -> WindowMode {
+fn startup_window_mode(mode: stream_town_domain::DisplayMode, benchmarking: bool) -> WindowMode {
+    if benchmarking {
+        return WindowMode::Windowed;
+    }
     match mode {
         stream_town_domain::DisplayMode::Windowed => WindowMode::Windowed,
         stream_town_domain::DisplayMode::Borderless
@@ -3031,10 +3101,17 @@ fn apply_player_settings(
     mut shadow_map: Option<ResMut<DirectionalLightShadowMap>>,
     mut winit: Option<ResMut<WinitSettings>>,
 ) {
+    let benchmarking = std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some();
     if let Ok((mut window, current_monitor)) = windows.single_mut() {
         let monitor = current_monitor.map(|monitor| monitor.0);
-        window.mode = player_window_mode(settings.0.video.display_mode, monitor);
-        window.present_mode = if settings.0.video.vsync {
+        window.mode = if benchmarking {
+            WindowMode::Windowed
+        } else {
+            player_window_mode(settings.0.video.display_mode, monitor)
+        };
+        window.present_mode = if benchmarking {
+            PresentMode::Immediate
+        } else if settings.0.video.vsync {
             PresentMode::AutoVsync
         } else {
             PresentMode::AutoNoVsync
@@ -3075,13 +3152,17 @@ fn apply_player_settings(
         shadow_map.size = usize::from(settings.0.video.shadow_map_resolution);
     }
     if let Some(winit) = winit.as_deref_mut() {
-        winit.focused_mode = settings
-            .0
-            .video
-            .fps_limit
-            .map_or(UpdateMode::Continuous, |limit| {
-                UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
-            });
+        winit.focused_mode = if benchmarking {
+            UpdateMode::Continuous
+        } else {
+            settings
+                .0
+                .video
+                .fps_limit
+                .map_or(UpdateMode::Continuous, |limit| {
+                    UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
+                })
+        };
     }
 }
 
@@ -3180,7 +3261,9 @@ fn sync_authored_post_processing(
     } else {
         entity.remove::<Vignette>();
     }
-    if let Some(motion_blur) = primary.and_then(|profile| profile.motion_blur) {
+    if motion_blur_supported()
+        && let Some(motion_blur) = primary.and_then(|profile| profile.motion_blur)
+    {
         entity.insert(MotionBlur {
             shutter_angle: motion_blur.intensity,
             samples: u32::from(motion_blur.quality),
@@ -3196,6 +3279,13 @@ fn sync_authored_post_processing(
         Some(PostProcessTonemapping::None) | None => entity.insert(Tonemapping::None),
     };
     runtime.applied = Some(signature);
+}
+
+const fn motion_blur_supported() -> bool {
+    // Bevy 0.19's motion-blur shader contains a varying loop that the
+    // self-contained Windows FXC path cannot compile. Other platforms retain
+    // the authored effect; Windows keeps the remainder of the post stack.
+    !cfg!(target_os = "windows")
 }
 
 fn authored_post_process_stack<'a>(
@@ -7648,6 +7738,7 @@ fn generate_and_spawn_world(
     mut bottom_bar: ResMut<BottomBarRuntime>,
     mut placers: ResMut<BuildingPlacers>,
     mut agent_commands: ResMut<AgentCommandQueue>,
+    mut render_stats: ResMut<WorldRenderStats>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
 ) {
     if loading.phase != WorldLoadingPhase::Generating {
@@ -7656,6 +7747,7 @@ fn generate_and_spawn_world(
     selected.0 = None;
     selected_group.actors.clear();
     selected_group.drag_start = None;
+    *render_stats = WorldRenderStats::default();
     let mut generated = generate_world_with_content(&config.0.world, &content.0);
     let centre = GridPos {
         x: config.0.world.width / 2,
@@ -7816,18 +7908,29 @@ fn generate_and_spawn_world(
         f32::from(config.0.world.height) * config.0.world.cell_size,
     );
     if let Some(meshes) = meshes.as_deref_mut() {
-        for (chunk_x, chunk_z, terrain_mesh) in generated_terrain_chunks(&generated, &config.0) {
-            let terrain_collider = Collider::trimesh_from_mesh(&terrain_mesh)
+        for chunk in generated_terrain_chunks(&generated, &config.0) {
+            let terrain_collider = Collider::trimesh_from_mesh(&chunk.high)
                 .expect("generated terrain chunk has indexed triangle geometry");
+            let high = meshes.add(chunk.high);
+            let medium = meshes.add(chunk.medium);
+            let low = meshes.add(chunk.low);
             commands.spawn((
                 WorldEntity,
                 TerrainSurface,
-                Name::new(format!("TerrainChunk_{chunk_x}_{chunk_z}")),
-                Mesh3d(meshes.add(terrain_mesh)),
+                Name::new(format!("TerrainChunk_{}_{}", chunk.chunk_x, chunk.chunk_z)),
+                Mesh3d(high.clone()),
                 MeshMaterial3d(render.ground.clone()),
                 terrain_collider,
                 RigidBody::Static,
+                TerrainChunkLod {
+                    centre: chunk.centre,
+                    high,
+                    medium,
+                    low,
+                    current: TerrainLodLevel::High,
+                },
             ));
+            render_stats.terrain_high_chunks += 1;
         }
     } else {
         commands.spawn((
@@ -7878,7 +7981,7 @@ fn generate_and_spawn_world(
     }
     if let Some(asset_server) = asset_server.as_deref() {
         for foliage in &generated.foliage {
-            spawn_foliage_visual(
+            if spawn_foliage_visual(
                 &mut commands,
                 &content.0,
                 &presentation.0,
@@ -7888,7 +7991,9 @@ fn generate_and_spawn_world(
                 &generated,
                 &config.0,
                 foliage,
-            );
+            ) {
+                render_stats.foliage_instances += 1;
+            }
         }
     }
 
@@ -8630,19 +8735,19 @@ fn spawn_foliage_visual(
     world: &GeneratedWorld,
     config: &GameConfig,
     foliage: &GeneratedFoliage,
-) {
+) -> bool {
     let Some(layer) = content
         .foliage
         .iter()
         .find(|layer| layer.id == foliage.layer)
     else {
-        return;
+        return false;
     };
     let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
-        return;
+        return false;
     };
     if !converted_asset_exists(asset_root, &variant.asset_path) {
-        return;
+        return false;
     }
     let mesh = asset_server.load(
         GltfAssetLabel::Primitive {
@@ -8662,6 +8767,7 @@ fn spawn_foliage_visual(
     let scale = Vec3::from_array(variant.base_scale)
         * resource_visual_scale(config.world.cell_size)
         * (f32::from(foliage.scale_milli) / 1_000.0);
+    let visibility_end = foliage_visibility_distance(scale);
     let material = presentation
         .model_materials
         .get(&variant.source_model)
@@ -8679,7 +8785,11 @@ fn spawn_foliage_visual(
             )
             .with_scale(scale),
         Visibility::Inherited,
-        bevy::camera::visibility::VisibilityRange::abrupt(0.0, FOLIAGE_VISIBILITY_RANGE),
+        bevy::camera::visibility::VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: (visibility_end - FOLIAGE_VISIBILITY_FADE)..visibility_end,
+            use_aabb: true,
+        },
         bevy::light::NotShadowCaster,
     ));
     match material {
@@ -8714,6 +8824,12 @@ fn spawn_foliage_visual(
             entity.insert(MeshMaterial3d(render.food.clone()));
         }
     }
+    true
+}
+
+fn foliage_visibility_distance(scale: Vec3) -> f32 {
+    (FOLIAGE_VISIBILITY_MIN_RANGE + scale.max_element().max(0.0) * 20.0)
+        .clamp(FOLIAGE_VISIBILITY_MIN_RANGE, FOLIAGE_VISIBILITY_MAX_RANGE)
 }
 
 fn archetype_scene_for_age(archetype: &ArchetypeDef, age: u8) -> Option<&ArchetypeScene> {
@@ -12885,6 +13001,129 @@ fn move_agents(
     }
 }
 
+fn reset_crowd_separation(
+    mut runtime: ResMut<CrowdSeparationRuntime>,
+    mut agents: Query<(Entity, &mut Transform), With<Agent>>,
+) {
+    for (entity, mut transform) in &mut agents {
+        if let Some(offset) = runtime.applied_offsets.remove(&entity) {
+            transform.translation -= offset;
+        }
+    }
+    runtime.applied_offsets.clear();
+}
+
+fn apply_crowd_separation(
+    config: Res<RuntimeConfig>,
+    mut runtime: ResMut<CrowdSeparationRuntime>,
+    mut stats: ResMut<WorldRenderStats>,
+    mut agents: Query<(Entity, &Agent, &mut Transform)>,
+) {
+    let mut ordered = agents
+        .iter()
+        .map(|(entity, agent, transform)| {
+            (
+                agent.id.clone(),
+                entity,
+                Vec2::new(transform.translation.x, transform.translation.z),
+            )
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.0.cmp(&right.0));
+    let positions = ordered
+        .iter()
+        .map(|(id, _, position)| (id.clone(), *position))
+        .collect::<Vec<_>>();
+    let radius = config.0.world.cell_size * CROWD_SEPARATION_RADIUS_CELLS;
+    let max_offset = config.0.world.cell_size * CROWD_SEPARATION_MAX_CELLS;
+    let offsets = crowd_separation_offsets(&positions, radius, max_offset);
+    stats.crowd_adjusted_agents = 0;
+    for ((_, entity, _), offset) in ordered.into_iter().zip(offsets) {
+        if offset.length_squared() <= f32::EPSILON {
+            continue;
+        }
+        let offset = Vec3::new(offset.x, 0.0, offset.y);
+        if let Ok((_, _, mut transform)) = agents.get_mut(entity) {
+            transform.translation += offset;
+            runtime.applied_offsets.insert(entity, offset);
+            stats.crowd_adjusted_agents += 1;
+        }
+    }
+}
+
+fn crowd_separation_offsets(
+    agents: &[(StableId, Vec2)],
+    radius: f32,
+    max_offset: f32,
+) -> Vec<Vec2> {
+    if agents.len() < 2 || radius <= f32::EPSILON || max_offset <= f32::EPSILON {
+        return vec![Vec2::ZERO; agents.len()];
+    }
+    let mut buckets: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
+    for (index, (_, position)) in agents.iter().enumerate() {
+        let bucket = crowd_spatial_bucket(*position, radius);
+        buckets.entry(bucket).or_default().push(index);
+    }
+    let mut offsets = vec![Vec2::ZERO; agents.len()];
+    for (index, (id, position)) in agents.iter().enumerate() {
+        let bucket = crowd_spatial_bucket(*position, radius);
+        for bucket_z in bucket.1 - 1..=bucket.1 + 1 {
+            for bucket_x in bucket.0 - 1..=bucket.0 + 1 {
+                let Some(neighbours) = buckets.get(&(bucket_x, bucket_z)) else {
+                    continue;
+                };
+                for &other_index in neighbours.iter().filter(|&&other| other > index) {
+                    let (other_id, other_position) = &agents[other_index];
+                    let delta = *position - *other_position;
+                    let distance = delta.length();
+                    if distance >= radius {
+                        continue;
+                    }
+                    let direction = if distance > 0.001 {
+                        delta / distance
+                    } else {
+                        deterministic_overlap_direction(id, other_id)
+                    };
+                    let strength = (1.0 - distance / radius) * max_offset * 0.5;
+                    let separation = direction * strength;
+                    offsets[index] += separation;
+                    offsets[other_index] -= separation;
+                }
+            }
+        }
+    }
+    for offset in &mut offsets {
+        *offset = offset.clamp_length_max(max_offset);
+    }
+    offsets
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn crowd_spatial_bucket(position: Vec2, radius: f32) -> (i32, i32) {
+    // Runtime world coordinates are bounded to a few thousand units; the cast
+    // cannot approach i32 limits and intentionally discards the fractional cell.
+    (
+        (position.x / radius).floor() as i32,
+        (position.y / radius).floor() as i32,
+    )
+}
+
+fn deterministic_overlap_direction(left: &StableId, right: &StableId) -> Vec2 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in left
+        .as_str()
+        .bytes()
+        .chain([0xff])
+        .chain(right.as_str().bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let milliradians = u16::try_from(hash % 6_283).expect("bounded angle fits u16");
+    let angle = f32::from(milliradians) / 1_000.0;
+    Vec2::from_angle(angle)
+}
+
 fn sync_resource_nodes(
     world: Res<WorldRuntime>,
     mut resources: Query<(&ResourceNode, &mut Visibility)>,
@@ -16616,6 +16855,78 @@ fn camera_controls(
     }
 }
 
+fn camera_ground_focus(transform: &Transform) -> Vec2 {
+    let forward = transform.forward();
+    let intersection = if forward.y.abs() > 0.001 {
+        transform.translation + forward * (-transform.translation.y / forward.y)
+    } else {
+        transform.translation
+    };
+    Vec2::new(intersection.x, intersection.z)
+}
+
+fn terrain_lod_for_distance(current: TerrainLodLevel, distance: f32) -> TerrainLodLevel {
+    match current {
+        TerrainLodLevel::High => {
+            if distance > TERRAIN_MEDIUM_DETAIL_RADIUS + TERRAIN_LOD_HYSTERESIS {
+                TerrainLodLevel::Low
+            } else if distance > TERRAIN_HIGH_DETAIL_RADIUS + TERRAIN_LOD_HYSTERESIS {
+                TerrainLodLevel::Medium
+            } else {
+                TerrainLodLevel::High
+            }
+        }
+        TerrainLodLevel::Medium => {
+            if distance < TERRAIN_HIGH_DETAIL_RADIUS - TERRAIN_LOD_HYSTERESIS {
+                TerrainLodLevel::High
+            } else if distance > TERRAIN_MEDIUM_DETAIL_RADIUS + TERRAIN_LOD_HYSTERESIS {
+                TerrainLodLevel::Low
+            } else {
+                TerrainLodLevel::Medium
+            }
+        }
+        TerrainLodLevel::Low => {
+            if distance < TERRAIN_HIGH_DETAIL_RADIUS - TERRAIN_LOD_HYSTERESIS {
+                TerrainLodLevel::High
+            } else if distance < TERRAIN_MEDIUM_DETAIL_RADIUS - TERRAIN_LOD_HYSTERESIS {
+                TerrainLodLevel::Medium
+            } else {
+                TerrainLodLevel::Low
+            }
+        }
+    }
+}
+
+fn sync_world_render_lod(
+    cameras: Query<&Transform, With<TownCamera>>,
+    mut chunks: Query<(&mut TerrainChunkLod, &mut Mesh3d)>,
+    mut stats: ResMut<WorldRenderStats>,
+) {
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let focus = camera_ground_focus(camera);
+    stats.terrain_high_chunks = 0;
+    stats.terrain_medium_chunks = 0;
+    stats.terrain_low_chunks = 0;
+    for (mut chunk, mut mesh) in &mut chunks {
+        let desired = terrain_lod_for_distance(chunk.current, chunk.centre.distance(focus));
+        if desired != chunk.current {
+            mesh.0 = match desired {
+                TerrainLodLevel::High => chunk.high.clone(),
+                TerrainLodLevel::Medium => chunk.medium.clone(),
+                TerrainLodLevel::Low => chunk.low.clone(),
+            };
+            chunk.current = desired;
+        }
+        match chunk.current {
+            TerrainLodLevel::High => stats.terrain_high_chunks += 1,
+            TerrainLodLevel::Medium => stats.terrain_medium_chunks += 1,
+            TerrainLodLevel::Low => stats.terrain_low_chunks += 1,
+        }
+    }
+}
+
 fn pet_scene<'a>(archetype: &'a ArchetypeDef, pet: &StableId) -> Option<&'a ArchetypeScene> {
     let suffix = match pet.as_str() {
         "pet:red_panda" => "Pet_RedPanda.fbx",
@@ -19548,6 +19859,7 @@ fn publish_runtime_console_status(
     world: Option<Res<WorldRuntime>>,
     simulation: Option<Res<SimulationRuntime>>,
     session: Res<SessionStats>,
+    render_stats: Res<WorldRenderStats>,
     save: Res<SaveRuntime>,
     twitch: Res<TwitchConnection>,
     diagnostics: Option<Res<DiagnosticsStore>>,
@@ -19615,6 +19927,11 @@ fn publish_runtime_console_status(
         commands_processed: session.commands_processed,
         average_frame_ms,
         p95_frame_ms,
+        terrain_high_chunks: render_stats.terrain_high_chunks,
+        terrain_medium_chunks: render_stats.terrain_medium_chunks,
+        terrain_low_chunks: render_stats.terrain_low_chunks,
+        foliage_instances: render_stats.foliage_instances,
+        crowd_adjusted_agents: render_stats.crowd_adjusted_agents,
         save_exists: save.store.path().is_file(),
         save_path: save.store.path().display().to_string(),
         twitch_status: format!("{:?}", twitch.status),
@@ -19860,7 +20177,7 @@ fn load_input(
     let terrain_replacement = if let Some(meshes) = load_render.meshes.as_mut() {
         let terrain_meshes = match snapshot.legacy_terrain_mesh.as_ref() {
             Some(saved) => match retained_terrain_mesh(saved) {
-                Ok(mesh) => vec![("TerrainLegacy".to_owned(), mesh)],
+                Ok(mesh) => vec![("TerrainLegacy".to_owned(), mesh, None)],
                 Err(error) => {
                     runtime_console.last_result = format!(
                         "Load failed: retained terrain could not be reconstructed: {error}"
@@ -19871,18 +20188,32 @@ fn load_input(
             },
             None => generated_terrain_chunks(&restored_world, &restored_config)
                 .into_iter()
-                .map(|(chunk_x, chunk_z, mesh)| (format!("TerrainChunk_{chunk_x}_{chunk_z}"), mesh))
+                .map(|chunk| {
+                    (
+                        format!("TerrainChunk_{}_{}", chunk.chunk_x, chunk.chunk_z),
+                        chunk.high,
+                        Some((chunk.centre, chunk.medium, chunk.low)),
+                    )
+                })
                 .collect(),
         };
         let mut replacements = Vec::with_capacity(terrain_meshes.len());
-        for (name, mesh) in terrain_meshes {
+        for (name, mesh, lod_meshes) in terrain_meshes {
             let Some(collider) = Collider::trimesh_from_mesh(&mesh) else {
                 "Load failed: saved terrain does not produce a valid collider"
                     .clone_into(&mut runtime_console.last_result);
                 error!("native save terrain does not produce a valid triangle collider");
                 return;
             };
-            replacements.push((name, meshes.add(mesh), collider));
+            let high = meshes.add(mesh);
+            let lod = lod_meshes.map(|(centre, medium, low)| TerrainChunkLod {
+                centre,
+                high: high.clone(),
+                medium: meshes.add(medium),
+                low: meshes.add(low),
+                current: TerrainLodLevel::High,
+            });
+            replacements.push((name, high, lod, collider));
         }
         Some(replacements)
     } else {
@@ -19957,8 +20288,8 @@ fn load_input(
         for entity in &load_render.terrain_surfaces {
             ecs.entity(entity).despawn();
         }
-        for (name, mesh, collider) in replacements {
-            ecs.spawn((
+        for (name, mesh, lod, collider) in replacements {
+            let mut terrain = ecs.spawn((
                 WorldEntity,
                 TerrainSurface,
                 Name::new(name),
@@ -19967,6 +20298,9 @@ fn load_input(
                 collider,
                 RigidBody::Static,
             ));
+            if let Some(lod) = lod {
+                terrain.insert(lod);
+            }
         }
     }
     let town_hall_id = StableId::new("building:townhall").expect("static ID");
@@ -20200,6 +20534,8 @@ fn capture_screenshot(
 fn report_frame_time_gate(
     time: Res<Time>,
     diagnostics: Option<ResMut<DiagnosticsStore>>,
+    stats: Res<WorldRenderStats>,
+    mut exit: MessageWriter<AppExit>,
     mut warmed_up: Local<bool>,
     mut reported: Local<bool>,
 ) {
@@ -20251,9 +20587,50 @@ fn report_frame_time_gate(
         p95_ms,
         budget_ms = 16.7,
         passed = p95_ms < 16.7,
+        terrain_high = stats.terrain_high_chunks,
+        terrain_medium = stats.terrain_medium_chunks,
+        terrain_low = stats.terrain_low_chunks,
+        foliage = stats.foliage_instances,
+        crowd_adjusted = stats.crowd_adjusted_agents,
         "steady-state frame-time gate"
     );
+    if let Some(path) = std::env::var_os("STREAM_TOWN_PERFORMANCE_REPORT_PATH") {
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            error!(%error, path = %path.display(), "could not create performance report directory");
+        } else {
+            let report = serde_json::json!({
+                "schema_version": 1,
+                "samples": values.len(),
+                "average_frame_ms": average_ms,
+                "p95_frame_ms": p95_ms,
+                "budget_frame_ms": 16.7,
+                "passed": p95_ms < 16.7,
+                "terrain_lod": {
+                    "high": stats.terrain_high_chunks,
+                    "medium": stats.terrain_medium_chunks,
+                    "low": stats.terrain_low_chunks,
+                },
+                "foliage_instances": stats.foliage_instances,
+                "crowd_adjusted_agents": stats.crowd_adjusted_agents,
+            });
+            match serde_json::to_vec_pretty(&report)
+                .map_err(std::io::Error::other)
+                .and_then(|bytes| std::fs::write(&path, bytes))
+            {
+                Ok(()) => info!(path = %path.display(), "performance report written"),
+                Err(error) => {
+                    error!(%error, path = %path.display(), "could not write performance report");
+                }
+            }
+        }
+    }
     *reported = true;
+    if std::env::var_os("STREAM_TOWN_EXIT_AFTER_FRAME_TIME").is_some() {
+        exit.write(AppExit::Success);
+    }
 }
 
 fn mirrored_target(world: &GeneratedWorld, position: GridPos) -> GridPos {
@@ -24668,7 +25045,19 @@ fn shoreline_focus(world: &GeneratedWorld, config: &GameConfig) -> Vec3 {
     boundary + inward * config.world.cell_size * 2.5
 }
 
-fn generated_terrain_chunks(world: &GeneratedWorld, config: &GameConfig) -> Vec<(u16, u16, Mesh)> {
+struct GeneratedTerrainChunk {
+    chunk_x: u16,
+    chunk_z: u16,
+    centre: Vec2,
+    high: Mesh,
+    medium: Mesh,
+    low: Mesh,
+}
+
+fn generated_terrain_chunks(
+    world: &GeneratedWorld,
+    config: &GameConfig,
+) -> Vec<GeneratedTerrainChunk> {
     let width = world.navigation.width();
     let height = world.navigation.height();
     (0..height.div_ceil(TERRAIN_CHUNK_CELLS))
@@ -24678,11 +25067,26 @@ fn generated_terrain_chunks(world: &GeneratedWorld, config: &GameConfig) -> Vec<
                 let start_z = chunk_z * TERRAIN_CHUNK_CELLS;
                 let cells_x = (width - start_x).min(TERRAIN_CHUNK_CELLS);
                 let cells_z = (height - start_z).min(TERRAIN_CHUNK_CELLS);
-                (
+                let centre = Vec2::new(
+                    (f32::from(start_x) + f32::from(cells_x) * 0.5 - f32::from(width) * 0.5)
+                        * config.world.cell_size,
+                    (f32::from(start_z) + f32::from(cells_z) * 0.5 - f32::from(height) * 0.5)
+                        * config.world.cell_size,
+                );
+                GeneratedTerrainChunk {
                     chunk_x,
                     chunk_z,
-                    generated_terrain_chunk_mesh(world, config, start_x, start_z, cells_x, cells_z),
-                )
+                    centre,
+                    high: generated_terrain_chunk_mesh(
+                        world, config, start_x, start_z, cells_x, cells_z, 1, false,
+                    ),
+                    medium: generated_terrain_chunk_mesh(
+                        world, config, start_x, start_z, cells_x, cells_z, 2, true,
+                    ),
+                    low: generated_terrain_chunk_mesh(
+                        world, config, start_x, start_z, cells_x, cells_z, 4, true,
+                    ),
+                }
             })
         })
         .collect()
@@ -24697,6 +25101,8 @@ fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
         0,
         world.navigation.width(),
         world.navigation.height(),
+        1,
+        false,
     )
 }
 
@@ -24707,15 +25113,19 @@ fn generated_terrain_chunk_mesh(
     start_z: u16,
     cells_x: u16,
     cells_z: u16,
+    detail_step: u16,
+    add_skirts: bool,
 ) -> Mesh {
     let world_width = world.navigation.width();
     let world_height = world.navigation.height();
-    let columns = u32::from(cells_x) + 1;
-    let mut positions = Vec::with_capacity(usize::from(cells_x + 1) * usize::from(cells_z + 1));
+    let sample_x = terrain_lod_samples(cells_x, detail_step);
+    let sample_z = terrain_lod_samples(cells_z, detail_step);
+    let columns = u32::try_from(sample_x.len()).expect("terrain LOD column count fits u32");
+    let mut positions = Vec::with_capacity(sample_x.len() * sample_z.len());
     let mut colors = Vec::with_capacity(positions.capacity());
     let mut uvs = Vec::with_capacity(positions.capacity());
-    for local_z in 0..=cells_z {
-        for local_x in 0..=cells_x {
+    for &local_z in &sample_z {
+        for &local_x in &sample_x {
             let x = start_x + local_x;
             let z = start_z + local_z;
             let elevation = terrain_corner_height(world, x, z);
@@ -24732,9 +25142,9 @@ fn generated_terrain_chunk_mesh(
         }
     }
 
-    let mut indices = Vec::with_capacity(usize::from(cells_x) * usize::from(cells_z) * 6);
-    for z in 0..u32::from(cells_z) {
-        for x in 0..u32::from(cells_x) {
+    let mut indices = Vec::with_capacity((sample_x.len() - 1) * (sample_z.len() - 1) * 6);
+    for z in 0..u32::try_from(sample_z.len() - 1).expect("terrain rows fit u32") {
+        for x in 0..u32::try_from(sample_x.len() - 1).expect("terrain columns fit u32") {
             let top_left = z * columns + x;
             let top_right = top_left + 1;
             let bottom_left = top_left + columns;
@@ -24750,6 +25160,36 @@ fn generated_terrain_chunk_mesh(
         }
     }
 
+    if add_skirts {
+        let skirt_depth = config.world.cell_size.max(1.0) * 0.75;
+        let top = sample_x.iter().copied().map(|x| (x, 0)).collect::<Vec<_>>();
+        let bottom = sample_x
+            .iter()
+            .copied()
+            .map(|x| (x, cells_z))
+            .collect::<Vec<_>>();
+        let left = sample_z.iter().copied().map(|z| (0, z)).collect::<Vec<_>>();
+        let right = sample_z
+            .iter()
+            .copied()
+            .map(|z| (cells_x, z))
+            .collect::<Vec<_>>();
+        for edge in [&top, &bottom, &left, &right] {
+            append_terrain_skirt(
+                world,
+                config,
+                start_x,
+                start_z,
+                edge,
+                skirt_depth,
+                &mut positions,
+                &mut colors,
+                &mut uvs,
+                &mut indices,
+            );
+        }
+    }
+
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -24760,6 +25200,67 @@ fn generated_terrain_chunk_mesh(
     .with_inserted_indices(Indices::U32(indices));
     mesh.compute_smooth_normals();
     mesh
+}
+
+fn terrain_lod_samples(cells: u16, step: u16) -> Vec<u16> {
+    let step = step.max(1);
+    let mut samples: Vec<_> = (0..=cells).step_by(usize::from(step)).collect();
+    if samples.last().copied() != Some(cells) {
+        samples.push(cells);
+    }
+    samples
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_terrain_skirt(
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    start_x: u16,
+    start_z: u16,
+    edge: &[(u16, u16)],
+    depth: f32,
+    positions: &mut Vec<[f32; 3]>,
+    colors: &mut Vec<[f32; 4]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+) {
+    let world_width = world.navigation.width();
+    let world_height = world.navigation.height();
+    for pair in edge.windows(2) {
+        let base = u32::try_from(positions.len()).expect("terrain mesh vertex count fits u32");
+        for (vertex_index, &(local_x, local_z)) in
+            [pair[0], pair[0], pair[1], pair[1]].iter().enumerate()
+        {
+            let x = start_x + local_x;
+            let z = start_z + local_z;
+            let elevation = terrain_corner_height(world, x, z);
+            let lower = vertex_index % 2 == 1;
+            positions.push([
+                (f32::from(x) - f32::from(world_width) * 0.5) * config.world.cell_size,
+                elevation - if lower { depth } else { 0.0 },
+                (f32::from(z) - f32::from(world_height) * 0.5) * config.world.cell_size,
+            ]);
+            colors.push(terrain_vertex_color(elevation, config));
+            uvs.push([
+                f32::from(x) / f32::from(world_width),
+                f32::from(z) / f32::from(world_height),
+            ]);
+        }
+        indices.extend_from_slice(&[
+            base,
+            base + 1,
+            base + 2,
+            base + 2,
+            base + 1,
+            base + 3,
+            base,
+            base + 2,
+            base + 1,
+            base + 2,
+            base + 3,
+            base + 1,
+        ]);
+    }
 }
 
 fn generated_water_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
@@ -25004,11 +25505,15 @@ mod tests {
             WindowMode::BorderlessFullscreen(MonitorSelection::Entity(monitor))
         );
         assert_eq!(
-            startup_window_mode(DisplayMode::Fullscreen),
+            startup_window_mode(DisplayMode::Fullscreen, false),
             WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
         );
         assert_eq!(
-            startup_window_mode(DisplayMode::Windowed),
+            startup_window_mode(DisplayMode::Windowed, false),
+            WindowMode::Windowed
+        );
+        assert_eq!(
+            startup_window_mode(DisplayMode::Fullscreen, true),
             WindowMode::Windowed
         );
     }
@@ -29920,19 +30425,23 @@ mod tests {
         assert_eq!(
             chunks
                 .iter()
-                .map(|(_, _, mesh)| mesh.indices().unwrap().len())
+                .map(|chunk| chunk.high.indices().unwrap().len())
                 .sum::<usize>(),
             64 * 64 * 6
         );
-        assert!(chunks.iter().all(|(_, _, mesh)| {
-            mesh.count_vertices() == 17 * 17 && Collider::trimesh_from_mesh(mesh).is_some()
+        assert!(chunks.iter().all(|chunk| {
+            chunk.high.count_vertices() == 17 * 17
+                && Collider::trimesh_from_mesh(&chunk.high).is_some()
+                && chunk.medium.indices().unwrap().len() < chunk.high.indices().unwrap().len()
+                && chunk.low.indices().unwrap().len() < chunk.medium.indices().unwrap().len()
         }));
 
         let positions = |chunk_x: u16, chunk_z: u16| {
-            let (_, _, mesh) = chunks
+            let mesh = &chunks
                 .iter()
-                .find(|(x, z, _)| *x == chunk_x && *z == chunk_z)
-                .unwrap();
+                .find(|chunk| chunk.chunk_x == chunk_x && chunk.chunk_z == chunk_z)
+                .unwrap()
+                .high;
             let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
                 mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
             else {
@@ -29962,10 +30471,73 @@ mod tests {
         assert_eq!(
             uneven_chunks
                 .iter()
-                .map(|(_, _, mesh)| mesh.indices().unwrap().len())
+                .map(|chunk| chunk.high.indices().unwrap().len())
                 .sum::<usize>(),
             35 * 19 * 6
         );
+    }
+
+    #[test]
+    fn terrain_lod_is_hysteretic_and_keeps_partial_chunk_boundaries() {
+        assert_eq!(
+            terrain_lod_for_distance(TerrainLodLevel::High, TERRAIN_HIGH_DETAIL_RADIUS),
+            TerrainLodLevel::High
+        );
+        assert_eq!(
+            terrain_lod_for_distance(
+                TerrainLodLevel::High,
+                TERRAIN_HIGH_DETAIL_RADIUS + TERRAIN_LOD_HYSTERESIS + 1.0,
+            ),
+            TerrainLodLevel::Medium
+        );
+        assert_eq!(
+            terrain_lod_for_distance(TerrainLodLevel::Medium, TERRAIN_HIGH_DETAIL_RADIUS),
+            TerrainLodLevel::Medium
+        );
+        assert_eq!(
+            terrain_lod_for_distance(
+                TerrainLodLevel::Medium,
+                TERRAIN_HIGH_DETAIL_RADIUS - TERRAIN_LOD_HYSTERESIS - 1.0,
+            ),
+            TerrainLodLevel::High
+        );
+        assert_eq!(terrain_lod_samples(15, 4), vec![0, 4, 8, 12, 15]);
+        assert_eq!(terrain_lod_samples(16, 4), vec![0, 4, 8, 12, 16]);
+
+        let focus = camera_ground_focus(&default_town_camera_transform());
+        assert!(focus.length() < 0.01);
+    }
+
+    #[test]
+    fn foliage_ranges_scale_without_exceeding_the_streaming_budget() {
+        assert!(
+            (foliage_visibility_distance(Vec3::ZERO) - FOLIAGE_VISIBILITY_MIN_RANGE).abs()
+                <= f32::EPSILON
+        );
+        assert!(
+            (foliage_visibility_distance(Vec3::splat(100.0)) - FOLIAGE_VISIBILITY_MAX_RANGE).abs()
+                <= f32::EPSILON
+        );
+        assert!(
+            foliage_visibility_distance(Vec3::splat(8.0))
+                > foliage_visibility_distance(Vec3::splat(2.0))
+        );
+    }
+
+    #[test]
+    fn crowd_separation_is_deterministic_bounded_and_balanced() {
+        let agents = vec![
+            (StableId::new("actor:alpha").unwrap(), Vec2::new(10.0, 10.0)),
+            (StableId::new("actor:beta").unwrap(), Vec2::new(10.0, 10.0)),
+            (StableId::new("actor:far").unwrap(), Vec2::new(50.0, 50.0)),
+        ];
+        let first = crowd_separation_offsets(&agents, 5.0, 2.0);
+        let second = crowd_separation_offsets(&agents, 5.0, 2.0);
+        assert_eq!(first, second);
+        assert!(first[0].length() > 0.0);
+        assert!((first[0] + first[1]).length() < 0.001);
+        assert_eq!(first[2], Vec2::ZERO);
+        assert!(first.iter().all(|offset| offset.length() <= 2.0 + 0.001));
     }
 
     #[test]

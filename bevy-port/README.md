@@ -564,10 +564,25 @@ uses an unsynchronized present mode for meaningful capacity measurements, and
 reports average and 95th-percentile frame time after a warmup. The optional
 `STREAM_TOWN_FRAME_TIME_WARMUP` and
 `STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS` values default to ten seconds each.
-The current Windows reference run (Ryzen 5 7600X, Radeon RX 7800 XT, 64 GB,
-DX12, 1920×1080) measured 514 post-warmup frames at 9.73 ms average and
-12.45 ms p95 with 300 simulated agents, 457 deterministic foliage instances,
-and the production 16-character detail budget, below the 16.7 ms gate.
+Set `STREAM_TOWN_PERFORMANCE_REPORT_PATH` to write the same gate plus terrain
+LOD, foliage-streaming, and crowd-separation counters as JSON. Set
+`STREAM_TOWN_EXIT_AFTER_FRAME_TIME=1` for an unattended run that exits once the
+report is complete. Terrain keeps full-resolution per-chunk physics while the
+render mesh changes between 1x, 2x, and 4x sampling with hysteresis and seam
+skirts. Foliage uses scale-aware fade ranges, and deterministic local crowd
+separation changes only presentation transforms, never navigation or saves.
+`cargo run -p xtask -- stress --agents 300 --ticks 3600` performs the matching
+one-minute-at-60-Hz CPU soak while repeatedly mutating dirty navigation cells.
+Windows builds pin wgpu to the self-contained DX12 path. This avoids the
+driver-specific Vulkan swapchain failures observed on the reference machine.
+Bevy 0.19's motion-blur pass is disabled on Windows because its varying loop
+does not compile with FXC; the rest of the authored post-processing stack stays
+enabled, and packaged builds need no Vulkan SDK or loose compiler DLL.
+The current Windows release reference run (Ryzen 5 7600X, Radeon RX 7800 XT,
+64 GB, DX12, 1920×1080) measured 600 post-warmup frames at 11.86 ms average and
+12.77 ms p95 with 300 simulated agents, 401 live converted foliage meshes,
+four high-detail and twelve medium-detail terrain chunks, and the production
+16-character detail budget, below the 16.7 ms gate.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use

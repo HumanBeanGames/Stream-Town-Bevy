@@ -83,6 +83,7 @@ pub enum RuntimeConsoleAction {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
 pub struct RuntimeConsoleStatus {
     pub schema_version: u32,
     pub process_id: u32,
@@ -98,6 +99,11 @@ pub struct RuntimeConsoleStatus {
     pub commands_processed: u64,
     pub average_frame_ms: Option<f64>,
     pub p95_frame_ms: Option<f64>,
+    pub terrain_high_chunks: usize,
+    pub terrain_medium_chunks: usize,
+    pub terrain_low_chunks: usize,
+    pub foliage_instances: usize,
+    pub crowd_adjusted_agents: usize,
     pub save_exists: bool,
     pub save_path: String,
     pub twitch_status: String,

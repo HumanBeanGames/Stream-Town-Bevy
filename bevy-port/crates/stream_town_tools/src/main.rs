@@ -1397,6 +1397,19 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 ui.label("Commands");
                 ui.monospace(status.commands_processed.to_string());
                 ui.end_row();
+                ui.label("Terrain H / M / L");
+                ui.monospace(format!(
+                    "{} / {} / {}",
+                    status.terrain_high_chunks,
+                    status.terrain_medium_chunks,
+                    status.terrain_low_chunks
+                ));
+                ui.label("Foliage / separated");
+                ui.monospace(format!(
+                    "{} / {}",
+                    status.foliage_instances, status.crowd_adjusted_agents
+                ));
+                ui.end_row();
                 ui.label("Twitch");
                 ui.monospace(&status.twitch_status);
                 ui.label("Save");

@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use stream_town_domain::{
-    ContentCatalog, GameConfig, GridPos, PlayerSettings, PresentationCatalog,
+    ContentCatalog, DirtyRegion, GameConfig, GridPos, PlayerSettings, PresentationCatalog,
     SHIPPING_SECONDS_PER_DAY, generate_world_with_content,
 };
 use walkdir::WalkDir;
@@ -28,6 +28,9 @@ enum Command {
     Stress {
         #[arg(long, default_value_t = 300)]
         agents: u32,
+        /// Simulation ticks to soak; 3,600 represents one minute at 60 Hz.
+        #[arg(long, default_value_t = 3_600)]
+        ticks: u32,
     },
     /// Build and validate a portable Windows release archive.
     PackageWindows {
@@ -38,10 +41,17 @@ enum Command {
     },
 }
 
+struct StressAgent {
+    position: GridPos,
+    goal: GridPos,
+    path: Vec<GridPos>,
+    cursor: usize,
+}
+
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Validate => validate(),
-        Command::Stress { agents } => stress(agents),
+        Command::Stress { agents, ticks } => stress(agents, ticks),
         Command::PackageWindows { output, skip_build } => {
             let report = xtask::package_windows(Path::new("."), &output, skip_build)?;
             println!(
@@ -745,7 +755,10 @@ fn glb_document_from_bytes(bytes: &[u8]) -> Result<serde_json::Value> {
     serde_json::from_slice(&bytes[20..json_end]).context("GLB JSON chunk is invalid")
 }
 
-fn stress(agents: u32) -> Result<()> {
+fn stress(agents: u32, ticks: u32) -> Result<()> {
+    if agents == 0 || ticks == 0 {
+        bail!("stress agents and ticks must both be non-zero");
+    }
     let config = GameConfig::default();
     let content: ContentCatalog =
         ron::from_str(&fs::read_to_string("assets/content/catalog.ron")?)?;
@@ -767,16 +780,117 @@ fn stress(agents: u32) -> Result<()> {
         bail!("generated world has too few mutually reachable cells");
     }
     let started = Instant::now();
+    let mut navigation = world.navigation.clone();
     let mut planned_steps = 0_usize;
+    let mut crowd = Vec::with_capacity(usize::try_from(agents).unwrap_or_default());
     for index in 0..agents {
         let index = usize::try_from(index).unwrap_or_default();
         let start = reachable[index % reachable.len()];
         let goal = reachable[(reachable.len() - 1 - index) % reachable.len()];
-        planned_steps += world.navigation.find_path(start, goal)?.len();
+        let path = navigation.find_path(start, goal)?;
+        planned_steps += path.len();
+        crowd.push(StressAgent {
+            position: start,
+            goal,
+            path,
+            cursor: 0,
+        });
     }
+    let mutation_cells = reachable
+        .iter()
+        .copied()
+        .filter(|position| *position != anchor)
+        .collect::<Vec<_>>();
+    let mut active_mutation = None;
+    let mut dirty_regions = 0_usize;
+    let mut completed_routes = 0_u64;
+    let mut replans = 0_u64;
+    for tick in 0..ticks {
+        if tick.is_multiple_of(120) && !mutation_cells.is_empty() {
+            if let Some(previous) = active_mutation.take() {
+                navigation.set_blocked(
+                    DirtyRegion {
+                        min: previous,
+                        max: previous,
+                    },
+                    false,
+                )?;
+            }
+            let occupied = crowd
+                .iter()
+                .map(|agent| agent.position)
+                .collect::<BTreeSet<_>>();
+            let start = usize::try_from(tick / 120).unwrap_or_default() % mutation_cells.len();
+            if let Some(candidate) = mutation_cells
+                .iter()
+                .cycle()
+                .skip(start)
+                .take(mutation_cells.len())
+                .copied()
+                .find(|candidate| !occupied.contains(candidate))
+            {
+                navigation.set_blocked(
+                    DirtyRegion {
+                        min: candidate,
+                        max: candidate,
+                    },
+                    true,
+                )?;
+                active_mutation = Some(candidate);
+            }
+            dirty_regions += navigation.take_dirty_regions().len();
+        }
+
+        for (index, agent) in crowd.iter_mut().enumerate() {
+            let path_invalid = agent
+                .path
+                .get(agent.cursor.saturating_add(1))
+                .is_some_and(|next| !navigation.is_walkable(*next));
+            if path_invalid || agent.cursor.saturating_add(1) >= agent.path.len() {
+                if agent.position == agent.goal {
+                    completed_routes = completed_routes.saturating_add(1);
+                    let tick = usize::try_from(tick).unwrap_or_default();
+                    agent.goal =
+                        reachable[(index.wrapping_mul(31).wrapping_add(tick)) % reachable.len()];
+                }
+                agent.path = if let Ok(path) = navigation.find_path(agent.position, agent.goal) {
+                    path
+                } else {
+                    agent.goal = anchor;
+                    navigation.find_path(agent.position, anchor)?
+                };
+                agent.cursor = 0;
+                planned_steps += agent.path.len();
+                replans = replans.saturating_add(1);
+            }
+            if let Some(next) = agent.path.get(agent.cursor.saturating_add(1)).copied()
+                && navigation.is_walkable(next)
+            {
+                agent.cursor += 1;
+                agent.position = next;
+            }
+        }
+    }
+    if let Some(previous) = active_mutation {
+        navigation.set_blocked(
+            DirtyRegion {
+                min: previous,
+                max: previous,
+            },
+            false,
+        )?;
+        dirty_regions += navigation.take_dirty_regions().len();
+    }
+    let final_hash = crowd.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, agent| {
+        [agent.position.x, agent.position.z]
+            .into_iter()
+            .fold(hash, |hash, value| {
+                (hash ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+    });
     let elapsed = started.elapsed();
     println!(
-        "Planned {agents} routes ({planned_steps} steps) in {:.2?}; {} foliage instances; world {}",
+        "Soaked {agents} agents for {ticks} ticks in {:.2?}: {completed_routes} routes, {replans} replans, {planned_steps} planned steps, {dirty_regions} dirty regions, final {final_hash:016x}; {} foliage instances; world {}",
         elapsed,
         world.foliage.len(),
         &world.deterministic_hash[..16]

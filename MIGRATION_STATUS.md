@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-13
+Last updated: 2026-08-20
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -377,8 +377,10 @@ mistaken for production-ready systems.
   configured waterline so the authored look remains meaningful on the
   deterministic replacement terrain, and season tint stays live. Generated
   terrain now spawns as deterministic 16×16-cell render/collider chunks with
-  bit-identical shared seams and complete cell/triangle coverage, while the
-  authoritative height/navigation grid and save hashes remain unchanged.
+  bit-identical shared seams and complete cell/triangle coverage. Camera-driven
+  1x/2x/4x render LOD uses hysteresis and boundary skirts while every chunk
+  retains its full-resolution Avian collider; the authoritative
+  height/navigation grid and save hashes remain unchanged.
   Explicit schema-1 Unity terrain meshes still reload as one exact retained
   surface rather than being resampled.
 - A separate PBR water extension consumes `Env_Water`'s shallow/deep, foam,
@@ -627,10 +629,12 @@ mistaken for production-ready systems.
 - A measured 300-agent presentation LOD: 16 actors use authored GLB rigs and
   shared animation graphs while the remaining crowd uses lightweight capsule
   visuals without changing authoritative gameplay or persistence. The recorded
-  1920×1080 DX12 reference run reached 9.73 ms average and 12.45 ms p95 across
-  514 post-warmup frames with 457 generated foliage instances and the
-  depth-aware 81×81 water surface on the documented
-  reference machine.
+  1920×1080 release DX12 reference run reached 11.86 ms average and 12.77 ms
+  p95 across 600 post-warmup frames with 401 live converted foliage meshes,
+  four high-detail and twelve medium-detail terrain chunks, deterministic local
+  crowd separation, and the depth-aware 81×81 water surface on the documented
+  reference machine. The gate now emits JSON and exits unattended; `xtask
+  stress` soaks 300 agents for 3,600 ticks with repeated dirty-grid mutations.
 - Reachable unit facing now follows Unity's `RotationHandler`: agents slerp
   toward travel or actor/building action targets at the prefab's authored five
   radians per second, while gathering preserves its explicit immediate snap to
@@ -649,8 +653,9 @@ mistaken for production-ready systems.
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable
   emitters are converted and live.
-- Chunked terrain/foliage LOD, production-grade actor steering, complete advanced
-  role/inventory behavior beyond the live resource-worker loop,
+- Foliage batching or authored impostor meshes beyond the live scale-aware
+  range streaming, predictive congestion avoidance beyond deterministic local
+  crowd separation, complete advanced role/inventory behavior beyond the live resource-worker loop,
   additional enemy archetype behaviors/spawners, remaining station behavior,
   and every reachable balance rule from the Unity scenes. The source audit
   confirms the Tower contains the shipping project's sole `ProjectileShooter`;
@@ -740,7 +745,7 @@ camera-projected player/building overlays. The shipping town seagull also flies
 its authored 32-second boundary route using the converted model and emits three
 generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
-ports backed by converted renderer bindings. It is still missing remaining
-chunked LOD work, particle fields, remaining custom-shader parity, and broader
+ports backed by converted renderer bindings. It is still missing foliage
+batching/impostors, particle fields, remaining custom-shader parity, and broader
 curated screenshot coverage required to close the milestone.
 Gameplay parity, presentation, and hardening remain long-term work.
