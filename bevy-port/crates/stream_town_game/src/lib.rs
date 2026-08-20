@@ -136,8 +136,10 @@ const GIRAFFE_MATERIAL_PATH: &str = "Assets/Materials/Character/Giraffe.mat";
 const BOUNDS_SHADER_ASSET_PATH: &str = "shaders/bounds_material.wgsl";
 const BOUNDS_MATERIAL_PATH: &str = "Assets/Materials/BoundsVisualizer.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
+const TREE_PREPASS_SHADER_ASSET_PATH: &str = "shaders/tree_material_prepass.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
+const GRASS_PREPASS_SHADER_ASSET_PATH: &str = "shaders/grass_material_prepass.wgsl";
 const GRASS_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Grass.mat";
 const CRITTER_SHADER_ASSET_PATH: &str = "shaders/critter_material.wgsl";
 const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
@@ -840,12 +842,20 @@ struct TreeMaterialExtension {
 }
 
 impl MaterialExtension for TreeMaterialExtension {
+    fn enable_shadows() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         TREE_SHADER_ASSET_PATH.into()
     }
 
     fn fragment_shader() -> ShaderRef {
         TREE_SHADER_ASSET_PATH.into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        TREE_PREPASS_SHADER_ASSET_PATH.into()
     }
 }
 
@@ -876,12 +886,20 @@ struct GrassMaterialExtension {
 }
 
 impl MaterialExtension for GrassMaterialExtension {
+    fn enable_shadows() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         GRASS_SHADER_ASSET_PATH.into()
     }
 
     fn fragment_shader() -> ShaderRef {
         GRASS_SHADER_ASSET_PATH.into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        GRASS_PREPASS_SHADER_ASSET_PATH.into()
     }
 }
 
@@ -3621,9 +3639,7 @@ fn spawn_seagull(
         seagull_flight_transform(start, end),
     ));
     flight.with_children(|parent| {
-        let model_transform =
-            Transform::from_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
-                .with_scale(Vec3::splat(5.0));
+        let model_transform = seagull_model_transform();
         if let Some(asset_server) = asset_server
             && converted_asset_exists(asset_root, SEAGULL_MODEL_PATH)
         {
@@ -3832,6 +3848,15 @@ fn seagull_flight_transform(position: Vec3, target: Vec3) -> Transform {
         Quat::from_rotation_arc(Vec3::Z, direction)
     };
     Transform::from_translation(position).with_rotation(rotation)
+}
+
+fn seagull_model_transform() -> Transform {
+    // The converted flock's visible nose axis is local +X. Unity's prefab uses
+    // +90 degrees around Y to align it with Transform.forward, but Unity and
+    // glTF/Bevy use opposite handedness for this import turn. Copying the
+    // numeric sign maps +X onto -Z and makes the flock fly backward.
+    Transform::from_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
+        .with_scale(Vec3::splat(5.0))
 }
 
 fn deterministic_seagull_leg(seed: u64, serial: u64) -> (Vec3, Vec3) {
@@ -8528,25 +8553,32 @@ fn generate_and_spawn_world(
             .filter(|scene| {
                 asset_server.is_some() && converted_asset_exists(&asset_root.0, &scene.asset_path)
             });
-        let native_animation =
-            real_archetype
-                .zip(real_scene.as_ref())
-                .and_then(|(archetype, scene)| {
-                    native_animation_request(archetype, scene, &presentation.0)
-                });
-        let converted_animation = (native_animation.is_none()
-            && std::env::var_os("STREAM_TOWN_SMOKE_STATIC_RIG").is_none())
-        .then(|| {
-            real_archetype
-                .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
-                .map(|mut spec| {
-                    if let Some(scene) = &real_scene {
-                        spec.rig_scene.clone_from(&scene.asset_path);
-                    }
-                    spec
-                })
-        })
-        .flatten();
+        // Prefer the complete translated Animator controller. A single native
+        // imported clip is only a fallback when the authored controller cannot
+        // be represented for this rig.
+        let converted_animation = std::env::var_os("STREAM_TOWN_SMOKE_STATIC_RIG")
+            .is_none()
+            .then(|| {
+                real_archetype
+                    .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
+                    .map(|mut spec| {
+                        if let Some(scene) = &real_scene {
+                            spec.rig_scene.clone_from(&scene.asset_path);
+                        }
+                        spec
+                    })
+            })
+            .flatten();
+        let native_animation = converted_animation
+            .is_none()
+            .then(|| {
+                real_archetype
+                    .zip(real_scene.as_ref())
+                    .and_then(|(archetype, scene)| {
+                        native_animation_request(archetype, scene, &presentation.0)
+                    })
+            })
+            .flatten();
         let base_scale = if real_scene.is_some() {
             Vec3::splat(config.0.world.cell_size / 2.0)
         } else {
@@ -13074,9 +13106,10 @@ fn rotate_agent_toward(
     if direction.length_squared() <= f32::EPSILON {
         return;
     }
-    let mut target_rotation = Transform::default()
-        .looking_to(direction.normalize(), Vec3::Y)
-        .rotation;
+    // Unity character and enemy meshes visibly face local +Z. Bevy's
+    // Transform::looking_to aligns local -Z, which made every actor walk and
+    // act backwards even though transform.forward() appeared correct.
+    let mut target_rotation = Quat::from_rotation_arc(Vec3::Z, direction.normalize());
     if correct_player_axis {
         target_rotation *= Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
     }
@@ -13111,9 +13144,6 @@ fn move_agents(
     )>,
     buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
-    if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
-        return;
-    }
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation
         .0
@@ -15396,7 +15426,11 @@ fn build_converted_animation(
         return None;
     }
     let mut graph = AnimationGraph::new();
-    let composition = graph.add_additive_blend(1.0, graph.root);
+    // Unity's outer Animator composition is an override blend. Only layers
+    // explicitly authored as additive may add deltas. Treating absolute glTF
+    // clips as one large additive pose stacks them on the rest transform and
+    // breaks the rig before any locomotion blend is evaluated.
+    let composition = add_animation_composition(&mut graph);
     let layer_specs: Vec<_> = controller
         .layers
         .iter()
@@ -15458,13 +15492,17 @@ fn build_converted_animation(
     }
     debug_assert!(matches!(
         graph.graph[composition].node_type,
-        AnimationNodeType::Add
+        AnimationNodeType::Blend
     ));
     Some(CachedConvertedAnimation {
         graph: animation_graphs.add(graph),
         layers,
         clip_count: converted.len(),
     })
+}
+
+fn add_animation_composition(graph: &mut AnimationGraph) -> AnimationNodeIndex {
+    graph.add_blend(1.0, graph.root)
 }
 
 fn add_animation_layer_branch(
@@ -15610,6 +15648,12 @@ fn equipment_node_names(content: &ContentCatalog) -> BTreeSet<String> {
                 .chain(equipment.helmet_node.iter().cloned())
         })
         .collect()
+}
+
+fn canonical_equipment_node_name(name: &str) -> &str {
+    // Blender retained the suffix on starter tool object names while Unity's
+    // role catalog references the same renderers without it.
+    name.strip_suffix("_Starter").unwrap_or(name)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -15868,7 +15912,7 @@ fn tag_equipment_nodes(
 ) {
     let names = equipment_node_names(&content.0);
     for (entity, name) in &nodes {
-        if !names.contains(name.as_str()) {
+        if !names.contains(canonical_equipment_node_name(name.as_str())) {
             continue;
         }
         let mut ancestor = entity;
@@ -15895,6 +15939,7 @@ fn equipment_node_visible(
     name: &str,
     carrying: bool,
 ) -> bool {
+    let name = canonical_equipment_node_name(name);
     equipment.body_nodes[usize::from(body_type).min(equipment.body_nodes.len() - 1)] == name
         || equipment.right_hand_node.as_deref() == Some(name)
         || equipment.helmet_node.as_deref() == Some(name)
@@ -27387,7 +27432,7 @@ mod tests {
         assert!(equipment_node_visible(
             logger,
             0,
-            "RHand_LoggerToolAxe",
+            "RHand_LoggerToolAxe_Starter",
             false
         ));
         assert!(!equipment_node_visible(
@@ -27410,7 +27455,7 @@ mod tests {
         assert!(equipment_node_visible(
             defender,
             0,
-            "LHand_DefenderToolShield",
+            "LHand_DefenderToolShield_Starter",
             false
         ));
         assert!(equipment_node_visible(
@@ -27425,6 +27470,14 @@ mod tests {
             "Body_Logger_Slim",
             false
         ));
+        let equipment_names = equipment_node_names(&content);
+        assert!(equipment_names.contains(canonical_equipment_node_name(
+            "RHand_NecromancerToolScepter_Starter"
+        )));
+        assert_eq!(
+            canonical_equipment_node_name("Helmet_Ruler"),
+            "Helmet_Ruler"
+        );
     }
 
     #[test]
@@ -27828,6 +27881,17 @@ mod tests {
             assert!(start.z.abs() <= 202.5);
             assert_eq!((start, end), deterministic_seagull_leg(0x5eed_2026, serial));
         }
+
+        let position = Vec3::new(-12.0, SEAGULL_HEIGHT, 8.0);
+        let target = Vec3::new(15.0, SEAGULL_HEIGHT, -21.0);
+        let flight = seagull_flight_transform(position, target);
+        let model = seagull_model_transform();
+        let visible_forward = flight.rotation * model.rotation * Vec3::X;
+        assert!(
+            visible_forward.dot((target - position).normalize()) > 0.999,
+            "the visible bird, not merely its parent entity, must face its flight direction"
+        );
+        assert!((model.rotation * Vec3::X).dot(Vec3::Z) > 0.999);
     }
 
     #[test]
@@ -30314,6 +30378,11 @@ mod tests {
             tree_season_controls(Season::Winter),
             Vec4::new(0.0, 0.5, 0.0, 0.0)
         );
+        assert!(!TreeMaterialExtension::enable_shadows());
+        let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");
+        assert!(prepass.contains("deformed_tree_position"));
+        assert!(prepass.contains("previous_world_position"));
+        assert!(prepass.contains("@group(0) @binding(1) var<uniform> globals"));
     }
 
     #[test]
@@ -30367,6 +30436,11 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.extension.noise_texture.is_none());
+        assert!(!GrassMaterialExtension::enable_shadows());
+        let prepass = include_str!("../../../assets/shaders/grass_material_prepass.wgsl");
+        assert!(prepass.contains("deformed_grass_position"));
+        assert!(prepass.contains("previous_world_position"));
+        assert!(prepass.contains("@group(0) @binding(1) var<uniform> globals"));
     }
 
     #[test]
@@ -31117,12 +31191,13 @@ mod tests {
     fn agent_facing_matches_unity_rotation_and_action_targets() {
         let mut smooth = Transform::default();
         rotate_agent_toward(&mut smooth, Vec3::X * 4.0, 0.1, false, false);
-        assert!(smooth.forward().dot(Vec3::X) > 0.7);
-        assert!(smooth.forward().dot(Vec3::X) < 0.999);
+        let smooth_visible_forward = smooth.rotation * Vec3::Z;
+        assert!(smooth_visible_forward.dot(Vec3::X) > 0.7);
+        assert!(smooth_visible_forward.dot(Vec3::X) < 0.999);
 
         let mut snapped = Transform::default();
         rotate_agent_toward(&mut snapped, Vec3::X * 4.0, 0.1, true, false);
-        assert!(snapped.forward().dot(Vec3::X) > 0.999);
+        assert!((snapped.rotation * Vec3::Z).dot(Vec3::X) > 0.999);
 
         let config = GameConfig::default();
         let content = embedded_content();
@@ -32554,7 +32629,11 @@ mod tests {
     #[test]
     fn authored_layer_weight_and_mask_configure_bevy_graph_branch() {
         let mut graph = AnimationGraph::new();
-        let composition = graph.add_additive_blend(1.0, graph.root);
+        let composition = add_animation_composition(&mut graph);
+        assert!(matches!(
+            graph.graph[composition].node_type,
+            AnimationNodeType::Blend
+        ));
         let path = "CharacterArmature/Body/UpperArm_R";
         let target = path.split('/').collect::<AnimationTargetId>();
         let targets =

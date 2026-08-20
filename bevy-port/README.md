@@ -430,10 +430,12 @@ clearings cannot leak between world states. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
-the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree
-renderers retain stable ground shadows but do not receive the incompatible
-static self-shadow generated for their custom wind-deformed vertices; an
-authored-color ambient floor keeps low-poly back faces from flickering black.
+the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree,
+bush, and grass materials run the same wind deformation in the visible and
+depth/normal prepasses so SSAO cannot sample a stale silhouette. Their
+incompatible depth-only shadow casting is disabled, trees do not receive the
+old static self-shadow, and an authored-color ambient floor keeps low-poly back
+faces readable as they sway.
 Missing converted assets retain the resource-cube fallback.
 
 Content schema 21 also preserves each building prefab's authored base maximum
@@ -501,7 +503,10 @@ The runtime uses `Characters.glb`'s single authoritative armature and matching
 renderer variants instead of applying animation curves to the TPose export's
 nine independent skins. Standalone Unity tracks resolve by rig-path suffix,
 keep joint rotations, limit translation curves to the skeleton root, and drop
-animation scale curves. The visible animated player remains shadow-free because
+animation scale curves. The full translated Animator controller takes priority
+over any single imported-clip fallback, its absolute base layer uses override
+composition, and Blender's `_Starter` tool suffix is normalized before role
+visibility is evaluated. The visible animated player remains shadow-free because
 Bevy's imported shadow-skinning path otherwise emits a terrain-sized invalid
 silhouette; all other world shadows remain enabled.
 `STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
@@ -636,7 +641,9 @@ short deterministic procedural cues; their no-sample provenance is documented in
 record covers the synthesized seasonal music and ambience. The reachable town
 seagull now uses its converted GLB, exact 32-second cross-town flight contract,
 three generated calls on the source's random 1–5 second cadence, and authored
-ambience rolloff. `Env_Grass` now uses a dedicated WGSL material preserving its
+ambience rolloff. Its converted +X nose axis receives the handedness-corrected
+-90-degree Bevy yaw, so the complete flock faces its flight direction.
+`Env_Grass` now uses a dedicated WGSL material preserving its
 vertex-color wind mask, scrolling main/noise textures, authored color blending,
 and exact seasonal color/tint endpoints. `Critters` also has a dedicated
 vertex-stage WGSL port: seagull and fish geometry samples the authored texture
