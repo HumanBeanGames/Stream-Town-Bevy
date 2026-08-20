@@ -51,51 +51,48 @@ fn generate_world_from_layers(
     config: &WorldGenConfig,
     foliage_layers: &[FoliageLayerDef],
 ) -> GeneratedWorld {
-    const GENERATOR_VERSION: u32 = 4;
+    const GENERATOR_VERSION: u32 = 5;
     let cell_count = usize::from(config.width) * usize::from(config.height);
+    let terrain_seed = u32::try_from(config.seed & u64::from(u32::MAX))
+        .expect("masked terrain seed fits u32")
+        .cast_signed();
+    let terrain_noise = unity_noise_map(
+        config.width,
+        config.height,
+        terrain_seed,
+        50.0,
+        3,
+        0.827,
+        2.0,
+        [0.0, 0.0],
+    );
     let mut heights = Vec::with_capacity(cell_count);
     let mut blocked = Vec::with_capacity(cell_count);
-    let mut resources = Vec::new();
-    let centre_x = i64::from(config.width.saturating_sub(1));
-    let centre_z = i64::from(config.height.saturating_sub(1));
-    let max_distance = centre_x * centre_x + centre_z * centre_z;
 
     for z in 0..config.height {
         for x in 0..config.width {
-            let position = GridPos { x, z };
-            let random = cell_hash(config.seed, x, z);
-            let dx = i64::from(x) * 2 - centre_x;
-            let dz = i64::from(z) * 2 - centre_z;
-            let distance = dx * dx + dz * dz;
-            let island =
-                i32::try_from((max_distance - distance).max(0) * 1_000 / max_distance.max(1))
-                    .expect("normalized island height is between 0 and 1000");
-            let noise = i32::try_from((random >> 16) & 0x3ff).expect("ten-bit value") - 512;
-            let scaled = (island - 420) * i32::from(config.height_scale_centimetres) / 580
-                + noise * i32::from(config.height_scale_centimetres) / 2_048;
-            let height = i16::try_from(scaled.clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
-                .expect("clamped height");
-            let is_blocked = height <= config.water_level_centimetres;
+            let index = usize::from(z) * usize::from(config.width) + usize::from(x);
+            let edge = x <= 1
+                || z <= 1
+                || x >= config.width.saturating_sub(2)
+                || z >= config.height.saturating_sub(2);
+            let source_height = if edge { -1.0 } else { terrain_noise[index] };
+            let curved_height = unity_terrain_height_curve(source_height);
+            let world = authored_grid_centre(config, GridPos { x, z });
+            let distance = (world[0].mul_add(world[0], world[1] * world[1])).sqrt();
+            let normalized_distance = (distance / 200.0).clamp(0.0, 1.0);
+            let island_bias = 3.0 * (1.0 - smooth_noise_step(normalized_distance));
+            let quantized = round_to_even(curved_height * island_bias / 0.5) * 0.5;
+            let centimetres = quantized * f32::from(config.height_scale_centimetres);
+            let height = unity_clamped_i16(centimetres);
+            // Unity's A* pass rejects terrain below QuantizationFactor - 0.05.
+            let is_blocked = height < 45;
             heights.push(height);
             blocked.push(is_blocked);
-
-            let resource_roll = u16::try_from(random % 1_000).expect("modulo 1000");
-            if !is_blocked && resource_roll < config.resource_density_per_thousand {
-                let (kind, target_kind) = match (random >> 10) % 3 {
-                    0 => ("resource:wood", "target:tree"),
-                    1 => ("resource:ore", "target:ore"),
-                    _ => ("resource:food", "target:bush"),
-                };
-                resources.push(GeneratedResource {
-                    id: StableId::new(format!("resource:{x}:{z}")).expect("generated stable ID"),
-                    kind: StableId::new(kind).expect("static stable ID"),
-                    target_kind: StableId::new(target_kind).expect("static stable ID"),
-                    position,
-                    amount: 100,
-                });
-            }
         }
     }
+
+    let mut resources = generate_authored_resources(config, &heights);
 
     // Keep the town centre navigable and suitable for deterministic actor spawning.
     let spawn = GridPos {
@@ -129,6 +126,110 @@ fn generate_world_from_layers(
         foliage,
         deterministic_hash,
     }
+}
+
+#[derive(Clone, Copy)]
+struct AuthoredResourceLayer {
+    seed: i32,
+    noise_scale: f32,
+    octaves: u8,
+    persistence: f32,
+    lacunarity: f32,
+    threshold: f32,
+    spacing: u16,
+    kind: &'static str,
+    target_kind: &'static str,
+}
+
+const AUTHORED_RESOURCE_LAYERS: [AuthoredResourceLayer; 3] = [
+    AuthoredResourceLayer {
+        seed: -1_165_233_549,
+        noise_scale: 17.0,
+        octaves: 6,
+        persistence: 0.452,
+        lacunarity: 22.47,
+        threshold: 0.6,
+        spacing: 2,
+        kind: "resource:wood",
+        target_kind: "target:tree",
+    },
+    AuthoredResourceLayer {
+        seed: -1_165_233_548,
+        noise_scale: 7.0,
+        octaves: 1,
+        persistence: 1.0,
+        lacunarity: 0.0,
+        threshold: 0.85,
+        spacing: 1,
+        kind: "resource:ore",
+        target_kind: "target:ore",
+    },
+    AuthoredResourceLayer {
+        seed: -1_165_233_547,
+        noise_scale: 7.0,
+        octaves: 2,
+        persistence: 1.0,
+        lacunarity: 0.0,
+        threshold: 0.85,
+        spacing: 1,
+        kind: "resource:food",
+        target_kind: "target:bush",
+    },
+];
+
+fn generate_authored_resources(config: &WorldGenConfig, heights: &[i16]) -> Vec<GeneratedResource> {
+    const SOURCE_SIZE: u16 = 300;
+    let mut resources = Vec::new();
+    let mut occupied = std::collections::BTreeSet::new();
+    for (layer_index, layer) in AUTHORED_RESOURCE_LAYERS.iter().enumerate() {
+        let offset = positive_noise_offset(layer.seed, SOURCE_SIZE);
+        let noise = unity_noise_map(
+            SOURCE_SIZE,
+            SOURCE_SIZE,
+            layer.seed,
+            layer.noise_scale,
+            layer.octaves,
+            layer.persistence,
+            layer.lacunarity,
+            offset,
+        );
+        let half = i32::from(SOURCE_SIZE / 2);
+        let spacing = usize::from(layer.spacing.max(1));
+        for source_z in (-half + 2..half - 2).step_by(spacing) {
+            for source_x in (-half + 2..half - 2).step_by(spacing) {
+                let sample_x = usize::try_from(source_x + half).expect("resource sample x");
+                let sample_z = usize::try_from(source_z + half).expect("resource sample z");
+                if noise[sample_z * usize::from(SOURCE_SIZE) + sample_x] < layer.threshold {
+                    continue;
+                }
+                let centre = f32::from(layer.spacing) * 0.5;
+                let world_x = f32::from(
+                    i16::try_from(source_z).expect("resource source x remains inside 300 cells"),
+                ) + centre;
+                let world_z = f32::from(
+                    i16::try_from(source_x).expect("resource source z remains inside 300 cells"),
+                ) + centre;
+                let Some(position) = authored_world_to_grid(config, world_x, world_z) else {
+                    continue;
+                };
+                let index =
+                    usize::from(position.z) * usize::from(config.width) + usize::from(position.x);
+                if heights[index] <= 0 || occupied_within(&occupied, position, 1) {
+                    continue;
+                }
+                occupied.insert(position);
+                resources.push(GeneratedResource {
+                    id: StableId::new(format!("resource:{layer_index}:{source_x}:{source_z}"))
+                        .expect("generated stable resource ID"),
+                    kind: StableId::new(layer.kind).expect("authored resource kind ID"),
+                    target_kind: StableId::new(layer.target_kind).expect("authored target kind ID"),
+                    position,
+                    amount: 100,
+                });
+            }
+        }
+    }
+    resources
 }
 
 fn generate_shoreline_fish(
@@ -297,37 +398,68 @@ fn generate_foliage(
     let mut occupied: std::collections::BTreeSet<_> =
         resources.iter().map(|resource| resource.position).collect();
     for (layer_index, layer) in layers.iter().enumerate() {
-        for z in 0..config.height {
-            for x in 0..config.width {
-                let position = GridPos { x, z };
-                if occupied.contains(&position)
-                    || x % layer.spacing != 0
-                    || z % layer.spacing != 0
+        if layer.variants.is_empty() {
+            continue;
+        }
+        let offset = positive_noise_offset(layer.seed, layer.source_size);
+        let noise = unity_noise_map(
+            layer.source_size,
+            layer.source_size,
+            layer.seed,
+            layer.noise_scale,
+            layer.octaves,
+            layer.persistence,
+            layer.lacunarity,
+            offset,
+        );
+        let half = i32::from(layer.source_size / 2);
+        let spacing = usize::from(layer.spacing.max(1));
+        for source_z in (-half + 2..half - 2).step_by(spacing) {
+            for source_x in (-half + 2..half - 2).step_by(spacing) {
+                let sample_x = usize::try_from(source_x + half).expect("foliage sample x");
+                let sample_z = usize::try_from(source_z + half).expect("foliage sample z");
+                if noise[sample_z * usize::from(layer.source_size) + sample_x]
+                    < layer.spawn_threshold
+                {
+                    continue;
+                }
+                let centre = f32::from(layer.spacing) * 0.5;
+                let world_x = f32::from(
+                    i16::try_from(source_z).expect("foliage source x fits the authored grid"),
+                ) + centre;
+                let world_z = f32::from(
+                    i16::try_from(source_x).expect("foliage source z fits the authored grid"),
+                ) + centre;
+                let Some(position) = authored_world_to_grid(config, world_x, world_z) else {
+                    continue;
+                };
+                if occupied_within(&occupied, position, 1)
                     || (layer.habitat == FoliageHabitat::Land) != navigation.is_walkable(position)
                 {
                     continue;
                 }
-                let random = foliage_hash(config.seed, layer.seed, x, z);
-                // Source thresholds are dense because Unity samples one-unit space.
-                // The Bevy grid is twelve units, so preserve the pattern while
-                // applying an explicit draw-budget density reduction.
-                if foliage_noise(config, layer, position) < f64::from(layer.spawn_threshold)
-                    || !(random >> 20).is_multiple_of(4)
-                {
-                    continue;
-                }
-                let variant = u16::try_from((random >> 24) % layer.variants.len() as u64)
-                    .expect("foliage variant count fits u16");
+                let centre_world = authored_grid_centre(config, position);
                 let offset_milli_cells = [
-                    i16::try_from((random >> 8) % 801).expect("bounded foliage offset") - 400,
-                    i16::try_from((random >> 16) % 801).expect("bounded foliage offset") - 400,
+                    unity_clamped_i16((world_x - centre_world[0]) / config.cell_size * 1_000.0),
+                    unity_clamped_i16((world_z - centre_world[1]) / config.cell_size * 1_000.0),
                 ];
-                let yaw_milliradians =
-                    u16::try_from((random >> 32) % 6_284).expect("bounded foliage yaw");
-                let scale_milli =
-                    u16::try_from(850 + ((random >> 48) % 301)).expect("bounded foliage scale");
+                let variant = u16::try_from(unity_instance_index(
+                    world_x,
+                    world_z,
+                    0x31_C4_D2_u32 ^ stable_string_hash(layer.id.as_str()),
+                    layer.variants.len(),
+                ))
+                .expect("foliage variant count fits u16");
+                let quarter_turn = unity_instance_index(
+                    world_x,
+                    world_z,
+                    0x7B_29_F3_u32 ^ stable_string_hash(layer.id.as_str()),
+                    4,
+                );
+                let yaw_milliradians = u16::try_from(quarter_turn * 1_571)
+                    .expect("four authored quarter turns fit u16");
                 foliage.push(GeneratedFoliage {
-                    id: StableId::new(format!("foliage:{layer_index}:{x}:{z}"))
+                    id: StableId::new(format!("foliage:{layer_index}:{source_x}:{source_z}"))
                         .expect("generated stable foliage ID"),
                     layer: layer.id.clone(),
                     habitat: layer.habitat,
@@ -335,7 +467,9 @@ fn generate_foliage(
                     offset_milli_cells,
                     variant,
                     yaw_milliradians,
-                    scale_milli,
+                    // Unity uses MeshSettings.BaseScale exactly; there is no
+                    // per-instance random scale in the shipping generator.
+                    scale_milli: 1_000,
                 });
                 occupied.insert(position);
             }
@@ -344,77 +478,293 @@ fn generate_foliage(
     foliage
 }
 
-fn foliage_noise(config: &WorldGenConfig, layer: &FoliageLayerDef, position: GridPos) -> f64 {
-    let source_size = f64::from(layer.source_size);
-    let source_x = f64::from(position.x) * source_size / f64::from(config.width)
-        - source_size * 0.5
-        + f64::from(layer.offset[0]);
-    let source_z = f64::from(position.z) * source_size / f64::from(config.height)
-        - source_size * 0.5
-        + f64::from(layer.offset[1]);
-    let mut amplitude = 1.0_f64;
-    let mut frequency = 1.0_f64;
-    let mut total = 0.0_f64;
-    let mut total_amplitude = 0.0_f64;
-    for octave in 0..layer.octaves {
-        let octave_seed = config.seed
-            ^ u64::from(layer.seed.cast_unsigned()).rotate_left(17)
-            ^ u64::from(octave).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        total += value_noise(
-            octave_seed,
-            source_x / f64::from(layer.noise_scale) * frequency,
-            source_z / f64::from(layer.noise_scale) * frequency,
-        ) * amplitude;
-        total_amplitude += amplitude;
-        amplitude *= f64::from(layer.persistence);
-        frequency *= f64::from(layer.lacunarity);
+fn occupied_within(
+    occupied: &std::collections::BTreeSet<GridPos>,
+    position: GridPos,
+    radius: u16,
+) -> bool {
+    occupied.iter().any(|candidate| {
+        candidate.x.abs_diff(position.x) <= radius && candidate.z.abs_diff(position.z) <= radius
+    })
+}
+
+fn authored_grid_centre(config: &WorldGenConfig, position: GridPos) -> [f32; 2] {
+    [
+        (f32::from(position.x) - f32::from(config.width.saturating_sub(1)) * 0.5)
+            * config.cell_size,
+        (f32::from(position.z) - f32::from(config.height.saturating_sub(1)) * 0.5)
+            * config.cell_size,
+    ]
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn authored_world_to_grid(config: &WorldGenConfig, world_x: f32, world_z: f32) -> Option<GridPos> {
+    let half_x = f32::from(config.width.saturating_sub(1)) * 0.5;
+    let half_z = f32::from(config.height.saturating_sub(1)) * 0.5;
+    let x = (world_x / config.cell_size + half_x).round();
+    let z = (world_z / config.cell_size + half_z).round();
+    if x < 0.0 || z < 0.0 || x >= f32::from(config.width) || z >= f32::from(config.height) {
+        return None;
     }
-    total / total_amplitude.max(f64::EPSILON)
+    Some(GridPos {
+        x: x as u16,
+        z: z as u16,
+    })
 }
 
-fn value_noise(seed: u64, x: f64, z: f64) -> f64 {
-    let x0 = x.floor();
-    let z0 = z.floor();
-    let tx = smooth_noise_step(x - x0);
-    let tz = smooth_noise_step(z - z0);
-    let lower = lerp(
-        lattice_noise(seed, x0, z0),
-        lattice_noise(seed, x0 + 1.0, z0),
-        tx,
-    );
-    let upper = lerp(
-        lattice_noise(seed, x0, z0 + 1.0),
-        lattice_noise(seed, x0 + 1.0, z0 + 1.0),
-        tx,
-    );
-    lerp(lower, upper, tz)
+#[allow(clippy::cast_possible_truncation)]
+fn positive_noise_offset(seed: i32, size: u16) -> [f32; 2] {
+    let mut random = SystemRandom::new(seed);
+    let minimum = f64::from(size) * 0.5;
+    let additional = f64::from(size) * 2.0;
+    [
+        (minimum + random.next_double() * additional) as f32,
+        (minimum + random.next_double() * additional) as f32,
+    ]
 }
 
-fn lattice_noise(seed: u64, x: f64, z: f64) -> f64 {
-    let mut value = seed
-        ^ x.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ z.to_bits().wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    value ^= value >> 31;
-    let sample = u32::try_from(value >> 32).expect("upper hash bits fit u32");
-    f64::from(sample) / f64::from(u32::MAX)
+// Rust has no checked float-to-integer conversion. Every call mirrors Unity's
+// rounded and clamped authored centimetre/offset serialization boundary.
+#[allow(clippy::cast_possible_truncation)]
+fn unity_clamped_i16(value: f32) -> i16 {
+    value
+        .round()
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
 }
 
-fn smooth_noise_step(value: f64) -> f64 {
+fn smooth_noise_step(value: f32) -> f32 {
     value * value * (3.0 - 2.0 * value)
 }
 
-fn lerp(start: f64, end: f64, amount: f64) -> f64 {
+fn lerp(start: f32, end: f32, amount: f32) -> f32 {
     start + (end - start) * amount
 }
 
-fn foliage_hash(seed: u64, layer_seed: i32, x: u16, z: u16) -> u64 {
-    cell_hash(
-        seed ^ u64::from(layer_seed.cast_unsigned()).rotate_left(17),
-        x,
-        z,
-    )
+fn unity_terrain_height_curve(value: f32) -> f32 {
+    if (0.0..=1.0).contains(&value) {
+        smooth_noise_step(value)
+    } else {
+        value
+    }
+}
+
+fn round_to_even(value: f32) -> f32 {
+    let floor = value.floor();
+    let fraction = value - floor;
+    if (fraction - 0.5).abs() > f32::EPSILON {
+        value.round()
+    } else if (floor * 0.5).fract().abs() <= f32::EPSILON {
+        floor
+    } else {
+        floor + 1.0
+    }
+}
+
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
+fn unity_noise_map(
+    width: u16,
+    height: u16,
+    seed: i32,
+    scale: f32,
+    octaves: u8,
+    persistence: f32,
+    lacunarity: f32,
+    offset: [f32; 2],
+) -> Vec<f32> {
+    let mut random = SystemRandom::new(seed);
+    let octave_offsets: Vec<_> = (0..octaves)
+        .map(|_| {
+            [
+                random.next_range(-100_000, 100_000) as f32 + offset[0],
+                random.next_range(-100_000, 100_000) as f32 + offset[1],
+            ]
+        })
+        .collect();
+    let scale = scale.max(0.000_1);
+    let half_width = f32::from(width) * 0.5;
+    let half_height = f32::from(height) * 0.5;
+    let mut values = Vec::with_capacity(usize::from(width) * usize::from(height));
+    let mut minimum = f32::MAX;
+    let mut maximum = f32::MIN;
+    for z in 0..height {
+        for x in 0..width {
+            let mut amplitude = 1.0;
+            let mut frequency = 1.0;
+            let mut noise_height = 0.0;
+            for octave_offset in &octave_offsets {
+                let sample_x = (f32::from(x) - half_width) / scale * frequency + octave_offset[0];
+                let sample_z = (f32::from(z) - half_height) / scale * frequency + octave_offset[1];
+                noise_height += (perlin_noise(sample_x, sample_z) * 2.0 - 1.0) * amplitude;
+                amplitude *= persistence;
+                frequency *= lacunarity;
+            }
+            if noise_height > maximum {
+                maximum = noise_height;
+            } else if noise_height < minimum {
+                minimum = noise_height;
+            }
+            values.push(noise_height);
+        }
+    }
+    let range = maximum - minimum;
+    for value in &mut values {
+        *value = if range.abs() <= f32::EPSILON {
+            0.0
+        } else {
+            ((*value - minimum) / range).clamp(0.0, 1.0)
+        };
+    }
+    values
+}
+
+// Unity's native Mathf.PerlinNoise implementation is not exposed to managed
+// code. This is the same fixed-permutation improved-Perlin family, while the
+// surrounding octave offsets, f32 sampling, normalization, curves and authored
+// settings mirror Assets/Scripts/Utils/Noise.cs exactly.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn perlin_noise(x: f32, z: f32) -> f32 {
+    const PERMUTATION: [u8; 256] = [
+        151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30,
+        69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94,
+        252, 219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171,
+        168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60,
+        211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1,
+        216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86,
+        164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118,
+        126, 255, 82, 85, 212, 207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170,
+        213, 119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39,
+        253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104, 218, 246, 97, 228, 251, 34,
+        242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249, 14, 239, 107, 49,
+        192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254,
+        138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180,
+    ];
+    let xi = (x.floor() as i32 & 255) as usize;
+    let zi = (z.floor() as i32 & 255) as usize;
+    let xf = x - x.floor();
+    let zf = z - z.floor();
+    let fade = |value: f32| value * value * value * (value * (value * 6.0 - 15.0) + 10.0);
+    let hash = |first: usize, second: usize| {
+        let inner = usize::from(PERMUTATION[first & 255]);
+        PERMUTATION[(inner + second) & 255]
+    };
+    let gradient = |hash: u8, x: f32, z: f32| match hash & 7 {
+        0 => x + z,
+        1 => -x + z,
+        2 => x - z,
+        3 => -x - z,
+        4 => x,
+        5 => -x,
+        6 => z,
+        _ => -z,
+    };
+    let u = fade(xf);
+    let v = fade(zf);
+    let lower = lerp(
+        gradient(hash(xi, zi), xf, zf),
+        gradient(hash(xi + 1, zi), xf - 1.0, zf),
+        u,
+    );
+    let upper = lerp(
+        gradient(hash(xi, zi + 1), xf, zf - 1.0),
+        gradient(hash(xi + 1, zi + 1), xf - 1.0, zf - 1.0),
+        u,
+    );
+    (lerp(lower, upper, v) * 0.5 + 0.5).clamp(0.0, 1.0)
+}
+
+struct SystemRandom {
+    seed_array: [i32; 56],
+    inext: usize,
+    inextp: usize,
+}
+
+impl SystemRandom {
+    fn new(seed: i32) -> Self {
+        const BIG: i32 = i32::MAX;
+        let subtraction = if seed == i32::MIN { BIG } else { seed.abs() };
+        let mut mj = 161_803_398 - subtraction;
+        if mj < 0 {
+            mj += BIG;
+        }
+        let mut seed_array = [0; 56];
+        seed_array[55] = mj;
+        let mut mk = 1;
+        for i in 1..55 {
+            let ii = (21 * i) % 55;
+            seed_array[ii] = mk;
+            mk = mj - mk;
+            if mk < 0 {
+                mk += BIG;
+            }
+            mj = seed_array[ii];
+        }
+        for _ in 0..4 {
+            for i in 1..56 {
+                seed_array[i] -= seed_array[1 + (i + 30) % 55];
+                if seed_array[i] < 0 {
+                    seed_array[i] += BIG;
+                }
+            }
+        }
+        Self {
+            seed_array,
+            inext: 0,
+            inextp: 21,
+        }
+    }
+
+    fn sample(&mut self) -> i32 {
+        self.inext += 1;
+        if self.inext >= 56 {
+            self.inext = 1;
+        }
+        self.inextp += 1;
+        if self.inextp >= 56 {
+            self.inextp = 1;
+        }
+        let mut result = self.seed_array[self.inext] - self.seed_array[self.inextp];
+        if result == i32::MAX {
+            result -= 1;
+        }
+        if result < 0 {
+            result += i32::MAX;
+        }
+        self.seed_array[self.inext] = result;
+        result
+    }
+
+    fn next_double(&mut self) -> f64 {
+        f64::from(self.sample()) / f64::from(i32::MAX)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn next_range(&mut self, minimum: i32, maximum: i32) -> i32 {
+        (self.next_double() * f64::from(maximum - minimum)) as i32 + minimum
+    }
+}
+
+fn fnv_mix(mut hash: u32, value: u32) -> u32 {
+    for shift in [0, 8, 16, 24] {
+        hash = (hash ^ ((value >> shift) & 0xff)).wrapping_mul(16_777_619);
+    }
+    hash
+}
+
+fn stable_string_hash(value: &str) -> u32 {
+    value.encode_utf16().fold(2_166_136_261, |hash, character| {
+        fnv_mix(hash, u32::from(character))
+    })
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn unity_instance_index(world_x: f32, world_z: f32, salt: u32, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let x = ((world_x * 1_000.0).round() as i32).cast_unsigned();
+    let z = ((world_z * 1_000.0).round() as i32).cast_unsigned();
+    let hash = fnv_mix(fnv_mix(fnv_mix(2_166_136_261, x), z), salt);
+    usize::try_from(hash).expect("u32 instance hash fits the target platform") % count
 }
 
 fn cell_hash(seed: u64, x: u16, z: u16) -> u64 {
@@ -485,7 +835,7 @@ mod tests {
     fn generated_resources_preserve_unity_target_types_and_reachable_fish() {
         let config = GameConfig::default().world;
         let world = generate_world(&config);
-        assert_eq!(world.generator_version, 4);
+        assert_eq!(world.generator_version, 5);
         assert_ne!(legacy_v1_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v2_world_hash(&world), world.deterministic_hash);
         assert_ne!(legacy_v3_world_hash(&world), world.deterministic_hash);

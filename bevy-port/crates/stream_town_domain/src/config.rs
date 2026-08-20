@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONFIG_SCHEMA: u32 = 5;
+pub const CURRENT_CONFIG_SCHEMA: u32 = 6;
 pub const SHIPPING_SECONDS_PER_DAY: u32 = 3_600;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -181,11 +181,14 @@ impl Default for GameConfig {
             },
             world: WorldGenConfig {
                 seed: 0x5EED_2026,
-                width: 64,
-                height: 64,
-                cell_size: 12.0,
-                height_scale_centimetres: 800,
-                water_level_centimetres: -180,
+                // D_TerrainGenSettings.Size (50) is multiplied by the shipping
+                // D_WorldGenScaleSettings x/y scale (4), and each authored
+                // voxel cell is two Unity units wide.
+                width: 200,
+                height: 200,
+                cell_size: 2.0,
+                height_scale_centimetres: 100,
+                water_level_centimetres: 5,
                 resource_density_per_thousand: 38,
             },
             time: TimeCycleConfig::default(),
@@ -227,8 +230,26 @@ impl GameConfig {
     /// Upgrades compatible user-owned configuration before strict validation.
     /// Schema 4 predates authored time-of-day settings and receives the shipping
     /// Unity values through `TimeCycleConfig::default` during deserialization.
+    /// Schema 5 used the Bevy prototype's oversized 12-metre cells; untouched
+    /// copies are migrated to the spatial scale authored by the Unity project.
     pub fn upgrade(mut self) -> Result<Self, ConfigError> {
         if self.schema_version == 4 {
+            self.schema_version = 5;
+        }
+        if self.schema_version == 5 {
+            if self.world.width == 64
+                && self.world.height == 64
+                && (self.world.cell_size - 12.0).abs() <= f32::EPSILON
+                && self.world.height_scale_centimetres == 800
+                && self.world.water_level_centimetres == -180
+                && self.world.resource_density_per_thousand == 38
+            {
+                self.world.width = 200;
+                self.world.height = 200;
+                self.world.cell_size = 2.0;
+                self.world.height_scale_centimetres = 100;
+                self.world.water_level_centimetres = 5;
+            }
             self.schema_version = CURRENT_CONFIG_SCHEMA;
         }
         self.validate()?;
@@ -360,6 +381,39 @@ mod tests {
             .unwrap();
         assert_eq!(upgraded.schema_version, CURRENT_CONFIG_SCHEMA);
         assert_eq!(upgraded.time, TimeCycleConfig::default());
+    }
+
+    #[test]
+    fn schema_five_prototype_world_scale_upgrades_to_unity_scale() {
+        let mut config = GameConfig {
+            schema_version: 5,
+            ..GameConfig::default()
+        };
+        config.world.width = 64;
+        config.world.height = 64;
+        config.world.cell_size = 12.0;
+        config.world.height_scale_centimetres = 800;
+        config.world.water_level_centimetres = -180;
+        let upgraded = config.upgrade().unwrap();
+        assert_eq!(upgraded.schema_version, CURRENT_CONFIG_SCHEMA);
+        assert_eq!(upgraded.world.width, 200);
+        assert_eq!(upgraded.world.height, 200);
+        assert!((upgraded.world.cell_size - 2.0).abs() <= f32::EPSILON);
+        assert_eq!(upgraded.world.height_scale_centimetres, 100);
+        assert_eq!(upgraded.world.water_level_centimetres, 5);
+    }
+
+    #[test]
+    fn schema_five_custom_world_scale_is_preserved() {
+        let mut config = GameConfig {
+            schema_version: 5,
+            ..GameConfig::default()
+        };
+        config.world.width = 96;
+        let upgraded = config.upgrade().unwrap();
+        assert_eq!(upgraded.schema_version, CURRENT_CONFIG_SCHEMA);
+        assert_eq!(upgraded.world.width, 96);
+        assert!((upgraded.world.cell_size - 2.0).abs() <= f32::EPSILON);
     }
 
     #[test]

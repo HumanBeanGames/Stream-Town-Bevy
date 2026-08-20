@@ -2,7 +2,7 @@
     forward_io::{FragmentOutput, VertexOutput},
     mesh_view_bindings as view_bindings,
     pbr_fragment::pbr_input_from_standard_material,
-    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_functions::{alpha_discard, main_pass_post_lighting_processing},
 }
 
 struct WaterMaterialUniform {
@@ -131,7 +131,24 @@ fn fragment(
     );
 
     var out: FragmentOutput;
-    out.color = apply_pbr_lighting(pbr_input);
+    // Unity's stylized water colour was authored as the final surface look.
+    // Feeding it through Bevy's physical sun response produced HDR values far
+    // above one at grazing coastline angles, turning the ocean into a white
+    // mirror. Keep the authored colour bounded and still run Bevy's fog/output
+    // processing below.
+    let bounded = clamp(
+        pbr_input.material.base_color.rgb,
+        vec3<f32>(0.0),
+        vec3<f32>(1.0),
+    );
+    // Foam and the animated alpha textures may reach authored white, but the
+    // Unity look never turns the whole coast into an HDR-white mirror. Keep a
+    // visibly blue ceiling and enough opacity that the black clear target does
+    // not drain the stylized surface colour.
+    out.color = vec4<f32>(
+        min(bounded, vec3<f32>(0.18, 0.48, 0.72)),
+        max(pbr_input.material.base_color.a, 0.88),
+    );
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

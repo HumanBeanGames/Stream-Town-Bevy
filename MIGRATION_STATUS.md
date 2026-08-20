@@ -9,6 +9,21 @@ mistaken for production-ready systems.
 
 ## Delivered in this milestone
 
+- Shipping-scale world rendering now replaces the 64x64 Bevy prototype. Config
+  schema 6 upgrades untouched schema-5 worlds to Unity's 200x200 samples,
+  two-unit cells, one-metre height scale, and 0.05-unit waterline while
+  preserving customized world settings. Generator version 5 ports the authored
+  terrain curve, island falloff, half-unit quantization, Unity-compatible random
+  octave offsets, globally normalized noise maps, all three resource layers,
+  and all four foliage layers. Source-space placement and shared one-cell
+  clearance remove coincident resource/foliage groups. Raw converted primitive
+  loads restore their omitted 0.01 glTF scene-node scale. Generated terrain is
+  one continuous render mesh/collider rather than independently lit LOD chunks,
+  eliminating chunk seams. Water uses energy-conserving bloom and bounded color
+  output so the high-exposure coastline cannot clip to white. Finally, the
+  Player root receives the shipping FBX axis conversion as one rigid transform,
+  and character retargeting no longer reapplies non-root translation/scale
+  curves that distort imported rigs.
 - A Bevy 0.19/Rust 1.95 workspace split into domain, game, tools, migration, and
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
@@ -64,16 +79,17 @@ mistaken for production-ready systems.
   linear values Bevy's PBR passes require. Terrain, water, grass, building
   detail/emission, placement bounds, and flags therefore retain detail under
   the shipping +1.1 EV/ACES profile instead of clipping into yellow-white.
-- Validated, versioned RON configuration (schema 5) and stable authored/runtime
+- Validated, versioned RON configuration (schema 6) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
   recruits before roster creation, plus Unity's 15,000 food/ore/wood and five-recruit base capacities;
   gold remains intentionally unbounded. Time configuration carries the shipping
   3,600-second day, 66.6% daylight boundary, 100-second dusk/dawn transitions,
   10/5 day/night light intensities, and five-unit building emission ceiling.
-- Deterministic island height generation, occupancy, A* routing, dirty regions,
-  grounding data, repeatable world hashes, and a 4,225-vertex/8,192-triangle
-  Bevy terrain surface generated directly from that navigation height field.
+- Deterministic source-guided island height generation, occupancy, A* routing,
+  dirty regions, grounding data, repeatable world hashes, and a continuous
+  636,804-vertex/318,402-triangle Bevy terrain surface generated directly from
+  the 200x200 navigation height field.
 - A runnable explicit 300-agent ECS benchmark, dynamic obstacles, path
   following, a town hall, resources, a status HUD, orthographic 3D pan/zoom
   camera controls, collider-backed surface picking, screenshot capture,
@@ -113,7 +129,7 @@ mistaken for production-ready systems.
   guaranteed walkable approach, so Fishers cannot harvest bushes and Gatherers
   cannot fish. Completed Farms expose Unity's unlimited food holder to Farmers;
   target selection, manual `!target`, carry limits, XP, depletion, and native
-  save fingerprints share the typed contract. Generator version 4 also marks
+  save fingerprints share the typed contract. Generator version 5 also marks
   land resource cells unwalkable, routes workers to a nearest edge, validates
   the action at that edge, and clears the dirty navigation cell on depletion,
   matching `ResourceProcessor.UpdateAllGraphBounds`/`ClearGraphBounds`. All four
@@ -384,23 +400,22 @@ mistaken for production-ready systems.
   covered by the DirectX 12 GPU smoke capture.
 - A custom Bevy PBR terrain extension and WGSL fragment shader consumes the
   converted `Env_Terrain` palette, noise texture, texture scale, blend height,
-  and tint controls. Its shoreline-height transition is anchored to Bevy's
-  configured waterline so the authored look remains meaningful on the
-  deterministic replacement terrain, and season tint stays live. Generated
-  terrain now spawns as deterministic 16×16-cell render/collider chunks with
-  bit-identical shared seams and complete cell/triangle coverage. Camera-driven
-  1x/2x/4x render LOD uses hysteresis and boundary skirts while every chunk
-  retains its full-resolution Avian collider; the authoritative
-  height/navigation grid and save hashes remain unchanged.
+  and tint controls. Its shoreline-height transition is anchored to the
+  shipping waterline and season tint stays live. Runtime-generated terrain now
+  spawns as one continuous authored-style render mesh and one full-resolution
+  Avian collider. This matches Unity's single `ProceduralMeshGenerator` surface
+  closely enough to remove independent chunk normals, LOD edge topology, and
+  the resulting cracks; the authoritative height/navigation grid and save
+  hashes remain unchanged.
   Explicit schema-1 Unity terrain meshes still reload as one exact retained
   surface rather than being resampled.
 - A separate PBR water extension consumes `Env_Water`'s shallow/deep, foam,
   wind, noise, alpha, and ice controls. Its WGSL port animates both authored
   noise textures and restores Unity's winter ice toggle while preserving live
-  season/weather tint. The generated 81×81 water mesh encodes terrain depth for
-  shallow/deep color, opacity, and animated shoreline foam and extends eight
-  cells beyond the island as deep ocean; this deterministically reproduces the
-  scene-depth relationship without requiring an opaque-texture sampling pass.
+  season/weather tint. The generated 217×217 water mesh encodes terrain depth
+  for shallow/deep color and extends eight cells beyond the island as deep
+  ocean. Energy-conserving bloom, high roughness, zero reflectance, and bounded
+  shader color prevent shoreline highlights from blowing out under ACES.
 - Exact prefab/model renderer bindings can replace a glTF primitive's standard
   material with a typed custom extension. The 688 reachable references to the
   shared `Building_Material` now use a WGSL port of `Building.shader`, including
@@ -645,15 +660,14 @@ mistaken for production-ready systems.
   cleaning node deletion, empty-group deletion, and metadata/prerequisite edits
   all share cycle/dangling-reference validation plus undo/redo. The searchable
   tier minimap remains live after each mutation.
-- A measured 300-agent presentation LOD: 16 actors use authored GLB rigs and
-  shared animation graphs while the remaining crowd uses lightweight capsule
-  visuals without changing authoritative gameplay or persistence. The recorded
-  1920×1080 release DX12 reference run reached 11.86 ms average and 12.77 ms
-  p95 across 600 post-warmup frames with 401 live converted foliage meshes,
-  four high-detail and twelve medium-detail terrain chunks, deterministic local
-  crowd separation, and the depth-aware 81×81 water surface on the documented
-  reference machine. The gate now emits JSON and exits unattended; `xtask
-  stress` soaks 300 agents for 3,600 ticks with repeated dirty-grid mutations.
+- A 300-agent presentation LOD: 16 actors use authored GLB rigs and shared
+  animation graphs while the remaining crowd uses lightweight capsule visuals
+  without changing authoritative gameplay or persistence. The GPU gate emits
+  JSON and exits unattended; `xtask stress` soaks 300 agents for 3,600 ticks
+  with repeated dirty-grid mutations. A 1920x1080 release DX12 run on the
+  documented reference machine measured 600 post-warmup frames at 6.53 ms
+  average and 7.94 ms p95 for the corrected 200x200 world, below the 16.7 ms
+  budget. The former 64x64 chunked-world timing is retired.
 - Reachable unit facing now follows Unity's `RotationHandler`: agents slerp
   toward travel or actor/building action targets at the prefab's authored five
   radians per second, while gathering preserves its explicit immediate snap to

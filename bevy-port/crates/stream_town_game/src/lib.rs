@@ -21,6 +21,7 @@ use bevy::{
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     asset::{AssetPlugin, RenderAssetUsages},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
+    camera::primitives::Aabb,
     camera::{Hdr, ScalingMode},
     color::LinearRgba,
     core_pipeline::tonemapping::Tonemapping,
@@ -1249,6 +1250,9 @@ struct Agent {
     health_regen_accumulator: f64,
 }
 
+#[derive(Component)]
+struct PlayerRigAxisCorrected;
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 enum AgentGoal {
     #[default]
@@ -2163,8 +2167,12 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
+                    correct_player_rig_axis,
+                    debug_player_model_bounds.after(correct_player_rig_axis),
                     tag_equipment_nodes,
-                    sync_equipment_nodes.after(tag_equipment_nodes),
+                    sync_equipment_nodes
+                        .after(tag_equipment_nodes)
+                        .after(correct_player_rig_axis),
                     tag_enemy_model_nodes,
                     sync_enemy_model_nodes.after(tag_enemy_model_nodes),
                     tag_cosmetic_nodes,
@@ -2211,7 +2219,12 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
-                    (reset_crowd_separation, move_agents, apply_crowd_separation).chain(),
+                    (
+                        reset_crowd_separation,
+                        move_agents.after(correct_player_rig_axis),
+                        apply_crowd_separation,
+                    )
+                        .chain(),
                     sync_resource_nodes.after(move_agents),
                     sync_building_presentation.after(move_agents),
                     animate_agents,
@@ -2220,7 +2233,8 @@ impl Plugin for StreamTownGamePlugin {
                     attach_converted_animations
                         .after(upgrade_actor_placeholders)
                         .after(sync_active_pets)
-                        .after(sync_fish_god_presentation),
+                        .after(sync_fish_god_presentation)
+                        .after(correct_player_rig_axis),
                     drive_native_animations,
                     drive_converted_animations
                         .after(move_agents)
@@ -2701,7 +2715,7 @@ fn setup_rendering(
                 viewport_height: if material_closeup {
                     96.0
                 } else if animation_closeup {
-                    180.0
+                    8.0
                 } else if resource_closeup {
                     24.0
                 } else if healing_closeup {
@@ -3276,14 +3290,18 @@ fn sync_authored_post_processing(
 
     if let Some(bloom) = primary.and_then(|profile| profile.bloom) {
         entity.insert(Bloom {
-            intensity: bloom.intensity,
+            // Unity URP's authored intensity is not numerically equivalent to
+            // Bevy's full-resolution additive blend. Mapping it onto Bevy's
+            // natural, energy-conserving preset prevents white shoreline and
+            // water highlights from flooding the entire HDR buffer.
+            intensity: (bloom.intensity * 0.15).clamp(0.0, 0.35),
             low_frequency_boost: bloom.scatter,
             prefilter: BloomPrefilter {
                 threshold: bloom.threshold,
                 threshold_softness: 0.2,
             },
-            composite_mode: BloomCompositeMode::Additive,
-            ..Bloom::OLD_SCHOOL
+            composite_mode: BloomCompositeMode::EnergyConserving,
+            ..Bloom::NATURAL
         });
     } else {
         entity.remove::<Bloom>();
@@ -4207,7 +4225,12 @@ fn water_material(
     WaterMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
-            perceptual_roughness: 1.0 - scalar("_WaterSmoothness", 0.9).clamp(0.0, 1.0),
+            // Unity's stylized water shader does not use the physically intense
+            // dielectric highlight produced by Bevy at its serialized 0.9
+            // smoothness. Preserve the animated surface while suppressing the
+            // false HDR mirror that washed the coastline white.
+            perceptual_roughness: (1.0 - scalar("_WaterSmoothness", 0.9).clamp(0.0, 1.0)).max(0.72),
+            reflectance: 0.0,
             alpha_mode: AlphaMode::Blend,
             ..default()
         },
@@ -7985,8 +8008,8 @@ fn generate_and_spawn_world(
                 .map_or(Vec3::ZERO, |resource| {
                     grid_to_world_on_surface(resource.position, &config.0, &generated)
                 });
-            Transform::from_xyz(focus.x + 12.0, focus.y + 16.0, focus.z + 12.0)
-                .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
+            Transform::from_xyz(focus.x + 5.0, focus.y + 6.0, focus.z + 5.0)
+                .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
             let focus = grid_to_world_on_surface(centre, &config.0, &generated);
             Transform::from_xyz(focus.x + 28.0, focus.y + 32.0, focus.z + 28.0)
@@ -8021,12 +8044,12 @@ fn generate_and_spawn_world(
             Transform::from_translation(focus + Vec3::new(45.0, 48.0, 45.0))
                 .looking_at(focus, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
-            let focus = initial_actor_position(&generated, town_hall_position, 1)
+            let focus = initial_actor_position(&generated, town_hall_position, 0)
                 .map_or(Vec3::ZERO, |position| {
                     grid_to_world_on_surface(position, &config.0, &generated)
                 });
-            Transform::from_xyz(focus.x + 110.0, 130.0, focus.z + 110.0)
-                .looking_at(Vec3::new(focus.x + 24.0, focus.y, focus.z + 24.0), Vec3::Y)
+            Transform::from_xyz(focus.x + 7.0, focus.y + 6.0, focus.z + 7.0)
+                .looking_at(focus + Vec3::Y * 1.6, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some() {
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 74.0, focus.y + 88.0, focus.z + 74.0)
@@ -8116,30 +8139,32 @@ fn generate_and_spawn_world(
         f32::from(config.0.world.height) * config.0.world.cell_size,
     );
     if let Some(meshes) = meshes.as_deref_mut() {
-        for chunk in generated_terrain_chunks(&generated, &config.0) {
-            let terrain_collider = Collider::trimesh_from_mesh(&chunk.high)
-                .expect("generated terrain chunk has indexed triangle geometry");
-            let high = meshes.add(chunk.high);
-            let medium = meshes.add(chunk.medium);
-            let low = meshes.add(chunk.low);
-            commands.spawn((
-                WorldEntity,
-                TerrainSurface,
-                Name::new(format!("TerrainChunk_{}_{}", chunk.chunk_x, chunk.chunk_z)),
-                Mesh3d(high.clone()),
-                MeshMaterial3d(render.ground.clone()),
-                terrain_collider,
-                RigidBody::Static,
-                TerrainChunkLod {
-                    centre: chunk.centre,
-                    high,
-                    medium,
-                    low,
-                    current: TerrainLodLevel::High,
-                },
-            ));
-            render_stats.terrain_high_chunks += 1;
-        }
+        // Unity shipped one ProceduralMeshGenerator mesh. Keeping the authored
+        // voxel faces in one Bevy mesh eliminates independent chunk normals and
+        // mismatched LOD edge topology, the two sources of visible seams.
+        let collision_mesh = generated_terrain_chunk_mesh(
+            &generated,
+            &config.0,
+            0,
+            0,
+            generated.navigation.width(),
+            generated.navigation.height(),
+            1,
+            false,
+        );
+        let terrain_collider = Collider::trimesh_from_mesh(&collision_mesh)
+            .expect("generated terrain has indexed triangle geometry");
+        let terrain = meshes.add(generated_terrain_mesh(&generated, &config.0));
+        commands.spawn((
+            WorldEntity,
+            TerrainSurface,
+            Name::new("Terrain"),
+            Mesh3d(terrain),
+            MeshMaterial3d(render.ground.clone()),
+            terrain_collider,
+            RigidBody::Static,
+        ));
+        render_stats.terrain_high_chunks = 1;
     } else {
         commands.spawn((
             WorldEntity,
@@ -8182,21 +8207,24 @@ fn generate_and_spawn_world(
         false,
     );
 
-    for resource in &generated.resources {
-        let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
-        spawn_resource_visual(
-            &mut commands,
-            &content.0,
-            &presentation.0,
-            &render,
-            asset_server.as_deref(),
-            &asset_root.0,
-            resource,
-            position,
-            config.0.world.cell_size,
-        );
+    let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
+    if !isolate_animation {
+        for resource in &generated.resources {
+            let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
+            spawn_resource_visual(
+                &mut commands,
+                &content.0,
+                &presentation.0,
+                &render,
+                asset_server.as_deref(),
+                &asset_root.0,
+                resource,
+                position,
+                config.0.world.cell_size,
+            );
+        }
     }
-    if let Some(asset_server) = asset_server.as_deref() {
+    if !isolate_animation && let Some(asset_server) = asset_server.as_deref() {
         for foliage in &generated.foliage {
             if spawn_foliage_visual(
                 &mut commands,
@@ -8230,7 +8258,9 @@ fn generate_and_spawn_world(
         .get(&town_hall_id)
         .and_then(|building| content.0.archetypes.get(&building.archetype));
     if let Some(scene) = town_hall.and_then(default_archetype_scene).filter(|scene| {
-        asset_server.is_some() && converted_asset_exists(&asset_root.0, &scene.asset_path)
+        !isolate_animation
+            && asset_server.is_some()
+            && converted_asset_exists(&asset_root.0, &scene.asset_path)
     }) {
         hall_entity.insert((
             WorldAssetRoot(
@@ -8257,7 +8287,7 @@ fn generate_and_spawn_world(
         {
             hall_entity.insert(material);
         }
-    } else {
+    } else if !isolate_animation {
         let footprint = town_hall.map_or([2, 2], |archetype| archetype.footprint);
         let size = Vec3::new(
             f32::from(footprint[0]) * config.0.world.cell_size,
@@ -8420,6 +8450,17 @@ fn generate_and_spawn_world(
         };
         let target = nearest_walkable(&generated, target).unwrap_or(centre);
         let world_position = grid_to_world_on_surface(position, &config.0, &generated);
+        if spawned == 0
+            && std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
+            && let Ok(mut camera) = cameras.single_mut()
+        {
+            *camera = Transform::from_xyz(
+                world_position.x + 7.0,
+                world_position.y + 6.0,
+                world_position.z + 7.0,
+            )
+            .looking_at(world_position + Vec3::Y * 1.6, Vec3::Y);
+        }
         let (actor_id, initial_role) = initial_actor_identity(spawned);
         let actor_id = StableId::new(actor_id).expect("generated ID");
         let kind = ActorKind::Player;
@@ -8472,13 +8513,13 @@ fn generate_and_spawn_world(
             .and_then(|(archetype, scene)| {
                 native_animation_request(archetype, scene, &presentation.0)
             });
-        let converted_animation = native_animation
-            .is_none()
-            .then(|| {
-                real_archetype
-                    .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
-            })
-            .flatten();
+        let converted_animation = (native_animation.is_none()
+            && std::env::var_os("STREAM_TOWN_SMOKE_STATIC_RIG").is_none())
+        .then(|| {
+            real_archetype
+                .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
+        })
+        .flatten();
         let base_scale = if real_scene.is_some() {
             Vec3::splat(config.0.world.cell_size / 2.0)
         } else {
@@ -8820,10 +8861,10 @@ fn resource_mesh_index(resource: &stream_town_domain::GeneratedResource) -> usiz
 }
 
 fn resource_visual_scale(cell_size: f32) -> f32 {
-    // Blender's GLBs retain the Unity scene root's centimeter conversion. The
-    // Bevy grid uses a 12-unit cell where the Unity resource footprint was
-    // authored around four units, so scale both conversions explicitly.
-    0.01 * (cell_size / 4.0)
+    // Primitive-label loads bypass the glTF scene node that carries Blender's
+    // centimetre-to-metre 0.01 transform. Restore it here, with the same world
+    // scale relationship as the shipping two-unit terrain cells.
+    cell_size / 200.0
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8979,8 +9020,8 @@ fn spawn_foliage_visual(
         0.0,
         f32::from(foliage.offset_milli_cells[1]) * config.world.cell_size / 1_000.0,
     );
-    // The Blender conversion preserves FBX centimetres just like the resource
-    // GLBs, while authored Unity scale is expressed in metres.
+    // This is also a primitive-label load, so `resource_visual_scale` restores
+    // the glTF scene node's centimetre conversion before authored BaseScale.
     let scale = Vec3::from_array(variant.base_scale)
         * resource_visual_scale(config.world.cell_size)
         * (f32::from(foliage.scale_milli) / 1_000.0);
@@ -12958,7 +12999,13 @@ fn agent_action_facing_grid(
     }
 }
 
-fn rotate_agent_toward(transform: &mut Transform, target: Vec3, delta_seconds: f32, snap: bool) {
+fn rotate_agent_toward(
+    transform: &mut Transform,
+    target: Vec3,
+    delta_seconds: f32,
+    snap: bool,
+    correct_player_axis: bool,
+) {
     let direction = Vec3::new(
         target.x - transform.translation.x,
         0.0,
@@ -12967,9 +13014,12 @@ fn rotate_agent_toward(transform: &mut Transform, target: Vec3, delta_seconds: f
     if direction.length_squared() <= f32::EPSILON {
         return;
     }
-    let target_rotation = Transform::default()
+    let mut target_rotation = Transform::default()
         .looking_to(direction.normalize(), Vec3::Y)
         .rotation;
+    if correct_player_axis {
+        target_rotation *= Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    }
     transform.rotation = if snap {
         target_rotation
     } else {
@@ -12980,6 +13030,7 @@ fn rotate_agent_toward(transform: &mut Transform, target: Vec3, delta_seconds: f
     };
 }
 
+#[allow(clippy::type_complexity)]
 fn move_agents(
     mut commands: Commands,
     time: Res<Time>,
@@ -12996,9 +13047,13 @@ fn move_agents(
         &mut GridLocation,
         &AgentAnimation,
         &mut Transform,
+        Option<&PlayerRigAxisCorrected>,
     )>,
     buildings: Query<(Entity, &RuntimeBuilding)>,
 ) {
+    if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
+        return;
+    }
     stats.elapsed_seconds += time.delta_secs_f64();
     simulation
         .0
@@ -13035,7 +13090,7 @@ fn move_agents(
     }
     let mut resource_reservations = BTreeMap::new();
     let mut target_assignment_counts: BTreeMap<StableId, u32> = BTreeMap::new();
-    for (_, agent, _, _, _) in &agents {
+    for (_, agent, _, _, _, _) in &agents {
         if let Some(target) = goal_reservation(&agent.goal)
             && goal_reservation_is_valid(
                 &simulation.0,
@@ -13071,11 +13126,12 @@ fn move_agents(
     }
     let mut agent_order: Vec<_> = agents
         .iter()
-        .map(|(entity, agent, _, _, _)| (agent.id.clone(), entity))
+        .map(|(entity, agent, _, _, _, _)| (agent.id.clone(), entity))
         .collect();
     agent_order.sort_by(|(left, _), (right, _)| left.cmp(right));
     for (_, entity) in agent_order {
-        let Ok((_, mut agent, mut location, animation, mut transform)) = agents.get_mut(entity)
+        let Ok((_, mut agent, mut location, animation, mut transform, axis_corrected)) =
+            agents.get_mut(entity)
         else {
             continue;
         };
@@ -13395,6 +13451,7 @@ fn move_agents(
                 facing_target,
                 time.delta_secs(),
                 action_target.is_some_and(|_| matches!(agent.goal, AgentGoal::Gather(_))),
+                axis_corrected.is_some(),
             );
         }
     }
@@ -15544,6 +15601,89 @@ fn enemy_model_node_names(content: &ContentCatalog) -> BTreeSet<String> {
         .collect()
 }
 
+/// Blender's GLB export preserves the player's FBX pre-rotation as a +90-degree
+/// local X rotation. Unity consumes that axis conversion while importing the
+/// FBX. Correct the complete actor presentation above the glTF scene so all
+/// skinned meshes, joints, and equipment receive one coherent rigid transform.
+#[allow(clippy::type_complexity)]
+fn correct_player_rig_axis(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    mut agents: Query<
+        (Entity, &Agent, &mut Transform),
+        (Without<PlayerRigAxisCorrected>, With<WorldAssetRoot>),
+    >,
+) {
+    for (entity, agent, mut transform) in &mut agents {
+        let is_player = content
+            .0
+            .archetypes
+            .get(&agent.archetype)
+            .is_some_and(|archetype| archetype.kind == ArchetypeKind::Player);
+        if !is_player {
+            continue;
+        }
+        transform.rotation *= Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+        commands.entity(entity).insert(PlayerRigAxisCorrected);
+    }
+}
+
+fn debug_player_model_bounds(
+    mut settled_frames: Local<u8>,
+    agents: Query<(), With<Agent>>,
+    parents: Query<&ChildOf>,
+    renderers: Query<(Entity, &Aabb, &GlobalTransform), With<Mesh3d>>,
+) {
+    if *settled_frames == u8::MAX || std::env::var_os("STREAM_TOWN_DEBUG_PLAYER_BOUNDS").is_none() {
+        return;
+    }
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    let mut count = 0_usize;
+    for (entity, aabb, global) in &renderers {
+        let mut ancestor = entity;
+        let mut belongs_to_actor = agents.contains(ancestor);
+        for _ in 0..64 {
+            if belongs_to_actor {
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            belongs_to_actor = agents.contains(ancestor);
+        }
+        if !belongs_to_actor {
+            continue;
+        }
+        let centre = Vec3::from(aabb.center);
+        let half = Vec3::from(aabb.half_extents);
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    let point = global.transform_point(centre + half * Vec3::new(x, y, z));
+                    minimum = minimum.min(point);
+                    maximum = maximum.max(point);
+                }
+            }
+        }
+        count += 1;
+    }
+    if count >= 80 {
+        if *settled_frames < 3 {
+            *settled_frames += 1;
+            return;
+        }
+        info!(
+            renderers = count,
+            ?minimum,
+            ?maximum,
+            "resolved player model bounds"
+        );
+        *settled_frames = u8::MAX;
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn tag_enemy_model_nodes(
     mut commands: Commands,
@@ -16050,14 +16190,27 @@ fn retargeted_animation_clip(
     targets: &BTreeMap<String, (Entity, Transform)>,
 ) -> Option<AnimationClip> {
     let mut clip = AnimationClip::default();
+    let skeletal_character = source
+        .rig_asset_path
+        .as_deref()
+        .is_some_and(|path| path.contains("/Characters/") || path.contains("/Enemies/"));
     for track in &source.transform_tracks {
         let Some((_, rest)) = targets.get(&track.target_path) else {
             continue;
         };
         let target = track.target_path.split('/').collect::<AnimationTargetId>();
-        add_translation_curve(&mut clip, target, track, rest);
+        // Unity's imported character clips contain baked position curves on
+        // several spine bones. Scaling those deltas to a glTF rest pose pulls
+        // the independently skinned body pieces apart. Character locomotion is
+        // rotation-driven; preserve only the root-bone translation. Mechanical
+        // clips (gates, buildings, props) retain their full transform curves.
+        if !skeletal_character || !track.target_path.contains('/') {
+            add_translation_curve(&mut clip, target, track, rest);
+        }
         add_rotation_curve(&mut clip, target, track, rest);
-        add_scale_curve(&mut clip, target, track, rest);
+        if !skeletal_character {
+            add_scale_curve(&mut clip, target, track, rest);
+        }
     }
     if clip.curves().is_empty() {
         return None;
@@ -17390,6 +17543,14 @@ fn sync_world_render_lod(
     mut chunks: Query<(&mut TerrainChunkLod, &mut Mesh3d)>,
     mut stats: ResMut<WorldRenderStats>,
 ) {
+    if chunks.is_empty() {
+        // Runtime-generated worlds now use one continuous authored-style mesh.
+        // Keep the legacy report fields meaningful for existing tooling.
+        stats.terrain_high_chunks = 1;
+        stats.terrain_medium_chunks = 0;
+        stats.terrain_low_chunks = 0;
+        return;
+    }
     let Ok(camera) = cameras.single() else {
         return;
     };
@@ -25528,9 +25689,11 @@ fn building_health_color(health_fraction: f32) -> Color {
 
 fn grid_to_world(position: GridPos, config: &GameConfig) -> Vec3 {
     Vec3::new(
-        (f32::from(position.x) - f32::from(config.world.width) * 0.5) * config.world.cell_size,
+        (f32::from(position.x) - f32::from(config.world.width.saturating_sub(1)) * 0.5)
+            * config.world.cell_size,
         0.0,
-        (f32::from(position.z) - f32::from(config.world.height) * 0.5) * config.world.cell_size,
+        (f32::from(position.z) - f32::from(config.world.height.saturating_sub(1)) * 0.5)
+            * config.world.cell_size,
     )
 }
 
@@ -25617,9 +25780,11 @@ fn generated_terrain_chunks(
                 let cells_x = (width - start_x).min(TERRAIN_CHUNK_CELLS);
                 let cells_z = (height - start_z).min(TERRAIN_CHUNK_CELLS);
                 let centre = Vec2::new(
-                    (f32::from(start_x) + f32::from(cells_x) * 0.5 - f32::from(width) * 0.5)
+                    (f32::from(start_x) + f32::from(cells_x) * 0.5
+                        - f32::from(width.saturating_sub(1)) * 0.5)
                         * config.world.cell_size,
-                    (f32::from(start_z) + f32::from(cells_z) * 0.5 - f32::from(height) * 0.5)
+                    (f32::from(start_z) + f32::from(cells_z) * 0.5
+                        - f32::from(height.saturating_sub(1)) * 0.5)
                         * config.world.cell_size,
                 );
                 GeneratedTerrainChunk {
@@ -25641,18 +25806,149 @@ fn generated_terrain_chunks(
         .collect()
 }
 
-#[cfg(test)]
 fn generated_terrain_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
-    generated_terrain_chunk_mesh(
-        world,
-        config,
-        0,
-        0,
-        world.navigation.width(),
-        world.navigation.height(),
-        1,
-        false,
+    let width = world.navigation.width();
+    let height = world.navigation.height();
+    let half = config.world.cell_size * 0.5 * 0.7;
+    let estimated_faces = usize::from(width) * usize::from(height) * 4;
+    let mut positions = Vec::with_capacity(estimated_faces * 4);
+    let mut colors = Vec::with_capacity(estimated_faces * 4);
+    let mut uvs = Vec::with_capacity(estimated_faces * 4);
+    let mut indices = Vec::with_capacity(estimated_faces * 6);
+    let centre = |x: u16, z: u16| {
+        Vec2::new(
+            (f32::from(x) - f32::from(width.saturating_sub(1)) * 0.5) * config.world.cell_size,
+            (f32::from(z) - f32::from(height.saturating_sub(1)) * 0.5) * config.world.cell_size,
+        )
+    };
+    let elevation = |x: u16, z: u16| {
+        f32::from(
+            world
+                .navigation
+                .height_at(GridPos { x, z })
+                .unwrap_or_default(),
+        ) * 0.01
+    };
+    for z in 0..height {
+        for x in 0..width {
+            let c = centre(x, z);
+            let y = elevation(x, z);
+            append_terrain_quad(
+                [
+                    [c.x - half, y, c.y - half],
+                    [c.x + half, y, c.y - half],
+                    [c.x + half, y, c.y + half],
+                    [c.x - half, y, c.y + half],
+                ],
+                terrain_vertex_color(y, config),
+                [
+                    f32::from(x) / f32::from(width),
+                    f32::from(z) / f32::from(height),
+                ],
+                &mut positions,
+                &mut colors,
+                &mut uvs,
+                &mut indices,
+            );
+            if x > 0 {
+                let previous = centre(x - 1, z);
+                let previous_y = elevation(x - 1, z);
+                append_terrain_quad(
+                    [
+                        [previous.x + half, previous_y, c.y - half],
+                        [c.x - half, y, c.y - half],
+                        [c.x - half, y, c.y + half],
+                        [previous.x + half, previous_y, c.y + half],
+                    ],
+                    terrain_vertex_color((y + previous_y) * 0.5, config),
+                    [
+                        f32::from(x) / f32::from(width),
+                        f32::from(z) / f32::from(height),
+                    ],
+                    &mut positions,
+                    &mut colors,
+                    &mut uvs,
+                    &mut indices,
+                );
+            }
+            if z > 0 {
+                let previous = centre(x, z - 1);
+                let previous_y = elevation(x, z - 1);
+                append_terrain_quad(
+                    [
+                        [c.x - half, previous_y, previous.y + half],
+                        [c.x + half, previous_y, previous.y + half],
+                        [c.x + half, y, c.y - half],
+                        [c.x - half, y, c.y - half],
+                    ],
+                    terrain_vertex_color((y + previous_y) * 0.5, config),
+                    [
+                        f32::from(x) / f32::from(width),
+                        f32::from(z) / f32::from(height),
+                    ],
+                    &mut positions,
+                    &mut colors,
+                    &mut uvs,
+                    &mut indices,
+                );
+            }
+            if x > 0 && z > 0 {
+                let upper_left = centre(x - 1, z - 1);
+                let upper_right = centre(x, z - 1);
+                let lower_left = centre(x - 1, z);
+                let heights = [
+                    elevation(x - 1, z - 1),
+                    elevation(x, z - 1),
+                    y,
+                    elevation(x - 1, z),
+                ];
+                append_terrain_quad(
+                    [
+                        [upper_left.x + half, heights[0], upper_left.y + half],
+                        [upper_right.x - half, heights[1], upper_right.y + half],
+                        [c.x - half, heights[2], c.y - half],
+                        [lower_left.x + half, heights[3], lower_left.y - half],
+                    ],
+                    terrain_vertex_color(heights.into_iter().sum::<f32>() * 0.25, config),
+                    [
+                        f32::from(x) / f32::from(width),
+                        f32::from(z) / f32::from(height),
+                    ],
+                    &mut positions,
+                    &mut colors,
+                    &mut uvs,
+                    &mut indices,
+                );
+            }
+        }
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
     )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices));
+    mesh.compute_smooth_normals();
+    mesh
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_terrain_quad(
+    quad: [[f32; 3]; 4],
+    color: [f32; 4],
+    uv: [f32; 2],
+    positions: &mut Vec<[f32; 3]>,
+    colors: &mut Vec<[f32; 4]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+) {
+    let base = u32::try_from(positions.len()).expect("terrain vertex count fits u32");
+    positions.extend_from_slice(&quad);
+    colors.extend_from_slice(&[color; 4]);
+    uvs.extend_from_slice(&[uv; 4]);
+    indices.extend_from_slice(&[base, base + 3, base + 1, base + 1, base + 3, base + 2]);
 }
 
 fn generated_terrain_chunk_mesh(
@@ -25679,9 +25975,11 @@ fn generated_terrain_chunk_mesh(
             let z = start_z + local_z;
             let elevation = terrain_corner_height(world, x, z);
             positions.push([
-                (f32::from(x) - f32::from(world_width) * 0.5) * config.world.cell_size,
+                (f32::from(x) - f32::from(world_width.saturating_sub(1)) * 0.5)
+                    * config.world.cell_size,
                 elevation,
-                (f32::from(z) - f32::from(world_height) * 0.5) * config.world.cell_size,
+                (f32::from(z) - f32::from(world_height.saturating_sub(1)) * 0.5)
+                    * config.world.cell_size,
             ]);
             colors.push(terrain_vertex_color(elevation, config));
             uvs.push([
@@ -25785,9 +26083,11 @@ fn append_terrain_skirt(
             let elevation = terrain_corner_height(world, x, z);
             let lower = vertex_index % 2 == 1;
             positions.push([
-                (f32::from(x) - f32::from(world_width) * 0.5) * config.world.cell_size,
+                (f32::from(x) - f32::from(world_width.saturating_sub(1)) * 0.5)
+                    * config.world.cell_size,
                 elevation - if lower { depth } else { 0.0 },
-                (f32::from(z) - f32::from(world_height) * 0.5) * config.world.cell_size,
+                (f32::from(z) - f32::from(world_height.saturating_sub(1)) * 0.5)
+                    * config.world.cell_size,
             ]);
             colors.push(terrain_vertex_color(elevation, config));
             uvs.push([
@@ -25838,10 +26138,14 @@ fn generated_water_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
             let depth = (water_height - terrain_height).max(0.0);
             let normalized_depth = (depth / authored_depth_range).clamp(0.0, 1.0);
             positions.push([
-                (f32::from(x) - f32::from(OCEAN_PADDING_CELLS) - f32::from(width) * 0.5)
+                (f32::from(x)
+                    - f32::from(OCEAN_PADDING_CELLS)
+                    - f32::from(width.saturating_sub(1)) * 0.5)
                     * config.world.cell_size,
                 water_height + 0.05,
-                (f32::from(z) - f32::from(OCEAN_PADDING_CELLS) - f32::from(height) * 0.5)
+                (f32::from(z)
+                    - f32::from(OCEAN_PADDING_CELLS)
+                    - f32::from(height.saturating_sub(1)) * 0.5)
                     * config.world.cell_size,
             ]);
             normals.push([0.0, 1.0, 0.0]);
@@ -26011,8 +26315,12 @@ fn terrain_vertex_color(elevation: f32, config: &GameConfig) -> [f32; 4] {
 }
 
 fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
-    let x = (position.x / config.world.cell_size + f32::from(config.world.width) * 0.5).floor();
-    let z = (position.z / config.world.cell_size + f32::from(config.world.height) * 0.5).floor();
+    let x = (position.x / config.world.cell_size
+        + f32::from(config.world.width.saturating_sub(1)) * 0.5)
+        .round();
+    let z = (position.z / config.world.cell_size
+        + f32::from(config.world.height.saturating_sub(1)) * 0.5)
+        .round();
     if x < 0.0
         || z < 0.0
         || x >= f32::from(config.world.width)
@@ -27778,7 +28086,8 @@ mod tests {
         let content = embedded_content();
         let mut world = generate_world(&config.world);
         world.resources.clear();
-        let current = GridPos { x: 20, z: 20 };
+        let current =
+            restored_town_hall_position(&content, &WorldSimulation::new(world.seed), &config);
         for offset in 1..=31_u16 {
             world.resources.push(stream_town_domain::GeneratedResource {
                 id: StableId::new(format!("resource:target_window_{offset:02}")).unwrap(),
@@ -28275,8 +28584,16 @@ mod tests {
         let config = GameConfig::default();
         let content = embedded_content();
         let mut world = generate_world(&config.world);
-        let defender_position = GridPos { x: 32, z: 32 };
-        let enemy_position = nearest_walkable(&world, GridPos { x: 33, z: 32 }).unwrap();
+        let (defender_position, enemy_position) = (0..world.navigation.height())
+            .find_map(|z| {
+                (0..world.navigation.width().saturating_sub(1)).find_map(|x| {
+                    let defender = GridPos { x, z };
+                    let enemy = GridPos { x: x + 1, z };
+                    (world.navigation.is_walkable(defender) && world.navigation.is_walkable(enemy))
+                        .then_some((defender, enemy))
+                })
+            })
+            .expect("generated world has adjacent combat cells");
         let defender = StableId::new("npc:defender_test").unwrap();
         let enemy = StableId::new("actor:enemy_test").unwrap();
         let mut simulation = WorldSimulation::new(world.seed);
@@ -28483,8 +28800,23 @@ mod tests {
             .expect("battering ram has valid authored health");
         let enemy_id = StableId::new("actor:battering_ram_test").unwrap();
         let building_id = StableId::new("building:ram_target").unwrap();
-        let enemy_position = GridPos { x: 22, z: 22 };
-        let building_position = GridPos { x: 23, z: 22 };
+        let house = &content.buildings[&StableId::new("building:house").unwrap()];
+        let building_position = find_building_site(
+            &world,
+            GridPos {
+                x: config.world.width / 2,
+                z: config.world.height / 2,
+            },
+            house.footprint,
+        )
+        .expect("generated world has a house site");
+        let enemy_position = building_approach(
+            &world,
+            building_position,
+            house.footprint,
+            building_position,
+        )
+        .expect("house site has an enemy approach");
         let mut simulation = WorldSimulation::new(world.seed);
         assert!(simulation.spawn_enemy(
             enemy_id.clone(),
@@ -28496,9 +28828,7 @@ mod tests {
             building_id.clone(),
             BuildingState {
                 id: building_id.clone(),
-                archetype: content.buildings[&StableId::new("building:house").unwrap()]
-                    .archetype
-                    .clone(),
+                archetype: house.archetype.clone(),
                 position: building_position,
                 rotation_quarter_turns: 0,
                 level: 1,
@@ -29815,7 +30145,8 @@ mod tests {
         assert_eq!(resource_mesh_index(&resource("resource:wood", 3, 4)), 1);
         assert_eq!(resource_mesh_index(&resource("resource:ore", 9, 6)), 1);
         assert_eq!(resource_mesh_index(&resource("resource:food", 9, 6)), 0);
-        assert!((resource_visual_scale(12.0) - 0.03).abs() < f32::EPSILON);
+        assert!((resource_visual_scale(2.0) - 0.01).abs() < f32::EPSILON);
+        assert!((resource_visual_scale(12.0) - 0.06).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -30635,12 +30966,12 @@ mod tests {
     #[test]
     fn agent_facing_matches_unity_rotation_and_action_targets() {
         let mut smooth = Transform::default();
-        rotate_agent_toward(&mut smooth, Vec3::X * 4.0, 0.1, false);
+        rotate_agent_toward(&mut smooth, Vec3::X * 4.0, 0.1, false, false);
         assert!(smooth.forward().dot(Vec3::X) > 0.7);
         assert!(smooth.forward().dot(Vec3::X) < 0.999);
 
         let mut snapped = Transform::default();
-        rotate_agent_toward(&mut snapped, Vec3::X * 4.0, 0.1, true);
+        rotate_agent_toward(&mut snapped, Vec3::X * 4.0, 0.1, true, false);
         assert!(snapped.forward().dot(Vec3::X) > 0.999);
 
         let config = GameConfig::default();
@@ -31201,8 +31532,10 @@ mod tests {
         let config = GameConfig::default();
         let world = generate_world(&config.world);
         let mesh = generated_terrain_mesh(&world, &config);
-        assert_eq!(mesh.count_vertices(), 65 * 65);
-        assert_eq!(mesh.indices().unwrap().len(), 64 * 64 * 6);
+        let face_count =
+            usize::from(config.world.width * 2 - 1) * usize::from(config.world.height * 2 - 1);
+        assert_eq!(mesh.count_vertices(), face_count * 4);
+        assert_eq!(mesh.indices().unwrap().len(), face_count * 6);
         assert_eq!(
             mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().len(),
             mesh.count_vertices()
@@ -31221,8 +31554,16 @@ mod tests {
                 <= f32::EPSILON
         );
         let water = generated_water_mesh(&world, &config);
-        assert_eq!(water.count_vertices(), 81 * 81);
-        assert_eq!(water.indices().unwrap().len(), 80 * 80 * 6);
+        let padded_width = usize::from(config.world.width) + 16;
+        let padded_height = usize::from(config.world.height) + 16;
+        assert_eq!(
+            water.count_vertices(),
+            (padded_width + 1) * (padded_height + 1)
+        );
+        assert_eq!(
+            water.indices().unwrap().len(),
+            padded_width * padded_height * 6
+        );
         let bevy::mesh::VertexAttributeValues::Float32x4(depth_colors) =
             water.attribute(Mesh::ATTRIBUTE_COLOR).unwrap()
         else {
@@ -31239,7 +31580,9 @@ mod tests {
 
     #[test]
     fn generated_terrain_chunks_cover_the_grid_with_watertight_seams() {
-        let config = GameConfig::default();
+        let mut config = GameConfig::default();
+        config.world.width = 64;
+        config.world.height = 64;
         let world = generate_world(&config.world);
         let chunks = generated_terrain_chunks(&world, &config);
         assert_eq!(chunks.len(), 16);
@@ -31711,7 +32054,7 @@ mod tests {
         );
         let terrain = terrain_material(&presentation, &GameConfig::default(), None);
         assert!(terrain.extension.grid_texture.is_none());
-        assert!((terrain.extension.parameters.texture_uv_blend_tint.z - -1.8).abs() < f32::EPSILON);
+        assert!((terrain.extension.parameters.texture_uv_blend_tint.z - 0.05).abs() < f32::EPSILON);
         assert!((terrain.extension.parameters.texture_uv_blend_tint.w - 1.0).abs() < f32::EPSILON);
         assert_eq!(
             terrain.extension.parameters.grid_scale_offset,
@@ -32037,6 +32380,19 @@ mod tests {
         let retargeted = retargeted_animation_clip(idle, &targets).unwrap();
         assert!(!retargeted.curves().is_empty());
         assert!(retargeted.duration() >= idle.duration_seconds);
+        assert!(
+            idle.rig_asset_path
+                .as_deref()
+                .is_some_and(|path| path.contains("/Characters/"))
+        );
+        assert!(
+            idle.transform_tracks
+                .iter()
+                .any(|track| track.target_path == "pelvis" && !track.translation.is_empty())
+        );
+        assert!(idle.transform_tracks.iter().any(|track| {
+            track.target_path.starts_with("pelvis/") && !track.translation.is_empty()
+        }));
     }
 
     #[test]

@@ -339,8 +339,9 @@ movement turns smoothly at the authored five-radians-per-second rate, action
 states face their actor, resource, or building target, and gathering keeps
 Unity's explicit immediate snap toward the resource.
 
-The vertical slice renders the deterministic navigation height field as a colored
-4,225-vertex terrain mesh, a water surface at the authored level, an Avian
+The vertical slice renders the deterministic 200x200 navigation height field as
+a single continuous 636,804-vertex voxel-style terrain mesh, a water surface at
+the authored level, an Avian
 trimesh collider used for surface picking, lighting, converted GLB scenes for
 the representative town hall and actors, and primitive fallbacks when an asset
 is unavailable. Actors, resources, buildings, movement, joins, save restores,
@@ -372,19 +373,22 @@ construction state, adjusted resource cost, and town inventory; unaffordable
 upgrades are visibly disabled and cannot dispatch.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
-texture, palette, and tint controls; Bevy's configured waterline adapts that
-blend to the deterministic replacement terrain generator. Its render and Avian
-collision surfaces are partitioned into deterministic 16×16-cell chunks with
-duplicated, bit-identical seam vertices, allowing frustum culling and localized
-spatial queries without changing navigation, terrain heights, or world/save
-hashes. Schema-1 saves with an explicit Unity terrain mesh retain that mesh as
-one exact legacy surface. A second PBR
+texture, palette, and tint controls. Runtime-generated terrain now follows the
+shipping Unity scale: 200x200 samples, two-unit cells, half-unit height
+quantization, the authored terrain curve and island falloff, and globally
+normalized multi-octave noise generated from Unity-compatible `System.Random`
+offsets. It is emitted as one mesh and one full-resolution Avian collider, as
+Unity's `ProceduralMeshGenerator` did. Removing independently shaded and
+LOD-switched render chunks eliminates visible cracks and lighting changes at
+former chunk boundaries without changing navigation or save hashes. Schema-1
+saves with an explicit Unity terrain mesh retain that mesh as one exact legacy
+surface. A second PBR
 extension ports the reachable water material's shallow/deep colors, animated
 dual-noise wind, foam controls, transparency, and winter ice pattern. A
-terrain-matched 6,561-vertex water mesh carries deterministic depth into the
-shader, producing the authored shallow/deep blend and animated edge foam along
-the replacement terrain shoreline, with an eight-cell deep-water apron beyond
-the island. Exact
+terrain-matched 47,089-vertex water mesh carries deterministic depth into the
+shader and extends eight cells beyond the island. Water uses energy-conserving
+bloom and a bounded stylized shader output instead of direct PBR highlights in
+the +1.1 EV/ACES path, preventing the coastline from clipping to white. Exact
 prefab/model renderer bindings can also replace a loaded glTF primitive with a
 typed material extension. The heavily reused shipping `Building.shader` now
 preserves its authored base/detail texture sampling, red-channel ambient
@@ -404,10 +408,16 @@ Unity's two tree and ore variants, while bushes retain Unity's duplicated first
 mesh. Ore uses the shared building material. Content schema 21 converts Unity's
 two land and two underwater foliage-generation layers, including their noise,
 threshold, seed, LOD, scale, material, and 21 FBX variant references. Bevy
-regenerates stable land/underwater instances from the world seed, excludes
-resource cells, and renders the converted grass, flower, seaweed, and coral
-primitives with deterministic jitter, rotation, scale, and a 420-unit
-visibility budget. Current building and enemy-camp footprints hide intersecting
+regenerates stable instances from the source layer sizes, seeds, thresholds,
+spacing, normalized octave noise, fixed base scale, and quarter-turn rotations.
+Resources use their three shipping generation layers and 100-unit amounts. A
+shared one-cell clearance prevents resources and foliage from intersecting,
+while source-space offsets remain stable. Raw glTF primitive loads restore
+Blender's omitted 0.01 centimetre-to-metre scene-node conversion before applying
+authored scale; this prevents tree, ore, bush, grass, and coral primitives from
+becoming roughly one hundred times too large and overlapping. The converted
+grass, flower, seaweed, and coral primitives retain a 420-unit visibility
+budget. Current building and enemy-camp footprints hide intersecting
 foliage, and the visibility is derived again after removal or save load so stale
 clearings cannot leak between world states. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
@@ -475,6 +485,14 @@ queues the starting defender's pointer and frames it for deterministic capture.
 repeatable land/shoreline visual capture.
 `STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated
 land/water boundary for a repeatable depth-blend and edge-foam capture.
+`STREAM_TOWN_SMOKE_STATIC_RIG=1` frames the unanimated shipping Player rig, and
+`STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames its live converted controller.
+The Player scene root receives the FBX-to-Unity +90-degree X-axis correction as
+one rigid transform shared by skin, joints, and equipment. Character retargeting
+keeps joint rotations but limits translation curves to the skeleton root and
+drops animation scale curves, avoiding double-applied imported bone offsets.
+`STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
+repeatable axis and retargeting checks.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while
 temporarily forcing all player-name and building-health overlays visible; it
 does not modify the saved player settings.
@@ -564,12 +582,12 @@ uses an unsynchronized present mode for meaningful capacity measurements, and
 reports average and 95th-percentile frame time after a warmup. The optional
 `STREAM_TOWN_FRAME_TIME_WARMUP` and
 `STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS` values default to ten seconds each.
-Set `STREAM_TOWN_PERFORMANCE_REPORT_PATH` to write the same gate plus terrain
-LOD, foliage-streaming, and crowd-separation counters as JSON. Set
+Set `STREAM_TOWN_PERFORMANCE_REPORT_PATH` to write the same gate plus terrain,
+foliage-streaming, and crowd-separation counters as JSON. Set
 `STREAM_TOWN_EXIT_AFTER_FRAME_TIME=1` for an unattended run that exits once the
-report is complete. Terrain keeps full-resolution per-chunk physics while the
-render mesh changes between 1x, 2x, and 4x sampling with hysteresis and seam
-skirts. Foliage uses scale-aware fade ranges, and deterministic local crowd
+report is complete. Generated terrain uses one continuous authored-style render
+mesh and one full-resolution collider, so terrain LOD boundaries cannot crack.
+Foliage uses scale-aware fade ranges, and deterministic local crowd
 separation changes only presentation transforms, never navigation or saves.
 `cargo run -p xtask -- stress --agents 300 --ticks 3600` performs the matching
 one-minute-at-60-Hz CPU soak while repeatedly mutating dirty navigation cells.
@@ -579,10 +597,9 @@ Bevy 0.19's motion-blur pass is disabled on Windows because its varying loop
 does not compile with FXC; the rest of the authored post-processing stack stays
 enabled, and packaged builds need no Vulkan SDK or loose compiler DLL.
 The current Windows release reference run (Ryzen 5 7600X, Radeon RX 7800 XT,
-64 GB, DX12, 1920×1080) measured 600 post-warmup frames at 11.86 ms average and
-12.77 ms p95 with 300 simulated agents, 401 live converted foliage meshes,
-four high-detail and twelve medium-detail terrain chunks, and the production
-16-character detail budget, below the 16.7 ms gate.
+64 GB, DX12, 1920x1080) measured 600 post-warmup frames at 6.53 ms average and
+7.94 ms p95 with 300 simulated agents, the single continuous 200x200 terrain
+surface, and the production 16-character detail budget, below the 16.7 ms gate.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use
