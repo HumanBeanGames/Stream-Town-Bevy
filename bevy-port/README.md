@@ -173,6 +173,10 @@ local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to open the game menu. Use
+the screen edges for the same Unity-relative pan directions. The shipping-scale
+camera starts with a 72-unit vertical span, can zoom down to roughly the Unity
+15-unit close view, and keeps the original isometric pitch at a matching camera
+distance. Use
 arrow keys and Enter to select Save Game, Load Game, Settings, Exit Game, or
 Idle Mode. Settings retain keyboard control: Tab/Shift+Tab changes category,
 arrow keys select or change values, Enter confirms, and Escape invokes the same
@@ -388,7 +392,10 @@ dual-noise wind, foam controls, transparency, and winter ice pattern. A
 terrain-matched 47,089-vertex water mesh carries deterministic depth into the
 shader and extends eight cells beyond the island. Water uses energy-conserving
 bloom and a bounded stylized shader output instead of direct PBR highlights in
-the +1.1 EV/ACES path, preventing the coastline from clipping to white. Exact
+the +1.1 EV/ACES path, preventing the coastline from clipping to white. The
+Unity 0-10 foam cutoff is normalized before sampling the averaged dual-noise
+field, foam color is applied once, and seasonal color remains a tint rather than
+replacing the authored cyan surface. Exact
 prefab/model renderer bindings can also replace a loaded glTF primitive with a
 typed material extension. The heavily reused shipping `Building.shader` now
 preserves its authored base/detail texture sampling, red-channel ambient
@@ -423,7 +430,10 @@ clearings cannot leak between world states. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
-the red wind, green snow, and blue bark-exclusion channels Bevy consumes.
+the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree
+renderers retain stable ground shadows but do not receive the incompatible
+static self-shadow generated for their custom wind-deformed vertices; an
+authored-color ambient floor keeps low-poly back faces from flickering black.
 Missing converted assets retain the resource-cube fallback.
 
 Content schema 21 also preserves each building prefab's authored base maximum
@@ -487,10 +497,13 @@ repeatable land/shoreline visual capture.
 land/water boundary for a repeatable depth-blend and edge-foam capture.
 `STREAM_TOWN_SMOKE_STATIC_RIG=1` frames the unanimated shipping Player rig, and
 `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames its live converted controller.
-The Player scene root receives the FBX-to-Unity +90-degree X-axis correction as
-one rigid transform shared by skin, joints, and equipment. Character retargeting
-keeps joint rotations but limits translation curves to the skeleton root and
-drops animation scale curves, avoiding double-applied imported bone offsets.
+The runtime uses `Characters.glb`'s single authoritative armature and matching
+renderer variants instead of applying animation curves to the TPose export's
+nine independent skins. Standalone Unity tracks resolve by rig-path suffix,
+keep joint rotations, limit translation curves to the skeleton root, and drop
+animation scale curves. The visible animated player remains shadow-free because
+Bevy's imported shadow-skinning path otherwise emits a terrain-sized invalid
+silhouette; all other world shadows remain enabled.
 `STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
 repeatable axis and retargeting checks.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while
@@ -540,8 +553,9 @@ can be captured without pointer or keyboard automation.
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips and translated standalone clips share Bevy
 animation graphs. The nine shipping enemy prefabs resolve their authored rig and
-full controller clip sets; the Player controller builds 19 converted clips retargeted onto 23
-bones in the Player GLB rest pose. An engine-independent interpreter evaluates
+full controller clip sets; the Player controller builds 19 converted clips on
+the single mesh-compatible `Characters.glb` armature, while standalone clip
+paths retarget onto matching suffixes in that hierarchy. An engine-independent interpreter evaluates
 typed parameters, trigger consumption, direct transitions, exit gates, and 1D
 threshold blending; runtime movement feeds the authored velocity/5 `Move Speed`
 parameter into Idle/Walk/Run. Converted renderer descendants receive cached Bevy

@@ -83,6 +83,14 @@ const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
+// The original Unity camera starts at the bottom of its 15-30 unit height
+// range. A 520-unit orthographic span was useful while the Bevy terrain was a
+// tiny prototype, but leaves the shipping-scale town illegibly far away.
+const DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT: f32 = 72.0;
+const MIN_TOWN_CAMERA_SCALE: f32 = 0.20;
+const MAX_TOWN_CAMERA_SCALE: f32 = 4.0;
+const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
+const PLAYER_ANIMATED_SOURCE_MODEL: &str = "Assets/Models/Characters/Characters.fbx";
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
 const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.glb";
 const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98fe";
@@ -1252,6 +1260,12 @@ struct Agent {
 
 #[derive(Component)]
 struct PlayerRigAxisCorrected;
+
+#[derive(Component)]
+struct PlayerRigAxisCorrectionRequired;
+
+#[derive(Component)]
+struct PlayerAnimatedRig;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 enum AgentGoal {
@@ -2747,7 +2761,7 @@ fn setup_rendering(
                 } else if role_audio_closeup {
                     30.0
                 } else {
-                    520.0
+                    DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT
                 },
             },
             ..OrthographicProjection::default_3d()
@@ -2765,12 +2779,17 @@ fn setup_rendering(
             },
             ..default()
         },
-        Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y),
+        default_town_camera_transform(),
     ));
     commands.spawn((
         DirectionalLight {
             illuminance: 14_000.0,
             shadow_maps_enabled: true,
+            // Converted low-poly assets use small, centimetre-derived scene
+            // transforms. A little more bias prevents coplanar faces from
+            // intermittently shadowing themselves at town-camera distances.
+            shadow_depth_bias: 0.04,
+            shadow_normal_bias: 2.5,
             ..default()
         },
         Transform::from_xyz(250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -3183,7 +3202,8 @@ fn apply_player_settings(
     let msaa = player_msaa(&settings.0);
     for (entity, mut projection) in &mut cameras {
         if let Projection::Orthographic(orthographic) = &mut *projection {
-            orthographic.scale = f32::from(settings.0.camera.field_of_view_degrees) / 60.0;
+            orthographic.scale =
+                town_camera_scale(f32::from(settings.0.camera.field_of_view_degrees) / 60.0);
         }
         let mut entity_commands = commands.entity(entity);
         entity_commands.insert(msaa);
@@ -8086,7 +8106,7 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
         } else {
-            Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
+            default_town_camera_transform()
         };
     }
     let town_hall_region = building_region(
@@ -8504,20 +8524,27 @@ fn generate_and_spawn_world(
             })
             .flatten();
         let real_scene = real_archetype
-            .and_then(default_archetype_scene)
+            .and_then(runtime_archetype_scene)
             .filter(|scene| {
                 asset_server.is_some() && converted_asset_exists(&asset_root.0, &scene.asset_path)
             });
-        let native_animation = real_archetype
-            .zip(real_scene)
-            .and_then(|(archetype, scene)| {
-                native_animation_request(archetype, scene, &presentation.0)
-            });
+        let native_animation =
+            real_archetype
+                .zip(real_scene.as_ref())
+                .and_then(|(archetype, scene)| {
+                    native_animation_request(archetype, scene, &presentation.0)
+                });
         let converted_animation = (native_animation.is_none()
             && std::env::var_os("STREAM_TOWN_SMOKE_STATIC_RIG").is_none())
         .then(|| {
             real_archetype
                 .and_then(|archetype| converted_animation_spec(archetype, &presentation.0))
+                .map(|mut spec| {
+                    if let Some(scene) = &real_scene {
+                        spec.rig_scene.clone_from(&scene.asset_path);
+                    }
+                    spec
+                })
         })
         .flatten();
         let base_scale = if real_scene.is_some() {
@@ -8572,9 +8599,20 @@ fn generate_and_spawn_world(
                 entity.insert(converted_animation);
             }
             if let Some(material) = real_archetype.and_then(|archetype| {
-                prefab_material_spec(archetype, scene, &presentation.0, &render)
+                prefab_material_spec(archetype, &scene, &presentation.0, &render)
             }) {
                 entity.insert(material);
+            }
+            if scene.asset_path != PLAYER_ANIMATED_MODEL_PATH
+                && real_archetype.is_some_and(|archetype| archetype.kind == ArchetypeKind::Player)
+            {
+                entity.insert(PlayerRigAxisCorrectionRequired);
+            } else if scene.asset_path == PLAYER_ANIMATED_MODEL_PATH {
+                // Bevy's shadow skinning pass does not currently agree with
+                // the imported Unity/Blender animation transforms for this
+                // armature. The visible mesh is correct, but its deformed
+                // shadow can span whole terrain chunks.
+                entity.insert(PlayerAnimatedRig);
             }
         } else {
             entity.insert((
@@ -8836,6 +8874,20 @@ fn default_archetype_scene(
         .or_else(|| archetype.scenes.first())
 }
 
+fn runtime_archetype_scene(archetype: &ArchetypeDef) -> Option<ArchetypeScene> {
+    let mut scene = default_archetype_scene(archetype)?.clone();
+    if archetype.kind == ArchetypeKind::Player {
+        // PlayerChar_TPose.glb contains nine independently exported skin rigs,
+        // while the animation FBX contains the one authoritative armature and
+        // the same renderer variants. Playing Unity curves on the former makes
+        // hands and heads orbit incompatible pivots. Use the animation model's
+        // own mesh + skeleton so embedded and manual clips share one rest pose.
+        PLAYER_ANIMATED_SOURCE_MODEL.clone_into(&mut scene.source_model);
+        PLAYER_ANIMATED_MODEL_PATH.clone_into(&mut scene.asset_path);
+    }
+    Some(scene)
+}
+
 fn resource_visual_archetype<'a>(
     content: &'a ContentCatalog,
     resource_kind: &StableId,
@@ -8945,7 +8997,15 @@ fn spawn_resource_visual(
                 entity.insert(MeshMaterial3d(material.clone()));
             }
             ResolvedMaterialHandle::Tree(material) => {
-                entity.insert(MeshMaterial3d(material.clone()));
+                entity.insert((
+                    MeshMaterial3d(material.clone()),
+                    // The visible tree vertices sway, but Bevy's generic
+                    // shadow pass cannot replay this custom vertex function.
+                    // Receiving the static self-shadow makes leaves flash
+                    // black as they move through it; the tree still casts a
+                    // stable shadow onto the ground.
+                    bevy::light::NotShadowReceiver,
+                ));
             }
             ResolvedMaterialHandle::Grass(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
@@ -14804,7 +14864,7 @@ fn upgrade_actor_placeholders(
         let Some(archetype) = content.0.archetypes.get(&agent.archetype) else {
             continue;
         };
-        let Some(scene) = default_archetype_scene(archetype)
+        let Some(scene) = runtime_archetype_scene(archetype)
             .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
         else {
             continue;
@@ -14813,10 +14873,13 @@ fn upgrade_actor_placeholders(
         // Animator controller remains authoritative whenever all of its
         // locomotion clips can be translated; native GLB animation is only the
         // fallback for assets without a complete converted controller.
-        let converted = converted_animation_spec(archetype, &presentation.0);
+        let converted = converted_animation_spec(archetype, &presentation.0).map(|mut spec| {
+            spec.rig_scene.clone_from(&scene.asset_path);
+            spec
+        });
         let native = converted
             .is_none()
-            .then(|| native_animation_request(archetype, scene, &presentation.0))
+            .then(|| native_animation_request(archetype, &scene, &presentation.0))
             .flatten();
         let base_scale = Vec3::splat(config.0.world.cell_size / 2.0);
         animation.base_scale = base_scale;
@@ -14839,8 +14902,13 @@ fn upgrade_actor_placeholders(
         } else if let Some(converted) = converted {
             actor.insert(converted);
         }
-        if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
+        if let Some(material) = prefab_material_spec(archetype, &scene, &presentation.0, &render) {
             actor.insert(material);
+        }
+        if scene.asset_path == PLAYER_ANIMATED_MODEL_PATH {
+            actor.insert(PlayerAnimatedRig);
+        } else if archetype.kind == ArchetypeKind::Player {
+            actor.insert(PlayerRigAxisCorrectionRequired);
         }
         remaining -= 1;
     }
@@ -15608,21 +15676,16 @@ fn enemy_model_node_names(content: &ContentCatalog) -> BTreeSet<String> {
 #[allow(clippy::type_complexity)]
 fn correct_player_rig_axis(
     mut commands: Commands,
-    content: Res<RuntimeContent>,
     mut agents: Query<
-        (Entity, &Agent, &mut Transform),
-        (Without<PlayerRigAxisCorrected>, With<WorldAssetRoot>),
+        (Entity, &mut Transform),
+        (
+            Without<PlayerRigAxisCorrected>,
+            With<WorldAssetRoot>,
+            With<PlayerRigAxisCorrectionRequired>,
+        ),
     >,
 ) {
-    for (entity, agent, mut transform) in &mut agents {
-        let is_player = content
-            .0
-            .archetypes
-            .get(&agent.archetype)
-            .is_some_and(|archetype| archetype.kind == ArchetypeKind::Player);
-        if !is_player {
-            continue;
-        }
+    for (entity, mut transform) in &mut agents {
         transform.rotation *= Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
         commands.entity(entity).insert(PlayerRigAxisCorrected);
     }
@@ -16195,10 +16258,12 @@ fn retargeted_animation_clip(
         .as_deref()
         .is_some_and(|path| path.contains("/Characters/") || path.contains("/Enemies/"));
     for track in &source.transform_tracks {
-        let Some((_, rest)) = targets.get(&track.target_path) else {
+        let Some((target_path, (_, rest))) =
+            animation_target_for_track(targets, &track.target_path)
+        else {
             continue;
         };
-        let target = track.target_path.split('/').collect::<AnimationTargetId>();
+        let target = target_path.split('/').collect::<AnimationTargetId>();
         // Unity's imported character clips contain baked position curves on
         // several spine bones. Scaling those deltas to a glTF rest pose pulls
         // the independently skinned body pieces apart. Character locomotion is
@@ -16217,6 +16282,22 @@ fn retargeted_animation_clip(
     }
     clip.set_duration(clip.duration().max(source.duration_seconds));
     Some(clip)
+}
+
+fn animation_target_for_track<'a>(
+    targets: &'a BTreeMap<String, (Entity, Transform)>,
+    track_path: &str,
+) -> Option<(&'a str, &'a (Entity, Transform))> {
+    targets
+        .get_key_value(track_path)
+        .map(|(path, target)| (path.as_str(), target))
+        .or_else(|| {
+            let suffix = format!("/{track_path}");
+            targets
+                .iter()
+                .find(|(path, _)| path.ends_with(&suffix))
+                .map(|(path, target)| (path.as_str(), target))
+        })
 }
 
 fn add_translation_curve(
@@ -17094,6 +17175,7 @@ fn same_animation_blend(
 fn apply_material_overrides(
     mut commands: Commands,
     specs: Query<&MaterialOverrideSpec>,
+    animated_player_rigs: Query<(), With<PlayerAnimatedRig>>,
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     mut renderers: Query<
@@ -17157,7 +17239,10 @@ fn apply_material_overrides(
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert(MeshMaterial3d(authored.clone()));
+                                .insert((
+                                    MeshMaterial3d(authored.clone()),
+                                    bevy::light::NotShadowReceiver,
+                                ));
                         }
                         ResolvedMaterialHandle::Grass(authored) => {
                             commands
@@ -17184,6 +17269,9 @@ fn apply_material_overrides(
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
                     }
+                }
+                if animated_player_rigs.contains(ancestor) {
+                    commands.entity(entity).insert(bevy::light::NotShadowCaster);
                 }
                 commands.entity(entity).insert(MaterialOverrideApplied);
                 break;
@@ -17408,18 +17496,18 @@ fn camera_controls(
     let Ok((mut transform, mut projection)) = cameras.single_mut() else {
         return;
     };
-    let mut direction = Vec2::ZERO;
+    let mut screen_direction = Vec2::ZERO;
     if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyA) {
-        direction.x -= 1.0;
+        screen_direction.x -= 1.0;
     }
     if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyD) {
-        direction.x += 1.0;
+        screen_direction.x += 1.0;
     }
     if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyS) {
-        direction.y -= 1.0;
+        screen_direction.y -= 1.0;
     }
     if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyW) {
-        direction.y += 1.0;
+        screen_direction.y += 1.0;
     }
     if !idle.0
         && settings.0.camera.mouse_controls
@@ -17429,16 +17517,19 @@ fn camera_controls(
     {
         let edge = 5.0;
         if cursor.x <= edge {
-            direction.x -= settings.0.camera.edge_scroll_sensitivity / 10.0;
+            screen_direction.x -= settings.0.camera.edge_scroll_sensitivity / 10.0;
         } else if cursor.x >= window.width() - edge {
-            direction.x += settings.0.camera.edge_scroll_sensitivity / 10.0;
+            screen_direction.x += settings.0.camera.edge_scroll_sensitivity / 10.0;
         }
         if cursor.y <= edge {
-            direction.y += settings.0.camera.edge_scroll_sensitivity / 10.0;
+            // Winit cursor Y is top-down; convert it to Unity's bottom-up
+            // screen vector before applying the shipping screen-to-world map.
+            screen_direction.y += settings.0.camera.edge_scroll_sensitivity / 10.0;
         } else if cursor.y >= window.height() - edge {
-            direction.y -= settings.0.camera.edge_scroll_sensitivity / 10.0;
+            screen_direction.y -= settings.0.camera.edge_scroll_sensitivity / 10.0;
         }
     }
+    let direction = unity_camera_world_direction(screen_direction);
     if direction != Vec2::ZERO {
         let speed = 42.0 * settings.0.camera.keyboard_pan_sensitivity * time.delta_secs();
         let direction = direction.normalize();
@@ -17463,7 +17554,7 @@ fn camera_controls(
         1.0
     };
     if let Projection::Orthographic(orthographic) = &mut *projection {
-        orthographic.scale = (orthographic.scale * zoom_factor).clamp(0.35, 4.0);
+        orthographic.scale = town_camera_scale(orthographic.scale * zoom_factor);
     }
     if let Some(request) = requests.0.pop_front() {
         if request.reset {
@@ -17487,13 +17578,21 @@ fn camera_controls(
                                 amount
                             };
                             orthographic.scale =
-                                (orthographic.scale * 1.12_f32.powf(signed)).clamp(0.35, 4.0);
+                                town_camera_scale(orthographic.scale * 1.12_f32.powf(signed));
                         }
                     }
                 }
             }
         }
     }
+}
+
+fn unity_camera_world_direction(screen_direction: Vec2) -> Vec2 {
+    Vec2::new(screen_direction.y, -screen_direction.x)
+}
+
+fn town_camera_scale(scale: f32) -> f32 {
+    scale.clamp(MIN_TOWN_CAMERA_SCALE, MAX_TOWN_CAMERA_SCALE)
 }
 
 fn camera_ground_focus(transform: &Transform) -> Vec2 {
@@ -17723,7 +17822,10 @@ fn sync_active_pets(
 }
 
 fn default_town_camera_transform() -> Transform {
-    Transform::from_xyz(360.0, 420.0, 360.0).looking_at(Vec3::ZERO, Vec3::Y)
+    // Preserve the old isometric pitch while bringing the physical camera
+    // distance into line with the 72/520 viewport-height correction. This also
+    // keeps the visible town inside Bevy's directional-shadow cascades.
+    Transform::from_xyz(50.0, 58.0, 50.0).looking_at(Vec3::ZERO, Vec3::Y)
 }
 
 fn ping_pointer_scale(elapsed_seconds: f32) -> f32 {
@@ -26376,6 +26478,54 @@ mod tests {
     }
 
     #[test]
+    fn camera_screen_directions_match_the_shipping_unity_mapping() {
+        assert_eq!(
+            unity_camera_world_direction(Vec2::new(-1.0, 0.0)),
+            Vec2::new(0.0, 1.0),
+            "left edge moves toward +Z"
+        );
+        assert_eq!(
+            unity_camera_world_direction(Vec2::new(1.0, 0.0)),
+            Vec2::new(0.0, -1.0),
+            "right edge moves toward -Z"
+        );
+        assert_eq!(
+            unity_camera_world_direction(Vec2::new(0.0, 1.0)),
+            Vec2::new(1.0, 0.0),
+            "top edge moves toward +X"
+        );
+        assert_eq!(
+            unity_camera_world_direction(Vec2::new(0.0, -1.0)),
+            Vec2::new(-1.0, 0.0),
+            "bottom edge moves toward -X"
+        );
+    }
+
+    #[test]
+    fn town_camera_starts_close_and_can_reach_unity_scale_detail() {
+        assert!((DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT - 72.0).abs() < f32::EPSILON);
+        assert!((town_camera_scale(0.0) - MIN_TOWN_CAMERA_SCALE).abs() < f32::EPSILON);
+        assert!((town_camera_scale(10.0) - MAX_TOWN_CAMERA_SCALE).abs() < f32::EPSILON);
+        let closest_span =
+            DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT * town_camera_scale(f32::NEG_INFINITY);
+        assert!(
+            closest_span < 18.0,
+            "minimum span should reach approximately Unity's 15-unit close view"
+        );
+    }
+
+    #[test]
+    fn player_runtime_uses_the_single_animation_armature() {
+        let content = embedded_content();
+        let player =
+            archetype_by_source(&content, ArchetypeKind::Player, "Player_Character.prefab")
+                .unwrap();
+        let scene = runtime_archetype_scene(player).unwrap();
+        assert_eq!(scene.asset_path, PLAYER_ANIMATED_MODEL_PATH);
+        assert_eq!(scene.source_model, PLAYER_ANIMATED_SOURCE_MODEL);
+    }
+
+    #[test]
     fn game_menu_exposes_state_appropriate_actions_and_save_availability() {
         let in_game = game_menu_text(GameState::InGame, 2, false);
         assert!(in_game.contains("STREAM TOWN MENU"));
@@ -32380,6 +32530,12 @@ mod tests {
         let retargeted = retargeted_animation_clip(idle, &targets).unwrap();
         assert!(!retargeted.curves().is_empty());
         assert!(retargeted.duration() >= idle.duration_seconds);
+        let prefixed_targets: BTreeMap<_, _> = targets
+            .iter()
+            .map(|(path, target)| (format!("CharacterArmature/Body/{path}"), *target))
+            .collect();
+        let prefixed = retargeted_animation_clip(idle, &prefixed_targets).unwrap();
+        assert_eq!(prefixed.curves().len(), retargeted.curves().len());
         assert!(
             idle.rig_asset_path
                 .as_deref()

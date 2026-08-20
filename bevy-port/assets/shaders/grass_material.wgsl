@@ -3,7 +3,7 @@
     mesh_functions,
     mesh_view_bindings as view_bindings,
     pbr_fragment::pbr_input_from_standard_material,
-    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing, visibility_range_dither},
     view_transformations::position_world_to_clip,
 }
 
@@ -119,6 +119,9 @@ fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
+#ifdef VISIBILITY_RANGE_DITHER
+    visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     var vertex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
 #ifdef VERTEX_COLORS

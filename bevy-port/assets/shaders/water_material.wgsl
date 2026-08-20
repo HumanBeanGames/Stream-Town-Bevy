@@ -101,14 +101,22 @@ fn fragment(
             / water_material.depth_foam_controls.x,
         depth,
     );
+    // `_FoamCuttoff` is serialized by Unity on a 0-10 inspector scale. The
+    // earlier port subtracted it from one and compared it with the *sum* of two
+    // 0-1 samples, so virtually every shallow pixel became solid foam.
     let foam_threshold = clamp(
-        1.0 - shoreline * water_material.depth_foam_controls.z * 0.1,
+        water_material.depth_foam_controls.z * 0.1,
         0.05,
-        1.95,
+        0.95,
     );
-    let foam = smoothstep(foam_threshold, foam_threshold + 0.22, foam_a + foam_b)
-        * shoreline;
-    color = mix(color, water_material.foam_color, foam);
+    let foam_noise = (foam_a + foam_b) * 0.5;
+    let foam = smoothstep(
+        foam_threshold,
+        min(foam_threshold + 0.14, 1.0),
+        foam_noise,
+    ) * shoreline;
+    let foam_colour_strength = foam * water_material.scale_foam_ice.z;
+    color = mix(color, water_material.foam_color, foam_colour_strength);
 
     let ice_pattern = smoothstep(0.2, 0.8, broad.b - primary * 0.35);
     color = mix(
@@ -116,9 +124,16 @@ fn fragment(
         water_material.ice_color,
         ice_pattern * water_material.scale_foam_ice.w,
     );
-    let tinted_water = color.rgb * water_material.season_tint.rgb;
+    // Seasonal colour is a tint, not a replacement albedo. Multiplying all the
+    // way down to the palette target made transparent water expose the dark
+    // terrain checker underneath. Retain most of the authored cyan surface.
+    let tinted_water = mix(
+        color.rgb,
+        color.rgb * water_material.season_tint.rgb,
+        0.35,
+    );
     pbr_input.material.base_color = vec4<f32>(
-        mix(tinted_water, water_material.foam_color.rgb, foam),
+        tinted_water,
         mix(
             mix(1.0, water_material.season_tint.a, depth),
             water_material.scale_foam_ice.z,
@@ -131,23 +146,16 @@ fn fragment(
     );
 
     var out: FragmentOutput;
-    // Unity's stylized water colour was authored as the final surface look.
-    // Feeding it through Bevy's physical sun response produced HDR values far
-    // above one at grazing coastline angles, turning the ocean into a white
-    // mirror. Keep the authored colour bounded and still run Bevy's fog/output
-    // processing below.
-    let bounded = clamp(
-        pbr_input.material.base_color.rgb,
-        vec3<f32>(0.0),
-        vec3<f32>(1.0),
-    );
-    // Foam and the animated alpha textures may reach authored white, but the
-    // Unity look never turns the whole coast into an HDR-white mirror. Keep a
-    // visibly blue ceiling and enough opacity that the black clear target does
-    // not drain the stylized surface colour.
+    // Unity authored this as a stylized final colour, so keep it unlit to avoid
+    // the grazing-angle HDR mirror. Compress overbright foam uniformly instead
+    // of clipping each RGB channel: the latter collapsed the surface, depth,
+    // and foam into a flat cyan strip.
+    let authored = max(pbr_input.material.base_color.rgb, vec3<f32>(0.0));
+    let peak = max(authored.r, max(authored.g, authored.b));
+    let bounded = authored / max(1.0, peak / 0.92);
     out.color = vec4<f32>(
-        min(bounded, vec3<f32>(0.18, 0.48, 0.72)),
-        max(pbr_input.material.base_color.a, 0.88),
+        bounded,
+        clamp(pbr_input.material.base_color.a, 0.86, 0.94),
     );
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;

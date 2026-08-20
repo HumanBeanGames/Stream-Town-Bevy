@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -20,10 +20,15 @@ mistaken for production-ready systems.
   loads restore their omitted 0.01 glTF scene-node scale. Generated terrain is
   one continuous render mesh/collider rather than independently lit LOD chunks,
   eliminating chunk seams. Water uses energy-conserving bloom and bounded color
-  output so the high-exposure coastline cannot clip to white. Finally, the
-  Player root receives the shipping FBX axis conversion as one rigid transform,
-  and character retargeting no longer reapplies non-root translation/scale
-  curves that distort imported rigs.
+  output so the high-exposure coastline cannot clip to white; normalized foam
+  cutoff, single-pass foam color, and partial seasonal tint keep its authored
+  cyan depth surface visible. Trees no longer receive an incompatible static
+  shadow while their custom vertices sway. The Player now uses the animation
+  FBX's single mesh-compatible armature instead of the TPose asset's nine
+  independent skins, and suffix-resolved standalone tracks no longer detach
+  body parts. The player-only broken animated shadow-skinning output is disabled
+  while all other world shadows remain live. Camera edge mapping, default
+  distance/span, and close-zoom range now follow the shipping Unity controller.
 - A Bevy 0.19/Rust 1.95 workspace split into domain, game, tools, migration, and
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
@@ -380,10 +385,11 @@ mistaken for production-ready systems.
   schema 13 assigns model-GUID/local-ID stable IDs and exact GLB indexes to 122
   reachable embedded FBX clips. All nine shipping enemy prefabs resolve their
   authored model rig and full controller clip set instead of falling back to a
-  default-pose animation. The Player locomotion controller
-  resolves stable Idle and Walk clip IDs, builds Bevy `AnimationClip` assets
-  from the converted Unity tracks, retargets curve deltas onto the converted
-  GLB rest pose, and drives a native `AnimationGraph` across 23 bone targets.
+  default-pose animation. The Player locomotion controller uses the single-skin
+  `Characters.glb` scene that owns its 25 embedded clips, resolves stable Idle
+  and Walk clip IDs, builds Bevy `AnimationClip` assets from the converted Unity
+  tracks, resolves standalone paths by hierarchy suffix onto the compatible GLB
+  rest pose, and drives a native `AnimationGraph` across matching bone targets.
   The engine-independent controller runtime initializes typed Float/Integer/
   Boolean/Trigger parameters, evaluates AnyState and state transitions with
   exit-time gates, consumes triggers, and produces threshold-weighted two-clip
@@ -415,7 +421,9 @@ mistaken for production-ready systems.
   season/weather tint. The generated 217×217 water mesh encodes terrain depth
   for shallow/deep color and extends eight cells beyond the island as deep
   ocean. Energy-conserving bloom, high roughness, zero reflectance, and bounded
-  shader color prevent shoreline highlights from blowing out under ACES.
+  shader color prevent shoreline highlights from blowing out under ACES. Its
+  Unity 0-10 foam cutoff is normalized against averaged dual noise, foam color
+  is applied once, and seasonal tint retains most of the authored cyan albedo.
 - Exact prefab/model renderer bindings can replace a glTF primitive's standard
   material with a typed custom extension. The 688 reachable references to the
   shared `Building_Material` now use a WGSL port of `Building.shader`, including
@@ -698,6 +706,10 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
+- Exact animated-player shadow parity. The visible single-armature rig and full
+  controller are live, but Bevy's imported shadow-skinning pass produces an
+  invalid terrain-sized silhouette for this converted asset, so only the player
+  renderer's shadow casting is disabled pending a custom compatible shadow pass.
 - Any remaining animation-event behavior discovered outside the ten reachable
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable
