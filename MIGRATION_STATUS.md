@@ -668,6 +668,16 @@ mistaken for production-ready systems.
   cleaning node deletion, empty-group deletion, and metadata/prerequisite edits
   all share cycle/dangling-reference validation plus undo/redo. The searchable
   tier minimap remains live after each mutation.
+- The external authoring suite now separates authoritative game configuration
+  from per-player settings. It edits every shipping role stat/reference and
+  equipment binding, all terrain scale/resource-density inputs, all converted
+  foliage noise layers and model variants, and expanded technology references.
+  Role, foliage, and technology edits share catalog-wide validation and
+  undo/redo. Project configuration and the content catalog use atomic temporary
+  files, `.bak` recovery copies, and reload/compare verification. The world lab
+  previews elevation/water, occupancy, resources, selected foliage layers, and
+  A* routes through the production deterministic generator. A Windows launcher
+  and a monitor-free `--validate-authoring` mode are included.
 - A 300-agent presentation LOD: 16 actors use authored GLB rigs and shared
   animation graphs while the remaining crowd uses lightweight capsule visuals
   without changing authoritative gameplay or persistence. The GPU gate emits

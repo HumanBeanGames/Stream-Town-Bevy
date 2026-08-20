@@ -10,20 +10,30 @@ here.
   vertical-slice benchmark.
 - `stream_town_tools`: focused content, migration, world-generation, navigation,
   Twitch, validation, and runtime tooling. Its catalog browser, validated
-  technology editor with undo/redo, occupancy/path lab, prefab/archetype browser,
+  role and technology editors with shared undo/redo, multi-layer terrain,
+  foliage, occupancy, resource, and path lab, prefab/archetype browser,
   material/texture and Animator-controller diagnostics, and Twitch
   device-OAuth/vault diagnostics are functional. Its Runtime tab can launch or
   attach to the game, inject validated commands, request save/load/frame
   capture, and inspect stable world/session/profiling status.
-
-The Technology tab supports searchable group/node authoring rather than only
-inspection: create or delete groups and nodes, move nodes between groups, edit
-prerequisites and metadata, validate cycles/dangling references, undo/redo, and
-save the complete content catalog atomically. Catalog saves preserve a `.bak`
-copy and are reloaded and revalidated before success is reported.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
+
+The Technology tab supports searchable group/node authoring rather than only
+inspection: create or delete groups and nodes, move nodes between groups, edit
+prerequisites, unlocks, objectives, icons, and metadata, validate cycles/dangling
+references, undo/redo, and save the complete content catalog atomically. Catalog
+saves preserve a `.bak` copy and are reloaded and revalidated before success is
+reported.
+
+The Game Authority tab edits the source-controlled simulation configuration and
+can also write a machine-local runtime override. The Roles tab covers every
+persisted balance, station, target, ability, animation, and equipment binding.
+The World + Nav tab edits the Unity-scale terrain inputs and every converted
+foliage noise layer, then renders elevation, occupancy, resource, and foliage
+previews using the production deterministic generator. See
+[`AUTHORING.md`](AUTHORING.md) for paths and the safe-save workflow.
 
 ## Commands
 
@@ -33,6 +43,7 @@ cargo xtask validate
 cargo test --workspace
 cargo run -p stream_town_game
 cargo run -p stream_town_tools
+cargo run -p stream_town_tools -- --validate-authoring
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
 cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
@@ -40,6 +51,10 @@ cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 cargo run -p xtask -- package-windows --output dist
 ```
+
+On Windows, `scripts\launch-tools.ps1` launches the authoring suite from any
+working directory. Pass `-Release` for an optimized build or `-ValidateOnly`
+for a headless authoring-data check.
 
 The tools Runtime tab launches the game with an opt-in atomic control directory
 at `.stream-town/runtime-console`. A separately launched game can be attached by

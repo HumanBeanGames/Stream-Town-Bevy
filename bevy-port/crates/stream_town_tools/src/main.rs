@@ -12,10 +12,11 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
-    BuildingHealthDisplayMode, ChatCommand, ContentCatalog, DisplayMode, GameConfig,
-    GeneratedWorld, GridPos, NameDisplayMode, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PresentationCatalog, RuntimeConsoleAction, RuntimeConsoleRequest,
-    RuntimeConsoleStatus, RuntimeConsoleStore, StableId, TechGroup, TechNode,
+    BuildingHealthDisplayMode, ChatCommand, ContentCatalog, DisplayMode, FoliageHabitat,
+    FoliageLayerDef, GameConfig, GeneratedWorld, GridPos, NameDisplayMode, PlayerSettings,
+    PlayerSettingsStore, PostProcessAntiAliasing, PresentationCatalog, RoleDef, RoleEquipmentDef,
+    RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus, RuntimeConsoleStore,
+    StableId, TechGroup, TechNode,
 };
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
@@ -25,7 +26,9 @@ use stream_town_game::twitch::{
 enum ToolTab {
     #[default]
     Migration,
+    Authority,
     Content,
+    Roles,
     Technology,
     World,
     Runtime,
@@ -36,9 +39,11 @@ enum ToolTab {
 }
 
 impl ToolTab {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 11] = [
         Self::Migration,
+        Self::Authority,
         Self::Content,
+        Self::Roles,
         Self::Technology,
         Self::World,
         Self::Runtime,
@@ -51,7 +56,9 @@ impl ToolTab {
     const fn label(self) -> &'static str {
         match self {
             Self::Migration => "Migration",
+            Self::Authority => "Game Authority",
             Self::Content => "Content",
+            Self::Roles => "Roles",
             Self::Technology => "Technology",
             Self::World => "World + Nav",
             Self::Runtime => "Runtime",
@@ -70,6 +77,7 @@ struct ToolState {
     command: String,
     status: String,
     config: GameConfig,
+    config_path: String,
     player_settings: PlayerSettings,
     catalog: ContentCatalog,
     presentation: PresentationCatalog,
@@ -81,6 +89,14 @@ struct ToolState {
     selected_group: Option<StableId>,
     technology_draft: Option<TechnologyDraft>,
     catalog_path: String,
+    role_search: String,
+    selected_role: Option<StableId>,
+    role_draft: Option<RoleDraft>,
+    new_role_id: String,
+    new_role_name: String,
+    selected_foliage: Option<StableId>,
+    foliage_draft: Option<FoliageLayerDef>,
+    world_preview_layer: WorldPreviewLayer,
     new_technology_id: String,
     new_technology_name: String,
     new_group_id: String,
@@ -125,8 +141,55 @@ struct TechnologyDraft {
     tier: i32,
     group: Option<StableId>,
     prerequisites: String,
+    unlocks: String,
+    objectives: String,
+    icon_path: String,
     initially_unlocked: bool,
     unavailable: bool,
+}
+
+#[derive(Clone)]
+struct RoleDraft {
+    id: StableId,
+    value: RoleDef,
+    resource: String,
+    station_kinds: String,
+    target_kinds: String,
+    granted_abilities: String,
+    has_equipment: bool,
+    body_nodes: [String; 3],
+    left_hand_node: String,
+    right_hand_node: String,
+    helmet_node: String,
+    carry_animation: String,
+    left_hand_permanent: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum WorldPreviewLayer {
+    #[default]
+    Elevation,
+    Navigation,
+    Resources,
+    Foliage,
+}
+
+impl WorldPreviewLayer {
+    const ALL: [Self; 4] = [
+        Self::Elevation,
+        Self::Navigation,
+        Self::Resources,
+        Self::Foliage,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Elevation => "Elevation + water",
+            Self::Navigation => "Navigation occupancy",
+            Self::Resources => "Resources",
+            Self::Foliage => "Foliage layers",
+        }
+    }
 }
 
 impl Default for ToolState {
@@ -138,13 +201,27 @@ impl Default for ToolState {
             .validate()
             .expect("checked-in content catalog must validate");
         let selected_group = catalog.technology.groups.keys().next().cloned();
+        let selected_role = catalog.roles.keys().next().cloned();
+        let role_draft = selected_role
+            .as_ref()
+            .and_then(|id| role_draft(&catalog, id));
+        let selected_foliage = catalog.foliage.first().map(|layer| layer.id.clone());
+        let foliage_draft = selected_foliage.as_ref().and_then(|id| {
+            catalog
+                .foliage
+                .iter()
+                .find(|layer| &layer.id == id)
+                .cloned()
+        });
         let presentation: PresentationCatalog =
             ron::from_str(include_str!("../../../assets/content/presentation.ron"))
                 .expect("checked-in presentation catalog must parse");
         presentation
             .validate()
             .expect("checked-in presentation catalog must validate");
-        let config = stream_town_game::load_runtime_config().unwrap_or_default();
+        let config_path = default_config_path();
+        let config = load_game_config(config_path.to_string_lossy().as_ref())
+            .expect("checked-in game configuration must parse and validate");
         let player_settings_store =
             PlayerSettingsStore::new(stream_town_game::player_settings_path());
         let player_settings = player_settings_store.load().unwrap_or_default();
@@ -161,6 +238,7 @@ impl Default for ToolState {
             command: "!join".to_owned(),
             status: "Ready. Migration operations are read-only by default.".to_owned(),
             config,
+            config_path: config_path.display().to_string(),
             player_settings,
             catalog,
             presentation,
@@ -172,6 +250,14 @@ impl Default for ToolState {
             selected_group,
             technology_draft: None,
             catalog_path: default_catalog_path().display().to_string(),
+            role_search: String::new(),
+            selected_role,
+            role_draft,
+            new_role_id: "role:new".to_owned(),
+            new_role_name: "New Role".to_owned(),
+            selected_foliage,
+            foliage_draft,
+            world_preview_layer: WorldPreviewLayer::default(),
             new_technology_id: "technology:new".to_owned(),
             new_technology_name: "New Technology".to_owned(),
             new_group_id: "technology_group:new".to_owned(),
@@ -194,7 +280,12 @@ impl Default for ToolState {
     }
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|argument| argument == "--validate-authoring") {
+        let summary = validate_authoring_assets()?;
+        println!("{summary}");
+        return Ok(());
+    }
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -214,6 +305,7 @@ fn main() {
         )
         .add_systems(EguiPrimaryContextPass, tools_ui)
         .run();
+    Ok(())
 }
 
 #[derive(Resource, Clone, Copy, Eq, PartialEq)]
@@ -256,7 +348,9 @@ fn tools_ui(
     });
     egui::CentralPanel::default().show(&mut viewport_ui, |ui| match state.tab {
         ToolTab::Migration => migration_tab(ui, &mut state),
+        ToolTab::Authority => authority_tab(ui, &mut state),
         ToolTab::Content => content_tab(ui, &state),
+        ToolTab::Roles => roles_tab(ui, &mut state),
         ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::World => world_tab(ui, &mut state),
         ToolTab::Runtime => runtime_tab(ui, &mut state),
@@ -303,6 +397,181 @@ fn migration_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.label(
         "Manifest stages: discovered -> referenced -> converted -> manually reviewed -> packaged",
     );
+}
+
+fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Authoritative game settings");
+    ui.label(
+        "These values drive deterministic world creation and simulation. Save the project baseline for source-controlled defaults, or write a local runtime override for immediate testing.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Project config");
+        ui.text_edit_singleline(&mut state.config_path);
+        if ui.button("Reload").clicked() {
+            state.status = match load_game_config(&state.config_path) {
+                Ok(config) => {
+                    state.config = config;
+                    state.generated_world = None;
+                    "Reloaded and validated authoritative game configuration".to_owned()
+                }
+                Err(error) => format!("Could not reload game configuration: {error:#}"),
+            };
+        }
+        if ui.button("Validate").clicked() {
+            state.status = match state.config.validate() {
+                Ok(()) => "Authoritative game configuration is valid".to_owned(),
+                Err(error) => format!("Game configuration error: {error}"),
+            };
+        }
+        if ui.button("Save project baseline").clicked() {
+            state.status = match save_game_config(&state.config, &state.config_path) {
+                Ok(path) => format!("Saved project game configuration to {}", path.display()),
+                Err(error) => format!("Could not save project game configuration: {error:#}"),
+            };
+        }
+        if ui.button("Write local runtime override").clicked() {
+            state.status = match save_runtime_config(&state.config) {
+                Ok(path) => format!("Saved runtime override to {}", path.display()),
+                Err(error) => format!("Could not save runtime override: {error:#}"),
+            };
+        }
+    });
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.separator();
+        ui.collapsing("Window and boot", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Title");
+                ui.text_edit_singleline(&mut state.config.window.title);
+            });
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut state.config.window.width)
+                        .range(640..=16_384)
+                        .prefix("Width "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut state.config.window.height)
+                        .range(480..=8_640)
+                        .prefix("Height "),
+                );
+            });
+        });
+        ui.collapsing("Simulation", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut state.config.gameplay.initial_agents)
+                    .range(1..=5_000)
+                    .prefix("Initial actors "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.config.gameplay.agent_speed_cells_per_second)
+                    .range(0.01..=100.0)
+                    .speed(0.05)
+                    .prefix("Actor speed ")
+                    .suffix(" cells/s"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.config.gameplay.repath_interval_seconds)
+                    .range(0.01..=60.0)
+                    .speed(0.05)
+                    .prefix("Repath interval ")
+                    .suffix(" s"),
+            );
+        });
+        ui.collapsing("Starting town resources", |ui| {
+            let ids: Vec<_> = state
+                .config
+                .gameplay
+                .starting_town_resources
+                .keys()
+                .cloned()
+                .collect();
+            egui::Grid::new("authority_starting_resources")
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.strong("Stable ID");
+                    ui.strong("Starting amount");
+                    ui.end_row();
+                    for id in ids {
+                        ui.monospace(id.to_string());
+                        if let Some(amount) =
+                            state.config.gameplay.starting_town_resources.get_mut(&id)
+                        {
+                            ui.add(egui::DragValue::new(amount).range(0..=u32::MAX));
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+        ui.collapsing("Base resource capacities", |ui| {
+            ui.label("Resources omitted from this table are intentionally unbounded.");
+            let ids: Vec<_> = state
+                .config
+                .gameplay
+                .base_town_resource_capacity
+                .keys()
+                .cloned()
+                .collect();
+            egui::Grid::new("authority_resource_capacities")
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.strong("Stable ID");
+                    ui.strong("Capacity");
+                    ui.end_row();
+                    for id in ids {
+                        ui.monospace(id.to_string());
+                        if let Some(amount) = state
+                            .config
+                            .gameplay
+                            .base_town_resource_capacity
+                            .get_mut(&id)
+                        {
+                            ui.add(egui::DragValue::new(amount).range(0..=u32::MAX));
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+        ui.collapsing("Time, lighting, and emission", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut state.config.time.seconds_per_day)
+                    .range(1..=86_400)
+                    .suffix(" seconds/day"),
+            );
+            ui.add(
+                egui::Slider::new(&mut state.config.time.daylight_per_thousand, 1..=999)
+                    .text("Daylight fraction (per thousand)"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.config.time.transition_seconds)
+                    .range(0..=3_600)
+                    .suffix(" transition seconds"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.config.time.day_light_intensity_milli)
+                    .range(1..=65_535)
+                    .suffix(" day intensity milli"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.config.time.night_light_intensity_milli)
+                    .range(0..=65_535)
+                    .suffix(" night intensity milli"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.config.time.max_building_emission_milli)
+                    .range(0..=65_535)
+                    .suffix(" max building emission milli"),
+            );
+        });
+        ui.separator();
+        match state.config.validate() {
+            Ok(()) => ui.colored_label(egui::Color32::LIGHT_GREEN, "Configuration is valid"),
+            Err(error) => ui.colored_label(
+                egui::Color32::LIGHT_RED,
+                format!("Configuration is not saveable: {error}"),
+            ),
+        };
+    });
 }
 
 fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
@@ -803,28 +1072,329 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
     });
 }
 
+fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Role authoring");
+    ui.label(
+        "Edit authoritative role balance, targeting, station compatibility, animation contracts, and equipment node bindings. Changes remain a draft until the complete catalog validates.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(!state.undo_catalogs.is_empty(), egui::Button::new("Undo"))
+            .clicked()
+        {
+            undo_catalog_edit(state);
+        }
+        if ui
+            .add_enabled(!state.redo_catalogs.is_empty(), egui::Button::new("Redo"))
+            .clicked()
+        {
+            redo_catalog_edit(state);
+        }
+        if ui.button("Validate catalog").clicked() {
+            state.status = match state.catalog.validate() {
+                Ok(()) => format!("Catalog valid: {} roles", state.catalog.roles.len()),
+                Err(error) => format!("Catalog error: {error}"),
+            };
+        }
+        if ui.button("Save validated catalog").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved validated content catalog to {}", path.display()),
+                Err(error) => format!("Could not save content catalog: {error:#}"),
+            };
+        }
+        ui.label("Search");
+        ui.text_edit_singleline(&mut state.role_search);
+    });
+    ui.horizontal(|ui| {
+        ui.label("Catalog path");
+        ui.text_edit_singleline(&mut state.catalog_path);
+        if ui.button("Reload catalog").clicked() {
+            state.status = match reload_content_catalog(state) {
+                Ok(()) => "Reloaded and validated content catalog".to_owned(),
+                Err(error) => format!("Could not reload content catalog: {error:#}"),
+            };
+        }
+    });
+
+    let search = state.role_search.trim().to_ascii_lowercase();
+    let choices: Vec<_> = state
+        .catalog
+        .roles
+        .iter()
+        .filter(|(id, role)| {
+            search.is_empty()
+                || id.as_str().contains(&search)
+                || role.display_name.to_ascii_lowercase().contains(&search)
+        })
+        .map(|(id, role)| (id.clone(), role.display_name.clone()))
+        .collect();
+    let mut selected = None;
+    egui::ScrollArea::horizontal()
+        .id_salt("role_selector")
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (id, name) in &choices {
+                    if ui
+                        .selectable_label(
+                            state.selected_role.as_ref() == Some(id),
+                            format!("{name}  ({id})"),
+                        )
+                        .clicked()
+                    {
+                        selected = Some(id.clone());
+                    }
+                }
+            });
+        });
+    if let Some(id) = selected {
+        state.selected_role = Some(id.clone());
+        state.role_draft = role_draft(&state.catalog, &id);
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Duplicate as stable ID");
+        ui.text_edit_singleline(&mut state.new_role_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_role_name);
+        if ui
+            .add_enabled(
+                state.selected_role.is_some(),
+                egui::Button::new("Duplicate role"),
+            )
+            .clicked()
+        {
+            state.status = match duplicate_selected_role(state) {
+                Ok(()) => "Duplicated role into a validated catalog draft".to_owned(),
+                Err(error) => format!("Role duplication rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_role.is_some(),
+                egui::Button::new("Delete role"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_role(state) {
+                Ok(()) => "Deleted unreferenced role".to_owned(),
+                Err(error) => format!("Role deletion rejected: {error}"),
+            };
+        }
+    });
+
+    let mut apply = false;
+    let mut reset = false;
+    if let Some(draft) = state.role_draft.as_mut() {
+        ui.separator();
+        ui.monospace(draft.id.to_string());
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.collapsing("Identity and behavior", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Display name");
+                    ui.text_edit_singleline(&mut draft.value.display_name);
+                    ui.label("Action animation");
+                    ui.text_edit_singleline(&mut draft.value.action_animation);
+                    ui.add(
+                        egui::DragValue::new(&mut draft.value.action_animation_variants)
+                            .range(1..=u8::MAX)
+                            .prefix("Variants "),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut draft.value.has_user_limit, "Limit users");
+                    ui.add(
+                        egui::DragValue::new(&mut draft.value.base_max_users)
+                            .prefix("Base max users "),
+                    );
+                    ui.checkbox(
+                        &mut draft.value.targets_all,
+                        "Targets all matching entities",
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Produced/carried resource (optional stable ID)");
+                    ui.text_edit_singleline(&mut draft.resource);
+                });
+                ui.label("Station kind stable IDs (comma separated)");
+                ui.text_edit_singleline(&mut draft.station_kinds);
+                ui.label("Target kind stable IDs (comma separated)");
+                ui.text_edit_singleline(&mut draft.target_kinds);
+                ui.label("Granted ability stable IDs (comma separated)");
+                ui.text_edit_singleline(&mut draft.granted_abilities);
+            });
+            ui.collapsing("Progression and action balance", |ui| {
+                egui::Grid::new("role_balance_grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        role_u16(
+                            ui,
+                            "Movement multiplier (per thousand)",
+                            &mut draft.value.movement_speed_multiplier_per_thousand,
+                        );
+                        role_u32(
+                            ui,
+                            "Experience multiplier (per thousand)",
+                            &mut draft.value.experience_multiplier_per_thousand,
+                        );
+                        role_u32(
+                            ui,
+                            "Base action amount",
+                            &mut draft.value.base_action_amount,
+                        );
+                        role_u32(
+                            ui,
+                            "Action/level (milli)",
+                            &mut draft.value.action_amount_per_level_milli,
+                        );
+                        role_u32(
+                            ui,
+                            "Base action cadence (ms)",
+                            &mut draft.value.base_action_milliseconds,
+                        );
+                        role_u32(
+                            ui,
+                            "Cadence reduction/level (ms)",
+                            &mut draft.value.action_milliseconds_reduction_per_level,
+                        );
+                        role_u32(
+                            ui,
+                            "Base action range (milli-cells)",
+                            &mut draft.value.base_action_range_milli_cells,
+                        );
+                        role_u32(
+                            ui,
+                            "Action range/level (milli-cells)",
+                            &mut draft.value.action_range_milli_cells_per_level,
+                        );
+                        role_u32(ui, "Base health", &mut draft.value.base_health);
+                        role_u32(
+                            ui,
+                            "Health/level (milli)",
+                            &mut draft.value.health_per_level_milli,
+                        );
+                        role_i32(
+                            ui,
+                            "Base health regeneration/s",
+                            &mut draft.value.base_health_regen_per_second,
+                        );
+                        role_u32(
+                            ui,
+                            "Health regeneration/level (milli/s)",
+                            &mut draft.value.health_regen_milli_per_second_per_level,
+                        );
+                        role_i32(
+                            ui,
+                            "Base damage reduction (%)",
+                            &mut draft.value.base_damage_reduction_percent,
+                        );
+                        role_u32(
+                            ui,
+                            "Damage reduction/level (milli-%)",
+                            &mut draft.value.damage_reduction_milli_percent_per_level,
+                        );
+                        role_u32(
+                            ui,
+                            "Base movement (milli-cells/s)",
+                            &mut draft.value.base_movement_speed_milli_cells_per_second,
+                        );
+                        role_u32(
+                            ui,
+                            "Movement/level (milli-cells/s)",
+                            &mut draft.value.movement_speed_milli_cells_per_second_per_level,
+                        );
+                        role_u32(
+                            ui,
+                            "Base carry capacity",
+                            &mut draft.value.base_carry_capacity,
+                        );
+                        role_u32(
+                            ui,
+                            "Carry capacity/level (milli)",
+                            &mut draft.value.carry_capacity_per_level_milli,
+                        );
+                    });
+            });
+            ui.collapsing("Character model and equipment bindings", |ui| {
+                ui.checkbox(&mut draft.has_equipment, "Role has equipment bindings");
+                if draft.has_equipment {
+                    for (index, label) in ["Slim body node", "Bulk body node", "Feminine body node"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            ui.text_edit_singleline(&mut draft.body_nodes[index]);
+                        });
+                    }
+                    for (label, value) in [
+                        ("Left-hand node", &mut draft.left_hand_node),
+                        ("Right-hand node", &mut draft.right_hand_node),
+                        ("Helmet node", &mut draft.helmet_node),
+                        ("Carry animation", &mut draft.carry_animation),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            ui.text_edit_singleline(value);
+                        });
+                    }
+                    ui.checkbox(
+                        &mut draft.left_hand_permanent,
+                        "Left-hand item remains visible outside carry actions",
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                apply = ui.button("Apply validated role edit").clicked();
+                reset = ui.button("Discard role draft").clicked();
+            });
+        });
+    } else {
+        ui.label("Select a role to edit it.");
+    }
+    if apply {
+        state.status = match apply_role_draft(state) {
+            Ok(()) => "Role edit applied; all catalog references remain valid".to_owned(),
+            Err(error) => format!("Role edit rejected: {error}"),
+        };
+    } else if reset {
+        refresh_role_draft(state);
+        "Discarded role draft".clone_into(&mut state.status);
+    }
+}
+
+fn role_u16(ui: &mut egui::Ui, label: &str, value: &mut u16) {
+    ui.label(label);
+    ui.add(egui::DragValue::new(value));
+    ui.end_row();
+}
+
+fn role_u32(ui: &mut egui::Ui, label: &str, value: &mut u32) {
+    ui.label(label);
+    ui.add(egui::DragValue::new(value));
+    ui.end_row();
+}
+
+fn role_i32(ui: &mut egui::Ui, label: &str, value: &mut i32) {
+    ui.label(label);
+    ui.add(egui::DragValue::new(value));
+    ui.end_row();
+}
+
 fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Technology graph editor");
     ui.horizontal(|ui| {
         if ui
             .add_enabled(!state.undo_catalogs.is_empty(), egui::Button::new("Undo"))
             .clicked()
-            && let Some(previous) = state.undo_catalogs.pop()
         {
-            state.redo_catalogs.push(state.catalog.clone());
-            state.catalog = previous;
-            refresh_technology_draft(state);
-            "Technology edit undone".clone_into(&mut state.status);
+            undo_catalog_edit(state);
         }
         if ui
             .add_enabled(!state.redo_catalogs.is_empty(), egui::Button::new("Redo"))
             .clicked()
-            && let Some(next) = state.redo_catalogs.pop()
         {
-            state.undo_catalogs.push(state.catalog.clone());
-            state.catalog = next;
-            refresh_technology_draft(state);
-            "Technology edit redone".clone_into(&mut state.status);
+            redo_catalog_edit(state);
         }
         if ui.button("Validate graph").clicked() {
             state.status = match state.catalog.validate() {
@@ -848,6 +1418,12 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.horizontal(|ui| {
         ui.label("Catalog path");
         ui.text_edit_singleline(&mut state.catalog_path);
+        if ui.button("Reload catalog").clicked() {
+            state.status = match reload_content_catalog(state) {
+                Ok(()) => "Reloaded and validated content catalog".to_owned(),
+                Err(error) => format!("Could not reload content catalog: {error:#}"),
+            };
+        }
     });
 
     let groups: Vec<_> = state
@@ -1029,6 +1605,14 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         }
         ui.label("Prerequisite stable IDs (comma separated)");
         ui.text_edit_singleline(&mut draft.prerequisites);
+        ui.label("Explicit unlock stable IDs (comma separated)");
+        ui.text_edit_singleline(&mut draft.unlocks);
+        ui.label("Objective stable IDs (comma separated)");
+        ui.text_edit_singleline(&mut draft.objectives);
+        ui.horizontal(|ui| {
+            ui.label("Icon asset path");
+            ui.text_edit_singleline(&mut draft.icon_path);
+        });
         ui.horizontal(|ui| {
             ui.checkbox(&mut draft.initially_unlocked, "Initially unlocked");
             ui.checkbox(&mut draft.unavailable, "Unavailable");
@@ -1047,73 +1631,277 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 
 fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("World-generation and navigation lab");
-    ui.add(egui::DragValue::new(&mut state.config.world.seed).prefix("Seed "));
-    ui.add(egui::Slider::new(&mut state.config.world.width, 8..=256).text("Width"));
-    ui.add(egui::Slider::new(&mut state.config.world.height, 8..=256).text("Height"));
-    ui.collapsing("Time-of-day settings", |ui| {
-        ui.label("Converted from D_TimeSettings and D_DayAndNightSettings");
+    ui.label(
+        "Tune the Unity-compatible terrain scale and authored foliage noise, generate deterministic previews, inspect occupancy, and exercise the same A* grid used by the game.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.add(egui::DragValue::new(&mut state.config.world.seed).prefix("Seed "));
+        ui.add(egui::Slider::new(&mut state.config.world.width, 8..=512).text("Width"));
+        ui.add(egui::Slider::new(&mut state.config.world.height, 8..=512).text("Height"));
         ui.add(
-            egui::DragValue::new(&mut state.config.time.seconds_per_day)
-                .range(1..=86_400)
-                .suffix(" seconds per day"),
+            egui::DragValue::new(&mut state.config.world.cell_size)
+                .range(0.1..=100.0)
+                .speed(0.1)
+                .prefix("Cell size "),
         );
         ui.add(
-            egui::Slider::new(&mut state.config.time.daylight_per_thousand, 1..=999)
-                .text("Daylight (per thousand)"),
+            egui::DragValue::new(&mut state.config.world.height_scale_centimetres)
+                .range(1..=10_000)
+                .prefix("Height scale cm "),
         );
         ui.add(
-            egui::DragValue::new(&mut state.config.time.transition_seconds)
-                .range(0..=3_600)
-                .suffix(" second transitions"),
+            egui::DragValue::new(&mut state.config.world.water_level_centimetres)
+                .prefix("Water level cm "),
         );
         ui.add(
-            egui::DragValue::new(&mut state.config.time.day_light_intensity_milli)
-                .range(1..=65_535)
-                .suffix(" day light milli"),
+            egui::Slider::new(
+                &mut state.config.world.resource_density_per_thousand,
+                0..=1_000,
+            )
+            .text("Resource density / 1000"),
         );
-        ui.add(
-            egui::DragValue::new(&mut state.config.time.night_light_intensity_milli)
-                .range(0..=65_535)
-                .suffix(" night light milli"),
-        );
-        ui.add(
-            egui::DragValue::new(&mut state.config.time.max_building_emission_milli)
-                .range(0..=65_535)
-                .suffix(" max emission milli"),
-        );
-        let dusk = f64::from(state.config.time.seconds_per_day)
-            * f64::from(state.config.time.daylight_per_thousand)
-            / 1_000.0;
-        ui.label(format!(
-            "Night begins after dusk at {dusk:.1}s; dawn completes at the next day boundary"
-        ));
-        if ui.button("Save validated runtime config").clicked() {
-            state.status = match save_runtime_config(&state.config) {
-                Ok(path) => format!("Saved public runtime configuration to {}", path.display()),
-                Err(error) => format!("Could not save runtime configuration: {error:#}"),
+    });
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Save project world config").clicked() {
+            state.status = match save_game_config(&state.config, &state.config_path) {
+                Ok(path) => format!("Saved project game configuration to {}", path.display()),
+                Err(error) => format!("Could not save game configuration: {error:#}"),
             };
         }
+        if ui.button("Save foliage catalog").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved authored foliage to {}", path.display()),
+                Err(error) => format!("Could not save foliage catalog: {error:#}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                !state.undo_catalogs.is_empty(),
+                egui::Button::new("Undo content edit"),
+            )
+            .clicked()
+        {
+            undo_catalog_edit(state);
+        }
+        if ui
+            .add_enabled(
+                !state.redo_catalogs.is_empty(),
+                egui::Button::new("Redo content edit"),
+            )
+            .clicked()
+        {
+            redo_catalog_edit(state);
+        }
     });
-    if ui.button("Generate deterministic preview").clicked() {
-        let world =
-            stream_town_domain::generate_world_with_content(&state.config.world, &state.catalog);
-        state.status = format!(
-            "Generated {}x{} world with {} resources and {} foliage instances; hash {}",
-            world.navigation.width(),
-            world.navigation.height(),
-            world.resources.len(),
-            world.foliage.len(),
-            &world.deterministic_hash[..16]
+
+    ui.collapsing("Authored foliage generation layers", |ui| {
+        let layers: Vec<_> = state
+            .catalog
+            .foliage
+            .iter()
+            .map(|layer| (layer.id.clone(), layer.source_path.clone()))
+            .collect();
+        let selected_label = state
+            .selected_foliage
+            .as_ref()
+            .map_or("Select layer", StableId::as_str);
+        let mut changed = false;
+        egui::ComboBox::from_label("Layer")
+            .selected_text(selected_label)
+            .show_ui(ui, |ui| {
+                for (id, source) in &layers {
+                    changed |= ui
+                        .selectable_value(
+                            &mut state.selected_foliage,
+                            Some(id.clone()),
+                            format!("{id} — {source}"),
+                        )
+                        .changed();
+                }
+            });
+        if changed {
+            refresh_foliage_draft(state);
+        }
+        let mut apply_foliage = false;
+        let mut reset_foliage = false;
+        if let Some(layer) = state.foliage_draft.as_mut() {
+            ui.horizontal_wrapped(|ui| {
+                ui.monospace(layer.id.to_string());
+                egui::ComboBox::from_label("Habitat")
+                    .selected_text(format!("{:?}", layer.habitat))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut layer.habitat, FoliageHabitat::Land, "Land");
+                        ui.selectable_value(
+                            &mut layer.habitat,
+                            FoliageHabitat::Underwater,
+                            "Underwater",
+                        );
+                    });
+                ui.add(
+                    egui::DragValue::new(&mut layer.source_size)
+                        .range(1..=4_096)
+                        .prefix("Source size "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut layer.level_of_detail)
+                        .range(0..=6)
+                        .prefix("LOD "),
+                );
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut layer.noise_scale)
+                        .range(0.001..=10_000.0)
+                        .speed(0.1)
+                        .prefix("Noise scale "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut layer.octaves)
+                        .range(1..=8)
+                        .prefix("Octaves "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut layer.persistence)
+                        .range(0.0..=1.0)
+                        .speed(0.01)
+                        .prefix("Persistence "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut layer.lacunarity)
+                        .range(0.001..=16.0)
+                        .speed(0.05)
+                        .prefix("Lacunarity "),
+                );
+                ui.add(egui::DragValue::new(&mut layer.seed).prefix("Layer seed "));
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut layer.offset[0])
+                        .speed(0.1)
+                        .prefix("Offset x "),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut layer.offset[1])
+                        .speed(0.1)
+                        .prefix("z "),
+                );
+                ui.add(
+                    egui::Slider::new(&mut layer.spawn_threshold, 0.0..=1.0)
+                        .text("Spawn threshold"),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut layer.spacing)
+                        .range(1..=u16::MAX)
+                        .prefix("Spacing "),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Unity source");
+                ui.text_edit_singleline(&mut layer.source_path);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Material source");
+                ui.text_edit_singleline(&mut layer.material_source_path);
+            });
+            ui.collapsing(format!("Model variants ({})", layer.variants.len()), |ui| {
+                for (index, variant) in layer.variants.iter_mut().enumerate() {
+                    ui.group(|ui| {
+                        ui.label(format!("Variant {}", index + 1));
+                        ui.horizontal(|ui| {
+                            ui.label("Source model");
+                            ui.text_edit_singleline(&mut variant.source_model);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("GLB asset path");
+                            ui.text_edit_singleline(&mut variant.asset_path);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Base scale");
+                            for axis in &mut variant.base_scale {
+                                ui.add(
+                                    egui::DragValue::new(axis)
+                                        .range(0.001..=1_000.0)
+                                        .speed(0.01),
+                                );
+                            }
+                        });
+                    });
+                }
+            });
+            ui.horizontal(|ui| {
+                apply_foliage = ui.button("Apply validated foliage edit").clicked();
+                reset_foliage = ui.button("Discard foliage draft").clicked();
+            });
+        }
+        if apply_foliage {
+            state.status = match apply_foliage_draft(state) {
+                Ok(()) => "Foliage generation edit applied and validated".to_owned(),
+                Err(error) => format!("Foliage edit rejected: {error}"),
+            };
+            state.generated_world = None;
+        } else if reset_foliage {
+            refresh_foliage_draft(state);
+            "Discarded foliage draft".clone_into(&mut state.status);
+        }
+    });
+
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Generate deterministic preview").clicked() {
+            state.status = match (state.config.validate(), state.catalog.validate()) {
+                (Ok(()), Ok(())) => {
+                    let world = stream_town_domain::generate_world_with_content(
+                        &state.config.world,
+                        &state.catalog,
+                    );
+                    let status = format!(
+                        "Generated {}x{} world with {} resources and {} foliage instances; hash {}",
+                        world.navigation.width(),
+                        world.navigation.height(),
+                        world.resources.len(),
+                        world.foliage.len(),
+                        &world.deterministic_hash[..16]
+                    );
+                    state.generated_world = Some(world);
+                    state.preview_path.clear();
+                    status
+                }
+                (Err(error), _) => format!("World configuration is invalid: {error}"),
+                (_, Err(error)) => format!("Foliage catalog is invalid: {error}"),
+            };
+        }
+        egui::ComboBox::from_label("Preview")
+            .selected_text(state.world_preview_layer.label())
+            .show_ui(ui, |ui| {
+                for layer in WorldPreviewLayer::ALL {
+                    ui.selectable_value(&mut state.world_preview_layer, layer, layer.label());
+                }
+            });
+    });
+    let max_x = state.config.world.width.saturating_sub(1);
+    let max_z = state.config.world.height.saturating_sub(1);
+    ui.horizontal_wrapped(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut state.path_start.x)
+                .range(0..=max_x)
+                .prefix("Start x "),
         );
-        state.generated_world = Some(world);
-        state.preview_path.clear();
-    }
-    ui.horizontal(|ui| {
-        ui.add(egui::DragValue::new(&mut state.path_start.x).prefix("Start x "));
-        ui.add(egui::DragValue::new(&mut state.path_start.z).prefix("z "));
-        ui.add(egui::DragValue::new(&mut state.path_goal.x).prefix("Goal x "));
-        ui.add(egui::DragValue::new(&mut state.path_goal.z).prefix("z "));
-        if ui.button("Plan path").clicked() {
+        ui.add(
+            egui::DragValue::new(&mut state.path_start.z)
+                .range(0..=max_z)
+                .prefix("z "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.path_goal.x)
+                .range(0..=max_x)
+                .prefix("Goal x "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut state.path_goal.z)
+                .range(0..=max_z)
+                .prefix("z "),
+        );
+        if ui.button("Plan A* path").clicked() {
             let result = state.generated_world.as_ref().map(|world| {
                 world
                     .navigation
@@ -1133,16 +1921,53 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         }
     });
     if let Some(world) = &state.generated_world {
+        let walkable = (0..world.navigation.height())
+            .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
+            .filter(|position| world.navigation.is_walkable(*position))
+            .count();
         ui.monospace(format!("Hash: {}", world.deterministic_hash));
-        ui.label(format!("Resources: {}", world.resources.len()));
-        ui.label(format!("Generator version: {}", world.generator_version));
-        draw_world_preview(ui, world, &state.preview_path);
+        ui.label(format!(
+            "Generator v{} · {} walkable / {} total cells · {} resources · {} foliage",
+            world.generator_version,
+            walkable,
+            usize::from(world.navigation.width()) * usize::from(world.navigation.height()),
+            world.resources.len(),
+            world.foliage.len(),
+        ));
+        draw_world_preview(
+            ui,
+            world,
+            &state.preview_path,
+            state.world_preview_layer,
+            state.selected_foliage.as_ref(),
+            state.config.world.water_level_centimetres,
+        );
     }
 }
 
 fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Player settings");
     ui.label("Unity SettingsData parity with validated, atomic RON persistence.");
+    let settings_path = stream_town_game::player_settings_path();
+    ui.horizontal_wrapped(|ui| {
+        ui.monospace(settings_path.display().to_string());
+        if ui.button("Reload saved settings").clicked() {
+            let store = PlayerSettingsStore::new(settings_path.clone());
+            state.status = match store.load() {
+                Ok(settings) => {
+                    state.player_settings = settings;
+                    "Reloaded and validated player settings".to_owned()
+                }
+                Err(error) => format!("Could not reload player settings: {error}"),
+            };
+        }
+        if ui.button("Validate draft").clicked() {
+            state.status = match state.player_settings.validate() {
+                Ok(()) => "Player settings are valid".to_owned(),
+                Err(error) => format!("Player settings error: {error}"),
+            };
+        }
+    });
     ui.horizontal(|ui| {
         ui.label("Display mode");
         for (mode, label) in [
@@ -1238,6 +2063,13 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             });
         state.player_settings.video.fps_limit = (fps != 0).then_some(fps);
     });
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::Slider::new(&mut state.player_settings.video.brightness_ev, -5.0..=5.0)
+                .text("Brightness EV"),
+        );
+        ui.add(egui::Slider::new(&mut state.player_settings.video.gamma, -5.0..=5.0).text("Gamma"));
+    });
     ui.separator();
     ui.label("Audio mix");
     ui.add(egui::Slider::new(&mut state.player_settings.audio.master, 0.0..=1.0).text("Master"));
@@ -1253,6 +2085,13 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.label("Camera and input");
     ui.add(
         egui::Slider::new(
+            &mut state.player_settings.camera.pan_sensitivity,
+            0.0..=100.0,
+        )
+        .text("Mouse pan sensitivity"),
+    );
+    ui.add(
+        egui::Slider::new(
             &mut state.player_settings.camera.keyboard_pan_sensitivity,
             0.0..=100.0,
         )
@@ -1264,6 +2103,20 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             0.0..=100.0,
         )
         .text("Zoom sensitivity"),
+    );
+    ui.add(
+        egui::Slider::new(
+            &mut state.player_settings.camera.edge_scroll_sensitivity,
+            0.0..=100.0,
+        )
+        .text("Edge-scroll sensitivity"),
+    );
+    ui.add(
+        egui::Slider::new(
+            &mut state.player_settings.camera.field_of_view_degrees,
+            30..=120,
+        )
+        .text("Field of view"),
     );
     ui.checkbox(
         &mut state.player_settings.camera.keyboard_movement,
@@ -1334,7 +2187,7 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     });
     ui.horizontal(|ui| {
         if ui.button("Save validated settings").clicked() {
-            let store = PlayerSettingsStore::new(stream_town_game::player_settings_path());
+            let store = PlayerSettingsStore::new(settings_path.clone());
             state.status = match store.write(&state.player_settings) {
                 Ok(()) => format!("Saved player settings to {}", store.path().display()),
                 Err(error) => format!("Could not save player settings: {error}"),
@@ -1864,27 +2717,7 @@ fn start_twitch_clear(state: &mut ToolState) {
 }
 
 fn save_runtime_config(config: &GameConfig) -> anyhow::Result<std::path::PathBuf> {
-    config.validate()?;
-    let directory = std::path::Path::new(".stream-town");
-    std::fs::create_dir_all(directory)?;
-    let path = directory.join("config.ron");
-    let temporary = directory.join("config.ron.tmp");
-    let backup = directory.join("config.ron.bak");
-    let pretty = ron::ser::PrettyConfig::new().struct_names(true);
-    std::fs::write(&temporary, ron::ser::to_string_pretty(config, pretty)?)?;
-    if path.is_file() {
-        if backup.is_file() {
-            std::fs::remove_file(&backup)?;
-        }
-        std::fs::rename(&path, &backup)?;
-    }
-    if let Err(error) = std::fs::rename(&temporary, &path) {
-        if backup.is_file() {
-            let _ = std::fs::rename(&backup, &path);
-        }
-        return Err(error.into());
-    }
-    Ok(path)
+    save_game_config(config, ".stream-town/config.ron")
 }
 
 fn validation_tab(ui: &mut egui::Ui, state: &mut ToolState) {
@@ -2007,6 +2840,19 @@ fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<Technolog
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", "),
+        unlocks: node
+            .unlocks
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        objectives: node
+            .objectives
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        icon_path: node.icon_path.clone(),
         initially_unlocked: node.initially_unlocked,
         unavailable: node.unavailable,
     })
@@ -2014,6 +2860,93 @@ fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<Technolog
 
 fn default_catalog_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/catalog.ron")
+}
+
+fn default_config_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/game.ron")
+}
+
+fn validate_authoring_assets() -> anyhow::Result<String> {
+    let config = load_game_config(default_config_path().to_string_lossy().as_ref())?;
+    let catalog = load_content_catalog(default_catalog_path().to_string_lossy().as_ref())?;
+    let presentation: PresentationCatalog =
+        ron::from_str(include_str!("../../../assets/content/presentation.ron"))?;
+    presentation.validate()?;
+    Ok(format!(
+        "Authoring assets valid: schema {}, {} roles, {} foliage layers, {} technologies, {} presentation records",
+        config.schema_version,
+        catalog.roles.len(),
+        catalog.foliage.len(),
+        catalog.technology.nodes.len(),
+        presentation.textures.len()
+            + presentation.materials.len()
+            + presentation.clips.len()
+            + presentation.controllers.len(),
+    ))
+}
+
+fn load_content_catalog(path: &str) -> anyhow::Result<ContentCatalog> {
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("content-catalog path cannot be empty");
+    }
+    let catalog: ContentCatalog = ron::from_str(&fs::read_to_string(&path)?)?;
+    catalog.validate()?;
+    Ok(catalog)
+}
+
+fn reload_content_catalog(state: &mut ToolState) -> anyhow::Result<()> {
+    state.catalog = load_content_catalog(&state.catalog_path)?;
+    state.undo_catalogs.clear();
+    state.redo_catalogs.clear();
+    refresh_catalog_drafts(state);
+    Ok(())
+}
+
+fn load_game_config(path: &str) -> anyhow::Result<GameConfig> {
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("game-config path cannot be empty");
+    }
+    let config: GameConfig = ron::from_str(&fs::read_to_string(&path)?)?;
+    Ok(config.upgrade()?)
+}
+
+fn save_game_config(config: &GameConfig, path: &str) -> anyhow::Result<PathBuf> {
+    config.validate()?;
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("game-config path cannot be empty");
+    }
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    fs::create_dir_all(parent)?;
+    let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+    let encoded =
+        ron::ser::to_string_pretty(config, ron::ser::PrettyConfig::new().struct_names(true))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(encoded.as_bytes())?;
+    file.sync_all()?;
+    if path.is_file() {
+        fs::copy(&path, &backup)?;
+        fs::remove_file(&path)?;
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        if backup.is_file() && !path.exists() {
+            let _ = fs::copy(&backup, &path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    let reloaded = load_game_config(path.to_string_lossy().as_ref())?;
+    if reloaded != *config {
+        anyhow::bail!("reloaded game configuration does not match the authored configuration");
+    }
+    Ok(path)
 }
 
 fn save_content_catalog(catalog: &ContentCatalog, path: &str) -> anyhow::Result<PathBuf> {
@@ -2053,6 +2986,190 @@ fn save_content_catalog(catalog: &ContentCatalog, path: &str) -> anyhow::Result<
     Ok(path)
 }
 
+fn parse_stable_id_list(value: &str) -> Result<Vec<StableId>, String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| StableId::new(value.to_owned()).map_err(|error| error.to_string()))
+        .collect()
+}
+
+fn parse_stable_id_set(value: &str) -> Result<BTreeSet<StableId>, String> {
+    parse_stable_id_list(value).map(|values| values.into_iter().collect())
+}
+
+fn optional_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn role_draft(catalog: &ContentCatalog, id: &StableId) -> Option<RoleDraft> {
+    let value = catalog.roles.get(id)?.clone();
+    let equipment = value.equipment.as_ref();
+    Some(RoleDraft {
+        id: id.clone(),
+        resource: value
+            .resource
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        station_kinds: value
+            .station_kinds
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        target_kinds: value
+            .target_kinds
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        granted_abilities: value
+            .granted_abilities
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        has_equipment: equipment.is_some(),
+        body_nodes: equipment.map_or_else(
+            || [String::new(), String::new(), String::new()],
+            |equipment| equipment.body_nodes.clone(),
+        ),
+        left_hand_node: equipment
+            .and_then(|equipment| equipment.left_hand_node.clone())
+            .unwrap_or_default(),
+        right_hand_node: equipment
+            .and_then(|equipment| equipment.right_hand_node.clone())
+            .unwrap_or_default(),
+        helmet_node: equipment
+            .and_then(|equipment| equipment.helmet_node.clone())
+            .unwrap_or_default(),
+        carry_animation: equipment
+            .and_then(|equipment| equipment.carry_animation.clone())
+            .unwrap_or_default(),
+        left_hand_permanent: equipment.is_some_and(|equipment| equipment.left_hand_permanent),
+        value,
+    })
+}
+
+fn apply_role_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .role_draft
+        .clone()
+        .ok_or_else(|| "no role selected".to_owned())?;
+    if draft.value.display_name.trim().is_empty() {
+        return Err("role display name cannot be empty".to_owned());
+    }
+    if draft.value.action_animation.trim().is_empty() || draft.value.action_animation_variants == 0
+    {
+        return Err("role action animation and variant count must be defined".to_owned());
+    }
+    if draft.value.movement_speed_multiplier_per_thousand == 0
+        || draft.value.experience_multiplier_per_thousand == 0
+        || draft.value.base_health == 0
+        || draft.value.base_movement_speed_milli_cells_per_second == 0
+    {
+        return Err("movement, experience, and health base values must be positive".to_owned());
+    }
+    let resource = optional_text(&draft.resource)
+        .map(StableId::new)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let mut value = draft.value;
+    value.resource = resource;
+    value.station_kinds = parse_stable_id_set(&draft.station_kinds)?;
+    value.target_kinds = parse_stable_id_set(&draft.target_kinds)?;
+    value.granted_abilities = parse_stable_id_list(&draft.granted_abilities)?;
+    value.equipment = draft.has_equipment.then(|| RoleEquipmentDef {
+        body_nodes: draft.body_nodes.map(|node| node.trim().to_owned()),
+        left_hand_node: optional_text(&draft.left_hand_node),
+        right_hand_node: optional_text(&draft.right_hand_node),
+        helmet_node: optional_text(&draft.helmet_node),
+        carry_animation: optional_text(&draft.carry_animation),
+        left_hand_permanent: draft.left_hand_permanent,
+    });
+    let mut candidate = state.catalog.clone();
+    candidate.roles.insert(draft.id, value);
+    commit_catalog_candidate(state, candidate)
+}
+
+fn duplicate_selected_role(state: &mut ToolState) -> Result<(), String> {
+    let source = state
+        .selected_role
+        .as_ref()
+        .and_then(|id| state.catalog.roles.get(id))
+        .cloned()
+        .ok_or_else(|| "no role selected".to_owned())?;
+    let id =
+        StableId::new(state.new_role_id.trim().to_owned()).map_err(|error| error.to_string())?;
+    if state.catalog.roles.contains_key(&id) {
+        return Err(format!("role {id} already exists"));
+    }
+    let display_name = state.new_role_name.trim();
+    if display_name.is_empty() {
+        return Err("new role name cannot be empty".to_owned());
+    }
+    let mut value = source;
+    display_name.clone_into(&mut value.display_name);
+    let mut candidate = state.catalog.clone();
+    candidate.roles.insert(id.clone(), value);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_role = Some(id);
+    refresh_role_draft(state);
+    Ok(())
+}
+
+fn delete_selected_role(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_role
+        .clone()
+        .ok_or_else(|| "no role selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    candidate
+        .roles
+        .remove(&id)
+        .ok_or_else(|| format!("missing role {id}"))?;
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_role = state.catalog.roles.keys().next().cloned();
+    refresh_role_draft(state);
+    Ok(())
+}
+
+fn apply_foliage_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .foliage_draft
+        .clone()
+        .ok_or_else(|| "no foliage layer selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    let layer = candidate
+        .foliage
+        .iter_mut()
+        .find(|layer| layer.id == draft.id)
+        .ok_or_else(|| format!("missing foliage layer {}", draft.id))?;
+    *layer = draft;
+    commit_catalog_candidate(state, candidate)
+}
+
+fn undo_catalog_edit(state: &mut ToolState) {
+    if let Some(previous) = state.undo_catalogs.pop() {
+        state.redo_catalogs.push(state.catalog.clone());
+        state.catalog = previous;
+        refresh_catalog_drafts(state);
+        "Content edit undone".clone_into(&mut state.status);
+    }
+}
+
+fn redo_catalog_edit(state: &mut ToolState) {
+    if let Some(next) = state.redo_catalogs.pop() {
+        state.undo_catalogs.push(state.catalog.clone());
+        state.catalog = next;
+        refresh_catalog_drafts(state);
+        "Content edit redone".clone_into(&mut state.status);
+    }
+}
+
 fn commit_catalog_candidate(
     state: &mut ToolState,
     candidate: ContentCatalog,
@@ -2061,7 +3178,7 @@ fn commit_catalog_candidate(
     state.undo_catalogs.push(state.catalog.clone());
     state.redo_catalogs.clear();
     state.catalog = candidate;
-    refresh_technology_draft(state);
+    refresh_catalog_drafts(state);
     Ok(())
 }
 
@@ -2226,6 +3343,46 @@ fn refresh_technology_draft(state: &mut ToolState) {
         .and_then(|id| technology_draft(&state.catalog, id));
 }
 
+fn refresh_role_draft(state: &mut ToolState) {
+    if state
+        .selected_role
+        .as_ref()
+        .is_none_or(|id| !state.catalog.roles.contains_key(id))
+    {
+        state.selected_role = state.catalog.roles.keys().next().cloned();
+    }
+    state.role_draft = state
+        .selected_role
+        .as_ref()
+        .and_then(|id| role_draft(&state.catalog, id));
+}
+
+fn refresh_foliage_draft(state: &mut ToolState) {
+    if state
+        .selected_foliage
+        .as_ref()
+        .is_none_or(|id| !state.catalog.foliage.iter().any(|layer| &layer.id == id))
+    {
+        state.selected_foliage = state.catalog.foliage.first().map(|layer| layer.id.clone());
+    }
+    state.foliage_draft = state.selected_foliage.as_ref().and_then(|id| {
+        state
+            .catalog
+            .foliage
+            .iter()
+            .find(|layer| &layer.id == id)
+            .cloned()
+    });
+}
+
+fn refresh_catalog_drafts(state: &mut ToolState) {
+    refresh_technology_draft(state);
+    refresh_role_draft(state);
+    refresh_foliage_draft(state);
+    state.generated_world = None;
+    state.preview_path.clear();
+}
+
 fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
     let draft = state
         .technology_draft
@@ -2238,6 +3395,8 @@ fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
         .filter(|value| !value.is_empty())
         .map(|value| StableId::new(value.to_owned()).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
+    let unlocks = parse_stable_id_list(&draft.unlocks)?;
+    let objectives = parse_stable_id_list(&draft.objectives)?;
     let mut candidate = state.catalog.clone();
     let node = candidate
         .technology
@@ -2250,6 +3409,9 @@ fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
     node.tier = draft.tier;
     node.group.clone_from(&draft.group);
     node.prerequisites = prerequisites;
+    node.unlocks = unlocks;
+    node.objectives = objectives;
+    node.icon_path = draft.icon_path;
     node.initially_unlocked = draft.initially_unlocked;
     node.unavailable = draft.unavailable;
     for group in candidate.technology.groups.values_mut() {
@@ -2329,7 +3491,14 @@ fn bounded_ui_index(value: usize) -> f32 {
     f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
-fn draw_world_preview(ui: &mut egui::Ui, world: &GeneratedWorld, path: &[GridPos]) {
+fn draw_world_preview(
+    ui: &mut egui::Ui,
+    world: &GeneratedWorld,
+    path: &[GridPos],
+    layer: WorldPreviewLayer,
+    selected_foliage: Option<&StableId>,
+    water_level_centimetres: i16,
+) {
     let width = world.navigation.width();
     let height = world.navigation.height();
     let desired_width = ui.available_width().min(720.0);
@@ -2340,8 +3509,12 @@ fn draw_world_preview(ui: &mut egui::Ui, world: &GeneratedWorld, path: &[GridPos
     let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
     let stride = usize::from(width.max(height)).div_ceil(96).max(1);
     let stride_u16 = u16::try_from(stride).unwrap_or(u16::MAX);
-    let path: BTreeSet<_> = path.iter().copied().collect();
-    let resources: BTreeSet<_> = world.resources.iter().map(|item| item.position).collect();
+    let (minimum_height, maximum_height) = (0..height)
+        .flat_map(|z| (0..width).map(move |x| GridPos { x, z }))
+        .filter_map(|position| world.navigation.height_at(position))
+        .fold((i16::MAX, i16::MIN), |(minimum, maximum), value| {
+            (minimum.min(value), maximum.max(value))
+        });
     for z in (0..height).step_by(stride) {
         for x in (0..width).step_by(stride) {
             let position = GridPos { x, z };
@@ -2353,14 +3526,35 @@ fn draw_world_preview(ui: &mut egui::Ui, world: &GeneratedWorld, path: &[GridPos
             let bottom = rect.top()
                 + f32::from(z.saturating_add(stride_u16).min(height)) * rect.height()
                     / f32::from(height);
-            let color = if path.contains(&position) {
-                egui::Color32::YELLOW
-            } else if resources.contains(&position) {
-                egui::Color32::from_rgb(205, 150, 55)
-            } else if world.navigation.is_walkable(position) {
-                egui::Color32::from_rgb(55, 115, 65)
-            } else {
-                egui::Color32::from_rgb(35, 70, 105)
+            let cell_height = world.navigation.height_at(position).unwrap_or_default();
+            let color = match layer {
+                WorldPreviewLayer::Elevation => {
+                    if cell_height <= water_level_centimetres {
+                        egui::Color32::from_rgb(34, 91, 145)
+                    } else {
+                        let range =
+                            f32::from(maximum_height.saturating_sub(minimum_height)).max(1.0);
+                        let normalized =
+                            f32::from(cell_height.saturating_sub(minimum_height)) / range;
+                        terrain_preview_color(normalized)
+                    }
+                }
+                WorldPreviewLayer::Navigation => {
+                    if world.navigation.is_walkable(position) {
+                        egui::Color32::from_rgb(70, 145, 83)
+                    } else {
+                        egui::Color32::from_rgb(42, 52, 62)
+                    }
+                }
+                WorldPreviewLayer::Resources | WorldPreviewLayer::Foliage => {
+                    if cell_height <= water_level_centimetres {
+                        egui::Color32::from_rgb(29, 70, 105)
+                    } else if world.navigation.is_walkable(position) {
+                        egui::Color32::from_rgb(54, 93, 59)
+                    } else {
+                        egui::Color32::from_rgb(51, 57, 54)
+                    }
+                }
             };
             ui.painter().rect_filled(
                 egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom)),
@@ -2369,6 +3563,104 @@ fn draw_world_preview(ui: &mut egui::Ui, world: &GeneratedWorld, path: &[GridPos
             );
         }
     }
+    if layer == WorldPreviewLayer::Resources {
+        for resource in &world.resources {
+            let color = match resource.kind.as_str() {
+                value if value.contains("wood") => egui::Color32::from_rgb(46, 185, 76),
+                value if value.contains("ore") => egui::Color32::from_rgb(190, 196, 207),
+                value if value.contains("food") => egui::Color32::from_rgb(219, 82, 81),
+                value if value.contains("fish") => egui::Color32::from_rgb(83, 207, 229),
+                _ => egui::Color32::GOLD,
+            };
+            ui.painter().circle_filled(
+                preview_grid_point(rect, width, height, resource.position),
+                2.25,
+                color,
+            );
+        }
+    }
+    if layer == WorldPreviewLayer::Foliage {
+        for foliage in &world.foliage {
+            let highlighted = selected_foliage.is_none_or(|id| id == &foliage.layer);
+            let color = match (foliage.habitat, highlighted) {
+                (FoliageHabitat::Land, true) => egui::Color32::from_rgb(115, 235, 100),
+                (FoliageHabitat::Underwater, true) => egui::Color32::from_rgb(92, 220, 225),
+                (_, false) => egui::Color32::from_rgba_unmultiplied(145, 145, 145, 90),
+            };
+            ui.painter().circle_filled(
+                preview_grid_point(rect, width, height, foliage.position),
+                if highlighted { 1.8 } else { 1.0 },
+                color,
+            );
+        }
+    }
+    for segment in path.windows(2) {
+        ui.painter().line_segment(
+            [
+                preview_grid_point(rect, width, height, segment[0]),
+                preview_grid_point(rect, width, height, segment[1]),
+            ],
+            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+        );
+    }
+    if let Some(start) = path.first() {
+        ui.painter().circle_filled(
+            preview_grid_point(rect, width, height, *start),
+            3.5,
+            egui::Color32::LIGHT_GREEN,
+        );
+    }
+    if let Some(goal) = path.last() {
+        ui.painter().circle_filled(
+            preview_grid_point(rect, width, height, *goal),
+            3.5,
+            egui::Color32::LIGHT_RED,
+        );
+    }
+    ui.label(match layer {
+        WorldPreviewLayer::Elevation => "Blue is at/below water level; green through stone encodes terrain elevation.",
+        WorldPreviewLayer::Navigation => "Green cells are walkable; charcoal cells are blocked.",
+        WorldPreviewLayer::Resources => "Green/grey/red/cyan markers identify generated wood, ore, food, and fish resources.",
+        WorldPreviewLayer::Foliage => "Bright markers belong to the selected foliage layer; dim markers belong to other layers.",
+    });
+}
+
+fn preview_grid_point(rect: egui::Rect, width: u16, height: u16, position: GridPos) -> egui::Pos2 {
+    egui::pos2(
+        rect.left() + (f32::from(position.x) + 0.5) * rect.width() / f32::from(width),
+        rect.top() + (f32::from(position.z) + 0.5) * rect.height() / f32::from(height),
+    )
+}
+
+fn terrain_preview_color(value: f32) -> egui::Color32 {
+    let value = value.clamp(0.0, 1.0);
+    if value < 0.55 {
+        let t = value / 0.55;
+        preview_lerp_color(
+            egui::Color32::from_rgb(60, 113, 63),
+            egui::Color32::from_rgb(157, 154, 91),
+            t,
+        )
+    } else {
+        let t = (value - 0.55) / 0.45;
+        preview_lerp_color(
+            egui::Color32::from_rgb(157, 154, 91),
+            egui::Color32::from_rgb(218, 220, 218),
+            t,
+        )
+    }
+}
+
+fn preview_lerp_color(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
+    let lerp = |start: u8, end: u8| {
+        f32::from(start) / 255.0 + (f32::from(end) - f32::from(start)) * t / 255.0
+    };
+    egui::Rgba::from_rgb(
+        lerp(from.r(), to.r()),
+        lerp(from.g(), to.g()),
+        lerp(from.b(), to.b()),
+    )
+    .into()
 }
 
 #[cfg(test)]
@@ -2447,5 +3739,70 @@ mod tests {
         assert_eq!(reloaded, catalog);
         assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
         assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
+    }
+
+    #[test]
+    fn game_config_save_is_atomic_validated_and_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("game.ron");
+        let mut config = GameConfig::default();
+        config.world.seed = 42;
+
+        save_game_config(&config, path.to_str().unwrap()).unwrap();
+        save_game_config(&config, path.to_str().unwrap()).unwrap();
+
+        assert_eq!(load_game_config(path.to_str().unwrap()).unwrap(), config);
+        assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
+        assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
+        config.world.cell_size = 0.0;
+        assert!(save_game_config(&config, path.to_str().unwrap()).is_err());
+        assert_eq!(
+            load_game_config(path.to_str().unwrap()).unwrap().world.seed,
+            42
+        );
+    }
+
+    #[test]
+    fn role_editor_applies_every_reference_family_without_partial_mutation() {
+        let mut state = ToolState::default();
+        let id = StableId::new("role:gatherer").unwrap();
+        state.selected_role = Some(id.clone());
+        state.role_draft = role_draft(&state.catalog, &id);
+        let draft = state.role_draft.as_mut().unwrap();
+        draft.value.base_action_amount = 7;
+        draft.station_kinds = "station:food, station:fish".to_owned();
+        draft.target_kinds = "target:bush, target:fish".to_owned();
+        draft.granted_abilities = "resource:food, role_flag:resource".to_owned();
+
+        apply_role_draft(&mut state).unwrap();
+        let role = &state.catalog.roles[&id];
+        assert_eq!(role.base_action_amount, 7);
+        assert!(
+            role.station_kinds
+                .contains(&StableId::new("station:fish").unwrap())
+        );
+        state.catalog.validate().unwrap();
+
+        let before = state.catalog.clone();
+        state.role_draft.as_mut().unwrap().body_nodes[0].clear();
+        assert!(apply_role_draft(&mut state).is_err());
+        assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn foliage_editor_rejects_invalid_generation_values_without_mutation() {
+        let mut state = ToolState::default();
+        let before = state.catalog.clone();
+        state.foliage_draft.as_mut().unwrap().noise_scale = 0.0;
+
+        assert!(apply_foliage_draft(&mut state).is_err());
+        assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn checked_in_authoring_assets_pass_headless_validation() {
+        let summary = validate_authoring_assets().unwrap();
+        assert!(summary.contains("roles"));
+        assert!(summary.contains("technologies"));
     }
 }
