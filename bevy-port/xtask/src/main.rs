@@ -249,7 +249,19 @@ fn validate() -> Result<()> {
             technology_edges,
             technology_roots,
             content.source_records.len(),
-        ) != (30, 215, 288, 26, 15, 422, 363, 20, 362, 1, 404)
+        ) != (
+            stream_town_domain::CURRENT_CONTENT_SCHEMA,
+            215,
+            288,
+            26,
+            15,
+            422,
+            363,
+            20,
+            362,
+            1,
+            404,
+        )
         || content.loading_screen.progress_milli_per_second != 500
         || content.loading_screen.completion_hold_milliseconds != 500
         || content.loading_screen.tooltips.len() != 1
@@ -287,6 +299,24 @@ fn validate() -> Result<()> {
         .filter_map(|archetype| archetype.enemy.as_ref())
         .filter(|enemy| enemy.kill_reward.amount > 0)
         .count();
+    let enemy_retaliation = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy.as_ref())
+        .filter(|enemy| enemy.attack_attacker)
+        .count();
+    let goblin_sensor_ranges = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy.as_ref())
+        .filter(|enemy| enemy.target_search_range_milli_cells == 4_000)
+        .count();
+    let standard_sensor_ranges = content
+        .archetypes
+        .values()
+        .filter_map(|archetype| archetype.enemy.as_ref())
+        .filter(|enemy| enemy.target_search_range_milli_cells == 12_500)
+        .count();
     let enemy_spawners = content
         .archetypes
         .values()
@@ -301,7 +331,10 @@ fn validate() -> Result<()> {
             enemy_definitions,
             enemy_spawners,
             enemy_resource_rewards,
-        ) != (42, 1, 9, 1, 9)
+            enemy_retaliation,
+            goblin_sensor_ranges,
+            standard_sensor_ranges,
+        ) != (42, 1, 9, 1, 9, 9, 1, 8)
     {
         bail!(
             "authored combat component counts differ from the verified Unity baseline: building health {} definitions, {} base total, {} per-level total; {health_definitions} total health, {projectile_shooters} projectile shooters, {enemy_definitions} enemies, {enemy_spawners} spawners, {enemy_resource_rewards} rewards",

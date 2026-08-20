@@ -9489,6 +9489,31 @@ fn enemy_targets_buildings(content: &ContentCatalog, actor: &ActorState) -> bool
     .any(|target| enemy_targets_kind(content, actor, target))
 }
 
+fn enemy_target_search_range_milli_cells(
+    content: &ContentCatalog,
+    actor: &ActorState,
+) -> Option<u32> {
+    actor_archetype(content, actor)
+        .and_then(|archetype| archetype.enemy.as_ref())
+        .map(|enemy| enemy.target_search_range_milli_cells)
+}
+
+fn enemy_attacks_attacker(content: &ContentCatalog, actor: &ActorState) -> bool {
+    actor_archetype(content, actor)
+        .and_then(|archetype| archetype.enemy.as_ref())
+        .is_some_and(|enemy| enemy.attack_attacker)
+}
+
+fn within_enemy_target_search(
+    content: &ContentCatalog,
+    actor: &ActorState,
+    current: GridPos,
+    target: GridPos,
+) -> bool {
+    enemy_target_search_range_milli_cells(content, actor)
+        .is_some_and(|range| within_milli_cell_range(current, target, range))
+}
+
 fn is_ranged_role(role: &StableId) -> bool {
     matches!(
         role.as_str(),
@@ -9755,6 +9780,26 @@ fn within_station_search_region(position: GridPos, station: StationCandidate<'_>
         && position.z.abs_diff(station.position.z) <= range
 }
 
+fn station_target_is_reachable(
+    world: &GeneratedWorld,
+    station: StationCandidate<'_>,
+    target_kind: &StableId,
+    target: GridPos,
+) -> bool {
+    // Unity intentionally skips its path check for fish, which are approached
+    // from the shoreline rather than from the target's water node.
+    if target_kind.as_str() == "target:fish" {
+        return true;
+    }
+    let Some(start) = nearest_walkable(world, station.position) else {
+        return false;
+    };
+    let Some(goal) = nearest_walkable(world, target) else {
+        return false;
+    };
+    world.navigation.find_path(start, goal).is_ok()
+}
+
 fn within_player_target_search_region(position: GridPos, player: GridPos) -> bool {
     position.x.abs_diff(player.x) <= PLAYER_TARGET_SEARCH_RANGE_CELLS
         && position.z.abs_diff(player.z) <= PLAYER_TARGET_SEARCH_RANGE_CELLS
@@ -9999,8 +10044,66 @@ fn next_agent_goal_with_reservations(
     if !actor.alive {
         return (AgentGoal::Wander, current);
     }
-    let station = assigned_station(content, simulation, config, actor);
+    let fallback_station =
+        best_station_id(content, simulation, config, &actor.role, actor.position);
+    let station = assigned_station(content, simulation, config, actor).or_else(|| {
+        fallback_station
+            .as_ref()
+            .and_then(|id| station_candidate(content, simulation, config, id))
+    });
     if let Some(preferred) = actor.preferred_target.as_ref() {
+        if actor.role.as_str() == "role:enemy" {
+            if let Some(target) = simulation
+                .actors
+                .get(preferred)
+                .filter(|target| target.alive && target.role.as_str() != "role:enemy")
+                .filter(|target| {
+                    enemy_targets_kind(content, actor, "target:player")
+                        || (target.health < target.max_health
+                            && enemy_targets_kind(content, actor, "target:injured_player"))
+                })
+            {
+                return (
+                    AgentGoal::Attack(target.id.clone()),
+                    if within_actor_attack_range(content, simulation, actor, target, current) {
+                        current
+                    } else {
+                        target.position
+                    },
+                );
+            }
+            if let Some(building) = simulation
+                .buildings
+                .get(preferred)
+                .filter(|building| building.health > 0)
+                .filter(|building| {
+                    enemy_targets_kind(content, actor, "target:building")
+                        || (!building.complete
+                            && enemy_targets_kind(content, actor, "target:construction"))
+                        || (building.complete
+                            && building.health < building_max_health(content, building)
+                            && enemy_targets_kind(content, actor, "target:damaged_building"))
+                })
+                && let Some(definition) = building_def_for_archetype(content, &building.archetype)
+                && let Some(approach) = building_approach(
+                    world,
+                    building.position,
+                    rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                    current,
+                )
+            {
+                return (
+                    AgentGoal::AttackBuilding(building.id.clone()),
+                    if within_enemy_building_attack_range(
+                        content, simulation, actor, building, current,
+                    ) {
+                        current
+                    } else {
+                        approach
+                    },
+                );
+            }
+        }
         if let Some(target) = simulation
             .actors
             .get(preferred)
@@ -10039,6 +10142,17 @@ fn next_agent_goal_with_reservations(
             .resources
             .iter()
             .find(|resource| resource.id == *preferred && resource.amount > 0)
+            .filter(|resource| {
+                station.is_some_and(|station| {
+                    within_station_search_region(resource.position, station)
+                        && station_target_is_reachable(
+                            world,
+                            station,
+                            &resource.target_kind,
+                            resource.position,
+                        )
+                })
+            })
             .filter(|resource| reservation_available(reservations, actor_id, &resource.id))
             .filter(|resource| actor_accepts_resource(content, actor, resource))
             .filter(|_| actor_remaining_carry_capacity(content, simulation, actor) > 0)
@@ -10121,6 +10235,9 @@ fn next_agent_goal_with_reservations(
                     .actors
                     .values()
                     .filter(|target| target.alive && target.role.as_str() != "role:enemy")
+                    .filter(|target| {
+                        within_enemy_target_search(content, actor, current, target.position)
+                    })
                     .map(|target| {
                         (
                             grid_distance_squared(target.position, current),
@@ -10137,6 +10254,14 @@ fn next_agent_goal_with_reservations(
                     .buildings
                     .values()
                     .filter(|building| building.health > 0)
+                    .filter(|building| {
+                        within_enemy_target_search(
+                            content,
+                            actor,
+                            current,
+                            building_visual_grid(content, building),
+                        )
+                    })
                     .filter_map(|building| {
                         let definition = building_def_for_archetype(content, &building.archetype)?;
                         let approach = building_approach(
@@ -10268,6 +10393,9 @@ fn next_agent_goal_with_reservations(
     let Some(resource_kind) = resource_for_role(content, &actor.role) else {
         return (AgentGoal::Wander, mirrored_target(world, current));
     };
+    let Some(station) = station else {
+        return (AgentGoal::Wander, mirrored_target(world, current));
+    };
     if content.roles.get(&actor.role).is_some_and(|role| {
         role_accepts_target(
             role,
@@ -10280,9 +10408,7 @@ fn next_agent_goal_with_reservations(
             .filter(|building| is_farm_resource_building(content, building))
             .filter(|building| reservation_available(reservations, actor_id, &building.id))
             .filter(|building| {
-                station.is_none_or(|station| {
-                    within_station_search_region(building_visual_grid(content, building), station)
-                })
+                within_station_search_region(building_visual_grid(content, building), station)
             })
             .filter_map(|building| {
                 let definition = building_def_for_archetype(content, &building.archetype)?;
@@ -10293,12 +10419,10 @@ fn next_agent_goal_with_reservations(
                     current,
                 )?;
                 Some((
-                    station.map_or(0, |station| {
-                        grid_distance_squared(
-                            building_visual_grid(content, building),
-                            station.position,
-                        )
-                    }),
+                    grid_distance_squared(
+                        building_visual_grid(content, building),
+                        station.position,
+                    ),
                     definition.targeting.as_ref().map_or_else(
                         || {
                             u128::from(grid_distance_squared(
@@ -10323,14 +10447,19 @@ fn next_agent_goal_with_reservations(
                 ))
             })
             .collect();
-        if let Some(station) = station {
-            farms.sort_by_key(|(station_distance, _, id, _)| (*station_distance, id.clone()));
-            farms.truncate(usize::from(station.definition.max_targets));
-        }
-        if let Some((_, _, building, approach)) = farms
-            .into_iter()
-            .min_by_key(|(_, score, id, _)| (*score, id.clone()))
-        {
+        farms.sort_by_key(|(station_distance, _, id, _)| (*station_distance, id.clone()));
+        farms.truncate(usize::from(station.definition.max_targets));
+        farms.sort_by_key(|(_, score, id, _)| (*score, id.clone()));
+        if let Some((_, _, building, approach)) = farms.into_iter().find(|(_, _, building, _)| {
+            simulation.buildings.get(building).is_some_and(|building| {
+                station_target_is_reachable(
+                    world,
+                    station,
+                    &StableId::new("target:farm").expect("static target ID"),
+                    building_visual_grid(content, building),
+                )
+            })
+        }) {
             return (AgentGoal::HarvestFarm(building), approach);
         }
     }
@@ -10341,8 +10470,16 @@ fn next_agent_goal_with_reservations(
             resource.kind == resource_kind
                 && resource.amount > 0
                 && actor_accepts_resource(content, actor, resource)
+                && within_station_search_region(resource.position, station)
         })
         .collect();
+    resources.sort_by_key(|resource| {
+        (
+            grid_distance_squared(resource.position, station.position),
+            resource.id.clone(),
+        )
+    });
+    resources.truncate(usize::from(station.definition.max_targets));
     resources.sort_by_key(|resource| {
         (
             grid_distance_squared(resource.position, current),
@@ -10351,12 +10488,13 @@ fn next_agent_goal_with_reservations(
             resource.id.clone(),
         )
     });
-    resources.truncate(20);
     resources
         .into_iter()
-        .find(|resource| reservation_available(reservations, actor_id, &resource.id))
-        .and_then(|resource| {
-            resource_approach(world, resource, current)
+        .filter(|resource| reservation_available(reservations, actor_id, &resource.id))
+        .find_map(|resource| {
+            station_target_is_reachable(world, station, &resource.target_kind, resource.position)
+                .then(|| resource_approach(world, resource, current))
+                .flatten()
                 .map(|approach| (AgentGoal::Gather(resource.id.clone()), approach))
         })
         .unwrap_or_else(|| (AgentGoal::Wander, mirrored_target(world, current)))
@@ -10561,7 +10699,14 @@ fn complete_agent_goal(
                 let defense = effective_role_stats(content, simulation, target)
                     .map_or(0, |stats| stats.damage_reduction_percent);
                 let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
-                match apply_combat_damage(config, simulation, content, target_id, damage) {
+                match apply_combat_damage(
+                    config,
+                    simulation,
+                    content,
+                    Some(actor_id),
+                    target_id,
+                    damage,
+                ) {
                     Ok(_) => {
                         if damage > 0 {
                             action_presentation = Some(ActionPresentation::Impact {
@@ -10758,6 +10903,7 @@ fn apply_combat_damage(
     config: &GameConfig,
     simulation: &mut WorldSimulation,
     content: &ContentCatalog,
+    attacker_id: Option<&StableId>,
     target_id: &StableId,
     damage: u32,
 ) -> Result<bool, stream_town_domain::SimulationError> {
@@ -10768,14 +10914,22 @@ fn apply_combat_damage(
         .actors
         .get(target_id)
         .is_some_and(|target| target.alive);
-    let enemy = simulation
-        .actors
-        .get(target_id)
+    let target_before_damage = simulation.actors.get(target_id).cloned();
+    let enemy = target_before_damage
+        .as_ref()
         .filter(|target| target.role.as_str() == "role:enemy")
         .and_then(|target| actor_archetype(content, target))
         .and_then(|archetype| archetype.enemy.as_ref())
         .cloned();
     let killed = simulation.damage_actor(target_id, damage)?;
+    if !killed
+        && let (Some(attacker_id), Some(target)) = (attacker_id, target_before_damage.as_ref())
+        && enemy_attacks_attacker(content, target)
+        && enemy_retaliation_target_is_valid(content, simulation, target, attacker_id)
+        && let Some(target) = simulation.actors.get_mut(target_id)
+    {
+        target.preferred_target = Some(attacker_id.clone());
+    }
     if killed
         && was_alive
         && let Some(enemy) = enemy
@@ -10802,6 +10956,30 @@ fn apply_combat_damage(
         );
     }
     Ok(killed)
+}
+
+fn enemy_retaliation_target_is_valid(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    enemy: &ActorState,
+    attacker: &StableId,
+) -> bool {
+    if let Some(actor) = simulation.actors.get(attacker) {
+        return actor.alive
+            && actor.role.as_str() != "role:enemy"
+            && (enemy_targets_kind(content, enemy, "target:player")
+                || (actor.health < actor.max_health
+                    && enemy_targets_kind(content, enemy, "target:injured_player")));
+    }
+    simulation.buildings.get(attacker).is_some_and(|building| {
+        building.health > 0
+            && (enemy_targets_kind(content, enemy, "target:building")
+                || (!building.complete
+                    && enemy_targets_kind(content, enemy, "target:construction"))
+                || (building.complete
+                    && building.health < building_max_health(content, building)
+                    && enemy_targets_kind(content, enemy, "target:damaged_building")))
+    })
 }
 
 fn spawn_combat_projectile(
@@ -11739,6 +11917,10 @@ fn move_combat_projectiles(
                 &config.0,
                 &mut simulation.0,
                 &content.0,
+                Some(match &projectile.source {
+                    ProjectileSource::Actor(actor) => actor,
+                    ProjectileSource::Building(building) => building,
+                }),
                 &projectile.target,
                 damage,
             ) {
@@ -17645,7 +17827,8 @@ fn apply_recruit_group_order(
                     compatible_station_ids(content, simulation, config, actor).contains(station)
                 }
                 RecruitGroupOrder::Target(target) => {
-                    compatible_target_ids(content, simulation, world, actor).contains(target)
+                    compatible_target_ids(content, simulation, world, config, actor)
+                        .contains(target)
                 }
             });
         if !valid {
@@ -21774,72 +21957,131 @@ fn compatible_target_ids(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
+    config: &GameConfig,
     actor: &ActorState,
 ) -> Vec<StableId> {
     let Some(role) = content.roles.get(&actor.role) else {
         return Vec::new();
     };
+    let fallback_station =
+        best_station_id(content, simulation, config, &actor.role, actor.position);
+    let Some(station) = assigned_station(content, simulation, config, actor).or_else(|| {
+        fallback_station
+            .as_ref()
+            .and_then(|id| station_candidate(content, simulation, config, id))
+    }) else {
+        return Vec::new();
+    };
+    let mut kinds = role.target_kinds.iter().collect::<Vec<_>>();
+    kinds.sort();
     let mut targets = Vec::new();
-    let accepts =
-        |kind: &str| role.targets_all || role.target_kinds.iter().any(|id| id.as_str() == kind);
-    targets.extend(
-        world
+    for kind in kinds {
+        if !station.definition.targets_all && !station.definition.target_kinds.contains(kind) {
+            continue;
+        }
+        let mut candidates = station_target_candidates(content, simulation, world, actor, kind);
+        candidates.retain(|(position, _)| {
+            within_station_search_region(*position, station)
+                && station_target_is_reachable(world, station, kind, *position)
+        });
+        candidates.sort_by_key(|(position, id)| {
+            (
+                grid_distance_squared(*position, station.position),
+                id.clone(),
+            )
+        });
+        candidates.truncate(usize::from(station.definition.max_targets));
+        targets.extend(candidates.into_iter().map(|(_, id)| id));
+    }
+    targets
+}
+
+fn station_target_candidates(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    actor: &ActorState,
+    kind: &StableId,
+) -> Vec<(GridPos, StableId)> {
+    match kind.as_str() {
+        "target:tree" | "target:ore" | "target:bush" | "target:fish" => world
             .resources
             .iter()
             .filter(|resource| {
-                resource.amount > 0 && actor_accepts_resource(content, actor, resource)
+                resource.amount > 0
+                    && resource.target_kind == *kind
+                    && actor_accepts_resource(content, actor, resource)
             })
-            .map(|resource| resource.id.clone()),
-    );
-    if accepts("target:farm") {
-        targets.extend(
-            simulation
-                .buildings
-                .values()
-                .filter(|building| is_farm_resource_building(content, building))
-                .map(|building| building.id.clone()),
-        );
+            .map(|resource| (resource.position, resource.id.clone()))
+            .collect(),
+        "target:farm" => simulation
+            .buildings
+            .values()
+            .filter(|building| is_farm_resource_building(content, building))
+            .map(|building| (building_visual_grid(content, building), building.id.clone()))
+            .collect(),
+        "target:enemy" | "target:boss" => simulation
+            .actors
+            .values()
+            .filter(|target| target.alive && target.role.as_str() == "role:enemy")
+            .filter(|target| {
+                let is_boss = actor_archetype(content, target)
+                    .and_then(|archetype| archetype.enemy.as_ref())
+                    .is_some_and(|enemy| enemy.enemy_type.as_str().ends_with("_boss"));
+                is_boss == (kind.as_str() == "target:boss")
+            })
+            .map(|target| (target.position, target.id.clone()))
+            .collect(),
+        "target:player" => simulation
+            .actors
+            .values()
+            .filter(|target| {
+                target.id != actor.id
+                    && target.alive
+                    && target.role.as_str() != "role:enemy"
+                    && target.health == target.max_health
+            })
+            .map(|target| (target.position, target.id.clone()))
+            .collect(),
+        "target:injured_player" => simulation
+            .actors
+            .values()
+            .filter(|target| {
+                target.id != actor.id
+                    && target.alive
+                    && target.role.as_str() != "role:enemy"
+                    && target.health < target.max_health
+            })
+            .map(|target| (target.position, target.id.clone()))
+            .collect(),
+        "target:construction" => simulation
+            .buildings
+            .values()
+            .filter(|building| !building.complete && building.health > 0)
+            .map(|building| (building_visual_grid(content, building), building.id.clone()))
+            .collect(),
+        "target:damaged_building" => simulation
+            .buildings
+            .values()
+            .filter(|building| {
+                building.complete
+                    && building.health > 0
+                    && building.health < building_max_health(content, building)
+            })
+            .map(|building| (building_visual_grid(content, building), building.id.clone()))
+            .collect(),
+        "target:building" => simulation
+            .buildings
+            .values()
+            .filter(|building| {
+                building.complete
+                    && building.health == building_max_health(content, building)
+                    && !is_farm_resource_building(content, building)
+            })
+            .map(|building| (building_visual_grid(content, building), building.id.clone()))
+            .collect(),
+        _ => Vec::new(),
     }
-    if accepts("target:enemy") {
-        targets.extend(
-            simulation
-                .actors
-                .values()
-                .filter(|target| target.alive && target.role.as_str() == "role:enemy")
-                .map(|target| target.id.clone()),
-        );
-    }
-    if accepts("target:injured_player") {
-        targets.extend(
-            simulation
-                .actors
-                .values()
-                .filter(|target| {
-                    target.id != actor.id
-                        && target.alive
-                        && target.role.as_str() != "role:enemy"
-                        && target.health < target.max_health
-                })
-                .map(|target| target.id.clone()),
-        );
-    }
-    if accepts("target:construction") || accepts("target:damaged_building") {
-        targets.extend(
-            simulation
-                .buildings
-                .values()
-                .filter(|building| {
-                    (!building.complete && accepts("target:construction"))
-                        || (building.complete
-                            && building.health < building_max_health(content, building)
-                            && accepts("target:damaged_building"))
-                })
-                .map(|building| building.id.clone()),
-        );
-    }
-    targets.sort();
-    targets.dedup();
-    targets
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -22858,6 +23100,7 @@ fn process_injected_commands(
                     &content.0,
                     &simulation.0,
                     &world.generated,
+                    &config.0,
                     actor,
                 );
                 if let Some(index) = index {
@@ -26070,6 +26313,79 @@ mod tests {
     }
 
     #[test]
+    fn resource_workers_only_receive_targets_from_their_assigned_station_catalog() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        world.resources.clear();
+        let close = stream_town_domain::GeneratedResource {
+            id: StableId::new("resource:station_close").unwrap(),
+            kind: StableId::new("resource:wood").unwrap(),
+            target_kind: StableId::new("target:tree").unwrap(),
+            position: GridPos { x: 5, z: 5 },
+            amount: 100,
+        };
+        let far = stream_town_domain::GeneratedResource {
+            id: StableId::new("resource:station_far").unwrap(),
+            kind: StableId::new("resource:wood").unwrap(),
+            target_kind: StableId::new("target:tree").unwrap(),
+            position: GridPos { x: 63, z: 63 },
+            amount: 100,
+        };
+        for resource in [&close, &far] {
+            world
+                .navigation
+                .set_blocked(
+                    stream_town_domain::DirtyRegion {
+                        min: resource.position,
+                        max: resource.position,
+                    },
+                    false,
+                )
+                .unwrap();
+        }
+        world.resources.extend([close.clone(), far.clone()]);
+
+        let lumbermill = &content.buildings[&StableId::new("building:lumbermill").unwrap()];
+        let station_id = StableId::new("building:station_catalog_lumbermill").unwrap();
+        let actor_id = StableId::new("npc:station_catalog_logger").unwrap();
+        let current = GridPos { x: 4, z: 5 };
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation.buildings.insert(
+            station_id.clone(),
+            BuildingState {
+                id: station_id.clone(),
+                archetype: lumbermill.archetype.clone(),
+                position: GridPos { x: 4, z: 4 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: i32::try_from(building_base_max_health(&content, lumbermill)).unwrap(),
+                complete: true,
+            },
+        );
+        assert!(simulation.join_player(actor_id.clone(), current));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:logger").unwrap())
+            .unwrap();
+        simulation.actors.get_mut(&actor_id).unwrap().station = Some(station_id);
+
+        assert_eq!(
+            compatible_target_ids(
+                &content,
+                &simulation,
+                &world,
+                &config,
+                &simulation.actors[&actor_id],
+            ),
+            vec![close.id.clone()],
+        );
+        assert_eq!(
+            next_agent_goal(&simulation, &world, &config, &content, &actor_id, current).0,
+            AgentGoal::Gather(close.id),
+        );
+    }
+
+    #[test]
     fn target_score_uses_authored_euclidean_distance_and_assignment_penalty() {
         let scoring = TargetingScoreDef {
             assignment_penalty_milli: 10_000_000,
@@ -26981,13 +27297,27 @@ mod tests {
             simulation
                 .assign_role(&actor_id, StableId::new(role).unwrap())
                 .unwrap();
-            let (goal, target) =
+            let (goal, _) =
                 next_agent_goal(&simulation, &world, &config, &content, &actor_id, current);
-            assert_eq!(goal, AgentGoal::Gather(expected_target.id.clone()));
-            assert_eq!(target, current);
-            let compatible =
-                compatible_target_ids(&content, &simulation, &world, &simulation.actors[&actor_id]);
-            assert!(compatible.contains(&expected_target.id));
+            let compatible = compatible_target_ids(
+                &content,
+                &simulation,
+                &world,
+                &config,
+                &simulation.actors[&actor_id],
+            );
+            let AgentGoal::Gather(selected) = goal else {
+                panic!("food worker did not select a generated resource");
+            };
+            assert!(compatible.contains(&selected));
+            assert_eq!(
+                world
+                    .resources
+                    .iter()
+                    .find(|resource| resource.id == selected)
+                    .map(|resource| &resource.target_kind),
+                Some(&expected_target.target_kind),
+            );
             assert!(!compatible.contains(&rejected_target.id));
         }
     }
@@ -26997,12 +27327,12 @@ mod tests {
         let config = GameConfig::default();
         let content = embedded_content();
         let world = generate_world(&config.world);
-        let claimed = world
+        let starting_resource = world
             .resources
             .iter()
             .find(|resource| resource.target_kind.as_str() == "target:tree")
             .unwrap();
-        let current = claimed.position;
+        let current = starting_resource.position;
         let first = StableId::new("npc:reservation_first").unwrap();
         let second = StableId::new("npc:reservation_second").unwrap();
         let mut simulation = WorldSimulation::new(world.seed);
@@ -27012,7 +27342,21 @@ mod tests {
                 .assign_role(actor, StableId::new("role:logger").unwrap())
                 .unwrap();
         }
-        let reservations = BTreeMap::from([(claimed.id.clone(), first.clone())]);
+        let AgentGoal::Gather(claimed) = next_agent_goal_with_reservations(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &first,
+            current,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .0
+        else {
+            panic!("logger did not select a station-catalog resource");
+        };
+        let reservations = BTreeMap::from([(claimed.clone(), first.clone())]);
         assert_eq!(
             next_agent_goal_with_reservations(
                 &simulation,
@@ -27025,7 +27369,7 @@ mod tests {
                 &BTreeMap::new(),
             )
             .0,
-            AgentGoal::Gather(claimed.id.clone())
+            AgentGoal::Gather(claimed.clone())
         );
         let second_goal = next_agent_goal_with_reservations(
             &simulation,
@@ -27038,22 +27382,18 @@ mod tests {
             &BTreeMap::new(),
         )
         .0;
-        assert!(matches!(second_goal, AgentGoal::Gather(ref id) if id != &claimed.id));
-        assert!(reservation_available(
-            &BTreeMap::new(),
-            &second,
-            &claimed.id
-        ));
+        assert!(matches!(second_goal, AgentGoal::Gather(ref id) if id != &claimed));
+        assert!(reservation_available(&BTreeMap::new(), &second, &claimed));
     }
 
     #[test]
-    fn generated_resource_claims_only_consider_unitys_twenty_closest() {
+    fn generated_resource_claims_respect_the_assigned_stations_authored_catalog_cap() {
         let config = GameConfig::default();
         let content = embedded_content();
         let mut world = generate_world(&config.world);
         world.resources.clear();
         let current = GridPos { x: 20, z: 20 };
-        for offset in 1..=21_u16 {
+        for offset in 1..=31_u16 {
             world.resources.push(stream_town_domain::GeneratedResource {
                 id: StableId::new(format!("resource:target_window_{offset:02}")).unwrap(),
                 kind: StableId::new("resource:wood").unwrap(),
@@ -27074,7 +27414,7 @@ mod tests {
         let reservations: BTreeMap<_, _> = world
             .resources
             .iter()
-            .take(20)
+            .take(30)
             .map(|resource| {
                 (
                     resource.id.clone(),
@@ -27101,7 +27441,7 @@ mod tests {
             .0,
             AgentGoal::Wander
         ));
-        assert!(world.resources[20].id.as_str().ends_with("21"));
+        assert!(world.resources[30].id.as_str().ends_with("31"));
     }
 
     #[test]
@@ -27279,8 +27619,14 @@ mod tests {
         assert_eq!(simulation.actors[&actor_id].inventory[&food], 1);
         assert_eq!(role_progress(&simulation.actors[&actor_id]).experience, 1);
         assert!(
-            compatible_target_ids(&content, &simulation, &world, &simulation.actors[&actor_id],)
-                .contains(&farm_id)
+            compatible_target_ids(
+                &content,
+                &simulation,
+                &world,
+                &config,
+                &simulation.actors[&actor_id],
+            )
+            .contains(&farm_id)
         );
     }
 
@@ -27647,9 +27993,13 @@ mod tests {
         assert!(
             (action_cooldown(&content, &simulation, &enemy_id, &goal) - 3.0).abs() <= f32::EPSILON
         );
-        assert!(apply_combat_damage(&config, &mut simulation, &content, &enemy_id, 5).unwrap());
+        assert!(
+            apply_combat_damage(&config, &mut simulation, &content, None, &enemy_id, 5).unwrap()
+        );
         assert_eq!(simulation.town_resources[&gold], 50);
-        assert!(apply_combat_damage(&config, &mut simulation, &content, &enemy_id, 5).unwrap());
+        assert!(
+            apply_combat_damage(&config, &mut simulation, &content, None, &enemy_id, 5).unwrap()
+        );
         assert_eq!(simulation.town_resources[&gold], 50);
 
         let camp = content
@@ -27661,6 +28011,72 @@ mod tests {
             .map(|serial| weighted_enemy_archetype(camp, 42, serial))
             .collect();
         assert_eq!(samples.len(), 3);
+    }
+
+    #[test]
+    fn enemy_sensor_range_and_retaliation_follow_each_authored_prefab() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let goblin_archetype =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
+        let goblin = content.archetypes[&goblin_archetype]
+            .enemy
+            .as_ref()
+            .unwrap();
+        assert_eq!(goblin.target_search_range_milli_cells, 4_000);
+        assert!(goblin.attack_attacker);
+
+        let enemy_id = StableId::new("actor:sensor_goblin").unwrap();
+        let attacker_id = StableId::new("npc:sensor_attacker").unwrap();
+        let enemy_position = GridPos { x: 20, z: 20 };
+        let attacker_position = GridPos { x: 25, z: 20 };
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.spawn_enemy(enemy_id.clone(), goblin_archetype, enemy_position, 10,));
+        assert!(simulation.join_player(attacker_id.clone(), attacker_position));
+
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &enemy_id,
+                enemy_position,
+            )
+            .0,
+            AgentGoal::Wander,
+        );
+        assert!(
+            !apply_combat_damage(
+                &config,
+                &mut simulation,
+                &content,
+                Some(&attacker_id),
+                &enemy_id,
+                1,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            simulation.actors[&enemy_id].preferred_target,
+            Some(attacker_id.clone()),
+        );
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &enemy_id,
+                enemy_position,
+            ),
+            (AgentGoal::Attack(attacker_id), attacker_position),
+        );
+
+        let serialized = ron::to_string(&simulation).unwrap();
+        let reloaded: WorldSimulation = ron::from_str(&serialized).unwrap();
+        assert_eq!(reloaded, simulation);
     }
 
     #[test]
@@ -29458,8 +29874,14 @@ mod tests {
         let compatible = selected
             .iter()
             .filter(|actor| {
-                compatible_target_ids(&content, &simulation, &world, &simulation.actors[*actor])
-                    .contains(&resource.id)
+                compatible_target_ids(
+                    &content,
+                    &simulation,
+                    &world,
+                    &config,
+                    &simulation.actors[*actor],
+                )
+                .contains(&resource.id)
             })
             .count();
         assert_eq!(

@@ -646,6 +646,22 @@ mistaken for production-ready systems.
   individual Unity controllers and retarget exported idle/walk transform tracks
   onto their own converted GLB rigs. Fish God intentionally stays static because
   its shipping model has no Animator.
+- Content schema 31 promotes the remaining reachable enemy `TargetSensor`
+  contract into neutral data. All nine shipping enemy archetypes now use their
+  authored acquisition radius (four logical cells for Goblin and 12.5 for the
+  other eight) and `attackAttacker` behavior. A damaged enemy retains a valid
+  player or building attacker outside its normal acquisition radius, and the
+  stable target survives native serialization. The migration converter, asset
+  validator, runtime tests, and focused archetype inspector all cover the new
+  fields.
+- Resource workers and `!target` now consume the assigned station's actual
+  target catalog. Candidate resources/farms are constrained by the station's
+  authored rectangular search region, per-target-kind list capacity, compatible
+  masks, and path reachability; deterministic distance/ID ordering replaces
+  Unity's frame-order tie behavior. Specialized stations can no longer leak to
+  valid-but-out-of-range world resources, while the Town Hall retains its
+  authored 30-target fallback catalog. Combat, healing, and construction keep
+  Unity's separate nearest-target sensor path.
 
 ## Not yet at parity
 
@@ -655,9 +671,12 @@ mistaken for production-ready systems.
   emitters are converted and live.
 - Foliage batching or authored impostor meshes beyond the live scale-aware
   range streaming, predictive congestion avoidance beyond deterministic local
-  crowd separation, complete advanced role/inventory behavior beyond the live resource-worker loop,
-  additional enemy archetype behaviors/spawners, remaining station behavior,
-  and every reachable balance rule from the Unity scenes. The source audit
+  crowd separation, any obscure advanced role/inventory interactions not yet
+  represented by the live worker/combat/healing/construction loops, exact
+  station refresh/stale-cache timing, and final source-diff closure for every
+  reachable balance edge case. All nine shipping enemy combat archetypes, the
+  weighted night camp spawner, raid waves/boss, retaliation, and prefab-specific
+  target acquisition ranges are now live. The source audit
   confirms the Tower contains the shipping project's sole `ProjectileShooter`;
   there is no second reachable combat building to reproduce.
 - Exact production outbound response wording. The authenticated IRC path now includes player
@@ -748,4 +767,5 @@ shipping grass, critter, and castle-flag custom materials now have typed WGSL
 ports backed by converted renderer bindings. It is still missing foliage
 batching/impostors, particle fields, remaining custom-shader parity, and broader
 curated screenshot coverage required to close the milestone.
-Gameplay parity, presentation, and hardening remain long-term work.
+Gameplay parity is materially advanced but still needs final source-diff closure;
+presentation and hardening remain long-term work.

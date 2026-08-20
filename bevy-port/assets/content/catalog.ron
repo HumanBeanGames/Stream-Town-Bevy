@@ -1,5 +1,5 @@
 (
-    schema_version: 30,
+    schema_version: 31,
     loading_screen: (
         progress_milli_per_second: 500,
         completion_hold_milliseconds: 500,
@@ -1762,6 +1762,8 @@
                 action_amount: 2,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 1000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 1000,
@@ -2082,6 +2084,8 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 1000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 150,
@@ -2168,6 +2172,8 @@
                 action_amount: 3,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 1000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 250,
@@ -2769,6 +2775,8 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 1000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 150,
@@ -4443,6 +4451,8 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 1000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 300,
@@ -5393,6 +5403,8 @@
                 action_amount: 30,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 5000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 10000,
@@ -6329,6 +6341,8 @@
                 action_amount: 5,
                 action_milliseconds: 3000,
                 action_range_milli_cells: 5000,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 50,
@@ -6634,6 +6648,8 @@
                 action_amount: 1,
                 action_milliseconds: 1000,
                 action_range_milli_cells: 1000,
+                target_search_range_milli_cells: 4000,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 15,
@@ -7711,6 +7727,8 @@
                 action_amount: 20,
                 action_milliseconds: 2000,
                 action_range_milli_cells: 1500,
+                target_search_range_milli_cells: 12500,
+                attack_attacker: true,
                 kill_reward: (
                     resource: "resource:gold",
                     amount: 500,

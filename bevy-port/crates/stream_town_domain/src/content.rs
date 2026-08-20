@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 30;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 31;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -126,6 +126,10 @@ pub struct EnemyDef {
     pub action_amount: u32,
     pub action_milliseconds: u32,
     pub action_range_milli_cells: u32,
+    /// Unity `TargetSensor._targetSearchRange`, converted through the two-unit grid.
+    pub target_search_range_milli_cells: u32,
+    /// Whether taking damage replaces the current target with a valid attacker.
+    pub attack_attacker: bool,
     pub kill_reward: ResourceReward,
     #[serde(default)]
     pub targets_all: bool,
@@ -738,6 +742,7 @@ impl ContentCatalog {
                 enemy.action_amount == 0
                     || enemy.action_milliseconds == 0
                     || enemy.action_range_milli_cells == 0
+                    || enemy.target_search_range_milli_cells == 0
                     || enemy.kill_reward.amount == 0
                     || (!enemy.targets_all && enemy.target_kinds.is_empty())
             }) {

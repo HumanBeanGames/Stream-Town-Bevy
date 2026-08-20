@@ -969,6 +969,9 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
         .and_then(Value::as_object)
         .with_context(|| format!("{} enemy target mask is invalid", asset.path))?;
     let (targets_all, target_kinds) = mask_ids(target_mask, "target")?;
+    let attack_attacker = component_field_value(sensor, "_attackAttacker")
+        .and_then(Value::as_bool)
+        .with_context(|| format!("{} enemy attack-attacker setting is invalid", asset.path))?;
     let reward = components
         .find(|component| component_type(component) == "GameResources.ActiveResourceIncrementer")
         .with_context(|| format!("{} enemy has no active resource reward", asset.path))?;
@@ -991,6 +994,12 @@ fn enemy_definition(asset: &UnityAsset, pools: &PoolIndex) -> Result<Option<Enem
         action_amount,
         action_milliseconds: positive_scaled_milli(action, "_actionRate", 1_000.0)?,
         action_range_milli_cells: positive_scaled_milli(action, "_actionRange", 500.0)?,
+        target_search_range_milli_cells: positive_scaled_milli(
+            sensor,
+            "_targetSearchRange",
+            500.0,
+        )?,
+        attack_attacker,
         kill_reward: ResourceReward {
             resource: stable_id("resource", &slug(reward_resource))?,
             amount: reward_amount,
@@ -3079,10 +3088,14 @@ mod tests {
                 ),
                 component(
                     "Sensors.TargetSensor, Assembly-CSharp",
-                    vec![field(
-                        "_targetMask",
-                        serde_json::json!({"Index": -1, "Name": null, "RawValue": 3841}),
-                    )],
+                    vec![
+                        field(
+                            "_targetMask",
+                            serde_json::json!({"Index": -1, "Name": null, "RawValue": 3841}),
+                        ),
+                        field("_attackAttacker", Value::from(true)),
+                        field("_targetSearchRange", Value::from(8.0)),
+                    ],
                 ),
                 component(
                     "GameResources.ActiveResourceIncrementer, Assembly-CSharp",
@@ -3101,6 +3114,8 @@ mod tests {
         assert_eq!(converted.additional_health_milli_per_player, 200);
         assert_eq!(converted.action_milliseconds, 1_000);
         assert_eq!(converted.action_range_milli_cells, 1_000);
+        assert_eq!(converted.target_search_range_milli_cells, 4_000);
+        assert!(converted.attack_attacker);
         assert_eq!(
             converted.kill_reward,
             ResourceReward {
