@@ -23,8 +23,8 @@ pub use command::{
     CommandParseError, CustomizationKind,
 };
 pub use config::{
-    GameConfig, GameplayConfig, SHIPPING_SECONDS_PER_DAY, TimeCycleConfig, TimeCycleSample,
-    TwitchConfig, WindowConfig, WorldGenConfig,
+    GameConfig, GameplayConfig, SHIPPING_FISH_GOD_REWARD_ID, SHIPPING_SECONDS_PER_DAY,
+    TimeCycleConfig, TimeCycleSample, TwitchConfig, WindowConfig, WorldGenConfig,
 };
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,

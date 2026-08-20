@@ -6,6 +6,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
+    time::{Duration, Instant},
 };
 
 use bevy::prelude::*;
@@ -19,7 +20,8 @@ use stream_town_domain::{
     StableId, TechGroup, TechNode,
 };
 use stream_town_game::twitch::{
-    CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation,
+    CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
+    TwitchStatus, TwitchTransport, TwitchUserIdentity,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -106,7 +108,11 @@ struct ToolState {
     twitch_auth_events: Option<Arc<Mutex<mpsc::Receiver<TwitchToolEvent>>>>,
     twitch_device: Option<DeviceAuthorization>,
     twitch_validation: Option<TokenValidation>,
+    twitch_channel_identity: Option<TwitchUserIdentity>,
+    twitch_irc_verified: bool,
     game_master_ids: String,
+    game_master_lookup: String,
+    fish_god_reward_id: String,
     tool_job_events: Option<Arc<Mutex<mpsc::Receiver<ToolJobEvent>>>>,
     runtime_console: RuntimeConsoleStore,
     runtime_status: Option<RuntimeConsoleStatus>,
@@ -121,7 +127,13 @@ struct ToolState {
 enum TwitchToolEvent {
     Device(DeviceAuthorization),
     Authorized(TokenValidation),
-    Diagnostic(TokenValidation),
+    Progress(String),
+    Diagnostic {
+        validation: TokenValidation,
+        channel: TwitchUserIdentity,
+    },
+    GameMasterResolved(TwitchUserIdentity),
+    RewardCaptured(String),
     Cleared,
     Error(String),
 }
@@ -232,6 +244,8 @@ impl Default for ToolState {
             .cloned()
             .collect::<Vec<_>>()
             .join(", ");
+        let game_master_lookup = config.twitch.channel_login.clone();
+        let fish_god_reward_id = config.twitch.fish_god_reward_id.clone().unwrap_or_default();
         Self {
             tab: ToolTab::default(),
             unity_root: "..".to_owned(),
@@ -267,7 +281,11 @@ impl Default for ToolState {
             twitch_auth_events: None,
             twitch_device: None,
             twitch_validation: None,
+            twitch_channel_identity: None,
+            twitch_irc_verified: false,
             game_master_ids,
+            game_master_lookup,
+            fish_god_reward_id,
             tool_job_events: None,
             runtime_console: RuntimeConsoleStore::from_environment(),
             runtime_status: None,
@@ -411,6 +429,7 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             state.status = match load_game_config(&state.config_path) {
                 Ok(config) => {
                     state.config = config;
+                    sync_twitch_tool_fields(state);
                     state.generated_world = None;
                     "Reloaded and validated authoritative game configuration".to_owned()
                 }
@@ -2449,29 +2468,38 @@ fn format_runtime_frame_times(status: &RuntimeConsoleStatus) -> String {
     }
 }
 
+fn parse_game_master_ids(value: &str) -> BTreeSet<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn format_game_master_ids(ids: &BTreeSet<String>) -> String {
+    ids.iter().cloned().collect::<Vec<_>>().join(", ")
+}
+
+fn sync_twitch_tool_fields(state: &mut ToolState) {
+    state.game_master_ids = format_game_master_ids(&state.config.twitch.game_master_ids);
+    state.fish_god_reward_id = state
+        .config
+        .twitch
+        .fish_god_reward_id
+        .clone()
+        .unwrap_or_default();
+    state.twitch_channel_identity = None;
+    state.twitch_irc_verified = false;
+}
+
 fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Twitch setup and diagnostics");
-    ui.label("Public-client settings are separate from OAuth tokens. Tokens live only in the operating-system credential vault.");
+    ui.label("Use a Twitch public client with the exact chat:read and chat:edit scopes. OAuth tokens live only in the operating-system credential vault.");
     ui.checkbox(
         &mut state.config.twitch.enabled,
         "Enable Twitch in the game",
     );
-    ui.horizontal(|ui| {
-        ui.label("Game-master Twitch user IDs");
-        if ui
-            .text_edit_singleline(&mut state.game_master_ids)
-            .changed()
-        {
-            state.config.twitch.game_master_ids = state
-                .game_master_ids
-                .split(',')
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-                .collect();
-        }
-    });
-    ui.label("GM IDs are explicit numeric Twitch user IDs; broadcaster/moderator status does not grant GM commands.");
     ui.horizontal(|ui| {
         ui.label("Client ID");
         ui.text_edit_singleline(&mut state.config.twitch.client_id);
@@ -2484,6 +2512,56 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         ui.label("Channel login");
         ui.text_edit_singleline(&mut state.config.twitch.channel_login);
     });
+    let busy = state.twitch_auth_events.is_some();
+    ui.horizontal(|ui| {
+        ui.label("Game-master Twitch user IDs");
+        if ui
+            .text_edit_singleline(&mut state.game_master_ids)
+            .changed()
+        {
+            state.config.twitch.game_master_ids = parse_game_master_ids(&state.game_master_ids);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Resolve GM login");
+        ui.text_edit_singleline(&mut state.game_master_lookup);
+        if ui
+            .add_enabled(
+                !busy
+                    && !state.config.twitch.client_id.trim().is_empty()
+                    && !state.game_master_lookup.trim().is_empty(),
+                egui::Button::new("Resolve and add ID"),
+            )
+            .clicked()
+        {
+            start_twitch_game_master_lookup(state);
+        }
+    });
+    ui.label("GM IDs are explicit numeric Twitch user IDs; broadcaster/moderator status does not grant GM commands.");
+    ui.horizontal(|ui| {
+        ui.label("Fish God reward ID");
+        if ui
+            .text_edit_singleline(&mut state.fish_god_reward_id)
+            .changed()
+        {
+            let reward_id = state.fish_god_reward_id.trim();
+            state.config.twitch.fish_god_reward_id = if reward_id.is_empty() {
+                None
+            } else {
+                Some(reward_id.to_owned())
+            };
+        }
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Capture next reward"),
+            )
+            .on_hover_text("Connect to chat, then redeem the intended Channel Points reward within three minutes")
+            .clicked()
+        {
+            start_twitch_reward_capture(state);
+        }
+    });
     ui.checkbox(
         &mut state.config.twitch.require_broadcaster_connect,
         "Require the broadcaster's per-session !connect code",
@@ -2495,7 +2573,6 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 Err(error) => format!("Could not save runtime configuration: {error:#}"),
             };
         }
-        let busy = state.twitch_auth_events.is_some();
         if ui
             .add_enabled(
                 !busy && !state.config.twitch.client_id.trim().is_empty(),
@@ -2508,7 +2585,7 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         if ui
             .add_enabled(
                 !busy && !state.config.twitch.client_id.trim().is_empty(),
-                egui::Button::new("Check vault"),
+                egui::Button::new("Run end-to-end diagnostic"),
             )
             .clicked()
         {
@@ -2547,9 +2624,21 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             validation.expires_in
         ));
     }
+    if let Some(channel) = &state.twitch_channel_identity {
+        ui.label(format!(
+            "Resolved channel '{}' ({}, user {})",
+            channel.display_name, channel.login, channel.id
+        ));
+    }
+    if state.twitch_irc_verified {
+        ui.colored_label(
+            egui::Color32::LIGHT_GREEN,
+            "Authenticated IRC connection and channel join verified.",
+        );
+    }
     ui.colored_label(
         egui::Color32::LIGHT_BLUE,
-        "No credentials are stored in repository assets.",
+        "No client secret or OAuth credential is stored in repository assets.",
     );
 }
 
@@ -2573,24 +2662,62 @@ fn poll_twitch_tool_events(state: &mut ToolState) {
                     validation.login
                 );
                 state.twitch_validation = Some(validation);
+                state.twitch_channel_identity = None;
+                state.twitch_irc_verified = false;
                 state.twitch_device = None;
                 finished = true;
             }
-            TwitchToolEvent::Diagnostic(validation) => {
-                state.status = format!("Twitch token for '{}' is valid", validation.login);
+            TwitchToolEvent::Progress(message) => {
+                state.status = message;
+            }
+            TwitchToolEvent::Diagnostic {
+                validation,
+                channel,
+            } => {
+                state.status = format!(
+                    "Twitch bot '{}' validated and joined channel '{}'",
+                    validation.login, channel.login
+                );
                 state.twitch_validation = Some(validation);
+                state.twitch_channel_identity = Some(channel);
+                state.twitch_irc_verified = true;
+                finished = true;
+            }
+            TwitchToolEvent::GameMasterResolved(identity) => {
+                state
+                    .config
+                    .twitch
+                    .game_master_ids
+                    .insert(identity.id.clone());
+                state.game_master_ids =
+                    format_game_master_ids(&state.config.twitch.game_master_ids);
+                state.status = format!(
+                    "Resolved Twitch GM '{}' to numeric user ID {}",
+                    identity.login, identity.id
+                );
+                finished = true;
+            }
+            TwitchToolEvent::RewardCaptured(reward_id) => {
+                state.config.twitch.fish_god_reward_id = Some(reward_id.clone());
+                state.fish_god_reward_id.clone_from(&reward_id);
+                state.status = format!(
+                    "Captured Channel Points reward ID {reward_id}; save the runtime config"
+                );
                 finished = true;
             }
             TwitchToolEvent::Cleared => {
                 "Removed the Twitch token from the OS credential vault"
                     .clone_into(&mut state.status);
                 state.twitch_validation = None;
+                state.twitch_channel_identity = None;
+                state.twitch_irc_verified = false;
                 state.twitch_device = None;
                 finished = true;
             }
             TwitchToolEvent::Error(error) => {
                 state.status = format!("Twitch setup failed: {error}");
                 state.twitch_device = None;
+                state.twitch_irc_verified = false;
                 finished = true;
             }
         }
@@ -2609,6 +2736,8 @@ fn twitch_event_channel(state: &mut ToolState) -> mpsc::Sender<TwitchToolEvent> 
 fn start_twitch_authorization(state: &mut ToolState) {
     state.twitch_device = None;
     state.twitch_validation = None;
+    state.twitch_channel_identity = None;
+    state.twitch_irc_verified = false;
     "Starting Twitch device authorization...".clone_into(&mut state.status);
     let config = state.config.twitch.clone();
     let sender = twitch_event_channel(state);
@@ -2651,41 +2780,46 @@ fn start_twitch_authorization(state: &mut ToolState) {
 }
 
 fn start_twitch_diagnostic(state: &mut ToolState) {
-    "Checking Twitch token in the OS credential vault...".clone_into(&mut state.status);
+    "Validating and refreshing the Twitch token...".clone_into(&mut state.status);
     let config = state.config.twitch.clone();
     let sender = twitch_event_channel(state);
     let worker = thread::Builder::new()
         .name("stream-town-tools-twitch-check".to_owned())
         .spawn(move || {
-            let outcome = (|| -> anyhow::Result<TokenValidation> {
+            let outcome = (|| -> anyhow::Result<(TokenValidation, TwitchUserIdentity)> {
                 let vault = CredentialVault::new(&config.client_id, &config.bot_login);
-                let mut token = vault
-                    .load()?
-                    .ok_or_else(|| anyhow::anyhow!("no token is stored for this bot and client"))?;
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()?;
-                runtime.block_on(async {
+                let (validation, channel) = runtime.block_on(async {
                     let oauth = OAuthClient::new(config.client_id.clone())?;
-                    let validation = if let Ok(validation) = oauth.validate(&token).await {
-                        validation
-                    } else {
-                        token = oauth.refresh(&token).await?;
-                        vault.save(&token)?;
-                        oauth.validate(&token).await?
-                    };
+                    let (token, validation) = oauth.load_validated_token(&vault).await?;
                     anyhow::ensure!(
                         validation.login == config.bot_login,
                         "stored token belongs to '{}', expected '{}'",
                         validation.login,
                         config.bot_login
                     );
-                    Ok(validation)
-                })
+                    let channel = oauth.lookup_user(&token, &config.channel_login).await?;
+                    Ok::<_, anyhow::Error>((validation, channel))
+                })?;
+                sender
+                    .send(TwitchToolEvent::Progress(format!(
+                        "Token and channel validated; joining #{}...",
+                        config.channel_login
+                    )))
+                    .map_err(|_| anyhow::anyhow!("Twitch setup window closed"))?;
+                let transport = TwitchTransport::start(config.clone())?;
+                wait_for_twitch_connection(&transport, Duration::from_secs(30))?;
+                let _ = transport.send(TwitchControl::Disconnect);
+                Ok((validation, channel))
             })();
             let event = outcome.map_or_else(
                 |error| TwitchToolEvent::Error(format!("{error:#}")),
-                TwitchToolEvent::Diagnostic,
+                |(validation, channel)| TwitchToolEvent::Diagnostic {
+                    validation,
+                    channel,
+                },
             );
             let _ = sender.send(event);
         });
@@ -2693,6 +2827,116 @@ fn start_twitch_diagnostic(state: &mut ToolState) {
         state.status = format!("Could not start Twitch diagnostic worker: {error}");
         state.twitch_auth_events = None;
     }
+}
+
+fn start_twitch_game_master_lookup(state: &mut ToolState) {
+    let config = state.config.twitch.clone();
+    let login = state.game_master_lookup.trim().to_ascii_lowercase();
+    state.status = format!("Resolving Twitch user '{login}'...");
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-twitch-user-lookup".to_owned())
+        .spawn(move || {
+            let outcome = (|| -> anyhow::Result<TwitchUserIdentity> {
+                let vault = CredentialVault::new(&config.client_id, &config.bot_login);
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(async {
+                    let oauth = OAuthClient::new(config.client_id.clone())?;
+                    let (token, validation) = oauth.load_validated_token(&vault).await?;
+                    anyhow::ensure!(
+                        validation.login == config.bot_login,
+                        "stored token belongs to '{}', expected '{}'",
+                        validation.login,
+                        config.bot_login
+                    );
+                    oauth.lookup_user(&token, &login).await
+                })
+            })();
+            let event = outcome.map_or_else(
+                |error| TwitchToolEvent::Error(format!("{error:#}")),
+                TwitchToolEvent::GameMasterResolved,
+            );
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start Twitch user lookup worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn start_twitch_reward_capture(state: &mut ToolState) {
+    let config = state.config.twitch.clone();
+    "Connecting to Twitch; redeem the intended Channel Points reward after the tool confirms the channel join..."
+        .clone_into(&mut state.status);
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-twitch-reward-capture".to_owned())
+        .spawn(move || {
+            let outcome = (|| -> anyhow::Result<String> {
+                let transport = TwitchTransport::start(config)?;
+                wait_for_twitch_connection(&transport, Duration::from_secs(30))?;
+                sender
+                    .send(TwitchToolEvent::Progress(
+                        "Connected. Redeem the intended Channel Points reward now (three-minute timeout)."
+                            .to_owned(),
+                    ))
+                    .map_err(|_| anyhow::anyhow!("Twitch setup window closed"))?;
+                let reward_id = wait_for_twitch_reward(&transport, Duration::from_mins(3))?;
+                let _ = transport.send(TwitchControl::Disconnect);
+                Ok(reward_id)
+            })();
+            let event = outcome.map_or_else(
+                |error| TwitchToolEvent::Error(format!("{error:#}")),
+                TwitchToolEvent::RewardCaptured,
+            );
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start Twitch reward capture worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn wait_for_twitch_connection(
+    transport: &TwitchTransport,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match transport.try_recv() {
+            Some(TwitchEvent::Status(TwitchStatus::Connected)) => return Ok(()),
+            Some(TwitchEvent::Status(TwitchStatus::Error(error))) => anyhow::bail!("{error}"),
+            Some(TwitchEvent::Status(TwitchStatus::Disconnected)) => {
+                anyhow::bail!("Twitch disconnected before joining the configured channel")
+            }
+            _ => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    anyhow::bail!("timed out waiting for Twitch to join the configured channel")
+}
+
+fn wait_for_twitch_reward(
+    transport: &TwitchTransport,
+    timeout: Duration,
+) -> anyhow::Result<String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match transport.try_recv() {
+            Some(TwitchEvent::Chat(envelope)) => {
+                if let Some(reward_id) = envelope.custom_reward_id {
+                    return Ok(reward_id);
+                }
+            }
+            Some(TwitchEvent::Status(TwitchStatus::Error(error))) => anyhow::bail!("{error}"),
+            Some(TwitchEvent::Status(TwitchStatus::Disconnected)) => {
+                anyhow::bail!("Twitch disconnected while waiting for a reward redemption")
+            }
+            _ => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    anyhow::bail!("timed out waiting for a Channel Points reward redemption")
 }
 
 fn start_twitch_clear(state: &mut ToolState) {
@@ -3760,6 +4004,21 @@ mod tests {
             load_game_config(path.to_str().unwrap()).unwrap().world.seed,
             42
         );
+    }
+
+    #[test]
+    fn twitch_tool_normalizes_game_master_ids_and_reward_field() {
+        let ids = parse_game_master_ids(" 42,7,42, ");
+        assert_eq!(format_game_master_ids(&ids), "42, 7");
+
+        let mut state = ToolState::default();
+        state.config.twitch.game_master_ids = ids;
+        state.config.twitch.fish_god_reward_id = None;
+        state.game_master_ids.clear();
+        state.fish_god_reward_id = "stale".to_owned();
+        sync_twitch_tool_fields(&mut state);
+        assert_eq!(state.game_master_ids, "42, 7");
+        assert!(state.fish_god_reward_id.is_empty());
     }
 
     #[test]

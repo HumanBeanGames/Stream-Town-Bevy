@@ -178,9 +178,12 @@ sizes, matching Unity's generated mipmaps and preventing menu/credits shimmer.
 
 Twitch is disabled in the checked-in configuration. The tools application writes
 public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
-stored only in the operating-system credential vault. The game validates or
-refreshes the token before starting IRC, revalidates hourly, and keeps the Unity
-broadcaster `!connect` safety gate. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
+stored only in the operating-system credential vault. The game validates and
+proactively refreshes the token before starting IRC, revalidates hourly, rebuilds
+the IRC connection after token rotation, and keeps the Unity broadcaster
+`!connect` safety gate. The Twitch tab can verify a real channel join, resolve
+operator logins to stable numeric IDs, and capture a live Channel Points reward
+ID. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
@@ -332,7 +335,7 @@ stations, selection, combat targeting, and legacy-imported transforms.
 Actor restore uses the same player-only completed-gate exception as live pathing.
 When a saved actor must otherwise move off a blocked cell, the relocated grid
 position is written to both the ECS agent and authoritative simulation state.
-The shipping Fish God event is also live: its exact Unity channel-point reward
+The shipping Fish God event is also live: its configurable channel-point reward
 ID and `!praise` feed the same deterministic command path, with Unity's one-in-ten
 summon chance, 20-praise requirement, 300-second timeout, 1,000-food reward, and
 70% Fish God pet roll across joined Twitch players. `!event fish_god` provides a

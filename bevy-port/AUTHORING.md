@@ -62,7 +62,12 @@ tool never writes Twitch access or refresh tokens to RON.
   autosave schema used by the game.
 - Migration, Content, Runtime, Twitch, Validation, and ECS Inspector retain the
   existing conversion, diagnostics, live-control, OAuth, packaging, and
-  inspection workflows.
+  inspection workflows. The Twitch tab validates/refreshes the vault token,
+  proves an authenticated channel join, resolves logins to stable game-master
+  IDs, and captures the next redeemed Channel Points reward ID.
+
+The account-bound Twitch setup sequence is documented in
+[`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 
 ## Safe persistence
 

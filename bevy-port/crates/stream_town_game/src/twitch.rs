@@ -23,7 +23,9 @@ use twitch_irc::{
 const DEVICE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/device";
 const TOKEN_ENDPOINT: &str = "https://id.twitch.tv/oauth2/token";
 const VALIDATE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/validate";
+const USERS_ENDPOINT: &str = "https://api.twitch.tv/helix/users";
 const VAULT_SERVICE: &str = "stream-town-twitch";
+const TOKEN_REFRESH_WINDOW_SECONDS: u64 = 90 * 60;
 pub const REQUIRED_SCOPES: [&str; 2] = ["chat:read", "chat:edit"];
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -89,6 +91,18 @@ pub struct TokenValidation {
     pub scopes: Vec<String>,
     pub expires_in: u64,
     pub user_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct TwitchUserIdentity {
+    pub id: String,
+    pub login: String,
+    pub display_name: String,
+}
+
+#[derive(Deserialize)]
+struct UsersResponse {
+    data: Vec<TwitchUserIdentity>,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +241,55 @@ impl OAuthClient {
             }
         }
         Ok(validation)
+    }
+
+    pub async fn load_validated_token(
+        &self,
+        vault: &CredentialVault,
+    ) -> Result<(StoredOAuthToken, TokenValidation)> {
+        let mut token = vault
+            .load()?
+            .context("Twitch bot is not authorized; use stream_town_tools first")?;
+        let validation = self.validate(&token).await;
+        if let Ok(validation) = validation
+            && validation.expires_in > TOKEN_REFRESH_WINDOW_SECONDS
+        {
+            return Ok((token, validation));
+        }
+        token = self.refresh(&token).await?;
+        vault.save(&token)?;
+        let validation = self.validate(&token).await?;
+        Ok((token, validation))
+    }
+
+    pub async fn lookup_user(
+        &self,
+        token: &StoredOAuthToken,
+        login: &str,
+    ) -> Result<TwitchUserIdentity> {
+        let login = login.trim().to_ascii_lowercase();
+        if login.is_empty() {
+            bail!("Twitch login is empty");
+        }
+        let response: UsersResponse = self
+            .http
+            .get(USERS_ENDPOINT)
+            .query(&[("login", login.as_str())])
+            .header("Client-Id", &self.client_id)
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .context("Twitch user lookup failed")?
+            .error_for_status()
+            .context("Twitch rejected the user lookup")?
+            .json()
+            .await
+            .context("Twitch returned an invalid user lookup response")?;
+        response
+            .data
+            .into_iter()
+            .next()
+            .with_context(|| format!("Twitch user '{login}' does not exist"))
     }
 }
 
@@ -403,86 +466,112 @@ async fn run_transport(
     events.send(TwitchEvent::Status(TwitchStatus::Authorizing))?;
     let oauth = OAuthClient::new(config.client_id.clone())?;
     let vault = CredentialVault::new(&config.client_id, &config.bot_login);
-    let mut token = vault
-        .load()?
-        .context("Twitch bot is not authorized; use stream_town_tools first")?;
-    let validation = if let Ok(validation) = oauth.validate(&token).await {
-        validation
-    } else {
-        token = oauth.refresh(&token).await?;
-        vault.save(&token)?;
-        oauth.validate(&token).await?
-    };
-    if validation.login != config.bot_login {
-        bail!(
-            "Twitch token belongs to '{}', expected '{}'",
-            validation.login,
-            config.bot_login
-        );
-    }
+    let (mut token, validation) = oauth.load_validated_token(&vault).await?;
+    ensure_bot_identity(&validation, &config.bot_login)?;
+    let mut first_connection = true;
 
-    let credentials =
-        StaticLoginCredentials::new(config.bot_login.clone(), Some(token.access_token.clone()));
-    let client_config = ClientConfig::new_simple(credentials);
-    let (mut incoming, client) =
-        TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(client_config);
-    events.send(TwitchEvent::Status(TwitchStatus::Connecting))?;
-    client
-        .join(config.channel_login.clone())
-        .context("invalid Twitch channel login")?;
-    let mut announced_connection = false;
-    let mut validation_timer = tokio::time::interval(Duration::from_hours(1));
-    validation_timer.tick().await;
+    'connection: loop {
+        events.send(TwitchEvent::Status(if first_connection {
+            TwitchStatus::Connecting
+        } else {
+            TwitchStatus::Reconnecting
+        }))?;
+        first_connection = false;
+        let credentials =
+            StaticLoginCredentials::new(config.bot_login.clone(), Some(token.access_token.clone()));
+        let client_config = ClientConfig::new_simple(credentials);
+        let (mut incoming, client) =
+            TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(client_config);
+        client
+            .join(config.channel_login.clone())
+            .context("invalid Twitch channel login")?;
+        let mut announced_connection = false;
+        let mut validation_timer = tokio::time::interval(Duration::from_hours(1));
+        validation_timer.tick().await;
 
-    loop {
-        tokio::select! {
-            message = incoming.recv() => {
-                let Some(message) = message else {
-                    events.send(TwitchEvent::Status(TwitchStatus::Disconnected))?;
-                    return Ok(());
-                };
-                if !announced_connection {
-                    announced_connection = true;
-                    events.send(TwitchEvent::Status(TwitchStatus::Connected))?;
-                }
-                match message {
-                    ServerMessage::Privmsg(message)
-                        if message.channel_login == config.channel_login
-                            && (message.message_text.starts_with('!')
-                                || message.source.tags.0.contains_key("custom-reward-id")) =>
-                    {
-                        events.send(TwitchEvent::Chat(envelope_from_privmsg(message)?))?;
-                    }
-                    ServerMessage::Reconnect(_) => {
+        loop {
+            tokio::select! {
+                message = incoming.recv() => {
+                    let Some(message) = message else {
                         events.send(TwitchEvent::Status(TwitchStatus::Reconnecting))?;
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let (validated_token, validation) =
+                            oauth.load_validated_token(&vault).await?;
+                        ensure_bot_identity(&validation, &config.bot_login)?;
+                        token = validated_token;
+                        continue 'connection;
+                    };
+                    let joined_target_channel =
+                        message_confirms_channel_join(&message, &config.channel_login);
+                    if !announced_connection && joined_target_channel {
+                        announced_connection = true;
+                        events.send(TwitchEvent::Status(TwitchStatus::Connected))?;
                     }
-                    _ => {}
+                    match message {
+                        ServerMessage::Privmsg(message)
+                            if message.channel_login == config.channel_login
+                                && (message.message_text.starts_with('!')
+                                    || message.source.tags.0.contains_key("custom-reward-id")) =>
+                        {
+                            events.send(TwitchEvent::Chat(envelope_from_privmsg(message)?))?;
+                        }
+                        ServerMessage::Reconnect(_) => {
+                            announced_connection = false;
+                            events.send(TwitchEvent::Status(TwitchStatus::Reconnecting))?;
+                        }
+                        _ => {}
+                    }
                 }
-            }
-            control = controls.recv() => {
-                match control {
-                    Some(TwitchControl::SendMessage(message)) => {
-                        client
-                            .privmsg(config.channel_login.clone(), message)
-                            .await
-                            .context("failed to send Twitch chat message")?;
+                control = controls.recv() => {
+                    match control {
+                        Some(TwitchControl::SendMessage(message)) => {
+                            client
+                                .say(config.channel_login.clone(), message)
+                                .await
+                                .context("failed to send Twitch chat message")?;
+                        }
+                        Some(TwitchControl::Disconnect) | None => {
+                            client.part(config.channel_login.clone());
+                            events.send(TwitchEvent::Status(TwitchStatus::Disconnected))?;
+                            return Ok(());
+                        }
                     }
-                    Some(TwitchControl::Disconnect) | None => {
+                }
+                _ = validation_timer.tick() => {
+                    let (validated_token, validation) = oauth
+                        .load_validated_token(&vault)
+                        .await
+                        .context("Twitch hourly token validation/refresh failed")?;
+                    ensure_bot_identity(&validation, &config.bot_login)?;
+                    if validated_token.access_token != token.access_token {
+                        token = validated_token;
                         client.part(config.channel_login.clone());
-                        events.send(TwitchEvent::Status(TwitchStatus::Disconnected))?;
-                        return Ok(());
+                        events.send(TwitchEvent::Status(TwitchStatus::Reconnecting))?;
+                        continue 'connection;
                     }
-                }
-            }
-            _ = validation_timer.tick() => {
-                if let Err(error) = oauth.validate(&token).await {
-                    events.send(TwitchEvent::Status(TwitchStatus::Error(format!(
-                        "Twitch hourly token validation failed: {error}"
-                    ))))?;
-                    return Ok(());
+                    token = validated_token;
                 }
             }
         }
+    }
+}
+
+fn ensure_bot_identity(validation: &TokenValidation, expected_login: &str) -> Result<()> {
+    if validation.login != expected_login {
+        bail!(
+            "Twitch token belongs to '{}', expected '{}'",
+            validation.login,
+            expected_login
+        );
+    }
+    Ok(())
+}
+
+fn message_confirms_channel_join(message: &ServerMessage, channel_login: &str) -> bool {
+    match message {
+        ServerMessage::Join(message) => message.channel_login == channel_login,
+        ServerMessage::RoomState(message) => message.channel_login == channel_login,
+        _ => false,
     }
 }
 
@@ -559,5 +648,23 @@ mod tests {
         assert_eq!(envelope.actor_id.as_str(), "twitch:42");
         assert_eq!(envelope.message, "Praise!");
         assert!(!envelope.is_subscriber);
+    }
+
+    #[test]
+    fn connected_status_requires_confirmation_for_the_target_channel() {
+        use twitch_irc::message::IRCMessage;
+
+        let joined = ServerMessage::try_from(
+            IRCMessage::parse(":bot!bot@bot.tmi.twitch.tv JOIN #channel").unwrap(),
+        )
+        .unwrap();
+        assert!(message_confirms_channel_join(&joined, "channel"));
+        assert!(!message_confirms_channel_join(&joined, "somewhere_else"));
+
+        let welcome = ServerMessage::try_from(
+            IRCMessage::parse(":tmi.twitch.tv 001 bot :Welcome, GLHF!").unwrap(),
+        )
+        .unwrap();
+        assert!(!message_confirms_channel_join(&welcome, "channel"));
     }
 }

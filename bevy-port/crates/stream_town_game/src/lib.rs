@@ -113,7 +113,6 @@ const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
 // Player_Character.prefab authors 100 Unity world units for both its target
 // and builder-resource sensors. Shipping terrain uses two units per cell.
 const PLAYER_TARGET_SEARCH_RANGE_CELLS: u16 = 50;
-const FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 const BUILDING_PLACEMENT_SUCCESS_COLOR: [f32; 3] = [0.242_250_26, 0.896_226_4, 0.054_957_304];
 const BUILDING_PLACEMENT_FAIL_COLOR: [f32; 3] = [0.933_962_3, 0.0, 0.0];
 const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
@@ -584,6 +583,7 @@ struct TwitchConnection {
     status: TwitchStatus,
     broadcaster_authorized: bool,
     connect_code: String,
+    fish_god_reward_id: Option<String>,
 }
 
 impl Default for TwitchConnection {
@@ -593,6 +593,7 @@ impl Default for TwitchConnection {
             status: TwitchStatus::Disabled,
             broadcaster_authorized: false,
             connect_code: generate_connect_code(),
+            fish_god_reward_id: None,
         }
     }
 }
@@ -20466,6 +20467,9 @@ fn start_twitch_transport(config: Res<RuntimeConfig>, mut connection: ResMut<Twi
         return;
     }
     connection.broadcaster_authorized = !config.0.twitch.require_broadcaster_connect;
+    connection
+        .fish_god_reward_id
+        .clone_from(&config.0.twitch.fish_god_reward_id);
     connection.status = TwitchStatus::Authorizing;
     match TwitchTransport::start(config.0.twitch.clone()) {
         Ok(transport) => connection.transport = Some(transport),
@@ -20486,6 +20490,9 @@ fn twitch_connection_input(
     } else if keyboard.just_pressed(KeyCode::F2) && config.0.twitch.enabled {
         connection.transport = None;
         connection.broadcaster_authorized = !config.0.twitch.require_broadcaster_connect;
+        connection
+            .fish_god_reward_id
+            .clone_from(&config.0.twitch.fish_god_reward_id);
         connection.connect_code = generate_connect_code();
         connection.status = TwitchStatus::Authorizing;
         match TwitchTransport::start(config.0.twitch.clone()) {
@@ -20544,7 +20551,11 @@ fn handle_twitch_event(
                 }
                 return;
             }
-            if message.custom_reward_id.as_deref() == Some(FISH_GOD_REWARD_ID) {
+            if connection
+                .fish_god_reward_id
+                .as_deref()
+                .is_some_and(|id| message.custom_reward_id.as_deref() == Some(id))
+            {
                 injected.0.push_back(PendingChatCommand {
                     actor_id: message.actor_id,
                     login_name: message.login,
@@ -32702,6 +32713,7 @@ mod tests {
     fn fish_god_channel_reward_dispatches_praise_without_command_text() {
         let mut connection = TwitchConnection {
             broadcaster_authorized: true,
+            fish_god_reward_id: Some(stream_town_domain::SHIPPING_FISH_GOD_REWARD_ID.to_owned()),
             ..default()
         };
         let mut commands = InjectedCommands::default();
@@ -32715,12 +32727,38 @@ mod tests {
                 is_broadcaster: false,
                 is_moderator: false,
                 is_subscriber: false,
-                custom_reward_id: Some(FISH_GOD_REWARD_ID.to_owned()),
+                custom_reward_id: Some(stream_town_domain::SHIPPING_FISH_GOD_REWARD_ID.to_owned()),
             }),
             &mut connection,
             &mut commands,
         );
         assert_eq!(commands.0.pop_front().unwrap().command, ChatCommand::Praise);
+    }
+
+    #[test]
+    fn unconfigured_or_different_channel_reward_does_not_dispatch_praise() {
+        let mut connection = TwitchConnection {
+            broadcaster_authorized: true,
+            fish_god_reward_id: None,
+            ..default()
+        };
+        let mut commands = InjectedCommands::default();
+        handle_twitch_event(
+            TwitchEvent::Chat(twitch::TwitchChatEnvelope {
+                actor_id: StableId::new("twitch:fish").unwrap(),
+                user_id: "fish".to_owned(),
+                login: "fishfriend".to_owned(),
+                display_name: "FishFriend".to_owned(),
+                message: "Praise!".to_owned(),
+                is_broadcaster: false,
+                is_moderator: false,
+                is_subscriber: false,
+                custom_reward_id: Some("00000000-0000-0000-0000-000000000000".to_owned()),
+            }),
+            &mut connection,
+            &mut commands,
+        );
+        assert!(commands.0.is_empty());
     }
 
     #[test]

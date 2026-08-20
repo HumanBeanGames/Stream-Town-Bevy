@@ -5,7 +5,8 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONFIG_SCHEMA: u32 = 6;
+pub const CURRENT_CONFIG_SCHEMA: u32 = 7;
+pub const SHIPPING_FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 pub const SHIPPING_SECONDS_PER_DAY: u32 = 3_600;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -142,6 +143,10 @@ pub struct TwitchConfig {
     /// This intentionally does not inherit broadcaster or moderator privileges.
     #[serde(default)]
     pub game_master_ids: BTreeSet<String>,
+    /// Optional channel-point reward UUID that dispatches the Fish God praise action.
+    /// The ordinary `!praise` command remains available when this is `None`.
+    #[serde(default = "shipping_fish_god_reward_id")]
+    pub fish_god_reward_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -166,6 +171,8 @@ pub enum ConfigError {
     TwitchLogin,
     #[error("game-master Twitch user IDs must contain only ASCII digits")]
     TwitchGameMasterId,
+    #[error("the Twitch channel-point reward ID must be a UUID or omitted")]
+    TwitchRewardId,
     #[error("starting resource {resource} exceeds capacity {capacity}")]
     StartingResourceCapacity { resource: StableId, capacity: u32 },
 }
@@ -217,6 +224,7 @@ impl Default for GameConfig {
                 channel_login: "humanbeangames".to_owned(),
                 require_broadcaster_connect: true,
                 game_master_ids: BTreeSet::new(),
+                fish_god_reward_id: shipping_fish_god_reward_id(),
             },
         }
     }
@@ -232,6 +240,8 @@ impl GameConfig {
     /// Unity values through `TimeCycleConfig::default` during deserialization.
     /// Schema 5 used the Bevy prototype's oversized 12-metre cells; untouched
     /// copies are migrated to the spatial scale authored by the Unity project.
+    /// Schema 7 adds a configurable Channel Points reward ID; schema-6 files
+    /// receive the shipping Unity reward ID through the serde default.
     pub fn upgrade(mut self) -> Result<Self, ConfigError> {
         if self.schema_version == 4 {
             self.schema_version = 5;
@@ -250,6 +260,9 @@ impl GameConfig {
                 self.world.height_scale_centimetres = 100;
                 self.world.water_level_centimetres = 5;
             }
+            self.schema_version = CURRENT_CONFIG_SCHEMA;
+        }
+        if self.schema_version == 6 {
             self.schema_version = CURRENT_CONFIG_SCHEMA;
         }
         self.validate()?;
@@ -317,8 +330,30 @@ impl GameConfig {
         {
             return Err(ConfigError::TwitchGameMasterId);
         }
+        if self
+            .twitch
+            .fish_god_reward_id
+            .as_deref()
+            .is_some_and(|id| !valid_uuid(id))
+        {
+            return Err(ConfigError::TwitchRewardId);
+        }
         Ok(())
     }
+}
+
+// Serde's field-default callback must return the field's `Option<String>` type.
+#[allow(clippy::unnecessary_wraps)]
+fn shipping_fish_god_reward_id() -> Option<String> {
+    Some(SHIPPING_FISH_GOD_REWARD_ID.to_owned())
+}
+
+fn valid_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
 }
 
 fn valid_twitch_login(login: &str) -> bool {
@@ -417,6 +452,56 @@ mod tests {
     }
 
     #[test]
+    fn schema_six_config_upgrades_with_shipping_reward_id() {
+        #[derive(Serialize)]
+        struct SchemaSixTwitch<'a> {
+            enabled: bool,
+            client_id: &'a str,
+            bot_login: &'a str,
+            channel_login: &'a str,
+            require_broadcaster_connect: bool,
+            game_master_ids: &'a BTreeSet<String>,
+        }
+
+        #[derive(Serialize)]
+        struct SchemaSixConfig<'a> {
+            schema_version: u32,
+            window: &'a WindowConfig,
+            world: &'a WorldGenConfig,
+            time: &'a TimeCycleConfig,
+            gameplay: &'a GameplayConfig,
+            twitch: SchemaSixTwitch<'a>,
+        }
+
+        let config = GameConfig::default();
+        let encoded = ron::to_string(&SchemaSixConfig {
+            schema_version: 6,
+            window: &config.window,
+            world: &config.world,
+            time: &config.time,
+            gameplay: &config.gameplay,
+            twitch: SchemaSixTwitch {
+                enabled: config.twitch.enabled,
+                client_id: &config.twitch.client_id,
+                bot_login: &config.twitch.bot_login,
+                channel_login: &config.twitch.channel_login,
+                require_broadcaster_connect: config.twitch.require_broadcaster_connect,
+                game_master_ids: &config.twitch.game_master_ids,
+            },
+        })
+        .unwrap();
+        let upgraded = ron::from_str::<GameConfig>(&encoded)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        assert_eq!(upgraded.schema_version, CURRENT_CONFIG_SCHEMA);
+        assert_eq!(
+            upgraded.twitch.fish_god_reward_id.as_deref(),
+            Some(SHIPPING_FISH_GOD_REWARD_ID)
+        );
+    }
+
+    #[test]
     fn enabled_twitch_requires_public_configuration() {
         let mut config = GameConfig::default();
         config.twitch.enabled = true;
@@ -431,5 +516,10 @@ mod tests {
             .game_master_ids
             .insert("not-a-user-id".to_owned());
         assert_eq!(config.validate(), Err(ConfigError::TwitchGameMasterId));
+        config.twitch.game_master_ids.clear();
+        config.twitch.fish_god_reward_id = Some("not-a-reward-uuid".to_owned());
+        assert_eq!(config.validate(), Err(ConfigError::TwitchRewardId));
+        config.twitch.fish_god_reward_id = None;
+        assert!(config.validate().is_ok());
     }
 }

@@ -10,7 +10,7 @@ mistaken for production-ready systems.
 ## Delivered in this milestone
 
 - Shipping-scale world rendering now replaces the 64x64 Bevy prototype. Config
-  schema 6 upgrades untouched schema-5 worlds to Unity's 200x200 samples,
+  schema 7 upgrades untouched schema-5 worlds to Unity's 200x200 samples,
   two-unit cells, one-metre height scale, and 0.05-unit waterline while
   preserving customized world settings. Generator version 5 ports the authored
   terrain curve, island falloff, half-unit quantization, Unity-compatible random
@@ -84,7 +84,7 @@ mistaken for production-ready systems.
   linear values Bevy's PBR passes require. Terrain, water, grass, building
   detail/emission, placement bounds, and flags therefore retain detail under
   the shipping +1.1 EV/ACES profile instead of clipping into yellow-white.
-- Validated, versioned RON configuration (schema 6) and stable authored/runtime
+- Validated, versioned RON configuration (schema 7) and stable authored/runtime
   IDs that do not expose Bevy entity identifiers. Gameplay configuration now
   carries Unity's 5,000-unit starting food/gold/ore/wood balances and zero
   recruits before roster creation, plus Unity's 15,000 food/ore/wood and five-recruit base capacities;
