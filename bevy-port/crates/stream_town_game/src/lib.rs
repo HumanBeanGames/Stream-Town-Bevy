@@ -4,6 +4,7 @@ mod unity_color_filter;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -61,10 +62,10 @@ use stream_town_domain::{
     ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
     EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage,
     GeneratedWorld, GridPos, HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
-    ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
-    PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog, RainingFishVfxDef,
-    RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
+    MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
+    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
+    RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
     RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
     StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, VfxGradientDef, Weather,
     WorldSimulation, WorldSnapshot, generate_world_with_content,
@@ -79,10 +80,15 @@ const CREDITS_SCENE_PATH: &str = "Assets/Scenes/Menu/Credits.unity";
 const PASSIVE_RESOURCE_FIXED_POINT_DENOMINATOR: u128 = 1_000_000_000_000;
 const CHIMNEY_ALPHA_STEPS: usize = 8;
 const TERRAIN_CHUNK_CELLS: u16 = 16;
+const OCEAN_PADDING_CELLS: u16 = 128;
+const WATER_SURFACE_LIFT_METRES: f32 = 0.20;
 const TERRAIN_HIGH_DETAIL_RADIUS: f32 = 220.0;
 const TERRAIN_MEDIUM_DETAIL_RADIUS: f32 = 440.0;
 const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
-const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 16;
+// Keep every shipping-sized town actor on its authored skinned rig. Larger
+// stress-test crowds still retain a bounded fallback, which can be overridden
+// explicitly with STREAM_TOWN_ACTOR_SCENE_BUDGET/STREAM_TOWN_ANIMATION_BUDGET.
+const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 64;
 // The original Unity camera starts at the bottom of its 15-30 unit height
 // range. A 520-unit orthographic span was useful while the Bevy terrain was a
 // tiny prototype, but leaves the shipping-scale town illegibly far away.
@@ -2181,8 +2187,15 @@ impl Plugin for StreamTownGamePlugin {
                     .chain()
                     .run_if(in_state(GameState::MainMenu)),
             )
+            .add_systems(
+                Update,
+                apply_material_overrides.run_if(in_rendered_game_state),
+            )
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
-            .add_systems(OnEnter(GameState::WorldLoading), spawn_loading_screen)
+            .add_systems(
+                OnEnter(GameState::WorldLoading),
+                (restore_town_camera_for_world, spawn_loading_screen).chain(),
+            )
             .add_systems(
                 Update,
                 (
@@ -2272,7 +2285,6 @@ impl Plugin for StreamTownGamePlugin {
                     drive_converted_animations
                         .after(move_agents)
                         .after(attach_converted_animations),
-                    apply_material_overrides,
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
                     camera_controls,
@@ -2783,6 +2795,8 @@ fn setup_rendering(
                     DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT
                 },
             },
+            near: -2_000.0,
+            far: 2_000.0,
             ..OrthographicProjection::default_3d()
         }),
         AmbientLight {
@@ -4909,11 +4923,209 @@ fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
     }
 }
 
+fn in_rendered_game_state(state: Res<State<GameState>>) -> bool {
+    matches!(state.get(), GameState::MainMenu | GameState::InGame)
+}
+
+fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
+    static REFERENCE: OnceLock<MainMenuSceneReference> = OnceLock::new();
+    REFERENCE.get_or_init(|| {
+        let reference: MainMenuSceneReference =
+            ron::from_str(include_str!("../../../assets/content/main_menu_scene.ron"))
+                .expect("checked-in authored main-menu scene must parse");
+        assert_eq!(
+            reference.schema_version, 1,
+            "checked-in authored main-menu scene schema must be supported"
+        );
+        reference
+    })
+}
+
+fn menu_scene_for_source_model<'a>(
+    content: &'a ContentCatalog,
+    source_model: &str,
+) -> Option<(&'a ArchetypeDef, &'a ArchetypeScene)> {
+    content
+        .archetypes
+        .values()
+        .flat_map(|archetype| archetype.scenes.iter().map(move |scene| (archetype, scene)))
+        .filter(|(_, scene)| scene.source_model == source_model)
+        .min_by_key(|(_, scene)| (!scene.is_default, scene.asset_path.as_str()))
+}
+
+fn unity_scene_rotation(rotation: [f32; 4]) -> Quat {
+    // Unity model instances use +Z as forward, while Bevy scene roots use -Z.
+    // Mirroring the quaternion's X/Y vector terms preserves the exported world
+    // orientation without mirroring the already converted glTF geometry.
+    Quat::from_xyzw(-rotation[0], -rotation[1], rotation[2], rotation[3]).normalize()
+}
+
+fn authored_main_menu_mesh(reference: &stream_town_domain::MainMenuEmbeddedMesh) -> Mesh {
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, reference.vertices.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, reference.normals.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, reference.uv.clone())
+    // The exported world-space vertices retain positive scale, and Unity's
+    // serialized triangle order has the same normal-facing winding expected by
+    // wgpu. Reversing it hides the island from the authored camera.
+    .with_inserted_indices(Indices::U32(reference.triangles.clone()))
+}
+
+fn apply_authored_main_menu_camera(
+    reference: &MainMenuSceneReference,
+    cameras: &mut Query<
+        (
+            &mut Camera,
+            &mut Projection,
+            &mut Transform,
+            &mut AmbientLight,
+        ),
+        With<TownCamera>,
+    >,
+) {
+    let camera_reference = &reference.camera;
+    for (mut camera, mut projection, mut transform, mut ambient) in cameras.iter_mut() {
+        camera.clear_color = bevy::camera::ClearColorConfig::Custom(Color::srgba(
+            camera_reference.background[0],
+            camera_reference.background[1],
+            camera_reference.background[2],
+            camera_reference.background[3],
+        ));
+        *projection = if camera_reference.orthographic {
+            Projection::from(OrthographicProjection {
+                scaling_mode: ScalingMode::FixedVertical {
+                    viewport_height: camera_reference.orthographic_size * 2.0,
+                },
+                near: camera_reference.near,
+                far: camera_reference.far,
+                ..OrthographicProjection::default_3d()
+            })
+        } else {
+            Projection::Perspective(PerspectiveProjection {
+                fov: camera_reference.field_of_view_degrees.to_radians(),
+                near: camera_reference.near,
+                far: camera_reference.far,
+                ..default()
+            })
+        };
+        *transform = Transform::from_translation(Vec3::from_array(camera_reference.position))
+            .with_rotation(unity_scene_rotation(camera_reference.rotation));
+        // The Unity camera renders against its sky-lit environment. The town
+        // runtime's lower ambient level is balanced for an overhead sun and
+        // leaves the authored side-on menu city nearly black.
+        ambient.color = Color::srgb(0.70, 0.82, 0.92);
+        ambient.brightness = 420.0;
+    }
+}
+
+fn restore_town_camera_for_world(
+    mut cameras: Query<
+        (
+            &mut Camera,
+            &mut Projection,
+            &mut Transform,
+            &mut AmbientLight,
+        ),
+        With<TownCamera>,
+    >,
+) {
+    for (mut camera, mut projection, mut transform, mut ambient) in &mut cameras {
+        camera.clear_color = bevy::camera::ClearColorConfig::Default;
+        *projection = Projection::from(OrthographicProjection {
+            scaling_mode: ScalingMode::FixedVertical {
+                viewport_height: DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT,
+            },
+            near: -2_000.0,
+            far: 2_000.0,
+            ..OrthographicProjection::default_3d()
+        });
+        *transform = default_town_camera_transform();
+        ambient.color = Color::srgb(0.70, 0.82, 0.92);
+        ambient.brightness = 90.0;
+    }
+}
+
 fn spawn_main_menu(
     mut commands: Commands,
     render: Res<RenderAssets>,
     presentation: Res<RuntimePresentation>,
+    content: Res<RuntimeContent>,
+    asset_root: Res<RuntimeAssetRoot>,
+    asset_server: Option<Res<AssetServer>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    mut cameras: Query<
+        (
+            &mut Camera,
+            &mut Projection,
+            &mut Transform,
+            &mut AmbientLight,
+        ),
+        With<TownCamera>,
+    >,
 ) {
+    let reference = embedded_main_menu_scene();
+    apply_authored_main_menu_camera(reference, &mut cameras);
+
+    if let Some(mut meshes) = meshes {
+        for embedded in &reference.embedded_meshes {
+            commands.spawn((
+                StateEntity,
+                Name::new(format!("Authored menu mesh: {}", embedded.hierarchy_path)),
+                Mesh3d(meshes.add(authored_main_menu_mesh(embedded))),
+                MeshMaterial3d(render.ground.clone()),
+            ));
+        }
+        // Generation_Main_Menu.prefab authors a built-in cube at local Y=3,
+        // under a root at Y=-3.5, with combined X/Z scale 255. Reconstruct it
+        // explicitly because built-in Unity primitives have no portable GUID.
+        commands.spawn((
+            StateEntity,
+            Name::new("Authored main-menu water"),
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.water.clone()),
+            Transform::from_xyz(0.0, -0.5, 0.0).with_scale(Vec3::new(255.0, 1.0, 255.0)),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
+        ));
+    }
+
+    if let Some(asset_server) = asset_server.as_deref() {
+        for instance in &reference.instances {
+            let Some((archetype, scene)) =
+                menu_scene_for_source_model(&content.0, &instance.source_path)
+                    .filter(|(_, scene)| converted_asset_exists(&asset_root.0, &scene.asset_path))
+            else {
+                warn!(
+                    source_model = %instance.source_path,
+                    hierarchy = %instance.hierarchy_path,
+                    "authored main-menu model has no converted scene"
+                );
+                continue;
+            };
+            let mut entity = commands.spawn((
+                StateEntity,
+                Name::new(format!(
+                    "Authored menu instance: {}",
+                    instance.hierarchy_path
+                )),
+                WorldAssetRoot(
+                    asset_server
+                        .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+                ),
+                Transform::from_translation(Vec3::from_array(instance.position))
+                    .with_rotation(unity_scene_rotation(instance.rotation))
+                    .with_scale(Vec3::from_array(instance.scale)),
+            ));
+            if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render)
+            {
+                entity.insert(material);
+            }
+        }
+    }
+
     spawn_cloud_field(&mut commands, &render, 72.0);
     spawn_fish_school_scene(
         &mut commands,
@@ -8052,7 +8264,7 @@ fn generate_and_spawn_world(
                     dx * dx + dz * dz
                 })
                 .map_or(Vec3::ZERO, |resource| {
-                    grid_to_world_on_surface(resource.position, &config.0, &generated)
+                    generated_resource_world_position(resource, &config.0, &generated)
                 });
             Transform::from_xyz(focus.x + 5.0, focus.y + 6.0, focus.z + 5.0)
                 .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
@@ -8256,7 +8468,7 @@ fn generate_and_spawn_world(
     let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
     if !isolate_animation {
         for resource in &generated.resources {
-            let position = grid_to_world_on_surface(resource.position, &config.0, &generated);
+            let position = generated_resource_world_position(resource, &config.0, &generated);
             spawn_resource_visual(
                 &mut commands,
                 &content.0,
@@ -8641,10 +8853,8 @@ fn generate_and_spawn_world(
             {
                 entity.insert(PlayerRigAxisCorrectionRequired);
             } else if scene.asset_path == PLAYER_ANIMATED_MODEL_PATH {
-                // Bevy's shadow skinning pass does not currently agree with
-                // the imported Unity/Blender animation transforms for this
-                // armature. The visible mesh is correct, but its deformed
-                // shadow can span whole terrain chunks.
+                // Tag the converted shipping armature so its descendants keep
+                // casting silhouettes while declining only self-shadow input.
                 entity.insert(PlayerAnimatedRig);
             }
         } else {
@@ -8937,6 +9147,17 @@ fn resource_visual_archetype<'a>(
         .find(|archetype| archetype.source_path == source_suffix)
 }
 
+fn generated_resource_world_position(
+    resource: &stream_town_domain::GeneratedResource,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+) -> Vec3 {
+    let mut position = grid_to_world_on_surface(resource.position, config, world);
+    position.x += f32::from(resource.offset_milli_cells[0]) * config.world.cell_size / 1_000.0;
+    position.z += f32::from(resource.offset_milli_cells[1]) * config.world.cell_size / 1_000.0;
+    position
+}
+
 fn resource_mesh_index(resource: &stream_town_domain::GeneratedResource) -> usize {
     if resource.kind.as_str() == "resource:food" {
         // Unity's production generation settings list the same bush mesh twice.
@@ -9141,7 +9362,9 @@ fn spawn_foliage_visual(
             end_margin: (visibility_end - FOLIAGE_VISIBILITY_FADE)..visibility_end,
             use_aabb: true,
         },
-        bevy::light::NotShadowCaster,
+        // Cast a stable silhouette into the world, but do not let these
+        // low-poly, two-sided foliage cards self-shadow into flickering black.
+        bevy::light::NotShadowReceiver,
     ));
     match material {
         Some(ResolvedMaterialHandle::Standard(material)) => {
@@ -10924,7 +11147,9 @@ fn complete_agent_goal(
                 resource.amount = resource.amount.saturating_add(amount);
                 false
             } else {
-                if let Some(position) = cleared_position {
+                if let Some(position) = cleared_position
+                    && !resource_cell_has_active_generation_occupant(&world.resources, position)
+                {
                     let _ = world.navigation.set_blocked(
                         stream_town_domain::DirtyRegion {
                             min: position,
@@ -11248,6 +11473,17 @@ fn complete_agent_goal(
         }
     }
     action_presentation
+}
+
+fn resource_cell_has_active_generation_occupant(
+    resources: &[stream_town_domain::GeneratedResource],
+    position: GridPos,
+) -> bool {
+    resources.iter().any(|resource| {
+        resource.amount > 0
+            && resource.target_kind.as_str() != "target:fish"
+            && resource.position == position
+    })
 }
 
 fn apply_combat_damage(
@@ -17294,13 +17530,19 @@ fn apply_material_overrides(
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert(MeshMaterial3d(authored.clone()));
+                                .insert((
+                                    MeshMaterial3d(authored.clone()),
+                                    bevy::light::NotShadowReceiver,
+                                ));
                         }
                         ResolvedMaterialHandle::Critter(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert(MeshMaterial3d(authored.clone()));
+                                .insert((
+                                    MeshMaterial3d(authored.clone()),
+                                    bevy::light::NotShadowReceiver,
+                                ));
                         }
                         ResolvedMaterialHandle::Flag(authored) => {
                             commands
@@ -17317,7 +17559,13 @@ fn apply_material_overrides(
                     }
                 }
                 if animated_player_rigs.contains(ancestor) {
-                    commands.entity(entity).insert(bevy::light::NotShadowCaster);
+                    // Imported skinned meshes now cast normally. Suppressing
+                    // receiving only on the mesh itself avoids the malformed
+                    // self-shadow that previously flickered across characters
+                    // without removing their world-space shadows.
+                    commands
+                        .entity(entity)
+                        .insert(bevy::light::NotShadowReceiver);
                 }
                 commands.entity(entity).insert(MaterialOverrideApplied);
                 break;
@@ -18202,6 +18450,7 @@ fn select_grid_cell(
     cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
     spatial: Option<SpatialQuery>,
     config: Res<RuntimeConfig>,
+    agents: Query<(&GridLocation, &GlobalTransform), With<Agent>>,
     mut selected: ResMut<SelectedCell>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
@@ -18222,13 +18471,30 @@ fn select_grid_cell(
     let Ok(ray) = camera.viewport_to_world(camera_transform, cursor) else {
         return;
     };
-    let Some(hit) = spatial.cast_ray(
+    let terrain_hit = spatial.cast_ray(
         ray.origin,
         ray.direction,
         2_000.0,
         true,
         &SpatialQueryFilter::default(),
-    ) else {
+    );
+    let terrain_distance = terrain_hit.as_ref().map_or(2_000.0, |hit| hit.distance);
+    let actor_radius = config.0.world.cell_size * 0.6;
+    let actor_height = config.0.world.cell_size * 0.9;
+    if let Some((location, _)) = agents
+        .iter()
+        .filter_map(|(location, transform)| {
+            let centre = transform.translation() + Vec3::Y * actor_height;
+            ray_sphere_distance(ray.origin, *ray.direction, centre, actor_radius)
+                .filter(|distance| *distance <= terrain_distance)
+                .map(|distance| (location, distance))
+        })
+        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+    {
+        selected.0 = Some(location.0);
+        return;
+    }
+    let Some(hit) = terrain_hit else {
         return;
     };
     let world_position = ray.get_point(hit.distance);
@@ -18236,6 +18502,20 @@ fn select_grid_cell(
         return;
     };
     selected.0 = Some(cell);
+}
+
+fn ray_sphere_distance(origin: Vec3, direction: Vec3, centre: Vec3, radius: f32) -> Option<f32> {
+    let to_centre = centre - origin;
+    let projected = to_centre.dot(direction);
+    if projected < 0.0 {
+        return None;
+    }
+    let closest_squared = to_centre.length_squared() - projected * projected;
+    let radius_squared = radius * radius;
+    if closest_squared > radius_squared {
+        return None;
+    }
+    Some((projected - (radius_squared - closest_squared).sqrt()).max(0.0))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20889,13 +21169,15 @@ fn load_input(
             }
         }
         for position in depleted_land {
-            let _ = restored_world.navigation.set_blocked(
-                stream_town_domain::DirtyRegion {
-                    min: position,
-                    max: position,
-                },
-                false,
-            );
+            if !resource_cell_has_active_generation_occupant(&restored_world.resources, position) {
+                let _ = restored_world.navigation.set_blocked(
+                    stream_town_domain::DirtyRegion {
+                        min: position,
+                        max: position,
+                    },
+                    false,
+                );
+            }
         }
     }
     ensure_town_hall_state(&content.0, &restored_config, &mut snapshot.simulation);
@@ -26271,7 +26553,9 @@ fn append_terrain_skirt(
 }
 
 fn generated_water_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
-    const OCEAN_PADDING_CELLS: u16 = 8;
+    // Unity's Water_Main plane is vastly wider than the authored terrain. The
+    // previous eight-cell skirt exposed the clear colour as a black bar at the
+    // legal maximum zoom, so retain enough ocean to cover that full view.
     let width = world.navigation.width();
     let height = world.navigation.height();
     let padded_width = width + OCEAN_PADDING_CELLS * 2;
@@ -26300,7 +26584,7 @@ fn generated_water_mesh(world: &GeneratedWorld, config: &GameConfig) -> Mesh {
                     - f32::from(OCEAN_PADDING_CELLS)
                     - f32::from(width.saturating_sub(1)) * 0.5)
                     * config.world.cell_size,
-                water_height + 0.05,
+                water_height + WATER_SURFACE_LIFT_METRES,
                 (f32::from(z)
                     - f32::from(OCEAN_PADDING_CELLS)
                     - f32::from(height.saturating_sub(1)) * 0.5)
@@ -26686,6 +26970,8 @@ mod tests {
     #[test]
     fn shipping_main_menu_preserves_art_order_and_load_availability() {
         let presentation = embedded_presentation();
+        let content = embedded_content();
+        let menu_scene = embedded_main_menu_scene();
         for source_path in MAIN_MENU_TEXTURE_PATHS {
             assert!(
                 presentation
@@ -26709,6 +26995,21 @@ mod tests {
         assert!(!main_menu_action_enabled(MainMenuAction::LoadGame, false));
         assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
         assert!(main_menu_action_enabled(MainMenuAction::NewGame, false));
+        assert_eq!(menu_scene.source_scene, MAIN_MENU_SCENE_PATH);
+        assert_eq!(menu_scene.instances.len(), 285);
+        assert_eq!(menu_scene.embedded_meshes.len(), 1);
+        assert_eq!(menu_scene.embedded_meshes[0].vertices.len(), 4_900);
+        assert_eq!(menu_scene.embedded_meshes[0].triangles.len() / 3, 9_522);
+        let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        for instance in &menu_scene.instances {
+            let (_, scene) = menu_scene_for_source_model(&content, &instance.source_path)
+                .unwrap_or_else(|| panic!("unmapped menu model {}", instance.source_path));
+            assert!(
+                asset_root.join(&scene.asset_path).is_file(),
+                "missing converted menu model {}",
+                scene.asset_path
+            );
+        }
     }
 
     #[test]
@@ -26917,9 +27218,9 @@ mod tests {
 
     #[test]
     fn production_crowd_lod_budget_matches_measured_gpu_gate() {
-        assert_eq!(actor_detail_budget(None), 16);
+        assert_eq!(actor_detail_budget(None), 64);
         assert_eq!(actor_detail_budget(Some("24")), 24);
-        assert_eq!(actor_detail_budget(Some("invalid")), 16);
+        assert_eq!(actor_detail_budget(Some("invalid")), 64);
     }
 
     #[test]
@@ -27143,6 +27444,8 @@ mod tests {
             kind: StableId::new("resource:wood").unwrap(),
             target_kind: StableId::new("target:tree").unwrap(),
             position: GridPos { x: 5, z: 5 },
+            offset_milli_cells: [0, 0],
+            generation_occupancy: [5, 5],
             amount: 100,
         };
         let far = stream_town_domain::GeneratedResource {
@@ -27150,6 +27453,8 @@ mod tests {
             kind: StableId::new("resource:wood").unwrap(),
             target_kind: StableId::new("target:tree").unwrap(),
             position: GridPos { x: 63, z: 63 },
+            offset_milli_cells: [0, 0],
+            generation_occupancy: [63, 63],
             amount: 100,
         };
         for resource in [&close, &far] {
@@ -28322,6 +28627,8 @@ mod tests {
                     x: current.x + offset,
                     z: current.z,
                 },
+                offset_milli_cells: [0, 0],
+                generation_occupancy: [0, 0],
                 amount: 100,
             });
         }
@@ -28418,7 +28725,7 @@ mod tests {
     }
 
     #[test]
-    fn land_resource_occupancy_requires_an_edge_action_and_clears_on_depletion() {
+    fn land_resource_occupancy_requires_an_edge_action_and_clears_after_last_depletion() {
         let config = GameConfig::default();
         let content = embedded_content();
         let mut world = generate_world(&config.world);
@@ -28428,9 +28735,22 @@ mod tests {
             .find(|resource| {
                 resource.target_kind.as_str() == "target:tree"
                     && !world.navigation.is_walkable(resource.position)
+                    && world
+                        .resources
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.target_kind.as_str() != "target:fish"
+                                && candidate.position == resource.position
+                        })
+                        .count()
+                        == 1
             })
             .unwrap()
             .clone();
+        let mut overlapping_resource = resource.clone();
+        overlapping_resource.id = StableId::new("resource:overlapping_tree").unwrap();
+        overlapping_resource.amount = 1;
+        world.resources.push(overlapping_resource.clone());
         let approach = resource_approach(&world, &resource, resource.position).unwrap();
         let actor_id = StableId::new("npc:resource_edge_test").unwrap();
         let mut simulation = WorldSimulation::new(world.seed);
@@ -28474,6 +28794,19 @@ mod tests {
                 &content,
                 &actor_id,
                 &goal,
+                approach,
+            )
+            .is_none()
+        );
+        assert!(!world.navigation.is_walkable(resource.position));
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &actor_id,
+                &AgentGoal::Gather(overlapping_resource.id),
                 approach,
             )
             .is_none()
@@ -30364,6 +30697,8 @@ mod tests {
             })
             .unwrap(),
             position: GridPos { x, z },
+            offset_milli_cells: [0, 0],
+            generation_occupancy: [i16::try_from(x).unwrap(), i16::try_from(z).unwrap()],
             amount: 100,
         };
         assert_eq!(resource_mesh_index(&resource("resource:wood", 2, 4)), 0);
@@ -31790,8 +32125,8 @@ mod tests {
                 <= f32::EPSILON
         );
         let water = generated_water_mesh(&world, &config);
-        let padded_width = usize::from(config.world.width) + 16;
-        let padded_height = usize::from(config.world.height) + 16;
+        let padded_width = usize::from(config.world.width + OCEAN_PADDING_CELLS * 2);
+        let padded_height = usize::from(config.world.height + OCEAN_PADDING_CELLS * 2);
         assert_eq!(
             water.count_vertices(),
             (padded_width + 1) * (padded_height + 1)

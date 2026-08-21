@@ -13,8 +13,10 @@ use walkdir::WalkDir;
 
 mod content;
 mod legacy;
+mod menu_scene;
 mod models;
 mod presentation;
+mod world_reference;
 
 #[derive(Debug, Parser)]
 #[command(about = "Read-only migration tooling for the Stream Town Unity project")]
@@ -53,6 +55,24 @@ enum Command {
     },
     /// Inspect a legacy JSON or STSV binary save without modifying it.
     InspectSave { save: PathBuf },
+    /// Export generated-world positions from a legacy save as an offline parity oracle.
+    ExportWorldOracle {
+        save: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Convert Unity-native noise/terrain samples into compact deterministic RON.
+    ConvertWorldReference {
+        reference: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Convert the authored Unity main-menu scene reference into portable RON.
+    ConvertMainMenuReference {
+        reference: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Convert a legacy JSON or schema 1-3 binary save into a validated native save.
     ImportSave {
         save: PathBuf,
@@ -160,6 +180,18 @@ fn main() -> Result<()> {
             let info = inspect_legacy_save(&save)
                 .with_context(|| format!("failed to inspect {}", save.display()))?;
             println!("{}", serde_json::to_string_pretty(&info)?);
+        }
+        Command::ExportWorldOracle { save, out } => {
+            let report = legacy::export_world_oracle(&save, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::ConvertWorldReference { reference, out } => {
+            let report = world_reference::convert(&reference, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::ConvertMainMenuReference { reference, out } => {
+            let report = menu_scene::convert(&reference, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::ImportSave { save, out, config } => {
             let config = if let Some(path) = config {

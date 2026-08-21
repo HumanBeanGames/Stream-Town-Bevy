@@ -49,6 +49,7 @@ cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export
 cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
 cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
+cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --out generated/unity-world-oracle.json
 cargo run -p xtask -- package-windows --output dist
 ```
 
@@ -146,7 +147,10 @@ geometry, rigs, and translation animation curves. It exports every imported FBX
 take as a named GLB animation rather than retaining only the active action.
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
-Legacy Unity saves are never modified by migration tools.
+Legacy Unity saves are never modified by migration tools. `import-save` is an
+optional one-time compatibility command only. The production generator never
+loads a Unity save: `export-world-oracle` emits sanitized counts and position
+hashes solely for offline tests that compare generated output with ground truth.
 
 Player preferences are written atomically to `.stream-town/settings.ron` with a
 backup. On first launch, the Windows game imports Unity's
@@ -269,10 +273,15 @@ the nearest matching generated node and exact target mask: trees, ore, bushes,
 and reachable shoreline fish no longer collapse into interchangeable resource
 targets. Farmers harvest the completed Farm's authored unlimited food holder,
 while Fishers approach invisible water targets from a walkable shore cell.
-World-generator schema 4 fingerprints these target identities, fish nodes, and
-generated-resource navigation occupancy. Land nodes block their cell, workers
-act from the nearest walkable edge, and depletion clears the cell through a
-dirty-region update. Every shipping generated resource starts at Unity's
+World-generator schema 6 fingerprints these target identities, exact Unity
+source-space offsets, fish nodes, and generated-resource navigation occupancy.
+For the shipping seed, terrain heights and candidate masks come from the
+versioned neutral output of Unity's generator itself; the saved-world oracle is
+used only to assert final counts and horizontal position hashes. Edited seeds
+continue through the deterministic portable fallback. Land nodes block their
+cell, workers act from the nearest walkable edge, and depletion clears the cell
+through a dirty-region update only after the last overlapping node is depleted.
+Every shipping generated resource starts at Unity's
 hard-coded 100 units (`SetByDistance` is false). Schema-1 through schema-3 native
 saves are hash-verified during load, preserve their existing depletion, and add
 newer world features without discarding saves.
@@ -435,9 +444,10 @@ two land and two underwater foliage-generation layers, including their noise,
 threshold, seed, LOD, scale, material, and 21 FBX variant references. Bevy
 regenerates stable instances from the source layer sizes, seeds, thresholds,
 spacing, normalized octave noise, fixed base scale, and quarter-turn rotations.
-Resources use their three shipping generation layers and 100-unit amounts. A
-shared one-cell clearance prevents resources and foliage from intersecting,
-while source-space offsets remain stable. Raw glTF primitive loads restore
+Resources use their three shipping generation layers and 100-unit amounts.
+Unity's shared generation-occupancy keys are preserved exactly: valid
+half-cell candidates and same-cell clusters are not collapsed, while subsequent
+foliage layers still reject occupied source keys. Raw glTF primitive loads restore
 Blender's omitted 0.01 centimetre-to-metre scene-node conversion before applying
 authored scale; this prevents tree, ore, bush, grass, and coral primitives from
 becoming roughly one hundred times too large and overlapping. The converted
@@ -450,10 +460,9 @@ wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree,
 bush, and grass materials run the same wind deformation in the visible and
-depth/normal prepasses so SSAO cannot sample a stale silhouette. Their
-incompatible depth-only shadow casting is disabled, trees do not receive the
-old static self-shadow, and an authored-color ambient floor keeps low-poly back
-faces readable as they sway.
+depth/normal prepasses so SSAO cannot sample a stale silhouette. They cast
+world-space silhouettes but decline self-shadow reception, and an
+authored-color ambient floor keeps low-poly back faces readable as they sway.
 Missing converted assets retain the resource-cube fallback.
 
 Content schema 21 also preserves each building prefab's authored base maximum
@@ -744,7 +753,11 @@ fallback. The Main Menu's reachable `UI_MainMenu.prefab` is reconstructed with
 its tinted left-half panel, copyright line, and five packaged sliced-image
 buttons in authored order. New Game, Load Game, Settings, Credits, and Quit are
 mouse-operable while retaining their keyboard paths; Load Game selects the exact
-disabled sprite and cannot activate until a native save exists.
+disabled sprite and cannot activate until a native save exists. Its background
+is no longer a synthetic blank stage: the migration exporter resolves the
+authored `Main_Menu_02` camera, 285 model instances, and its 4,900-vertex island
+mesh into checked RON. Bevy reconstructs that scene with the converted GLBs and
+restores the orthographic town camera when gameplay loading begins.
 
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/

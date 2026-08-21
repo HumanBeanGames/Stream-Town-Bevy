@@ -187,7 +187,9 @@ impl Default for GameConfig {
                 height: 1_080,
             },
             world: WorldGenConfig {
-                seed: 0x5EED_2026,
+                // Recorded shipping-town seed. The Unity save is used only by
+                // offline parity tests; runtime generation starts from this seed.
+                seed: 1_580_290_387,
                 // D_TerrainGenSettings.Size (50) is multiplied by the shipping
                 // D_WorldGenScaleSettings x/y scale (4), and each authored
                 // voxel cell is two Unity units wide.

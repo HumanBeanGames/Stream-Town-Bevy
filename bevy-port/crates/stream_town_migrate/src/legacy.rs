@@ -42,6 +42,50 @@ pub(crate) struct ImportReport {
     native_world_hash: String,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct WorldOracleExportReport {
+    source: String,
+    destination: String,
+    source_sha256: String,
+    schema_version: u32,
+    container_version: Option<u32>,
+    terrain_seed: Option<i32>,
+    terrain_generator_version: i32,
+    recovered_from_backup: bool,
+    groups: BTreeMap<String, WorldOracleGroupSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorldOracleFile {
+    schema_version: u32,
+    purpose: &'static str,
+    source_sha256: String,
+    source_save_schema_version: u32,
+    source_container_version: Option<u32>,
+    terrain_seed: Option<i32>,
+    terrain_generator_version: i32,
+    groups: BTreeMap<String, WorldOracleGroup>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct WorldOracleGroup {
+    count: usize,
+    position_sha256: String,
+    horizontal_position_sha256: String,
+    minimum: [f32; 3],
+    maximum: [f32; 3],
+    positions: Vec<[f32; 3]>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct WorldOracleGroupSummary {
+    count: usize,
+    position_sha256: String,
+    horizontal_position_sha256: String,
+    minimum: [f32; 3],
+    maximum: [f32; 3],
+}
+
 #[derive(Clone, Debug)]
 struct LegacyEntity {
     key: String,
@@ -197,6 +241,153 @@ pub(crate) fn import_save(
         relocated_entities,
         preserved_terrain_mesh: snapshot.legacy_terrain_mesh.is_some(),
         native_world_hash: snapshot.world_hash,
+    })
+}
+
+pub(crate) fn export_world_oracle(
+    source: &Path,
+    destination: &Path,
+) -> Result<WorldOracleExportReport> {
+    ensure!(
+        source.is_file(),
+        "legacy save {} does not exist",
+        source.display()
+    );
+    let source_absolute = absolute_path(source)?;
+    let destination_absolute = absolute_path(destination)?;
+    ensure!(
+        source_absolute != destination_absolute,
+        "oracle destination must not overwrite the legacy source"
+    );
+
+    let primary_bytes = fs::read(source)
+        .with_context(|| format!("failed to read legacy save {}", source.display()))?;
+    let (decoded, used_path, used_bytes, recovered_from_backup) =
+        match decode_legacy(&primary_bytes) {
+            Ok(decoded) => (decoded, source.to_path_buf(), primary_bytes, false),
+            Err(primary_error) => {
+                let backup = backup_candidate(source);
+                if !backup.is_file() {
+                    return Err(primary_error).with_context(|| {
+                        format!(
+                            "legacy save {} is invalid and no backup exists",
+                            source.display()
+                        )
+                    });
+                }
+                let backup_bytes = fs::read(&backup)
+                    .with_context(|| format!("failed to read backup {}", backup.display()))?;
+                let decoded = decode_legacy(&backup_bytes).with_context(|| {
+                    format!(
+                        "legacy save {} and backup {} are both invalid",
+                        source.display(),
+                        backup.display()
+                    )
+                })?;
+                (decoded, backup, backup_bytes, true)
+            }
+        };
+
+    let source_sha256 = hex::encode(Sha256::digest(&used_bytes));
+    let mut positions_by_group = BTreeMap::<String, Vec<[f32; 3]>>::new();
+    for entity in &decoded.entities {
+        let prefix = match entity.kind {
+            ActorKind::Resource => "resource",
+            ActorKind::Foliage => "foliage",
+            // The shipping Town Hall is placed by world generation before
+            // resource/foliage overlap removal, so its sanitized position is
+            // part of the offline generation oracle as well.
+            ActorKind::Building => "building",
+            _ => continue,
+        };
+        let group = format!("{prefix}:{}", slug(&entity.archetype));
+        positions_by_group
+            .entry(group)
+            .or_default()
+            .push(entity.position);
+    }
+    let groups = positions_by_group
+        .into_iter()
+        .map(|(name, mut positions)| {
+            positions.sort_by(|left, right| {
+                left[0]
+                    .total_cmp(&right[0])
+                    .then(left[1].total_cmp(&right[1]))
+                    .then(left[2].total_cmp(&right[2]))
+            });
+            let mut hasher = Sha256::new();
+            let mut minimum = [f32::INFINITY; 3];
+            let mut maximum = [f32::NEG_INFINITY; 3];
+            for position in &positions {
+                for axis in 0..3 {
+                    minimum[axis] = minimum[axis].min(position[axis]);
+                    maximum[axis] = maximum[axis].max(position[axis]);
+                    hasher.update(position[axis].to_bits().to_le_bytes());
+                }
+            }
+            let mut horizontal_positions = positions.clone();
+            horizontal_positions.sort_by(|left, right| {
+                left[0]
+                    .total_cmp(&right[0])
+                    .then(left[2].total_cmp(&right[2]))
+            });
+            let mut horizontal_hasher = Sha256::new();
+            for position in &horizontal_positions {
+                horizontal_hasher.update(position[0].to_bits().to_le_bytes());
+                horizontal_hasher.update(position[2].to_bits().to_le_bytes());
+            }
+            let group = WorldOracleGroup {
+                count: positions.len(),
+                position_sha256: hex::encode(hasher.finalize()),
+                horizontal_position_sha256: hex::encode(horizontal_hasher.finalize()),
+                minimum,
+                maximum,
+                positions,
+            };
+            (name, group)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let summaries = groups
+        .iter()
+        .map(|(name, group)| {
+            (
+                name.clone(),
+                WorldOracleGroupSummary {
+                    count: group.count,
+                    position_sha256: group.position_sha256.clone(),
+                    horizontal_position_sha256: group.horizontal_position_sha256.clone(),
+                    minimum: group.minimum,
+                    maximum: group.maximum,
+                },
+            )
+        })
+        .collect();
+    let oracle = WorldOracleFile {
+        schema_version: 1,
+        purpose: "offline Unity generation parity oracle; never consumed by the Bevy runtime",
+        source_sha256: source_sha256.clone(),
+        source_save_schema_version: decoded.schema_version,
+        source_container_version: decoded.container_version,
+        terrain_seed: decoded.terrain_seed,
+        terrain_generator_version: decoded.terrain_generator_version,
+        groups,
+    };
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(destination, serde_json::to_vec_pretty(&oracle)?)
+        .with_context(|| format!("failed to write {}", destination.display()))?;
+    Ok(WorldOracleExportReport {
+        source: used_path.display().to_string(),
+        destination: destination.display().to_string(),
+        source_sha256,
+        schema_version: decoded.schema_version,
+        container_version: decoded.container_version,
+        terrain_seed: decoded.terrain_seed,
+        terrain_generator_version: decoded.terrain_generator_version,
+        recovered_from_backup,
+        groups: summaries,
     })
 }
 

@@ -5,6 +5,7 @@ pub mod command;
 pub mod config;
 pub mod content;
 pub mod id;
+pub mod menu_scene;
 pub mod navigation;
 pub mod presentation;
 pub mod runtime_console;
@@ -36,6 +37,9 @@ pub use content::{
     TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
+pub use menu_scene::{
+    MainMenuCameraReference, MainMenuEmbeddedMesh, MainMenuModelInstance, MainMenuSceneReference,
+};
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
 pub use presentation::{
     AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
@@ -76,7 +80,7 @@ pub use simulation::{
     TownGoalState, Weather, WorldSimulation, required_role_experience,
 };
 pub use world::{
-    GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,
-    generate_world_with_content, legacy_v1_world_hash, legacy_v2_world_hash, legacy_v3_world_hash,
-    shoreline_approaches,
+    GeneratedFoliage, GeneratedResource, GeneratedWorld, UnityGenerationLayerReference,
+    UnityGenerationReference, UnityTerrainReference, generate_world, generate_world_with_content,
+    legacy_v1_world_hash, legacy_v2_world_hash, legacy_v3_world_hash, shoreline_approaches,
 };
