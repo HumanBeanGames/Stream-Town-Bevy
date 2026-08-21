@@ -1,50 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::OnceLock;
 
 use crate::{FoliageHabitat, FoliageLayerDef, GridPos, NavGrid, StableId, WorldGenConfig};
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct UnityGenerationReference {
-    pub schema_version: u32,
-    pub unity_version: String,
-    pub terrain: UnityTerrainReference,
-    pub layers: std::collections::BTreeMap<StableId, UnityGenerationLayerReference>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct UnityTerrainReference {
-    pub seed: i32,
-    pub width: u16,
-    pub height: u16,
-    /// Unity terrain height in half-metre steps after its authored curve,
-    /// island bias, and quantization have been applied.
-    pub height_half_metres: Vec<u8>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct UnityGenerationLayerReference {
-    pub source_size: u16,
-    pub seed: i32,
-    pub noise_scale: f32,
-    pub octaves: u8,
-    pub persistence: f32,
-    pub lacunarity: f32,
-    pub threshold: f32,
-    pub spacing: u16,
-    pub candidate_half_units: Vec<[i16; 2]>,
-}
-
-#[must_use]
-pub fn converted_unity_generation_reference() -> &'static UnityGenerationReference {
-    static REFERENCE: OnceLock<UnityGenerationReference> = OnceLock::new();
-    REFERENCE.get_or_init(|| {
-        ron::from_str(include_str!(
-            "../../../assets/content/unity_generation_reference.ron"
-        ))
-        .expect("checked-in Unity generation reference is valid RON")
-    })
-}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GeneratedResource {
@@ -103,55 +60,43 @@ fn generate_world_from_layers(
     let terrain_seed = u32::try_from(config.seed & u64::from(u32::MAX))
         .expect("masked terrain seed fits u32")
         .cast_signed();
-    let reference = converted_unity_generation_reference();
-    let exact_terrain = terrain_seed == reference.terrain.seed
-        && config.width == reference.terrain.width
-        && config.height == reference.terrain.height
-        && (config.cell_size - 2.0).abs() <= f32::EPSILON
-        && config.height_scale_centimetres == 100;
-    let terrain_noise = (!exact_terrain).then(|| {
-        unity_noise_map(
-            config.width,
-            config.height,
-            terrain_seed,
-            50.0,
-            3,
-            0.827,
-            2.0,
-            [0.0, 0.0],
-        )
-    });
+    let terrain_noise = unity_noise_map(
+        config.width,
+        config.height,
+        terrain_seed,
+        50.0,
+        3,
+        0.827,
+        2.0,
+        [0.0, 0.0],
+    );
     let mut heights = Vec::with_capacity(cell_count);
     let mut blocked = Vec::with_capacity(cell_count);
 
     for z in 0..config.height {
         for x in 0..config.width {
-            let index = usize::from(z) * usize::from(config.width) + usize::from(x);
-            let height = if exact_terrain {
-                // Unity's mesh rows run from +Z to -Z; Bevy's grid rows run in
-                // the opposite direction, so mirror the row while preserving
-                // the same world-space terrain.
-                let unity_z = config.height - 1 - z;
-                let unity_index = usize::from(unity_z) * usize::from(config.width) + usize::from(x);
-                i16::from(reference.terrain.height_half_metres[unity_index]) * 50
+            // Unity emits noise rows from +Z to -Z, while NavGrid rows run from
+            // -Z to +Z. Mirroring the source row reproduces the authored mesh in
+            // the same world-space orientation without importing any mesh data.
+            let unity_y = config.height - 1 - z;
+            let unity_index = usize::from(unity_y) * usize::from(config.width) + usize::from(x);
+            let edge = x <= 1
+                || unity_y <= 1
+                || x >= config.width.saturating_sub(2)
+                || unity_y >= config.height.saturating_sub(2);
+            let source_height = if edge {
+                -1.0
             } else {
-                let terrain_noise = terrain_noise
-                    .as_ref()
-                    .expect("fallback terrain noise exists");
-                let edge = x <= 1
-                    || z <= 1
-                    || x >= config.width.saturating_sub(2)
-                    || z >= config.height.saturating_sub(2);
-                let source_height = if edge { -1.0 } else { terrain_noise[index] };
-                let curved_height = unity_terrain_height_curve(source_height);
-                let world = authored_grid_centre(config, GridPos { x, z });
-                let distance = (world[0].mul_add(world[0], world[1] * world[1])).sqrt();
-                let normalized_distance = (distance / 200.0).clamp(0.0, 1.0);
-                let island_bias = 3.0 * (1.0 - smooth_noise_step(normalized_distance));
-                let quantized = round_to_even(curved_height * island_bias / 0.5) * 0.5;
-                let centimetres = quantized * f32::from(config.height_scale_centimetres);
-                unity_clamped_i16(centimetres)
+                terrain_noise[unity_index]
             };
+            let curved_height = unity_terrain_height_curve(source_height);
+            let world = authored_grid_centre(config, GridPos { x, z });
+            let distance = (world[0].mul_add(world[0], world[1] * world[1])).sqrt();
+            let normalized_distance = (distance / 200.0).clamp(0.0, 1.0);
+            let island_bias = 3.0 * (1.0 - smooth_noise_step(normalized_distance));
+            let quantized = round_to_even(curved_height * island_bias / 0.5) * 0.5;
+            let centimetres = quantized * f32::from(config.height_scale_centimetres);
+            let height = unity_clamped_i16(centimetres);
             // Unity's A* pass rejects terrain below QuantizationFactor - 0.05.
             let is_blocked = height < 45;
             heights.push(height);
@@ -250,25 +195,18 @@ fn generate_authored_resources(config: &WorldGenConfig, heights: &[i16]) -> Vec<
     // layers. Each layer computes those keys using its own spacing; preserving
     // that slightly unusual behavior is required for placement parity.
     let mut occupied = std::collections::BTreeSet::<(i32, i32)>::new();
-    let reference = converted_unity_generation_reference();
     for (layer_index, layer) in AUTHORED_RESOURCE_LAYERS.iter().enumerate() {
-        let layer_id = StableId::new(layer.kind).expect("authored resource layer ID");
-        let reference_layer = &reference.layers[&layer_id];
-        let candidates = if resource_layer_matches_reference(layer, reference_layer) {
-            reference_layer.candidate_half_units.clone()
-        } else {
-            generate_candidate_mask(
-                300,
-                layer.seed,
-                layer.noise_scale,
-                layer.octaves,
-                layer.persistence,
-                layer.lacunarity,
-                layer.threshold,
-                layer.spacing,
-                layer.kind == "resource:wood",
-            )
-        };
+        let candidates = generate_candidate_mask(
+            300,
+            layer.seed,
+            layer.noise_scale,
+            layer.octaves,
+            layer.persistence,
+            layer.lacunarity,
+            layer.threshold,
+            layer.spacing,
+            layer.kind == "resource:wood",
+        );
         for candidate in candidates {
             let resource_world_x = f32::from(candidate[0]) * 0.5;
             let resource_world_z = f32::from(candidate[1]) * 0.5;
@@ -327,20 +265,6 @@ fn generate_authored_resources(config: &WorldGenConfig, heights: &[i16]) -> Vec<
         }
     }
     resources
-}
-
-fn resource_layer_matches_reference(
-    layer: &AuthoredResourceLayer,
-    reference: &UnityGenerationLayerReference,
-) -> bool {
-    reference.source_size == 300
-        && reference.seed == layer.seed
-        && exact_f32(reference.noise_scale, layer.noise_scale)
-        && reference.octaves == layer.octaves
-        && exact_f32(reference.persistence, layer.persistence)
-        && exact_f32(reference.lacunarity, layer.lacunarity)
-        && exact_f32(reference.threshold, layer.threshold)
-        && reference.spacing == layer.spacing
 }
 
 fn generate_shoreline_fish(
@@ -525,27 +449,17 @@ fn generate_foliage(
         if layer.variants.is_empty() {
             continue;
         }
-        let reference = converted_unity_generation_reference();
-        let candidates = reference
-            .layers
-            .get(&layer.id)
-            .filter(|reference| foliage_layer_matches_reference(layer, reference))
-            .map_or_else(
-                || {
-                    generate_candidate_mask(
-                        layer.source_size,
-                        layer.seed,
-                        layer.noise_scale,
-                        layer.octaves,
-                        layer.persistence,
-                        layer.lacunarity,
-                        layer.spawn_threshold,
-                        layer.spacing,
-                        false,
-                    )
-                },
-                |reference| reference.candidate_half_units.clone(),
-            );
+        let candidates = generate_candidate_mask(
+            layer.source_size,
+            layer.seed,
+            layer.noise_scale,
+            layer.octaves,
+            layer.persistence,
+            layer.lacunarity,
+            layer.spawn_threshold,
+            layer.spacing,
+            false,
+        );
         for candidate in candidates {
             let world_x = f32::from(candidate[0]) * 0.5;
             let world_z = f32::from(candidate[1]) * 0.5;
@@ -607,24 +521,6 @@ fn generate_foliage(
         }
     }
     foliage
-}
-
-fn foliage_layer_matches_reference(
-    layer: &FoliageLayerDef,
-    reference: &UnityGenerationLayerReference,
-) -> bool {
-    reference.source_size == layer.source_size
-        && reference.seed == layer.seed
-        && exact_f32(reference.noise_scale, layer.noise_scale)
-        && reference.octaves == layer.octaves
-        && exact_f32(reference.persistence, layer.persistence)
-        && exact_f32(reference.lacunarity, layer.lacunarity)
-        && exact_f32(reference.threshold, layer.spawn_threshold)
-        && reference.spacing == layer.spacing
-}
-
-fn exact_f32(left: f32, right: f32) -> bool {
-    left.to_bits() == right.to_bits()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -714,11 +610,11 @@ fn unity_floor_i32(value: f32) -> i32 {
 #[allow(clippy::cast_possible_truncation)]
 fn positive_noise_offset(seed: i32, size: u16) -> [f32; 2] {
     let mut random = SystemRandom::new(seed);
-    let minimum = f64::from(size) * 0.5;
-    let additional = f64::from(size) * 2.0;
+    let minimum = f32::from(size) * 0.5;
+    let additional = f32::from(size) * 2.0;
     [
-        (minimum + random.next_double() * additional) as f32,
-        (minimum + random.next_double() * additional) as f32,
+        minimum + random.next_double() as f32 * additional,
+        minimum + random.next_double() as f32 * additional,
     ]
 }
 
@@ -759,7 +655,12 @@ fn round_to_even(value: f32) -> f32 {
     }
 }
 
-#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    clippy::too_many_arguments
+)]
 fn unity_noise_map(
     width: u16,
     height: u16,
@@ -788,11 +689,16 @@ fn unity_noise_map(
     for z in 0..height {
         for x in 0..width {
             let mut amplitude = 1.0;
-            let mut frequency = 1.0;
+            let mut frequency = 1.0_f32;
             let mut noise_height = 0.0;
             for octave_offset in &octave_offsets {
-                let sample_x = (f32::from(x) - half_width) / scale * frequency + octave_offset[0];
-                let sample_z = (f32::from(z) - half_height) / scale * frequency + octave_offset[1];
+                // Mono evaluates this CLI floating-point expression at its
+                // internal precision, then rounds at the native Mathf call.
+                // The stored frequency local itself rounds to f32 each loop.
+                let base_x = (f64::from(x) - f64::from(half_width)) / f64::from(scale);
+                let base_z = (f64::from(z) - f64::from(half_height)) / f64::from(scale);
+                let sample_x = (base_x * f64::from(frequency) + f64::from(octave_offset[0])) as f32;
+                let sample_z = (base_z * f64::from(frequency) + f64::from(octave_offset[1])) as f32;
                 noise_height += (perlin_noise(sample_x, sample_z) * 2.0 - 1.0) * amplitude;
                 amplitude *= persistence;
                 frequency *= lacunarity;
@@ -805,21 +711,26 @@ fn unity_noise_map(
             values.push(noise_height);
         }
     }
-    let range = maximum - minimum;
     for value in &mut values {
-        *value = if range.abs() <= f32::EPSILON {
+        *value = if maximum == minimum {
             0.0
         } else {
-            ((*value - minimum) / range).clamp(0.0, 1.0)
+            // Mathf.InverseLerp is another managed CLI floating-point
+            // expression: its float arguments are fixed-width, while the
+            // subtraction/division is evaluated at Mono's internal precision
+            // before the float result crosses the Clamp01 call boundary.
+            (((f64::from(*value) - f64::from(minimum)) / (f64::from(maximum) - f64::from(minimum)))
+                as f32)
+                .clamp(0.0, 1.0)
         };
     }
     values
 }
 
-// Unity's native Mathf.PerlinNoise implementation is not exposed to managed
-// code. This is the same fixed-permutation improved-Perlin family, while the
-// surrounding octave offsets, f32 sampling, normalization, curves and authored
-// settings mirror Assets/Scripts/Utils/Noise.cs exactly.
+// Algorithmic port of Unity 6000.5's native PerlinNoise::NoiseNormalized:
+// absolute coordinates, its duplicated fixed permutation, improved-Perlin
+// gradients, and Unity's measured normalization constants. No generated Unity
+// terrain, masks, candidates, save positions, or coordinate fixtures are inputs.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn perlin_noise(x: f32, z: f32) -> f32 {
     const PERMUTATION: [u8; 256] = [
@@ -837,24 +748,31 @@ fn perlin_noise(x: f32, z: f32) -> f32 {
         192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254,
         138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180,
     ];
-    let xi = (x.floor() as i32 & 255) as usize;
-    let zi = (z.floor() as i32 & 255) as usize;
-    let xf = x - x.floor();
-    let zf = z - z.floor();
+    let x = x.abs();
+    let z = z.abs();
+    let xi_integer = x.trunc();
+    let zi_integer = z.trunc();
+    let xi = (xi_integer as i32 & 255) as usize;
+    let zi = (zi_integer as i32 & 255) as usize;
+    let xf = x - xi_integer;
+    let zf = z - zi_integer;
     let fade = |value: f32| value * value * value * (value * (value * 6.0 - 15.0) + 10.0);
     let hash = |first: usize, second: usize| {
         let inner = usize::from(PERMUTATION[first & 255]);
-        PERMUTATION[(inner + second) & 255]
+        let corner = usize::from(PERMUTATION[(inner + second) & 255]);
+        PERMUTATION[corner]
     };
-    let gradient = |hash: u8, x: f32, z: f32| match hash & 7 {
-        0 => x + z,
-        1 => -x + z,
-        2 => x - z,
-        3 => -x - z,
-        4 => x,
-        5 => -x,
-        6 => z,
-        _ => -z,
+    let gradient = |hash: u8, x: f32, z: f32| {
+        let hash = hash & 15;
+        let first = if hash < 8 { x } else { z };
+        let second = if hash < 4 {
+            z
+        } else if hash == 12 || hash == 14 {
+            x
+        } else {
+            0.0
+        };
+        (if hash & 1 == 0 { first } else { -first }) + if hash & 2 == 0 { second } else { -second }
     };
     let u = fade(xf);
     let v = fade(zf);
@@ -868,7 +786,7 @@ fn perlin_noise(x: f32, z: f32) -> f32 {
         gradient(hash(xi + 1, zi + 1), xf - 1.0, zf - 1.0),
         u,
     );
-    (lerp(lower, upper, v) * 0.5 + 0.5).clamp(0.0, 1.0)
+    (lerp(lower, upper, v) + 0.69) / 1.483
 }
 
 struct SystemRandom {
@@ -1018,6 +936,208 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::excessive_precision)]
+    fn unity_native_perlin_port_matches_validation_samples() {
+        let samples: [([f32; 2], f32); 14] = [
+            ([0.0, 0.0], 0.465_273_08),
+            ([0.1, 0.1], 0.521_736_98),
+            ([0.5, 0.5], 0.296_695_9),
+            ([1.25, -2.75], 0.569_467_96),
+            ([-0.25, 0.75], 0.412_921_97),
+            ([123.456, 789.012], 0.640_877_66),
+            ([-999.75, 431.125], 0.657_504_8),
+            ([100_000.125, -99_999.875], 0.281_942_93),
+            ([33_797.949_218_75, 87_593.859_375], 0.556_386_23),
+            ([24_469.505_859_375, -84_847.585_937_5], 0.458_267_84),
+            ([-88_742.234_375, -43_157.328_125], 0.674_914_6),
+            ([-41_509.246_093_75, -76_963.335_937_5], 0.464_331_9),
+            ([-2_174_468.5, -2_253_224.5], -0.040_458_53),
+            ([-50_637_696.0, -50_605_980.0], 0.465_273_08),
+        ];
+        for ([x, z], expected) in samples {
+            assert_eq!(
+                perlin_noise(x, z).to_bits(),
+                expected.to_bits(),
+                "Unity Perlin mismatch at ({x}, {z})"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss, clippy::excessive_precision)]
+    fn algorithmic_generation_matches_unity_validation_fingerprints() {
+        // These are output-only validation fingerprints emitted by Unity. They
+        // can fail this test but cannot supply coordinates, terrain, masks, or
+        // counts to the generator above.
+        assert_eq!(
+            positive_noise_offset(-1_165_233_549, 300).map(f32::to_bits),
+            [
+                549.771_972_656_25_f32.to_bits(),
+                710.678_771_972_656_3_f32.to_bits()
+            ]
+        );
+        let outer = positive_noise_offset(-1_165_233_549, 300);
+        let mut offset_hasher = Sha256::new();
+        let mut octave_random = SystemRandom::new(-1_165_233_549);
+        for _ in 0..6 {
+            let x = octave_random.next_range(-100_000, 100_000) as f32 + outer[0];
+            let z = octave_random.next_range(-100_000, 100_000) as f32 + outer[1];
+            offset_hasher.update(x.to_bits().to_le_bytes());
+            offset_hasher.update(z.to_bits().to_le_bytes());
+        }
+        assert_eq!(
+            hex::encode(offset_hasher.finalize()),
+            "bd28ef8bcfc692dae0df71cee2ac4108d131fb4c0ac61f256cbc98cf96a01335"
+        );
+        let layers = [
+            (
+                300,
+                -1_165_233_549,
+                17.0,
+                6,
+                0.452,
+                22.47,
+                0.6,
+                2,
+                true,
+                3_763,
+                "b1d0baa74171a590bf1d6ca0972a255a7ee56f929a1fb4f9c21926c4322049fb",
+            ),
+            (
+                300,
+                -1_165_233_548,
+                7.0,
+                1,
+                1.0,
+                0.0,
+                0.85,
+                1,
+                false,
+                393,
+                "2ffd55a61a479c2cb65a290e455f18cef63591074e6881af80e6e0052d4d61d1",
+            ),
+            (
+                300,
+                -1_165_233_547,
+                7.0,
+                2,
+                1.0,
+                0.0,
+                0.85,
+                1,
+                false,
+                130,
+                "5ea5ddab9e13b56f4ee53181a5d889c958da6c1852609b83d9429a5c38ae5537",
+            ),
+            (
+                300,
+                -430_535_522,
+                10.0,
+                1,
+                0.847,
+                1.53,
+                0.6,
+                1,
+                false,
+                22_341,
+                "bf56606b2a300bd2bd4fcd7a8db6dfd997bd6e4b2d1b5596dd827f148de10fb7",
+            ),
+            (
+                300,
+                -430_535_523,
+                4.0,
+                1,
+                0.847,
+                1.53,
+                0.8,
+                1,
+                false,
+                726,
+                "138a87651288ae8e057f180033c42fac50fb94adb7136ebced6a169c3ded478a",
+            ),
+            (
+                500,
+                -430_535_520,
+                6.68,
+                1,
+                0.8,
+                1.53,
+                0.7,
+                1,
+                false,
+                21_680,
+                "2f965ea209c5f2ef77fa6088253465f3f768bd3dfa2b09f7c6da2f5281e81e94",
+            ),
+            (
+                500,
+                -430_535_519,
+                6.68,
+                1,
+                0.8,
+                1.53,
+                0.7,
+                1,
+                false,
+                21_071,
+                "661ae24165c7d685df8fc3c202b9a4191270ab5788d8d34f149af26f93877ffb",
+            ),
+        ];
+        for (
+            size,
+            seed,
+            scale,
+            octaves,
+            persistence,
+            lacunarity,
+            threshold,
+            spacing,
+            wood_offset,
+            expected_count,
+            expected_hash,
+        ) in layers
+        {
+            let candidates = generate_candidate_mask(
+                size,
+                seed,
+                scale,
+                octaves,
+                persistence,
+                lacunarity,
+                threshold,
+                spacing,
+                wood_offset,
+            );
+            assert_eq!(candidates.len(), expected_count, "seed {seed}");
+            let mut hasher = Sha256::new();
+            for [x, z] in candidates {
+                hasher.update((f32::from(x) * 0.5).to_bits().to_le_bytes());
+                hasher.update((f32::from(z) * 0.5).to_bits().to_le_bytes());
+            }
+            assert_eq!(hex::encode(hasher.finalize()), expected_hash, "seed {seed}");
+        }
+
+        let config = GameConfig::default().world;
+        let world = generate_world(&config);
+        let mut hasher = Sha256::new();
+        for unity_y in 0..config.height {
+            let bevy_z = config.height - 1 - unity_y;
+            for x in 0..config.width {
+                let height_metres = f32::from(
+                    world
+                        .navigation
+                        .height_at(GridPos { x, z: bevy_z })
+                        .unwrap(),
+                ) / 100.0;
+                hasher.update(height_metres.to_bits().to_le_bytes());
+            }
+        }
+        assert_eq!(
+            hex::encode(hasher.finalize()),
+            "c4ef1e2b23cd38224676866f5467fe7fc98ad167e227be0013f7b7bbfd254455"
+        );
+    }
+
+    #[test]
     fn generation_is_deterministic() {
         let config = GameConfig::default().world;
         let first = generate_world(&config);
@@ -1143,8 +1263,8 @@ mod tests {
         // StreamTownSave.stsave is never loaded by the runtime. These are the
         // non-personal generation counts and horizontal fingerprints exported
         // from it by `stream_town_migrate export-world-oracle` for the recorded
-        // seed. The checked-in Unity generation reference comes from the editor
-        // algorithm and authored settings, not from save placements.
+        // seed. They are expected values inside this test only. The generator
+        // above neither reads the save nor receives any of its placements.
         let mut config = GameConfig::default().world;
         config.seed = 1_580_290_387;
         let content: ContentCatalog =

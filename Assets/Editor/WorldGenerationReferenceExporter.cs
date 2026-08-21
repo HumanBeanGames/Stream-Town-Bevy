@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using UnityEditor;
 using UnityEngine;
 using Utils;
@@ -11,10 +12,9 @@ using World.Generation;
 namespace StreamTown.Migration
 {
     /// <summary>
-    /// Emits reference data from Unity's native Mathf.PerlinNoise implementation.
-    /// The neutral converted fixture reproduces the shipping seed without a
-    /// Unity runtime dependency. Unity save placements are a separate offline
-    /// oracle and are never inputs to this exporter or the Bevy generator.
+    /// Emits validation fingerprints from Unity's world-generation pipeline.
+    /// This output deliberately contains no terrain samples or candidate
+    /// coordinates and has no converter or runtime consumer in the Bevy port.
     /// </summary>
     public static class WorldGenerationReferenceExporter
     {
@@ -41,8 +41,8 @@ namespace StreamTown.Migration
         {
             GenerationReference export = new GenerationReference
             {
-                SchemaVersion = 1,
-                Purpose = "Unity generator reference converted to a neutral Bevy fixture; contains no save placements",
+                SchemaVersion = 2,
+                Purpose = "Validation only; must never be consumed by Bevy generation or runtime code",
                 TerrainSeed = terrainSeed,
                 PerlinSamples = PerlinReferenceSamples(),
                 Terrain = BuildTerrainReference(terrainSeed),
@@ -68,7 +68,7 @@ namespace StreamTown.Migration
             const int size = 200;
             GenerationSettings settings = new GenerationSettings(size, 0, 50f, 3, 0.827f, 2f, seed, Vector2.zero, 0f);
             float[,] noise = Noise.GenerateNoiseMap(settings);
-            float[] heights = new float[size * size];
+            List<float> heights = new List<float>(size * size);
             float topLeft = (size - 1) * 2f / -2f;
             for (int y = 0; y < size; y++)
             {
@@ -79,10 +79,18 @@ namespace StreamTown.Migration
                     Vector3 position = new Vector3(topLeft + x * 2f, 0f, -topLeft - y * 2f);
                     float normalizedDistance = Mathf.Clamp01(position.magnitude / 200f);
                     float bias = 3f * (1f - SmoothStep01(normalizedDistance));
-                    heights[y * size + x] = Mathf.Round(height * bias / 0.5f) * 0.5f;
+                    float quantized = Mathf.Round(height * bias / 0.5f) * 0.5f;
+                    // Canonicalize signed zero so the JSON-era and binary hash
+                    // validators agree without exposing the underlying samples.
+                    heights.Add(quantized == 0f ? 0f : quantized);
                 }
             }
-            return new TerrainReference { Size = size, Heights = heights };
+            return new TerrainReference
+            {
+                Size = size,
+                CellCount = heights.Count,
+                HeightBitsSha256 = HashFloats(heights),
+            };
         }
 
         private static float SmoothStep01(float value)
@@ -112,6 +120,14 @@ namespace StreamTown.Migration
             {
                 Spacing = spacing
             };
+            System.Random octaveRandom = new System.Random(seed);
+            List<Vector2> octaveOffsets = new List<Vector2>(octaves);
+            for (int index = 0; index < octaves; index++)
+            {
+                octaveOffsets.Add(new Vector2(
+                    octaveRandom.Next(-100000, 100000) + offset.x,
+                    octaveRandom.Next(-100000, 100000) + offset.y));
+            }
             float[,] noise = Noise.GenerateNoiseMap(settings);
             int half = size / 2;
             List<Vector2> candidates = new List<Vector2>();
@@ -139,8 +155,28 @@ namespace StreamTown.Migration
                 Lacunarity = lacunarity,
                 Threshold = threshold,
                 Spacing = spacing,
-                Candidates = candidates.ToArray(),
+                OctaveOffsetBitsSha256 = HashVectors(octaveOffsets),
+                CandidateCount = candidates.Count,
+                CandidateBitsSha256 = HashVectors(candidates),
             };
+        }
+
+        private static string HashFloats(IEnumerable<float> values)
+        {
+            using (MemoryStream stream = new MemoryStream())
+            using (BinaryWriter writer = new BinaryWriter(stream))
+            using (SHA256 sha = SHA256.Create())
+            {
+                foreach (float value in values)
+                    writer.Write(value);
+                writer.Flush();
+                return BitConverter.ToString(sha.ComputeHash(stream.ToArray())).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        private static string HashVectors(IEnumerable<Vector2> values)
+        {
+            return HashFloats(values.SelectMany(value => new[] { value.x, value.y }));
         }
 
         private static PerlinSample[] PerlinReferenceSamples()
@@ -190,7 +226,8 @@ namespace StreamTown.Migration
         private sealed class TerrainReference
         {
             public int Size;
-            public float[] Heights;
+            public int CellCount;
+            public string HeightBitsSha256;
         }
 
         [Serializable]
@@ -206,7 +243,9 @@ namespace StreamTown.Migration
             public float Lacunarity;
             public float Threshold;
             public int Spacing;
-            public Vector2[] Candidates;
+            public string OctaveOffsetBitsSha256;
+            public int CandidateCount;
+            public string CandidateBitsSha256;
         }
     }
 }

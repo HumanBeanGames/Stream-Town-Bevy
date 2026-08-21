@@ -66,6 +66,29 @@ fn main() -> Result<()> {
 }
 
 fn validate() -> Result<()> {
+    let forbidden_reference = Path::new("assets/content/unity_generation_reference.ron");
+    if forbidden_reference.exists() {
+        bail!(
+            "{} must not exist: Unity generation output is validation-only and cannot be a Bevy input",
+            forbidden_reference.display()
+        );
+    }
+    let world_source_path = Path::new("crates/stream_town_domain/src/world.rs");
+    let world_source = fs::read_to_string(world_source_path)
+        .with_context(|| format!("failed to read {}", world_source_path.display()))?;
+    for forbidden_symbol in [
+        "UnityGenerationReference",
+        "converted_unity_generation_reference",
+        "candidate_half_units",
+        "height_half_metres",
+    ] {
+        if world_source.contains(forbidden_symbol) {
+            bail!(
+                "world generator contains forbidden Unity-output replay symbol {forbidden_symbol}"
+            );
+        }
+    }
+
     let config_path = Path::new("assets/config/game.ron");
     let config: GameConfig = ron::from_str(
         &fs::read_to_string(config_path)

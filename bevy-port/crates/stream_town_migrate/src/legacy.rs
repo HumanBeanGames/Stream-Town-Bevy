@@ -64,17 +64,7 @@ struct WorldOracleFile {
     source_container_version: Option<u32>,
     terrain_seed: Option<i32>,
     terrain_generator_version: i32,
-    groups: BTreeMap<String, WorldOracleGroup>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct WorldOracleGroup {
-    count: usize,
-    position_sha256: String,
-    horizontal_position_sha256: String,
-    minimum: [f32; 3],
-    maximum: [f32; 3],
-    positions: Vec<[f32; 3]>,
+    groups: BTreeMap<String, WorldOracleGroupSummary>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -336,41 +326,25 @@ pub(crate) fn export_world_oracle(
                 horizontal_hasher.update(position[0].to_bits().to_le_bytes());
                 horizontal_hasher.update(position[2].to_bits().to_le_bytes());
             }
-            let group = WorldOracleGroup {
+            let group = WorldOracleGroupSummary {
                 count: positions.len(),
                 position_sha256: hex::encode(hasher.finalize()),
                 horizontal_position_sha256: hex::encode(horizontal_hasher.finalize()),
                 minimum,
                 maximum,
-                positions,
             };
             (name, group)
         })
         .collect::<BTreeMap<_, _>>();
-    let summaries = groups
-        .iter()
-        .map(|(name, group)| {
-            (
-                name.clone(),
-                WorldOracleGroupSummary {
-                    count: group.count,
-                    position_sha256: group.position_sha256.clone(),
-                    horizontal_position_sha256: group.horizontal_position_sha256.clone(),
-                    minimum: group.minimum,
-                    maximum: group.maximum,
-                },
-            )
-        })
-        .collect();
     let oracle = WorldOracleFile {
-        schema_version: 1,
-        purpose: "offline Unity generation parity oracle; never consumed by the Bevy runtime",
+        schema_version: 2,
+        purpose: "validation-only Unity generation fingerprints; contains no positions and is never consumed by the Bevy runtime",
         source_sha256: source_sha256.clone(),
         source_save_schema_version: decoded.schema_version,
         source_container_version: decoded.container_version,
         terrain_seed: decoded.terrain_seed,
         terrain_generator_version: decoded.terrain_generator_version,
-        groups,
+        groups: groups.clone(),
     };
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
@@ -387,7 +361,7 @@ pub(crate) fn export_world_oracle(
         terrain_seed: decoded.terrain_seed,
         terrain_generator_version: decoded.terrain_generator_version,
         recovered_from_backup,
-        groups: summaries,
+        groups,
     })
 }
 

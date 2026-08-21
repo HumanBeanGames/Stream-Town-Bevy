@@ -275,12 +275,15 @@ targets. Farmers harvest the completed Farm's authored unlimited food holder,
 while Fishers approach invisible water targets from a walkable shore cell.
 World-generator schema 6 fingerprints these target identities, exact Unity
 source-space offsets, fish nodes, and generated-resource navigation occupancy.
-For the shipping seed, terrain heights and candidate masks come from the
-versioned neutral output of Unity's generator itself; the saved-world oracle is
-used only to assert final counts and horizontal position hashes. Edited seeds
-continue through the deterministic portable fallback. Land nodes block their
-cell, workers act from the nearest walkable edge, and depletion clears the cell
-through a dirty-region update only after the last overlapping node is depleted.
+Every seed, including the shipping seed, is generated independently by the Bevy
+domain code. Its Unity-compatible path reproduces the seeded .NET random stream,
+Mono floating-point expression boundaries, Unity's native `Mathf.PerlinNoise`,
+min/max normalization, terrain curve and island quantization, traversal order,
+habitat tests, and shared occupancy. Unity-generated terrain samples, candidate
+coordinates, and save placements are never generator inputs; output-only hashes
+can fail parity tests but cannot supply world data. Land nodes block their cell,
+workers act from the nearest walkable edge, and depletion clears the cell through
+a dirty-region update only after the last overlapping node is depleted.
 Every shipping generated resource starts at Unity's
 hard-coded 100 units (`SetByDistance` is false). Schema-1 through schema-3 native
 saves are hash-verified during load, preserve their existing depletion, and add

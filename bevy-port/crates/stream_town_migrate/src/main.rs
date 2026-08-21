@@ -16,7 +16,6 @@ mod legacy;
 mod menu_scene;
 mod models;
 mod presentation;
-mod world_reference;
 
 #[derive(Debug, Parser)]
 #[command(about = "Read-only migration tooling for the Stream Town Unity project")]
@@ -58,12 +57,6 @@ enum Command {
     /// Export generated-world positions from a legacy save as an offline parity oracle.
     ExportWorldOracle {
         save: PathBuf,
-        #[arg(long)]
-        out: PathBuf,
-    },
-    /// Convert Unity-native noise/terrain samples into compact deterministic RON.
-    ConvertWorldReference {
-        reference: PathBuf,
         #[arg(long)]
         out: PathBuf,
     },
@@ -183,10 +176,6 @@ fn main() -> Result<()> {
         }
         Command::ExportWorldOracle { save, out } => {
             let report = legacy::export_world_oracle(&save, &out)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
-        Command::ConvertWorldReference { reference, out } => {
-            let report = world_reference::convert(&reference, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::ConvertMainMenuReference { reference, out } => {

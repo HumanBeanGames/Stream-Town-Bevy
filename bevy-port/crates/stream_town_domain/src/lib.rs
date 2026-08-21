@@ -80,7 +80,7 @@ pub use simulation::{
     TownGoalState, Weather, WorldSimulation, required_role_experience,
 };
 pub use world::{
-    GeneratedFoliage, GeneratedResource, GeneratedWorld, UnityGenerationLayerReference,
-    UnityGenerationReference, UnityTerrainReference, generate_world, generate_world_with_content,
-    legacy_v1_world_hash, legacy_v2_world_hash, legacy_v3_world_hash, shoreline_approaches,
+    GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,
+    generate_world_with_content, legacy_v1_world_hash, legacy_v2_world_hash, legacy_v3_world_hash,
+    shoreline_approaches,
 };
