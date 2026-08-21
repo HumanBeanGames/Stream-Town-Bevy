@@ -48,6 +48,8 @@ cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifes
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
 cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
 cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
+cargo run -p stream_town_migrate -- convert-main-menu-reference ../generated/main-menu-reference.json --out generated/main-menu-scene.ron
+cargo run -p stream_town_migrate -- bake-main-menu-scene generated/main-menu-scene.ron --config assets/config/game.ron --content assets/content/catalog.ron --out assets/content/main_menu_scene.ron
 cargo run -p stream_town_migrate -- import-save StreamTownSave.stsave --out generated/imported.stbevy --config assets/config/game.ron
 cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --out generated/unity-world-oracle.json
 cargo run -p xtask -- package-windows --output dist
@@ -770,6 +772,13 @@ rotations, mesh vertices/normals, and triangle winding together into Bevy's
 right-handed coordinates, preserving the left UI/right town composition. Bevy
 reconstructs that scene with the converted GLBs and restores the town camera when
 gameplay loading begins.
+The landscape is a schema-3 corrective bake produced once by the ordinary
+deterministic world generator, not by reading a Unity save. The bake weights
+generated height by the authored shoreline mask, flattens building foundations,
+lifts model instances, and writes generated resource/foliage placements into
+`main_menu_scene.ron` for load-only runtime use. Re-run the documented
+`bake-main-menu-scene` command from an unbaked schema-2 reference whenever
+generator configuration intentionally changes.
 
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/

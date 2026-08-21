@@ -20,7 +20,7 @@ use bevy::{
         transition::AnimationTransitions,
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
-    asset::{AssetPlugin, RenderAssetUsages},
+    asset::{AssetPlugin, LoadState, RenderAssetUsages, UntypedHandle},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
     camera::primitives::Aabb,
     camera::{Hdr, ScalingMode},
@@ -47,6 +47,7 @@ use bevy::{
     render::{RenderPlugin, settings::WgpuSettings},
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
+    tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
     window::{
         MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode, WindowResolution,
     },
@@ -1128,6 +1129,9 @@ struct LoadingIconSpinner {
 struct LoadingStatusText;
 
 #[derive(Component)]
+struct LoadingSubstatusText;
+
+#[derive(Component)]
 struct LoadingPercentText;
 
 #[derive(Component)]
@@ -1137,7 +1141,8 @@ struct LoadingProgressFill;
 enum WorldLoadingPhase {
     #[default]
     Presenting,
-    Generating,
+    Loading,
+    Spawning,
     Complete,
 }
 
@@ -1145,7 +1150,42 @@ enum WorldLoadingPhase {
 struct WorldLoadingRuntime {
     phase: WorldLoadingPhase,
     progress: f32,
+    status: String,
+    substatus: String,
+    asset_handles: Vec<UntypedHandle>,
+    loaded_assets: usize,
+    failed_assets: usize,
+    prepared_world: Option<GeneratedWorld>,
+    scene_ready_frames: u8,
     completion_remaining_seconds: f32,
+}
+
+#[derive(Resource)]
+struct WorldGenerationTask(Task<GeneratedWorld>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootDestination {
+    MainMenu,
+    WorldLoading,
+    Credits,
+}
+
+#[derive(Resource)]
+struct MenuLoadingRuntime {
+    destination: BootDestination,
+    progress: f32,
+    status: String,
+    substatus: String,
+    asset_handles: Vec<UntypedHandle>,
+    loaded_assets: usize,
+    failed_assets: usize,
+    presented_frames: u8,
+}
+
+#[derive(Resource, Default)]
+struct MenuRevealRuntime {
+    rendered_frames: u16,
+    scene_ready_frames: u8,
 }
 
 #[derive(Component)]
@@ -1507,6 +1547,53 @@ type GameMenuIdleToggleQuery<'w, 's> = Query<
 >;
 type MenuOverlayEntityQuery<'w, 's> =
     Query<'w, 's, Entity, Or<(With<MenuOverlay>, With<GameMenuRoot>, With<SettingsRoot>)>>;
+type TownCameraMutQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Camera,
+        &'static mut Projection,
+        &'static mut Transform,
+        &'static mut AmbientLight,
+    ),
+    (With<TownCamera>, Without<TownSun>),
+>;
+type TownSunMutQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut DirectionalLight, &'static mut Transform),
+    (With<TownSun>, Without<TownCamera>),
+>;
+type LoadingSubstatusQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<LoadingSubstatusText>,
+        Without<LoadingStatusText>,
+        Without<LoadingPercentText>,
+    ),
+>;
+type LoadingPercentQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<LoadingPercentText>,
+        Without<LoadingStatusText>,
+        Without<LoadingSubstatusText>,
+    ),
+>;
+type MenuWorldAssetRootQuery<'w, 's> = Query<
+    'w,
+    's,
+    Option<&'static Children>,
+    (
+        With<StateEntity>,
+        With<WorldAssetRoot>,
+        Without<WorldEntity>,
+    ),
+>;
 
 #[derive(Component)]
 struct MenuOverlay;
@@ -1871,6 +1958,18 @@ struct AuthoredRotatingNode {
     radians_per_second: f32,
 }
 
+#[derive(Component)]
+struct MainMenuRotatingDefinitions(Vec<stream_town_domain::RotatingNodeDef>);
+
+#[derive(Component)]
+struct MainMenuRotatingNode {
+    axis: Vec3,
+    radians_per_second: f32,
+}
+
+#[derive(Component)]
+struct TownSun;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CosmeticNodeKind {
     Eyes,
@@ -2153,7 +2252,20 @@ impl Plugin for StreamTownGamePlugin {
                     sync_authored_post_processing.after(apply_player_settings),
                 ),
             )
-            .add_systems(OnEnter(GameState::Boot), finish_boot)
+            .add_systems(
+                OnEnter(GameState::Boot),
+                (spawn_loading_screen, begin_menu_loading).chain(),
+            )
+            .add_systems(
+                Update,
+                (
+                    animate_loading_icon,
+                    poll_menu_loading,
+                    sync_boot_loading_screen,
+                )
+                    .chain()
+                    .run_if(in_state(GameState::Boot)),
+            )
             .add_systems(
                 OnEnter(GameState::MainMenu),
                 (spawn_main_menu, spawn_menu_overlay),
@@ -2186,7 +2298,12 @@ impl Plugin for StreamTownGamePlugin {
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
+                    animate_loading_icon,
+                    finish_menu_reveal,
+                    sync_boot_loading_screen,
                     animate_fish_school,
+                    tag_main_menu_rotating_nodes,
+                    rotate_main_menu_nodes.after(tag_main_menu_rotating_nodes),
                 )
                     .chain()
                     .run_if(in_state(GameState::MainMenu)),
@@ -2198,13 +2315,20 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
             .add_systems(
                 OnEnter(GameState::WorldLoading),
-                (restore_town_camera_for_world, spawn_loading_screen).chain(),
+                (
+                    cleanup_loading_screen,
+                    restore_town_camera_for_world,
+                    spawn_loading_screen,
+                    begin_world_loading,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
                 (
                     animate_loading_icon,
-                    generate_and_spawn_world,
+                    poll_world_loading,
+                    generate_and_spawn_world.after(poll_world_loading),
                     advance_loading_phase,
                     sync_loading_screen_status,
                 )
@@ -2451,7 +2575,10 @@ impl Plugin for StreamTownGamePlugin {
                     .after(apply_player_settings)
                     .after(update_environment_presentation),
             )
-            .add_systems(OnEnter(GameState::Credits), spawn_credits)
+            .add_systems(
+                OnEnter(GameState::Credits),
+                (cleanup_loading_screen, spawn_credits).chain(),
+            )
             .add_systems(
                 Update,
                 (
@@ -2819,6 +2946,7 @@ fn setup_rendering(
         default_town_camera_transform(),
     ));
     commands.spawn((
+        TownSun,
         DirectionalLight {
             illuminance: 14_000.0,
             shadow_maps_enabled: true,
@@ -4175,7 +4303,7 @@ fn character_material_from_standard(material: StandardMaterial) -> CharacterMate
 
 fn terrain_material(
     presentation: &PresentationCatalog,
-    config: &GameConfig,
+    _config: &GameConfig,
     asset_server: Option<&AssetServer>,
 ) -> TerrainMaterial {
     let authored = presentation
@@ -4230,8 +4358,8 @@ fn terrain_material(
                 texture_uv_blend_tint: Vec4::new(
                     texture_uv[0],
                     texture_uv[1],
-                    f32::from(config.world.water_level_centimetres) * 0.01,
-                    scalar("_BlendHeight", 1.0).max(0.01),
+                    scalar("_BlendHeight", 1.0),
+                    0.0,
                 ),
                 grid_scale_offset: Vec4::new(
                     grid_transform.scale[0],
@@ -4452,7 +4580,6 @@ fn cloud_material(
             base_color: Color::WHITE,
             perceptual_roughness: 0.5,
             alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
             ..default()
         },
         extension: CloudMaterialExtension {
@@ -4916,14 +5043,150 @@ fn presentation_texture_handle(
     Some(asset_server?.load(asset_path))
 }
 
-fn finish_boot(mut next_state: ResMut<NextState<GameState>>) {
-    info!("Stream Town boot validation complete");
-    if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
-        next_state.set(GameState::Credits);
+fn begin_menu_loading(
+    mut commands: Commands,
+    content: Res<RuntimeContent>,
+    asset_root: Res<RuntimeAssetRoot>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    let destination = if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
+        BootDestination::Credits
     } else if std::env::var_os("STREAM_TOWN_AUTOSTART").is_some() {
-        next_state.set(GameState::WorldLoading);
+        BootDestination::WorldLoading
     } else {
-        next_state.set(GameState::MainMenu);
+        BootDestination::MainMenu
+    };
+    let asset_handles = if destination == BootDestination::MainMenu {
+        asset_server.as_deref().map_or_else(Vec::new, |server| {
+            main_menu_preload_paths(&content.0, &asset_root.0)
+                .into_iter()
+                .map(|path| server.load_builder().load_untyped(path).untyped())
+                .collect()
+        })
+    } else {
+        Vec::new()
+    };
+    let asset_count = asset_handles.len();
+    commands.insert_resource(MenuLoadingRuntime {
+        destination,
+        progress: 0.0,
+        status: "Loading main menu".to_owned(),
+        substatus: format!("0 / {asset_count} scene assets"),
+        asset_handles,
+        loaded_assets: 0,
+        failed_assets: 0,
+        presented_frames: 0,
+    });
+}
+
+fn main_menu_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTreeSet<String> {
+    let reference = embedded_main_menu_scene();
+    let mut paths = BTreeSet::new();
+    for instance in &reference.instances {
+        if let Some((_, scene)) = menu_scene_for_source_model(content, &instance.source_path)
+            .filter(|(_, scene)| converted_asset_exists(asset_root, &scene.asset_path))
+        {
+            paths.insert(scene.asset_path.clone());
+        }
+    }
+    if let Some(bake) = &reference.corrective_bake {
+        for resource in &bake.resources {
+            if !menu_baked_position_visible(reference, Vec3::from_array(resource.position)) {
+                continue;
+            }
+            if let Some(scene) = resource_visual_archetype(content, &resource.kind)
+                .and_then(default_archetype_scene)
+                .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path))
+            {
+                paths.insert(scene.asset_path.clone());
+            }
+        }
+        for foliage in &bake.foliage {
+            if !menu_baked_position_visible(reference, Vec3::from_array(foliage.position)) {
+                continue;
+            }
+            if let Some(variant) = content
+                .foliage
+                .iter()
+                .find(|layer| layer.id == foliage.layer)
+                .and_then(|layer| layer.variants.get(usize::from(foliage.variant)))
+                .filter(|variant| converted_asset_exists(asset_root, &variant.asset_path))
+            {
+                paths.insert(variant.asset_path.clone());
+            }
+        }
+    }
+    paths
+}
+
+fn loaded_asset_counts(
+    asset_server: Option<&AssetServer>,
+    handles: &[UntypedHandle],
+) -> (usize, usize) {
+    let Some(asset_server) = asset_server else {
+        return (handles.len(), 0);
+    };
+    let mut loaded = 0;
+    let mut failed = 0;
+    for handle in handles {
+        if asset_server.is_loaded_with_dependencies(handle.id()) {
+            loaded += 1;
+        } else if matches!(
+            asset_server.get_load_state(handle.id()),
+            Some(LoadState::Failed(_))
+        ) || asset_server
+            .get_recursive_dependency_load_state(handle.id())
+            .is_some_and(|state| state.is_failed())
+        {
+            failed += 1;
+        }
+    }
+    (loaded, failed)
+}
+
+fn loading_fraction(completed: usize, total: usize) -> f32 {
+    if total == 0 {
+        return 1.0;
+    }
+    let completed = u16::try_from(completed).expect("preload manifest count fits u16");
+    let total = u16::try_from(total).expect("preload manifest count fits u16");
+    f32::from(completed) / f32::from(total)
+}
+
+fn poll_menu_loading(
+    mut loading: ResMut<MenuLoadingRuntime>,
+    asset_server: Option<Res<AssetServer>>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    loading.presented_frames = loading.presented_frames.saturating_add(1);
+    let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &loading.asset_handles);
+    loading.loaded_assets = loaded;
+    loading.failed_assets = failed;
+    let completed = loaded + failed;
+    let total = loading.asset_handles.len();
+    loading.progress = loading_fraction(completed, total);
+    loading.status = if loading.progress >= 1.0 {
+        "Main menu ready".to_owned()
+    } else {
+        "Loading main menu".to_owned()
+    };
+    loading.substatus = if failed == 0 {
+        format!("{loaded} / {total} scene assets")
+    } else {
+        format!("{loaded} loaded, {failed} unavailable, {total} total")
+    };
+    let required_presented_frames = if asset_server.is_some() { 2 } else { 1 };
+    if loading.progress >= 1.0 && loading.presented_frames >= required_presented_frames {
+        info!(
+            loaded_assets = loaded,
+            failed_assets = failed,
+            "Stream Town boot loading complete"
+        );
+        next_state.set(match loading.destination {
+            BootDestination::MainMenu => GameState::MainMenu,
+            BootDestination::WorldLoading => GameState::WorldLoading,
+            BootDestination::Credits => GameState::Credits,
+        });
     }
 }
 
@@ -4938,8 +5201,12 @@ fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
             ron::from_str(include_str!("../../../assets/content/main_menu_scene.ron"))
                 .expect("checked-in authored main-menu scene must parse");
         assert_eq!(
-            reference.schema_version, 2,
+            reference.schema_version, 3,
             "checked-in authored main-menu scene schema must be supported"
+        );
+        assert!(
+            reference.corrective_bake.is_some(),
+            "checked-in authored main-menu scene must contain the corrective bake"
         );
         reference
     })
@@ -4976,15 +5243,7 @@ fn authored_main_menu_mesh(reference: &stream_town_domain::MainMenuEmbeddedMesh)
 
 fn apply_authored_main_menu_camera(
     reference: &MainMenuSceneReference,
-    cameras: &mut Query<
-        (
-            &mut Camera,
-            &mut Projection,
-            &mut Transform,
-            &mut AmbientLight,
-        ),
-        With<TownCamera>,
-    >,
+    cameras: &mut TownCameraMutQuery,
 ) {
     let camera_reference = &reference.camera;
     for (mut camera, mut projection, mut transform, mut ambient) in cameras.iter_mut() {
@@ -5016,22 +5275,12 @@ fn apply_authored_main_menu_camera(
         // The Unity camera renders against its sky-lit environment. The town
         // runtime's lower ambient level is balanced for an overhead sun and
         // leaves the authored side-on menu city nearly black.
-        ambient.color = Color::srgb(0.70, 0.82, 0.92);
-        ambient.brightness = 420.0;
+        ambient.color = Color::srgb(0.212, 0.227, 0.259);
+        ambient.brightness = 150.0;
     }
 }
 
-fn restore_town_camera_for_world(
-    mut cameras: Query<
-        (
-            &mut Camera,
-            &mut Projection,
-            &mut Transform,
-            &mut AmbientLight,
-        ),
-        With<TownCamera>,
-    >,
-) {
+fn restore_town_camera_for_world(mut cameras: TownCameraMutQuery, mut sun: TownSunMutQuery) {
     for (mut camera, mut projection, mut transform, mut ambient) in &mut cameras {
         camera.clear_color = bevy::camera::ClearColorConfig::Default;
         *projection = Projection::from(OrthographicProjection {
@@ -5046,6 +5295,12 @@ fn restore_town_camera_for_world(
         ambient.color = Color::srgb(0.70, 0.82, 0.92);
         ambient.brightness = 90.0;
     }
+    if let Ok((mut light, mut transform)) = sun.single_mut() {
+        light.color = Color::WHITE;
+        light.illuminance = 14_000.0;
+        light.shadow_maps_enabled = true;
+        *transform = Transform::from_xyz(250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y);
+    }
 }
 
 fn spawn_main_menu(
@@ -5056,18 +5311,43 @@ fn spawn_main_menu(
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    mut cameras: Query<
-        (
-            &mut Camera,
-            &mut Projection,
-            &mut Transform,
-            &mut AmbientLight,
-        ),
-        With<TownCamera>,
-    >,
+    mut cameras: TownCameraMutQuery,
+    mut sun: TownSunMutQuery,
 ) {
+    commands.insert_resource(MenuRevealRuntime::default());
     let reference = embedded_main_menu_scene();
+    let bake = reference
+        .corrective_bake
+        .as_ref()
+        .expect("validated main-menu corrective bake");
     apply_authored_main_menu_camera(reference, &mut cameras);
+    if let Ok((mut light, mut transform)) = sun.single_mut() {
+        light.color = Color::srgb(1.0, 0.956_862_75, 0.839_215_7);
+        light.illuminance = 14_000.0;
+        light.shadow_maps_enabled = true;
+        *transform = Transform::from_rotation(Quat::from_xyzw(
+            -0.408_217_88,
+            0.234_569_68,
+            0.109_381_63,
+            0.875_426_1,
+        ));
+    }
+    commands.spawn((
+        StateEntity,
+        Name::new("Authored menu secondary light"),
+        DirectionalLight {
+            color: Color::srgb(1.0, 0.956_862_75, 0.839_215_7),
+            illuminance: 7_000.0,
+            shadow_maps_enabled: false,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_xyzw(
+            0.951_251_27,
+            0.044_943_463,
+            -0.254_886_93,
+            0.167_731_26,
+        )),
+    ));
 
     if let Some(mut meshes) = meshes {
         for embedded in &reference.embedded_meshes {
@@ -5078,15 +5358,25 @@ fn spawn_main_menu(
                 MeshMaterial3d(render.ground.clone()),
             ));
         }
-        // Generation_Main_Menu.prefab authors a built-in cube at local Y=3,
-        // under a root at Y=-3.5, with combined X/Z scale 255. Reconstruct it
-        // explicitly because built-in Unity primitives have no portable GUID.
+        // The source prefab's water cube ended exactly at the flat terrain's
+        // Y=0 surface. The corrective bake lowers the surface below the beach,
+        // expands it past the camera frustum, and uses a plane so only the
+        // animated water surface participates in transparent sorting.
         commands.spawn((
             StateEntity,
-            Name::new("Authored main-menu water"),
-            Mesh3d(render.cube.clone()),
+            Name::new("Baked main-menu ocean floor"),
+            Mesh3d(render.cloud_plane.clone()),
+            MeshMaterial3d(render.ground.clone()),
+            Transform::from_xyz(0.0, bake.ocean_floor_height, 0.0)
+                .with_scale(Vec3::splat(bake.terrain_extent)),
+        ));
+        commands.spawn((
+            StateEntity,
+            Name::new("Baked main-menu animated water"),
+            Mesh3d(render.cloud_plane.clone()),
             MeshMaterial3d(render.water.clone()),
-            Transform::from_xyz(0.0, -0.5, 0.0).with_scale(Vec3::new(255.0, 1.0, 255.0)),
+            Transform::from_xyz(0.0, bake.water_height, 0.0)
+                .with_scale(Vec3::splat(bake.water_extent)),
             bevy::light::NotShadowCaster,
             bevy::light::NotShadowReceiver,
         ));
@@ -5123,18 +5413,33 @@ fn spawn_main_menu(
             {
                 entity.insert(material);
             }
+            if !archetype.rotating_nodes.is_empty() {
+                entity.insert(MainMenuRotatingDefinitions(
+                    archetype.rotating_nodes.clone(),
+                ));
+            }
         }
+        spawn_main_menu_baked_decorations(
+            &mut commands,
+            reference,
+            &content.0,
+            &presentation.0,
+            &render,
+            asset_server,
+            &asset_root.0,
+        );
     }
 
-    spawn_cloud_field(&mut commands, &render, 72.0);
+    spawn_authored_main_menu_clouds(&mut commands, &render);
     spawn_fish_school_scene(
         &mut commands,
         &presentation.0,
         &render,
         MAIN_MENU_SCENE_PATH,
         0,
-        0.0,
+        bake.water_height,
         true,
+        Some(reference),
     );
     commands.spawn((
         StateEntity,
@@ -5291,10 +5596,26 @@ fn spawn_loading_screen(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
-    render: Res<RenderAssets>,
+    render: Option<Res<RenderAssets>>,
 ) {
-    commands.insert_resource(WorldLoadingRuntime::default());
-    if let Some(background) = &render.loading_screen {
+    // This solid layer is immediately renderable even before the authored PNG
+    // finishes its own first asset-server round trip. It prevents the partially
+    // instantiated destination scene from showing through during boot.
+    commands.spawn((
+        LoadingScreenEntity,
+        BackgroundColor(Color::srgb(0.025, 0.04, 0.055)),
+        GlobalZIndex(99),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            ..default()
+        },
+    ));
+    if let Some(background) = render
+        .as_deref()
+        .and_then(|render| render.loading_screen.as_ref())
+    {
         commands.spawn((
             LoadingScreenEntity,
             ImageNode::new(background.clone()).with_mode(NodeImageMode::Stretch),
@@ -5307,7 +5628,10 @@ fn spawn_loading_screen(
             },
         ));
     }
-    if let Some(overlay) = &render.loading_overlay {
+    if let Some(overlay) = render
+        .as_deref()
+        .and_then(|render| render.loading_overlay.as_ref())
+    {
         commands.spawn((
             LoadingScreenEntity,
             ImageNode::new(overlay.clone()).with_mode(NodeImageMode::Stretch),
@@ -5336,6 +5660,25 @@ fn spawn_loading_screen(
             left: percent(34.0),
             bottom: percent(20.0),
             width: percent(32.0),
+            ..default()
+        },
+    ));
+    commands.spawn((
+        LoadingScreenEntity,
+        LoadingSubstatusText,
+        Text::new("Discovering dependencies..."),
+        TextFont {
+            font_size: FontSize::Px(14.0),
+            ..default()
+        },
+        TextLayout::justify(Justify::Center),
+        TextColor(Color::srgb(0.75, 0.76, 0.78)),
+        GlobalZIndex(103),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(30.0),
+            bottom: percent(17.0),
+            width: percent(40.0),
             ..default()
         },
     ));
@@ -5405,7 +5748,10 @@ fn spawn_loading_screen(
             ..default()
         },
     ));
-    let Some(icon) = &render.loading_icon else {
+    let Some(icon) = render
+        .as_deref()
+        .and_then(|render| render.loading_icon.as_ref())
+    else {
         return;
     };
     let rotation = loading_icon_rotation(&content.0)
@@ -5429,36 +5775,166 @@ fn spawn_loading_screen(
     ));
 }
 
+fn world_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTreeSet<String> {
+    content
+        .archetypes
+        .values()
+        .flat_map(|archetype| archetype.scenes.iter())
+        .map(|scene| (scene.asset_path.as_str(), scene.asset_path.clone()))
+        .chain(
+            content
+                .foliage
+                .iter()
+                .flat_map(|layer| &layer.variants)
+                .map(|variant| (variant.asset_path.as_str(), variant.asset_path.clone())),
+        )
+        .filter(|(path, _)| converted_asset_exists(asset_root, path))
+        .map(|(_, path)| path)
+        .collect()
+}
+
+fn begin_world_loading(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    asset_root: Res<RuntimeAssetRoot>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    let asset_handles = asset_server.as_deref().map_or_else(Vec::new, |server| {
+        world_preload_paths(&content.0, &asset_root.0)
+            .into_iter()
+            .map(|path| server.load_builder().load_untyped(path).untyped())
+            .collect()
+    });
+    let asset_count = asset_handles.len();
+    let world_config = config.0.world.clone();
+    let content = content.0.clone();
+    let prepared_world = if asset_server.is_some()
+        && let Some(pool) = AsyncComputeTaskPool::try_get()
+    {
+        commands.insert_resource(WorldGenerationTask(
+            pool.spawn(async move { generate_world_with_content(&world_config, &content) }),
+        ));
+        None
+    } else {
+        // Headless tests and reduced apps have no asset pipeline to overlap,
+        // so keep their deterministic generation synchronous and immediate.
+        Some(generate_world_with_content(&world_config, &content))
+    };
+    commands.insert_resource(WorldLoadingRuntime {
+        phase: WorldLoadingPhase::Presenting,
+        progress: 0.0,
+        status: "Preparing new town".to_owned(),
+        substatus: format!(
+            "0 / {asset_count} scene assets; terrain {}",
+            if prepared_world.is_some() {
+                "ready"
+            } else {
+                "queued"
+            }
+        ),
+        asset_handles,
+        loaded_assets: 0,
+        failed_assets: 0,
+        prepared_world,
+        scene_ready_frames: 0,
+        completion_remaining_seconds: 0.0,
+    });
+}
+
+fn poll_world_loading(
+    mut commands: Commands,
+    mut loading: ResMut<WorldLoadingRuntime>,
+    mut task: Option<ResMut<WorldGenerationTask>>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    if loading.phase == WorldLoadingPhase::Presenting {
+        loading.phase = WorldLoadingPhase::Loading;
+    }
+    if loading.phase != WorldLoadingPhase::Loading {
+        return;
+    }
+    if loading.prepared_world.is_none()
+        && let Some(task) = task.as_deref_mut()
+        && let Some(generated) = block_on(poll_once(&mut task.0))
+    {
+        loading.prepared_world = Some(generated);
+        commands.remove_resource::<WorldGenerationTask>();
+    }
+
+    let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &loading.asset_handles);
+    loading.loaded_assets = loaded;
+    loading.failed_assets = failed;
+    let completed_assets = loaded + failed;
+    let total_assets = loading.asset_handles.len();
+    let asset_progress = loading_fraction(completed_assets, total_assets);
+    let terrain_ready = loading.prepared_world.is_some();
+    loading.progress = 0.05 + asset_progress * 0.55 + if terrain_ready { 0.30 } else { 0.0 };
+    loading.status = if terrain_ready {
+        "Loading town presentation".to_owned()
+    } else {
+        "Generating deterministic terrain".to_owned()
+    };
+    loading.substatus = if failed == 0 {
+        format!(
+            "{loaded} / {total_assets} scene assets; terrain {}",
+            if terrain_ready { "ready" } else { "generating" }
+        )
+    } else {
+        format!(
+            "{loaded} loaded, {failed} unavailable; terrain {}",
+            if terrain_ready { "ready" } else { "generating" }
+        )
+    };
+    if completed_assets == total_assets && terrain_ready {
+        loading.phase = WorldLoadingPhase::Spawning;
+        loading.progress = 0.92;
+        "Building the town scene".clone_into(&mut loading.status);
+        "Terrain and presentation assets are ready".clone_into(&mut loading.substatus);
+    }
+}
+
 fn advance_loading_phase(
     time: Res<Time>,
-    content: Res<RuntimeContent>,
     mut loading: ResMut<WorldLoadingRuntime>,
     mut next_state: ResMut<NextState<GameState>>,
+    scene_roots: Query<Option<&Children>, (With<WorldEntity>, With<WorldAssetRoot>)>,
 ) {
-    let progress_per_second = Duration::from_millis(u64::from(
-        content.0.loading_screen.progress_milli_per_second,
-    ))
-    .as_secs_f32();
-    if advance_loading_runtime(&mut loading, progress_per_second, time.delta_secs()) {
+    if loading.phase == WorldLoadingPhase::Complete {
+        let mut root_count = 0;
+        let mut ready_count = 0;
+        for children in &scene_roots {
+            root_count += 1;
+            if children.is_some_and(|children| !children.is_empty()) {
+                ready_count += 1;
+            }
+        }
+        if root_count == ready_count {
+            loading.scene_ready_frames = loading.scene_ready_frames.saturating_add(1);
+        } else {
+            loading.scene_ready_frames = 0;
+        }
+        if loading.scene_ready_frames < 5 {
+            loading.progress = 0.98;
+            "Finalizing town presentation".clone_into(&mut loading.status);
+            loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
+            return;
+        }
+        loading.progress = 1.0;
+        "Town ready".clone_into(&mut loading.status);
+        "All initial scene roots are instantiated".clone_into(&mut loading.substatus);
+    }
+    if advance_loading_runtime(&mut loading, time.delta_secs()) {
         next_state.set(GameState::InGame);
     }
 }
 
-fn advance_loading_runtime(
-    loading: &mut WorldLoadingRuntime,
-    progress_per_second: f32,
-    delta_seconds: f32,
-) -> bool {
+fn advance_loading_runtime(loading: &mut WorldLoadingRuntime, delta_seconds: f32) -> bool {
     let delta_seconds = delta_seconds.max(0.0);
     match loading.phase {
-        WorldLoadingPhase::Presenting => {
-            loading.phase = WorldLoadingPhase::Generating;
-            false
-        }
-        WorldLoadingPhase::Generating => {
-            loading.progress = (loading.progress + progress_per_second * delta_seconds).min(0.95);
-            false
-        }
+        WorldLoadingPhase::Presenting
+        | WorldLoadingPhase::Loading
+        | WorldLoadingPhase::Spawning => false,
         WorldLoadingPhase::Complete => {
             loading.completion_remaining_seconds =
                 (loading.completion_remaining_seconds - delta_seconds).max(0.0);
@@ -5470,16 +5946,16 @@ fn advance_loading_runtime(
 fn sync_loading_screen_status(
     loading: Res<WorldLoadingRuntime>,
     mut status: Query<&mut Text, With<LoadingStatusText>>,
-    mut percent_text: Query<&mut Text, (With<LoadingPercentText>, Without<LoadingStatusText>)>,
+    mut substatus: LoadingSubstatusQuery,
+    mut percent_text: LoadingPercentQuery,
     mut fills: Query<&mut Node, With<LoadingProgressFill>>,
 ) {
     let progress_percent = (loading.progress * 100.0).round();
     if let Ok(mut text) = status.single_mut() {
-        **text = if loading.phase == WorldLoadingPhase::Complete {
-            "Ready".to_owned()
-        } else {
-            "Preparing town...".to_owned()
-        };
+        (**text).clone_from(&loading.status);
+    }
+    if let Ok(mut text) = substatus.single_mut() {
+        (**text).clone_from(&loading.substatus);
     }
     if let Ok(mut text) = percent_text.single_mut() {
         **text = format!("{progress_percent:.0}%");
@@ -5487,6 +5963,70 @@ fn sync_loading_screen_status(
     if let Ok(mut fill) = fills.single_mut() {
         fill.width = percent(progress_percent);
     }
+}
+
+fn sync_boot_loading_screen(
+    loading: Option<Res<MenuLoadingRuntime>>,
+    mut status: Query<&mut Text, With<LoadingStatusText>>,
+    mut substatus: LoadingSubstatusQuery,
+    mut percent_text: LoadingPercentQuery,
+    mut fills: Query<&mut Node, With<LoadingProgressFill>>,
+) {
+    let Some(loading) = loading else {
+        return;
+    };
+    let progress_percent = (loading.progress * 100.0).round();
+    if let Ok(mut text) = status.single_mut() {
+        (**text).clone_from(&loading.status);
+    }
+    if let Ok(mut text) = substatus.single_mut() {
+        (**text).clone_from(&loading.substatus);
+    }
+    if let Ok(mut text) = percent_text.single_mut() {
+        **text = format!("{progress_percent:.0}%");
+    }
+    if let Ok(mut fill) = fills.single_mut() {
+        fill.width = percent(progress_percent);
+    }
+}
+
+fn finish_menu_reveal(
+    mut commands: Commands,
+    mut reveal: Option<ResMut<MenuRevealRuntime>>,
+    mut loading: Option<ResMut<MenuLoadingRuntime>>,
+    loading_entities: Query<Entity, With<LoadingScreenEntity>>,
+    scene_roots: MenuWorldAssetRootQuery,
+) {
+    let Some(reveal) = reveal.as_deref_mut() else {
+        return;
+    };
+    reveal.rendered_frames = reveal.rendered_frames.saturating_add(1);
+    let mut root_count = 0;
+    let mut ready_count = 0;
+    for children in &scene_roots {
+        root_count += 1;
+        if children.is_some_and(|children| !children.is_empty()) {
+            ready_count += 1;
+        }
+    }
+    if root_count > 0 && ready_count == root_count {
+        reveal.scene_ready_frames = reveal.scene_ready_frames.saturating_add(1);
+    } else {
+        reveal.scene_ready_frames = 0;
+    }
+    if let Some(loading) = loading.as_deref_mut() {
+        loading.progress = 0.98;
+        "Building main menu scene".clone_into(&mut loading.status);
+        loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
+    }
+    if reveal.rendered_frames < 3 || reveal.scene_ready_frames < 5 {
+        return;
+    }
+    for entity in &loading_entities {
+        commands.entity(entity).despawn();
+    }
+    commands.remove_resource::<MenuLoadingRuntime>();
+    commands.remove_resource::<MenuRevealRuntime>();
 }
 
 fn animate_loading_icon(
@@ -5513,6 +6053,257 @@ fn apply_loading_icon_rotation(
         Rot2::radians(transform.rotation.as_radians() - radians_per_second * delta_seconds);
 }
 
+fn menu_baked_position_visible(reference: &MainMenuSceneReference, position: Vec3) -> bool {
+    let camera = Transform::from_translation(Vec3::from_array(reference.camera.position))
+        .with_rotation(authored_scene_rotation(reference.camera.rotation));
+    let local = camera.rotation.inverse() * (position - camera.translation);
+    let depth = -local.z;
+    if depth < reference.camera.near || depth > reference.camera.far {
+        return false;
+    }
+    let vertical = depth * (reference.camera.field_of_view_degrees.to_radians() * 0.5).tan();
+    // The shipping menu is authored at 16:9. The generous margin retains tall
+    // trees and anything just outside the static camera's ground intersection.
+    let horizontal = vertical * (16.0 / 9.0);
+    local.x.abs() <= horizontal * 1.25 + 12.0 && local.y.abs() <= vertical * 1.45 + 18.0
+}
+
+fn insert_main_menu_material(entity: &mut EntityCommands<'_>, material: &ResolvedMaterialHandle) {
+    match material {
+        ResolvedMaterialHandle::Standard(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Building(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Cloud(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Godray(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Giraffe(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Bounds(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Tree(material) => {
+            entity.insert((
+                MeshMaterial3d(material.clone()),
+                bevy::light::NotShadowReceiver,
+            ));
+        }
+        ResolvedMaterialHandle::Grass(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Critter(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Flag(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Character(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_main_menu_baked_decorations(
+    commands: &mut Commands,
+    reference: &MainMenuSceneReference,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+) {
+    let bake = reference
+        .corrective_bake
+        .as_ref()
+        .expect("validated main-menu corrective bake");
+    for resource in &bake.resources {
+        let position = Vec3::from_array(resource.position);
+        if !menu_baked_position_visible(reference, position) {
+            continue;
+        }
+        let visual = resource_visual_archetype(content, &resource.kind)
+            .and_then(default_archetype_scene)
+            .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
+        let material = visual.and_then(|scene| {
+            presentation
+                .model_materials
+                .get(&scene.source_model)
+                .and_then(|materials| materials.get("MainMaterial"))
+                .and_then(|id| render.presentation_materials.get(id))
+        });
+        if let Some(scene) = visual {
+            let mesh = asset_server.load(
+                GltfAssetLabel::Primitive {
+                    mesh: usize::from(resource.mesh_index),
+                    primitive: 0,
+                }
+                .from_asset(scene.asset_path.clone()),
+            );
+            let mut entity = commands.spawn((
+                StateEntity,
+                Name::new(format!("Baked menu resource: {}", resource.id)),
+                Mesh3d(mesh),
+                Transform::from_translation(position)
+                    .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                    .with_scale(Vec3::splat(resource_visual_scale(bake.cell_size))),
+            ));
+            if let Some(material) = material {
+                insert_main_menu_material(&mut entity, material);
+            } else {
+                entity.insert(MeshMaterial3d(render.food.clone()));
+            }
+        }
+    }
+    for foliage in &bake.foliage {
+        let position = Vec3::from_array(foliage.position);
+        if !menu_baked_position_visible(reference, position) {
+            continue;
+        }
+        let Some(layer) = content
+            .foliage
+            .iter()
+            .find(|layer| layer.id == foliage.layer)
+        else {
+            continue;
+        };
+        let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
+            continue;
+        };
+        if !converted_asset_exists(asset_root, &variant.asset_path) {
+            continue;
+        }
+        let material = presentation
+            .model_materials
+            .get(&variant.source_model)
+            .and_then(|materials| materials.values().next())
+            .and_then(|id| render.presentation_materials.get(id));
+        let mesh = asset_server.load(
+            GltfAssetLabel::Primitive {
+                mesh: 0,
+                primitive: 0,
+            }
+            .from_asset(variant.asset_path.clone()),
+        );
+        let scale = Vec3::from_array(variant.base_scale)
+            * resource_visual_scale(bake.cell_size)
+            * (f32::from(foliage.scale_milli) / 1_000.0);
+        let mut entity = commands.spawn((
+            StateEntity,
+            Name::new(format!("Baked menu foliage: {}", foliage.id)),
+            Mesh3d(mesh),
+            Transform::from_translation(position)
+                .with_rotation(
+                    Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
+                        * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                )
+                .with_scale(scale),
+            bevy::light::NotShadowReceiver,
+        ));
+        if let Some(material) = material {
+            insert_main_menu_material(&mut entity, material);
+        } else {
+            entity.insert(MeshMaterial3d(render.food.clone()));
+        }
+    }
+}
+
+fn tag_main_menu_rotating_nodes(
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    definitions: Query<&MainMenuRotatingDefinitions>,
+    nodes: Query<(Entity, &Name), Without<MainMenuRotatingNode>>,
+) {
+    for (entity, name) in &nodes {
+        let mut ancestor = entity;
+        for _ in 0..64 {
+            if let Ok(definitions) = definitions.get(ancestor) {
+                if let Some(rotation) = definitions
+                    .0
+                    .iter()
+                    .find(|rotation| rotation.node == name.as_str())
+                {
+                    commands.entity(entity).insert(MainMenuRotatingNode {
+                        axis: Vec3::from_array(rotation.axis),
+                        radians_per_second: rotation.degrees_per_second.to_radians(),
+                    });
+                }
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+    }
+}
+
+fn rotate_main_menu_nodes(
+    time: Res<Time>,
+    mut nodes: Query<(&MainMenuRotatingNode, &mut Transform)>,
+) {
+    for (node, mut transform) in &mut nodes {
+        apply_authored_local_rotation(
+            &mut transform,
+            node.axis,
+            node.radians_per_second,
+            time.delta_secs(),
+        );
+    }
+}
+
+fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAssets) {
+    const UNITY_LAYER_OFFSETS: [f32; 21] = [
+        0.0,
+        0.100_000_38,
+        0.199_999_81,
+        0.300_000_2,
+        0.399_999_62,
+        0.5,
+        0.600_000_4,
+        0.699_999_8,
+        0.800_000_2,
+        0.899_999_6,
+        1.022_999_8,
+        1.022_999_8,
+        1.122_999_2,
+        1.222_999_6,
+        1.322_999,
+        1.422_999_4,
+        1.522_999_8,
+        1.622_999_2,
+        1.722_999_6,
+        1.822_999,
+        0.100_000_38,
+    ];
+    for (layer, offset) in UNITY_LAYER_OFFSETS.into_iter().enumerate() {
+        commands.spawn((
+            StateEntity,
+            Name::new(format!("Authored menu cloud layer {layer:02}")),
+            Mesh3d(render.cloud_plane.clone()),
+            MeshMaterial3d(render.clouds.clone()),
+            Transform::from_xyz(20.666_718, 20.0 - offset, -10.153_707)
+                // Unity's prefab applies +90 degrees to each Quad and the menu
+                // instance applies another 180 degrees around X. Plane3d is
+                // already horizontal, so this final half-turn restores the
+                // authored downward front face for back-face culling.
+                .with_rotation(Quat::from_rotation_x(std::f32::consts::PI))
+                .with_scale(Vec3::splat(1_524.212_5)),
+            // The Unity shader explicitly disables both casting and receiving
+            // shadows. Bevy's generic transparent shadow pass otherwise treats
+            // each enormous quad as opaque and darkens the entire town.
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
+        ));
+    }
+}
+
 fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
     for layer in 0_u8..21 {
         let height = base_height + f32::from(layer) * 0.85;
@@ -5520,7 +6311,11 @@ fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height
             StateEntity,
             Mesh3d(render.cloud_plane.clone()),
             MeshMaterial3d(render.clouds.clone()),
-            Transform::from_xyz(0.0, height, 0.0).with_scale(Vec3::new(900.0, 1.0, 900.0)),
+            Transform::from_xyz(0.0, height, 0.0)
+                .with_rotation(Quat::from_rotation_x(std::f32::consts::PI))
+                .with_scale(Vec3::new(900.0, 1.0, 900.0)),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
         ));
     }
 }
@@ -5534,6 +6329,7 @@ fn spawn_fish_school_scene(
     world_seed: u64,
     water_height: f32,
     state_entity: bool,
+    menu_reference: Option<&MainMenuSceneReference>,
 ) {
     let Some(bindings) = presentation.scene_fish_schools.get(scene_path) else {
         return;
@@ -5587,6 +6383,15 @@ fn spawn_fish_school_scene(
                 octave_scale: effect.noise_octave_scale,
                 align_to_velocity: effect.align_to_velocity,
             };
+            if menu_reference.is_some_and(|reference| {
+                main_menu_surface_height_at(
+                    reference,
+                    particle.base_position.x,
+                    particle.base_position.z,
+                ) > water_height + 0.05
+            }) {
+                continue;
+            }
             let mut transform = fish_school_transform(&particle, 0.0);
             transform.scale = Vec3::splat(size);
             let mut entity = commands.spawn((
@@ -5625,6 +6430,20 @@ fn animate_fish_school(time: Res<Time>, mut fish: Query<(&FishSchoolParticle, &m
     }
 }
 
+fn main_menu_surface_height_at(reference: &MainMenuSceneReference, x: f32, z: f32) -> f32 {
+    reference
+        .embedded_meshes
+        .first()
+        .and_then(|mesh| {
+            mesh.vertices.iter().min_by(|left, right| {
+                let left_distance = (left[0] - x).mul_add(left[0] - x, (left[2] - z).powi(2));
+                let right_distance = (right[0] - x).mul_add(right[0] - x, (right[2] - z).powi(2));
+                left_distance.total_cmp(&right_distance)
+            })
+        })
+        .map_or(f32::NEG_INFINITY, |vertex| vertex[1])
+}
+
 fn fish_school_transform(fish: &FishSchoolParticle, elapsed_seconds: f32) -> Transform {
     let (x, velocity_x) = fish_school_noise_axis(fish, fish.phase.x, elapsed_seconds);
     let (y, velocity_y) = fish_school_noise_axis(fish, fish.phase.y, elapsed_seconds);
@@ -5632,8 +6451,12 @@ fn fish_school_transform(fish: &FishSchoolParticle, elapsed_seconds: f32) -> Tra
     let offset = Vec3::new(x, y, z) * fish.noise_amplitude;
     let velocity = Vec3::new(velocity_x, velocity_y, velocity_z) * fish.noise_amplitude;
     let rotation = if fish.align_to_velocity && velocity.length_squared() > 1.0e-8 {
-        // Converted glTF scene roots face -Z; Unity's particle renderer aligns the mesh to velocity.
+        // Primitive-label loading intentionally bypasses the GLB scene node.
+        // Critter_Fish3's node carries the +90° X correction that maps its raw
+        // FBX -Y forward axis to glTF -Z. Reapply that correction after velocity
+        // alignment so the fish neither points at the sky nor swims backward.
         Quat::from_rotation_arc(Vec3::NEG_Z, velocity.normalize())
+            * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
     } else {
         Quat::IDENTITY
     };
@@ -8244,14 +9067,19 @@ fn generate_and_spawn_world(
     mut render_stats: ResMut<WorldRenderStats>,
     mut cameras: Query<&mut Transform, With<TownCamera>>,
 ) {
-    if loading.phase != WorldLoadingPhase::Generating {
+    if loading.phase != WorldLoadingPhase::Spawning {
         return;
     }
     selected.0 = None;
     selected_group.actors.clear();
     selected_group.drag_start = None;
     *render_stats = WorldRenderStats::default();
-    let mut generated = generate_world_with_content(&config.0.world, &content.0);
+    let Some(mut generated) = loading.prepared_world.take() else {
+        loading.phase = WorldLoadingPhase::Loading;
+        "Waiting for deterministic terrain".clone_into(&mut loading.status);
+        "The generation task has not completed yet".clone_into(&mut loading.substatus);
+        return;
+    };
     let centre = GridPos {
         x: config.0.world.width / 2,
         z: config.0.world.height / 2,
@@ -8489,6 +9317,7 @@ fn generate_and_spawn_world(
         generated.seed,
         f32::from(config.0.world.water_level_centimetres) * 0.01,
         false,
+        None,
     );
 
     let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
@@ -9108,7 +9937,9 @@ fn generate_and_spawn_world(
     commands.insert_resource(SimulationRuntime(simulation));
     commands.insert_resource(EnvironmentPresentation::default());
     loading.phase = WorldLoadingPhase::Complete;
-    loading.progress = 1.0;
+    loading.progress = 0.96;
+    "Finalizing town presentation".clone_into(&mut loading.status);
+    "Waiting for initial scene roots to instantiate".clone_into(&mut loading.substatus);
     loading.completion_remaining_seconds = Duration::from_millis(u64::from(
         content.0.loading_screen.completion_hold_milliseconds,
     ))
@@ -25606,6 +26437,9 @@ fn cleanup_loading_screen(
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<WorldLoadingRuntime>();
+    commands.remove_resource::<WorldGenerationTask>();
+    commands.remove_resource::<MenuLoadingRuntime>();
+    commands.remove_resource::<MenuRevealRuntime>();
 }
 
 fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntity>>) {
@@ -27021,7 +27855,8 @@ mod tests {
         assert!(!main_menu_action_enabled(MainMenuAction::LoadGame, false));
         assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
         assert!(main_menu_action_enabled(MainMenuAction::NewGame, false));
-        assert_eq!(menu_scene.schema_version, 2);
+        assert_eq!(menu_scene.schema_version, 3);
+        assert!(menu_scene.corrective_bake.is_some());
         assert_eq!(menu_scene.source_scene, MAIN_MENU_SCENE_PATH);
         assert!(
             menu_scene
@@ -28207,7 +29042,10 @@ mod tests {
             assert!(offset.z.abs() <= particle.noise_amplitude.z);
             let next = fish_school_transform(&particle, elapsed + 0.001);
             let movement = (next.translation - transform.translation).normalize();
-            let model_forward = transform.rotation * Vec3::NEG_Z;
+            // The converted primitive is authored longitudinally on -Y; the
+            // runtime transform reapplies the GLB node's +90-degree X axis
+            // correction before aligning its resulting -Z axis to velocity.
+            let model_forward = transform.rotation * Vec3::NEG_Y;
             assert!(model_forward.dot(movement) > 0.999);
         }
         let one_second = fish_school_transform(&particle, 1.0).translation
@@ -29985,15 +30823,17 @@ mod tests {
         apply_loading_icon_rotation(&mut transform, 500.0_f32.to_radians(), 0.1);
         assert!((transform.rotation.as_degrees() + 50.0).abs() < 1e-5);
         let mut loading = WorldLoadingRuntime::default();
-        assert!(!advance_loading_runtime(&mut loading, 0.5, 0.1));
-        assert_eq!(loading.phase, WorldLoadingPhase::Generating);
-        assert!(!advance_loading_runtime(&mut loading, 0.5, 0.1));
-        assert!((loading.progress - 0.05).abs() < f32::EPSILON);
+        assert!(!advance_loading_runtime(&mut loading, 0.1));
+        assert_eq!(loading.phase, WorldLoadingPhase::Presenting);
+        loading.phase = WorldLoadingPhase::Loading;
+        loading.progress = 0.5;
+        assert!(!advance_loading_runtime(&mut loading, 0.1));
+        assert!((loading.progress - 0.5).abs() < f32::EPSILON);
         loading.phase = WorldLoadingPhase::Complete;
         loading.progress = 1.0;
         loading.completion_remaining_seconds = 0.5;
-        assert!(!advance_loading_runtime(&mut loading, 0.5, 0.49));
-        assert!(advance_loading_runtime(&mut loading, 0.5, 0.02));
+        assert!(!advance_loading_runtime(&mut loading, 0.49));
+        assert!(advance_loading_runtime(&mut loading, 0.02));
         let presentation = embedded_presentation();
         for source_path in [
             LOADING_SCREEN_TEXTURE_PATH,
@@ -32723,8 +33563,8 @@ mod tests {
         );
         let terrain = terrain_material(&presentation, &GameConfig::default(), None);
         assert!(terrain.extension.grid_texture.is_none());
-        assert!((terrain.extension.parameters.texture_uv_blend_tint.z - 0.05).abs() < f32::EPSILON);
-        assert!((terrain.extension.parameters.texture_uv_blend_tint.w - 1.0).abs() < f32::EPSILON);
+        assert!((terrain.extension.parameters.texture_uv_blend_tint.z - 1.0).abs() < f32::EPSILON);
+        assert!(terrain.extension.parameters.texture_uv_blend_tint.w.abs() < f32::EPSILON);
         assert_eq!(
             terrain.extension.parameters.grid_scale_offset,
             Vec4::new(1.0, 1.0, 0.0, 0.0)
@@ -33417,7 +34257,7 @@ mod tests {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             Duration::from_millis(250),
         ));
-        for _ in 0..4 {
+        for _ in 0..12 {
             app.update();
             if *app.world().resource::<State<GameState>>().get() == GameState::InGame {
                 break;
@@ -33453,6 +34293,7 @@ mod tests {
             *app.world().resource::<State<GameState>>().get(),
             GameState::Boot
         );
+        app.update();
         app.update();
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),

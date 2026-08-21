@@ -18,7 +18,7 @@ mod models;
 mod presentation;
 
 #[derive(Debug, Parser)]
-#[command(about = "Read-only migration tooling for the Stream Town Unity project")]
+#[command(about = "Migration and deterministic content-baking tools for Stream Town")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -63,6 +63,16 @@ enum Command {
     /// Convert the authored Unity main-menu scene reference into portable RON.
     ConvertMainMenuReference {
         reference: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Apply the deterministic once-off terrain, foundation, resource, and foliage menu bake.
+    BakeMainMenuScene {
+        scene: PathBuf,
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        content: PathBuf,
         #[arg(long)]
         out: PathBuf,
     },
@@ -180,6 +190,15 @@ fn main() -> Result<()> {
         }
         Command::ConvertMainMenuReference { reference, out } => {
             let report = menu_scene::convert(&reference, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::BakeMainMenuScene {
+            scene,
+            config,
+            content,
+            out,
+        } => {
+            let report = menu_scene::bake(&scene, &config, &content, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::ImportSave { save, out, config } => {

@@ -27,10 +27,13 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    let height_blend = smoothstep(
-        terrain_material.texture_uv_blend_tint.z,
-        terrain_material.texture_uv_blend_tint.z + terrain_material.texture_uv_blend_tint.w,
-        in.world_position.y,
+    // Terrain.shader uses saturate(WorldPosition.y + _BlendHeight), not a
+    // water-relative smoothstep. This is why authored Y=0 land is fully grass
+    // while the -3.5m shoreline shelf remains sand.
+    let height_blend = clamp(
+        in.world_position.y + terrain_material.texture_uv_blend_tint.z,
+        0.0,
+        1.0,
     );
     let color_a = mix(
         terrain_material.sand_color_a,

@@ -38,7 +38,8 @@ pub use content::{
 };
 pub use id::{StableId, StableIdError};
 pub use menu_scene::{
-    MainMenuCameraReference, MainMenuEmbeddedMesh, MainMenuModelInstance, MainMenuSceneReference,
+    MainMenuCameraReference, MainMenuCorrectiveBake, MainMenuEmbeddedMesh, MainMenuFoliageVisual,
+    MainMenuModelInstance, MainMenuResourceVisual, MainMenuSceneReference,
 };
 pub use navigation::{DirtyRegion, GridPos, NavGrid, NavigationError};
 pub use presentation::{
