@@ -161,12 +161,20 @@ pub struct FishSchoolVfxDef {
     pub duration_seconds: f32,
     pub emission_rate_per_second: f32,
     pub lifetime_seconds: f32,
+    pub start_speed: f32,
     pub start_size: [f32; 2],
     pub max_particles: u16,
     pub particle_local_position: [f32; 3],
     pub shape_scale: [f32; 3],
+    pub shape_rotation_degrees: [f32; 3],
     pub noise_strength: [f32; 3],
     pub noise_frequency: f32,
+    pub noise_scroll_speed: f32,
+    pub noise_position_amount: f32,
+    pub noise_octaves: u8,
+    pub noise_octave_multiplier: f32,
+    pub noise_octave_scale: f32,
+    pub align_to_velocity: bool,
     pub world_space: bool,
     pub prewarm: bool,
 }
@@ -1080,16 +1088,24 @@ impl PresentationCatalog {
                 && finite_positive(effect.duration_seconds)
                 && finite_positive(effect.emission_rate_per_second)
                 && finite_positive(effect.lifetime_seconds)
+                && effect.start_speed.is_finite()
+                && effect.start_speed >= 0.0
                 && effect.start_size.into_iter().all(finite_positive)
                 && effect.start_size[1] >= effect.start_size[0]
                 && effect.max_particles > 0
                 && effect
                     .particle_local_position
                     .into_iter()
+                    .chain(effect.shape_rotation_degrees)
                     .chain(effect.noise_strength)
                     .all(f32::is_finite)
                 && effect.shape_scale.into_iter().all(finite_positive)
-                && finite_positive(effect.noise_frequency);
+                && finite_positive(effect.noise_frequency)
+                && finite_positive(effect.noise_scroll_speed)
+                && finite_positive(effect.noise_position_amount)
+                && effect.noise_octaves > 0
+                && finite_positive(effect.noise_octave_multiplier)
+                && finite_positive(effect.noise_octave_scale);
             if !valid {
                 return Err(PresentationError::InvalidFishSchoolEffect {
                     effect: id.clone(),

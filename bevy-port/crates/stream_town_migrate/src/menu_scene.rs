@@ -99,8 +99,8 @@ pub(crate) fn convert(source: &Path, destination: &Path) -> Result<ConversionRep
         "unsupported main-menu reference schema"
     );
     let camera = MainMenuCameraReference {
-        position: vec3(source.camera.position)?,
-        rotation: quat(source.camera.rotation)?,
+        position: right_handed_vec3(source.camera.position)?,
+        rotation: right_handed_quat(source.camera.rotation)?,
         orthographic: source.camera.orthographic,
         orthographic_size: finite(source.camera.orthographic_size)?,
         field_of_view_degrees: finite(source.camera.field_of_view)?,
@@ -134,8 +134,8 @@ pub(crate) fn convert(source: &Path, destination: &Path) -> Result<ConversionRep
                 hierarchy_path: instance.hierarchy_path,
                 source_guid: instance.source_guid,
                 source_path: instance.source_path.replace('\\', "/"),
-                position: vec3(instance.position)?,
-                rotation: quat(instance.rotation)?,
+                position: right_handed_vec3(instance.position)?,
+                rotation: right_handed_quat(instance.rotation)?,
                 scale: vec3(instance.scale)?,
             })
         })
@@ -164,19 +164,27 @@ pub(crate) fn convert(source: &Path, destination: &Path) -> Result<ConversionRep
                 );
                 Ok(MainMenuEmbeddedMesh {
                     hierarchy_path: mesh.hierarchy_path,
-                    vertices: mesh.vertices.into_iter().map(vec3).collect::<Result<_>>()?,
-                    normals: mesh.normals.into_iter().map(vec3).collect::<Result<_>>()?,
+                    vertices: mesh
+                        .vertices
+                        .into_iter()
+                        .map(right_handed_vec3)
+                        .collect::<Result<_>>()?,
+                    normals: mesh
+                        .normals
+                        .into_iter()
+                        .map(right_handed_vec3)
+                        .collect::<Result<_>>()?,
                     uv: mesh
                         .uv
                         .into_iter()
                         .map(|value| Ok([finite(value.x)?, finite(value.y)?]))
                         .collect::<Result<_>>()?,
-                    triangles: mesh.triangles,
+                    triangles: right_handed_triangles(mesh.triangles),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
     let reference = MainMenuSceneReference {
-        schema_version: 1,
+        schema_version: 2,
         source_scene: source.source_scene,
         camera,
         instances,
@@ -212,13 +220,24 @@ fn vec3(value: UnityVec3) -> Result<[f32; 3]> {
     Ok([finite(value.x)?, finite(value.y)?, finite(value.z)?])
 }
 
-fn quat(value: UnityQuat) -> Result<[f32; 4]> {
+fn right_handed_vec3(value: UnityVec3) -> Result<[f32; 3]> {
+    Ok([finite(value.x)?, finite(value.y)?, -finite(value.z)?])
+}
+
+fn right_handed_quat(value: UnityQuat) -> Result<[f32; 4]> {
     Ok([
-        finite(value.x)?,
-        finite(value.y)?,
+        -finite(value.x)?,
+        -finite(value.y)?,
         finite(value.z)?,
         finite(value.w)?,
     ])
+}
+
+fn right_handed_triangles(mut triangles: Vec<u32>) -> Vec<u32> {
+    for triangle in triangles.chunks_exact_mut(3) {
+        triangle.swap(1, 2);
+    }
+    triangles
 }
 
 fn finite(value: f32) -> Result<f32> {
@@ -227,4 +246,40 @@ fn finite(value: f32) -> Result<f32> {
         "main-menu reference contains a non-finite number"
     );
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unity_scene_data_is_fully_reflected_into_bevy_space() {
+        assert!(
+            right_handed_vec3(UnityVec3 {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            })
+            .unwrap()
+            .into_iter()
+            .zip([1.0, 2.0, -3.0])
+            .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            right_handed_quat(UnityQuat {
+                x: 0.1,
+                y: 0.2,
+                z: 0.3,
+                w: 0.4,
+            })
+            .unwrap()
+            .into_iter()
+            .zip([-0.1, -0.2, 0.3, 0.4])
+            .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert_eq!(
+            right_handed_triangles(vec![0, 1, 2, 4, 5, 6]),
+            vec![0, 2, 1, 4, 6, 5]
+        );
+    }
 }

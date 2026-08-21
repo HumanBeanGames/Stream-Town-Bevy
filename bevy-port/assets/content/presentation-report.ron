@@ -1,5 +1,5 @@
 (
-    schema_version: 19,
+    schema_version: 20,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
@@ -38,7 +38,7 @@
     prefab_chimney_emitters: 7,
     raining_fish_effects: 1,
     fish_school_effects: 1,
-    scene_fish_school_bindings: 3,
+    scene_fish_school_bindings: 2,
     role_action_audio_roles: 14,
     role_action_audio_variants: 35,
     healing_channel_effects: 1,

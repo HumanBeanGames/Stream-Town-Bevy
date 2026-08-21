@@ -261,7 +261,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 19,
+        schema_version: 20,
         textures,
         materials,
         clips,
@@ -293,7 +293,7 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 19,
+        schema_version: 20,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -947,6 +947,7 @@ fn convert_fish_schools(export: &UnityExport, unity_root: &Path) -> Result<FishS
         .context("fish-school prefab has no ParticleSystemRenderer")?;
     let initial = yaml_section(&particle.lines, "InitialModule:")?;
     let lifetime = yaml_section(initial, "startLifetime:")?;
+    let speed = yaml_section(initial, "startSpeed:")?;
     let size = yaml_section(initial, "startSize:")?;
     let shape = yaml_section(&particle.lines, "ShapeModule:")?;
     let emission = yaml_section(&particle.lines, "EmissionModule:")?;
@@ -955,6 +956,8 @@ fn convert_fish_schools(export: &UnityExport, unity_root: &Path) -> Result<FishS
     let strength_x = yaml_section(noise, "strength:")?;
     let strength_y = yaml_section(noise, "strengthY:")?;
     let strength_z = yaml_section(noise, "strengthZ:")?;
+    let scroll_speed = yaml_section(noise, "scrollSpeed:")?;
+    let position_amount = yaml_section(noise, "positionAmount:")?;
     let material_guid = renderer
         .lines
         .iter()
@@ -988,6 +991,7 @@ fn convert_fish_schools(export: &UnityExport, unity_root: &Path) -> Result<FishS
         )?,
         emission_rate_per_second: required_particle_scalar_f32(rate, "scalar:", "emission rate")?,
         lifetime_seconds: required_particle_scalar_f32(lifetime, "scalar:", "lifetime")?,
+        start_speed: required_particle_scalar_f32(speed, "scalar:", "start speed")?,
         start_size: [
             required_particle_scalar_f32(size, "minScalar:", "minimum start size")?,
             required_particle_scalar_f32(size, "scalar:", "maximum start size")?,
@@ -1004,12 +1008,40 @@ fn convert_fish_schools(export: &UnityExport, unity_root: &Path) -> Result<FishS
             scalar(shape, "m_Scale:").context("fish-school shape has no scale")?,
             [1.0; 3],
         ),
+        shape_rotation_degrees: inline_vec3(
+            scalar(shape, "m_Rotation:").context("fish-school shape has no rotation")?,
+            [0.0; 3],
+        ),
         noise_strength: [
             required_particle_scalar_f32(strength_x, "scalar:", "noise strength X")?,
             required_particle_scalar_f32(strength_y, "scalar:", "noise strength Y")?,
             required_particle_scalar_f32(strength_z, "scalar:", "noise strength Z")?,
         ],
         noise_frequency: required_particle_scalar_f32(noise, "frequency:", "noise frequency")?,
+        noise_scroll_speed: required_particle_scalar_f32(
+            scroll_speed,
+            "scalar:",
+            "noise scroll speed",
+        )?,
+        noise_position_amount: required_particle_scalar_f32(
+            position_amount,
+            "scalar:",
+            "noise position amount",
+        )?,
+        noise_octaves: scalar(noise, "octaves:")
+            .and_then(|value| value.parse().ok())
+            .context("fish-school noise has no octave count")?,
+        noise_octave_multiplier: required_particle_scalar_f32(
+            noise,
+            "octaveMultiplier:",
+            "noise octave multiplier",
+        )?,
+        noise_octave_scale: required_particle_scalar_f32(
+            noise,
+            "octaveScale:",
+            "noise octave scale",
+        )?,
+        align_to_velocity: scalar(&renderer.lines, "m_RenderAlignment:") == Some("4"),
         world_space: scalar(&particle.lines, "moveWithTransform:") == Some("0"),
         prewarm: scalar(&particle.lines, "prewarm:") == Some("1"),
     };
@@ -1031,6 +1063,7 @@ fn convert_fish_schools(export: &UnityExport, unity_root: &Path) -> Result<FishS
                     line.trim_start().starts_with("m_SourcePrefab:")
                         && reference_guid(line) == Some(asset.guid.as_str())
                 })
+                && prefab_instance_is_effectively_active(document, &scene_documents)
         }) {
             let value = |property: &str| prefab_modification_value(&document.lines, property);
             let position = [
@@ -1090,6 +1123,60 @@ fn prefab_modification_value<'a>(lines: &'a [String], property: &str) -> Option<
                 .take(2)
                 .find_map(|line| line.trim().strip_prefix("value: "))
         })
+}
+
+fn prefab_instance_is_effectively_active(
+    instance: &YamlDocument,
+    documents: &[YamlDocument],
+) -> bool {
+    if prefab_modification_value(&instance.lines, "m_IsActive") == Some("0") {
+        return false;
+    }
+    let Some(parent) = scalar(&instance.lines, "m_TransformParent:").and_then(inline_file_id)
+    else {
+        return true;
+    };
+    transform_hierarchy_is_active(parent, documents, &mut BTreeSet::new())
+}
+
+fn transform_hierarchy_is_active(
+    transform_id: i64,
+    documents: &[YamlDocument],
+    visited: &mut BTreeSet<i64>,
+) -> bool {
+    if transform_id == 0 || !visited.insert(transform_id) {
+        return true;
+    }
+    let Some(transform) = documents
+        .iter()
+        .find(|document| document.class_id == 4 && document.file_id == transform_id)
+    else {
+        return true;
+    };
+    if let Some(game_object_id) = scalar(&transform.lines, "m_GameObject:").and_then(inline_file_id)
+        && documents
+            .iter()
+            .find(|document| document.class_id == 1 && document.file_id == game_object_id)
+            .is_some_and(|game_object| scalar(&game_object.lines, "m_IsActive:") == Some("0"))
+    {
+        return false;
+    }
+    if let Some(prefab_id) = scalar(&transform.lines, "m_PrefabInstance:").and_then(inline_file_id)
+        && prefab_id != 0
+        && let Some(prefab) = documents
+            .iter()
+            .find(|document| document.class_id == 1001 && document.file_id == prefab_id)
+    {
+        if prefab_modification_value(&prefab.lines, "m_IsActive") == Some("0") {
+            return false;
+        }
+        return scalar(&prefab.lines, "m_TransformParent:")
+            .and_then(inline_file_id)
+            .is_none_or(|parent| transform_hierarchy_is_active(parent, documents, visited));
+    }
+    scalar(&transform.lines, "m_Father:")
+        .and_then(inline_file_id)
+        .is_none_or(|parent| transform_hierarchy_is_active(parent, documents, visited))
 }
 
 fn convert_role_action_audio(
@@ -4141,17 +4228,40 @@ MonoBehaviour:
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
         assert!((effect.noise_frequency - 0.22).abs() < f32::EPSILON);
+        assert!(effect.start_speed.abs() < f32::EPSILON);
+        assert!(
+            effect
+                .shape_rotation_degrees
+                .into_iter()
+                .zip([-90.0, 0.0, 0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!((effect.noise_scroll_speed - 1.0).abs() < f32::EPSILON);
+        assert!((effect.noise_position_amount - 2.0).abs() < f32::EPSILON);
+        assert_eq!(effect.noise_octaves, 2);
+        assert!((effect.noise_octave_multiplier - 1.0).abs() < f32::EPSILON);
+        assert!((effect.noise_octave_scale - 2.0).abs() < f32::EPSILON);
+        assert!(effect.align_to_velocity);
         assert!(effect.world_space && effect.prewarm);
-        assert_eq!(bindings.values().map(Vec::len).sum::<usize>(), 3);
+        assert_eq!(bindings.values().map(Vec::len).sum::<usize>(), 2);
         assert_eq!(
             bindings["Assets/Scenes/Menu/Main_Menu_02.unity"][0].max_particles,
             800
         );
+        let town = &bindings["Assets/Scenes/Worlds/World_Town.unity"];
+        assert_eq!(town.len(), 1);
+        assert_eq!(town[0].hierarchy_path, "Fish");
         assert!(
-            bindings["Assets/Scenes/Worlds/World_Town.unity"][1]
+            town[0]
+                .local_position
+                .into_iter()
+                .all(|value| value.abs() < f32::EPSILON)
+        );
+        assert!(
+            town[0]
                 .noise_strength
                 .into_iter()
-                .zip([10.0, 5.0, 10.0])
+                .zip([10.0, 0.02, 10.0])
                 .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
         );
 

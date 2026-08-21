@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-/// Authored Unity main-menu scene content converted into engine-neutral data.
+/// Authored Unity main-menu scene content converted into Bevy's right-handed,
+/// Y-up coordinate system. Positions and normals use -Z forward, rotations are
+/// already reflected, and embedded triangle winding is counter-clockwise.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct MainMenuSceneReference {
     pub schema_version: u32,

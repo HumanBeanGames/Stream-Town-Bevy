@@ -462,9 +462,11 @@ clearings cannot leak between world states. Resource trees use a typed
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree,
-bush, and grass materials run the same wind deformation in the visible and
-depth/normal prepasses so SSAO cannot sample a stale silhouette. They cast
-world-space silhouettes but decline self-shadow reception, and an
+bush, and grass materials run wind deformation in both visible and depth/normal
+passes so SSAO cannot sample a stale silhouette. Their shadow-only pass uses the
+shipping wind constants and binding-free procedural detail because Bevy omits
+extension-material bindings from shadow pipelines. They cast world-space
+silhouettes but decline self-shadow reception, and an
 authored-color ambient floor keeps low-poly back faces readable as they sway.
 Missing converted assets retain the resource-cube fallback.
 
@@ -724,12 +726,16 @@ its 1.2-second disable contract, eight-capacity/100-count plus burst, converted
 two prefab HDR gradients, and `Particle_02` texture provenance. Bevy samples
 those budgets, curves, and gradients into short-lived ECS effects and uses the
 converted plus mesh when assets are available.
-Presentation schema 19 also converts the shipping `Fish.prefab` field instead
-of omitting it. The catalog retains its Fish3 mesh, Critters material,
-120-second lifetime, 40-per-second logical emission, 0.2-1.0 size range,
-300x300x5 shape, noise, world-space/prewarm flags, all three scene bindings,
-the Main Menu's 800-particle capacity, and both 2,000-particle town overrides.
-Bevy deterministically prewarms 160 shared-mesh representatives per binding.
+Presentation schema 20 converts the shipping `Fish.prefab` field instead of
+omitting it. The catalog retains its Fish3 mesh, Critters material, zero start
+speed, 120-second lifetime, 40-per-second logical emission, 0.2-1.0 size range,
+rotated 300x300x5 spawn box, two-octave scrolling noise, velocity alignment, and
+world-space/prewarm flags. Only the two effectively active scene bindings are
+retained: the Main Menu's 800-particle field and the town's 2,000-particle field.
+The second town YAML instance is excluded because its parent prefab is inactive.
+Bevy deterministically prewarms 160 shared-mesh representatives per binding,
+samples the box once, and applies bounded smooth noise rather than turning the
+box extents into an orbit.
 Use `STREAM_TOWN_AUTOSTART=1` with `STREAM_TOWN_SMOKE_FISH_SCHOOL=1` for the
 focused town capture.
 
@@ -759,8 +765,11 @@ mouse-operable while retaining their keyboard paths; Load Game selects the exact
 disabled sprite and cannot activate until a native save exists. Its background
 is no longer a synthetic blank stage: the migration exporter resolves the
 authored `Main_Menu_02` camera, 285 model instances, and its 4,900-vertex island
-mesh into checked RON. Bevy reconstructs that scene with the converted GLBs and
-restores the orthographic town camera when gameplay loading begins.
+mesh into checked RON. The converter reflects camera and instance positions,
+rotations, mesh vertices/normals, and triangle winding together into Bevy's
+right-handed coordinates, preserving the left UI/right town composition. Bevy
+reconstructs that scene with the converted GLBs and restores the town camera when
+gameplay loading begins.
 
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/

@@ -7,32 +7,12 @@
 
 @group(0) @binding(1) var<uniform> globals: Globals;
 
-struct GrassMaterialUniform {
-    grid_color_1: vec4<f32>,
-    grid_color_2: vec4<f32>,
-    wind_color: vec4<f32>,
-    wind_direction_smoothness: vec4<f32>,
-    wind_controls: vec4<f32>,
-    surface_controls: vec4<f32>,
-    world_strength_transform: vec4<f32>,
-    main_scale_offset: vec4<f32>,
-}
-
-@group(#{MATERIAL_BIND_GROUP}) @binding(100)
-var<uniform> grass_material: GrassMaterialUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101)
-var main_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102)
-var main_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103)
-var noise_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104)
-var noise_sampler: sampler;
-
 fn grass_wind_uv(world_position: vec3<f32>, animation_time: f32) -> vec2<f32> {
-    let direction = grass_material.wind_direction_smoothness.xy;
-    let crawl_speed = grass_material.wind_controls.x;
-    let texture_size = max(abs(grass_material.wind_controls.w), 0.0001);
+    // Authored Grass material constants are embedded because Bevy's shadow-only
+    // prepass has no extension-material bind group.
+    let direction = vec2<f32>(1.0, 0.0);
+    let crawl_speed = 0.1;
+    let texture_size = 20.0;
     return world_position.xz / texture_size + animation_time * crawl_speed * direction;
 }
 
@@ -50,27 +30,27 @@ fn deformed_grass_position(
 #ifdef VERTEX_COLORS
     vertex_color = vertex.color;
 #endif
-    let vertex_mask_max = max(abs(grass_material.surface_controls.w), 0.0001);
+    let vertex_mask_max = 1.0;
     let vertex_mask = smoothstep(0.0, vertex_mask_max, 1.0 - vertex_color.b);
     let panner = grass_wind_uv(source_world_position.xyz, animation_time);
-    let wind_sample = textureSampleLevel(main_texture, main_sampler, fract(panner), 0.0).a;
+    let wind_sample = 0.5 + 0.5 * sin(dot(panner, vec2<f32>(12.9898, 78.233)));
     let wind_texture = smoothstep(
-        grass_material.wind_direction_smoothness.z,
-        grass_material.wind_direction_smoothness.w,
+        -0.28,
+        0.66,
         wind_sample,
     );
     var local_uv = vec2<f32>(0.0);
 #ifdef VERTEX_UVS_A
     local_uv = vertex.uv;
 #endif
-    let noise_uv = local_uv * grass_material.wind_controls.y + panner;
-    let noise = textureSampleLevel(noise_texture, noise_sampler, fract(noise_uv), 0.0).a;
+    let noise_uv = local_uv + panner;
+    let noise = 0.5 + 0.5 * sin(dot(noise_uv, vec2<f32>(39.3468, 11.1351)));
     let noise_displacement = vec3<f32>(noise * 2.0, 0.0, noise * 2.0);
     let displacement = mix(
         wind_texture * noise_displacement,
         noise_displacement,
         wind_texture,
-    ) * vertex_mask * grass_material.wind_controls.z * 0.05;
+    ) * vertex_mask * 1.1 * 0.05;
     local_position += displacement;
     return local_position;
 }

@@ -850,7 +850,7 @@ struct TreeMaterialExtension {
 
 impl MaterialExtension for TreeMaterialExtension {
     fn enable_shadows() -> bool {
-        false
+        true
     }
 
     fn vertex_shader() -> ShaderRef {
@@ -894,7 +894,7 @@ struct GrassMaterialExtension {
 
 impl MaterialExtension for GrassMaterialExtension {
     fn enable_shadows() -> bool {
-        false
+        true
     }
 
     fn vertex_shader() -> ShaderRef {
@@ -1620,11 +1620,15 @@ struct FallingFishEmitter {
 
 #[derive(Component)]
 struct FishSchoolParticle {
-    centre: Vec3,
-    half_extents: Vec3,
+    base_position: Vec3,
+    noise_amplitude: Vec3,
     phase: Vec3,
-    speed: f32,
-    turn_rate: f32,
+    frequency: f32,
+    scroll_speed: f32,
+    octaves: u8,
+    octave_multiplier: f32,
+    octave_scale: f32,
+    align_to_velocity: bool,
 }
 
 #[derive(Component)]
@@ -4934,7 +4938,7 @@ fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
             ron::from_str(include_str!("../../../assets/content/main_menu_scene.ron"))
                 .expect("checked-in authored main-menu scene must parse");
         assert_eq!(
-            reference.schema_version, 1,
+            reference.schema_version, 2,
             "checked-in authored main-menu scene schema must be supported"
         );
         reference
@@ -4953,11 +4957,9 @@ fn menu_scene_for_source_model<'a>(
         .min_by_key(|(_, scene)| (!scene.is_default, scene.asset_path.as_str()))
 }
 
-fn unity_scene_rotation(rotation: [f32; 4]) -> Quat {
-    // Unity model instances use +Z as forward, while Bevy scene roots use -Z.
-    // Mirroring the quaternion's X/Y vector terms preserves the exported world
-    // orientation without mirroring the already converted glTF geometry.
-    Quat::from_xyzw(-rotation[0], -rotation[1], rotation[2], rotation[3]).normalize()
+fn authored_scene_rotation(rotation: [f32; 4]) -> Quat {
+    // Main-menu reference schema 2 stores rotations in Bevy's right-handed space.
+    Quat::from_array(rotation).normalize()
 }
 
 fn authored_main_menu_mesh(reference: &stream_town_domain::MainMenuEmbeddedMesh) -> Mesh {
@@ -4968,9 +4970,7 @@ fn authored_main_menu_mesh(reference: &stream_town_domain::MainMenuEmbeddedMesh)
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, reference.vertices.clone())
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, reference.normals.clone())
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, reference.uv.clone())
-    // The exported world-space vertices retain positive scale, and Unity's
-    // serialized triangle order has the same normal-facing winding expected by
-    // wgpu. Reversing it hides the island from the authored camera.
+    // The converter has already reflected Unity's vertices and reversed winding.
     .with_inserted_indices(Indices::U32(reference.triangles.clone()))
 }
 
@@ -5012,7 +5012,7 @@ fn apply_authored_main_menu_camera(
             })
         };
         *transform = Transform::from_translation(Vec3::from_array(camera_reference.position))
-            .with_rotation(unity_scene_rotation(camera_reference.rotation));
+            .with_rotation(authored_scene_rotation(camera_reference.rotation));
         // The Unity camera renders against its sky-lit environment. The town
         // runtime's lower ambient level is balanced for an overhead sun and
         // leaves the authored side-on menu city nearly black.
@@ -5116,7 +5116,7 @@ fn spawn_main_menu(
                         .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
                 ),
                 Transform::from_translation(Vec3::from_array(instance.position))
-                    .with_rotation(unity_scene_rotation(instance.rotation))
+                    .with_rotation(authored_scene_rotation(instance.rotation))
                     .with_scale(Vec3::from_array(instance.scale)),
             ));
             if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render)
@@ -5543,20 +5543,19 @@ fn spawn_fish_school_scene(
             continue;
         };
         let count = usize::from(binding.max_particles).min(FISH_SCHOOL_RENDER_BUDGET_PER_BINDING);
-        let half_extents = Vec3::new(
-            effect.shape_scale[0] * 0.5,
-            effect.shape_scale[2] * 0.5,
-            effect.shape_scale[1] * 0.5,
+        let shape_half_extents = Vec3::from_array(effect.shape_scale) * 0.5;
+        let shape_rotation = Quat::from_euler(
+            EulerRot::XYZ,
+            -effect.shape_rotation_degrees[0].to_radians(),
+            -effect.shape_rotation_degrees[1].to_radians(),
+            effect.shape_rotation_degrees[2].to_radians(),
         );
-        // Unity parents these world-space systems under different water/VFX roots. The roots are
-        // intentionally not recreated, so retain their horizontal offset and layer the second
-        // town school slightly deeper rather than applying its parent-relative -46.2 Y directly.
+        // The converter excludes inactive Unity hierarchies. Active fish systems are world-space,
+        // so their authored root and child offsets can be applied without invented depth layers.
         let centre = Vec3::new(
             binding.local_position[0],
-            water_height
-                + effect.particle_local_position[1]
-                + binding.local_position[1].clamp(-60.0, 0.0) * 0.025,
-            binding.local_position[2],
+            water_height + effect.particle_local_position[1] + binding.local_position[1],
+            -binding.local_position[2],
         );
         for sequence in 0..count {
             let seed = fish_school_seed(
@@ -5571,16 +5570,22 @@ fn spawn_fish_school_scene(
                 deterministic_unit(seed.rotate_left(23)) * std::f32::consts::TAU,
             );
             let size = deterministic_f32_range(effect.start_size, seed.rotate_left(7)) * 0.01;
-            let movement_rate = (0.12
-                + (binding.noise_strength[0].abs() + binding.noise_strength[2].abs()) * 0.012)
-                .clamp(0.08, 0.8);
-            let turn_rate = 0.45 + deterministic_unit(seed.rotate_left(17)) * 0.75;
+            let shape_local = Vec3::new(
+                deterministic_signed_unit(seed.rotate_left(3)) * shape_half_extents.x,
+                deterministic_signed_unit(seed.rotate_left(13)) * shape_half_extents.y,
+                -deterministic_signed_unit(seed.rotate_left(29)) * shape_half_extents.z,
+            );
             let particle = FishSchoolParticle {
-                centre,
-                half_extents,
+                base_position: centre + shape_rotation * shape_local,
+                noise_amplitude: Vec3::from_array(binding.noise_strength)
+                    * effect.noise_position_amount,
                 phase,
-                speed: movement_rate,
-                turn_rate,
+                frequency: effect.noise_frequency,
+                scroll_speed: effect.noise_scroll_speed,
+                octaves: effect.noise_octaves,
+                octave_multiplier: effect.noise_octave_multiplier,
+                octave_scale: effect.noise_octave_scale,
+                align_to_velocity: effect.align_to_velocity,
             };
             let mut transform = fish_school_transform(&particle, 0.0);
             transform.scale = Vec3::splat(size);
@@ -5621,28 +5626,49 @@ fn animate_fish_school(time: Res<Time>, mut fish: Query<(&FishSchoolParticle, &m
 }
 
 fn fish_school_transform(fish: &FishSchoolParticle, elapsed_seconds: f32) -> Transform {
-    let time = elapsed_seconds * fish.speed;
-    let angles = Vec3::new(
-        fish.phase.x + time * fish.turn_rate,
-        fish.phase.y + time * (fish.turn_rate * 0.43 + 0.17),
-        fish.phase.z + time * (fish.turn_rate * 0.79 + 0.11),
-    );
-    let local = Vec3::new(
-        angles.x.sin() * fish.half_extents.x,
-        angles.y.sin() * fish.half_extents.y,
-        angles.z.cos() * fish.half_extents.z,
-    );
-    let velocity = Vec3::new(
-        angles.x.cos() * fish.half_extents.x * fish.turn_rate,
-        angles.y.cos() * fish.half_extents.y * (fish.turn_rate * 0.43 + 0.17),
-        -angles.z.sin() * fish.half_extents.z * (fish.turn_rate * 0.79 + 0.11),
-    );
-    let rotation = if velocity.length_squared() > 1.0e-8 {
-        Quat::from_rotation_arc(Vec3::Z, velocity.normalize())
+    let (x, velocity_x) = fish_school_noise_axis(fish, fish.phase.x, elapsed_seconds);
+    let (y, velocity_y) = fish_school_noise_axis(fish, fish.phase.y, elapsed_seconds);
+    let (z, velocity_z) = fish_school_noise_axis(fish, fish.phase.z, elapsed_seconds);
+    let offset = Vec3::new(x, y, z) * fish.noise_amplitude;
+    let velocity = Vec3::new(velocity_x, velocity_y, velocity_z) * fish.noise_amplitude;
+    let rotation = if fish.align_to_velocity && velocity.length_squared() > 1.0e-8 {
+        // Converted glTF scene roots face -Z; Unity's particle renderer aligns the mesh to velocity.
+        Quat::from_rotation_arc(Vec3::NEG_Z, velocity.normalize())
     } else {
         Quat::IDENTITY
     };
-    Transform::from_translation(fish.centre + local).with_rotation(rotation)
+    Transform::from_translation(fish.base_position + offset).with_rotation(rotation)
+}
+
+fn fish_school_noise_axis(
+    fish: &FishSchoolParticle,
+    phase: f32,
+    elapsed_seconds: f32,
+) -> (f32, f32) {
+    let octaves = fish.octaves.max(1);
+    let base_rate = fish.frequency.max(0.001) * fish.scroll_speed.max(0.001);
+    let mut displacement = 0.0;
+    let mut velocity = 0.0;
+    let mut amplitude_sum = 0.0;
+    for octave in 0..octaves {
+        let exponent = i32::from(octave);
+        let octave = f32::from(octave);
+        let amplitude = fish.octave_multiplier.powi(exponent);
+        let rate = base_rate * fish.octave_scale.powi(exponent);
+        let angle = phase * (1.0 + octave * 0.37) + octave * 2.399_963_1 + elapsed_seconds * rate;
+        displacement += angle.sin() * amplitude;
+        velocity += angle.cos() * amplitude * rate;
+        amplitude_sum += amplitude.abs();
+    }
+    if amplitude_sum <= f32::EPSILON {
+        (0.0, 0.0)
+    } else {
+        (displacement / amplitude_sum, velocity / amplitude_sum)
+    }
+}
+
+fn deterministic_signed_unit(seed: u32) -> f32 {
+    deterministic_unit(seed) * 2.0 - 1.0
 }
 
 fn fish_school_seed(world_seed: u64, scene_path: &str, binding: usize, sequence: u32) -> u32 {
@@ -26995,11 +27021,48 @@ mod tests {
         assert!(!main_menu_action_enabled(MainMenuAction::LoadGame, false));
         assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
         assert!(main_menu_action_enabled(MainMenuAction::NewGame, false));
+        assert_eq!(menu_scene.schema_version, 2);
         assert_eq!(menu_scene.source_scene, MAIN_MENU_SCENE_PATH);
+        assert!(
+            menu_scene
+                .camera
+                .position
+                .into_iter()
+                .zip([134.97, 8.5, 133.799_99])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            menu_scene
+                .camera
+                .rotation
+                .into_iter()
+                .zip([0.117_483_57, -0.617_187, -0.095_625_274, -0.772_096_93])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
         assert_eq!(menu_scene.instances.len(), 285);
         assert_eq!(menu_scene.embedded_meshes.len(), 1);
         assert_eq!(menu_scene.embedded_meshes[0].vertices.len(), 4_900);
         assert_eq!(menu_scene.embedded_meshes[0].triangles.len() / 3, 9_522);
+        let fountain = menu_scene
+            .instances
+            .iter()
+            .find(|instance| instance.hierarchy_path.contains("Building_Fountain"))
+            .unwrap();
+        let camera_transform =
+            Transform::from_translation(Vec3::from_array(menu_scene.camera.position))
+                .with_rotation(authored_scene_rotation(menu_scene.camera.rotation));
+        let clip = Mat4::perspective_rh(
+            menu_scene.camera.field_of_view_degrees.to_radians(),
+            16.0 / 9.0,
+            menu_scene.camera.near,
+            menu_scene.camera.far,
+        ) * camera_transform.to_matrix().inverse()
+            * Vec3::from_array(fountain.position).extend(1.0);
+        assert!(clip.w > 0.0);
+        assert!(
+            clip.x / clip.w > 0.0,
+            "the authored town must compose on the right side of the menu"
+        );
         let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         for instance in &menu_scene.instances {
             let (_, scene) = menu_scene_for_source_model(&content, &instance.source_path)
@@ -28083,7 +28146,7 @@ mod tests {
     }
 
     #[test]
-    fn fish_school_motion_is_repeatable_and_stays_inside_authored_shape() {
+    fn fish_school_uses_authored_spawn_volume_noise_and_velocity_alignment() {
         let presentation = embedded_presentation();
         let effect = presentation.fish_school_effects.values().next().unwrap();
         assert!(
@@ -28099,14 +28162,37 @@ mod tests {
                 .values()
                 .map(Vec::len)
                 .sum::<usize>(),
-            3
+            2
+        );
+        assert!(effect.start_speed.abs() < f32::EPSILON);
+        assert!(
+            effect
+                .shape_rotation_degrees
+                .into_iter()
+                .zip([-90.0, 0.0, 0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!((effect.noise_scroll_speed - 1.0).abs() < f32::EPSILON);
+        assert!((effect.noise_position_amount - 2.0).abs() < f32::EPSILON);
+        assert_eq!(effect.noise_octaves, 2);
+        assert!(effect.align_to_velocity);
+        assert_eq!(
+            presentation.scene_fish_schools[WORLD_SCENE_PATH]
+                .iter()
+                .map(|binding| binding.hierarchy_path.as_str())
+                .collect::<Vec<_>>(),
+            ["Fish"]
         );
         let particle = FishSchoolParticle {
-            centre: Vec3::new(2.0, -2.0, 3.0),
-            half_extents: Vec3::new(150.0, 2.5, 150.0),
+            base_position: Vec3::new(2.0, -2.0, 3.0),
+            noise_amplitude: Vec3::new(20.0, 0.04, 20.0),
             phase: Vec3::new(0.4, 1.7, 2.8),
-            speed: 0.3,
-            turn_rate: 0.8,
+            frequency: 0.22,
+            scroll_speed: 1.0,
+            octaves: 2,
+            octave_multiplier: 1.0,
+            octave_scale: 2.0,
+            align_to_velocity: true,
         };
         for elapsed in [0.0, 1.0, 30.0, 120.0] {
             let transform = fish_school_transform(&particle, elapsed);
@@ -28115,11 +28201,21 @@ mod tests {
                 fish_school_transform(&particle, elapsed),
                 "fish transform must be deterministic"
             );
-            let offset = transform.translation - particle.centre;
-            assert!(offset.x.abs() <= particle.half_extents.x);
-            assert!(offset.y.abs() <= particle.half_extents.y);
-            assert!(offset.z.abs() <= particle.half_extents.z);
+            let offset = transform.translation - particle.base_position;
+            assert!(offset.x.abs() <= particle.noise_amplitude.x);
+            assert!(offset.y.abs() <= particle.noise_amplitude.y);
+            assert!(offset.z.abs() <= particle.noise_amplitude.z);
+            let next = fish_school_transform(&particle, elapsed + 0.001);
+            let movement = (next.translation - transform.translation).normalize();
+            let model_forward = transform.rotation * Vec3::NEG_Z;
+            assert!(model_forward.dot(movement) > 0.999);
         }
+        let one_second = fish_school_transform(&particle, 1.0).translation
+            - fish_school_transform(&particle, 0.0).translation;
+        assert!(
+            one_second.length() < 15.0,
+            "fish movement must remain smooth"
+        );
     }
 
     #[test]
@@ -30724,11 +30820,12 @@ mod tests {
             tree_season_controls(Season::Winter),
             Vec4::new(0.0, 0.5, 0.0, 0.0)
         );
-        assert!(!TreeMaterialExtension::enable_shadows());
+        assert!(TreeMaterialExtension::enable_shadows());
         let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");
         assert!(prepass.contains("deformed_tree_position"));
         assert!(prepass.contains("previous_world_position"));
         assert!(prepass.contains("@group(0) @binding(1) var<uniform> globals"));
+        assert!(!prepass.contains("@binding(100)"));
     }
 
     #[test]
@@ -30782,11 +30879,12 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.extension.noise_texture.is_none());
-        assert!(!GrassMaterialExtension::enable_shadows());
+        assert!(GrassMaterialExtension::enable_shadows());
         let prepass = include_str!("../../../assets/shaders/grass_material_prepass.wgsl");
         assert!(prepass.contains("deformed_grass_position"));
         assert!(prepass.contains("previous_world_position"));
         assert!(prepass.contains("@group(0) @binding(1) var<uniform> globals"));
+        assert!(!prepass.contains("@binding(100)"));
     }
 
     #[test]
@@ -32565,7 +32663,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 19);
+        assert_eq!(presentation.schema_version, 20);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.post_process_profiles.len(), 2);

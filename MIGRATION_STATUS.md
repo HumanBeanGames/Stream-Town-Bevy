@@ -22,8 +22,9 @@ mistaken for production-ready systems.
   eliminating chunk seams. Water uses energy-conserving bloom and bounded color
   output so the high-exposure coastline cannot clip to white; normalized foam
   cutoff, single-pass foam color, and partial seasonal tint keep its authored
-  cyan depth surface visible. Trees no longer receive an incompatible static
-  shadow while their custom vertices sway. The Player now uses the animation
+  cyan depth surface visible. Trees and foliage cast through a binding-free
+  animated shadow prepass while still declining the incompatible self-shadow
+  reception that caused black flicker. The Player now uses the animation
   FBX's single mesh-compatible armature instead of the TPose asset's nine
   independent skins, and suffix-resolved standalone tracks no longer detach
   body parts. The player-only broken animated shadow-skinning output is disabled
@@ -446,14 +447,21 @@ mistaken for production-ready systems.
   Settings, Credits, and Quit buttons appear in authored order. Mouse actions
   share the existing typed state/settings paths, and Load Game uses Unity's
   disabled sprite and rejects activation until a native save exists.
-- Presentation schema 19 converts the reachable `Fish.prefab` field used by the
-  Main Menu and town: Fish3 mesh, Critters material, 120-second lifetime,
-  40-per-second logical emission, 0.2-1.0 size range, 300x300x5 box, noise,
-  prewarm, world-space simulation, all three scene instances, the Main Menu's
-  800-particle override, and the town's 2,000-particle/vertical-noise overrides.
+  The authored camera, 285 model transforms, and island mesh are fully reflected
+  from Unity's left-handed coordinates into Bevy's right-handed coordinates,
+  including normals and triangle winding, so the town remains on the right of
+  the left-side menu panel.
+- Presentation schema 20 converts the reachable `Fish.prefab` field used by the
+  Main Menu and town: Fish3 mesh, Critters material, zero start speed,
+  120-second lifetime, 40-per-second logical emission, 0.2-1.0 size range,
+  rotated 300x300x5 spawn box, two-octave scrolling noise, velocity alignment,
+  prewarm, and world-space simulation. It retains the two effectively active
+  scene instances and excludes the second town YAML instance under its inactive
+  parent prefab.
   Bevy renders a deterministic prewarmed representative budget of 160 shared-
-  mesh fish per binding, preserving coverage and motion without adding the full
-  4,800 logical particles to the 300-agent performance gate.
+  mesh fish per binding, samples the box only for initial placement, and applies
+  bounded smooth noise without adding the full 4,800 logical particles to the
+  300-agent performance gate.
 - Credits now recreates both reachable `VFX_FireWorks` instances as a
   deterministic purpose-built particle effect driven by presentation schema 15.
   The converter resolves their exact Unity scene positions and graph GUID, the

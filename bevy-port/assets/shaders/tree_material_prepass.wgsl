@@ -7,24 +7,6 @@
 
 @group(0) @binding(1) var<uniform> globals: Globals;
 
-struct TreeMaterialUniform {
-    wind_direction_smoothness: vec4<f32>,
-    wind_controls: vec4<f32>,
-    season_controls: vec4<f32>,
-    main_scale_offset: vec4<f32>,
-}
-
-@group(#{MATERIAL_BIND_GROUP}) @binding(100)
-var<uniform> tree_material: TreeMaterialUniform;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101)
-var main_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102)
-var main_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103)
-var noise_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104)
-var noise_sampler: sampler;
-
 fn deformed_tree_position(
     vertex: Vertex,
     world_from_local: mat4x4<f32>,
@@ -35,11 +17,14 @@ fn deformed_tree_position(
         world_from_local,
         vec4<f32>(local_position, 1.0),
     );
-    let direction = tree_material.wind_direction_smoothness.xy;
-    let sync = tree_material.wind_controls.x;
-    let wind_strength = tree_material.wind_controls.y;
-    let detail_strength = tree_material.wind_controls.z;
-    let detail_scale = tree_material.wind_controls.w;
+    // Bevy's shadow-only prepass deliberately omits extension-material bindings.
+    // These are the shipping Tree material's authored wind constants; procedural
+    // detail keeps the shadow silhouette moving without sampling group 3.
+    let direction = vec2<f32>(1.0, 0.0);
+    let sync = 0.7;
+    let wind_strength = 0.79;
+    let detail_strength = 0.01;
+    let detail_scale = 1.0;
     var wind_weight = 1.0;
 #ifdef VERTEX_COLORS
     wind_weight = vertex.color.r;
@@ -47,15 +32,13 @@ fn deformed_tree_position(
     let gust = sin(
         animation_time + (source_world_position.x + source_world_position.z) * sync,
     );
-    let detail_uv = fract(
-        (vertex.position.xy + animation_time * direction) * detail_scale
-            + vec2<f32>(detail_scale),
-    );
-    let detail_noise = textureSampleLevel(noise_texture, noise_sampler, detail_uv, 0.0).a;
     let detail = smoothstep(
-        tree_material.wind_direction_smoothness.z,
-        tree_material.wind_direction_smoothness.w,
-        detail_noise,
+        0.0,
+        1.0,
+        0.5 + 0.5 * sin(
+            dot(vertex.position.xy * detail_scale, vec2<f32>(12.9898, 78.233))
+                + animation_time * 0.73,
+        ),
     );
     let displacement = vec3<f32>(direction.x, 0.0, direction.y) * gust * wind_strength
         + vec3<f32>(detail_strength * detail);
