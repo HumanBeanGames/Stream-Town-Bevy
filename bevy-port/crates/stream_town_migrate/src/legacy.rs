@@ -72,8 +72,6 @@ pub(crate) struct WorldOracleGroupSummary {
     count: usize,
     position_sha256: String,
     horizontal_position_sha256: String,
-    minimum: [f32; 3],
-    maximum: [f32; 3],
 }
 
 #[derive(Clone, Debug)]
@@ -306,13 +304,9 @@ pub(crate) fn export_world_oracle(
                     .then(left[2].total_cmp(&right[2]))
             });
             let mut hasher = Sha256::new();
-            let mut minimum = [f32::INFINITY; 3];
-            let mut maximum = [f32::NEG_INFINITY; 3];
             for position in &positions {
-                for axis in 0..3 {
-                    minimum[axis] = minimum[axis].min(position[axis]);
-                    maximum[axis] = maximum[axis].max(position[axis]);
-                    hasher.update(position[axis].to_bits().to_le_bytes());
+                for coordinate in position {
+                    hasher.update(coordinate.to_bits().to_le_bytes());
                 }
             }
             let mut horizontal_positions = positions.clone();
@@ -330,15 +324,13 @@ pub(crate) fn export_world_oracle(
                 count: positions.len(),
                 position_sha256: hex::encode(hasher.finalize()),
                 horizontal_position_sha256: hex::encode(horizontal_hasher.finalize()),
-                minimum,
-                maximum,
             };
             (name, group)
         })
         .collect::<BTreeMap<_, _>>();
     let oracle = WorldOracleFile {
         schema_version: 2,
-        purpose: "validation-only Unity generation fingerprints; contains no positions and is never consumed by the Bevy runtime",
+        purpose: "validation-only Unity generation fingerprints; contains no coordinate values and is never consumed by the Bevy runtime",
         source_sha256: source_sha256.clone(),
         source_save_schema_version: decoded.schema_version,
         source_container_version: decoded.container_version,
