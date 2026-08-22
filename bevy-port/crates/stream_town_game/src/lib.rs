@@ -102,7 +102,7 @@ const UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT: f32 = 15.0;
 const UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT: f32 = 20.0;
 const UNITY_TOWN_CAMERA_MIN_POSITION: Vec2 = Vec2::new(-142.0, -124.0);
 const UNITY_TOWN_CAMERA_MAX_POSITION: Vec2 = Vec2::new(124.0, 124.0);
-const UNITY_TOWN_CAMERA_PAN_SMOOTHNESS: f32 = 0.5;
+const UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS: f32 = 0.5;
 const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
 const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 10.0;
 const UNITY_TOWN_CAMERA_EDGE_SIZE: f32 = 10.0;
@@ -155,7 +155,6 @@ const GIRAFFE_MATERIAL_PATH: &str = "Assets/Materials/Character/Giraffe.mat";
 const BOUNDS_SHADER_ASSET_PATH: &str = "shaders/bounds_material.wgsl";
 const BOUNDS_MATERIAL_PATH: &str = "Assets/Materials/BoundsVisualizer.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
-const TREE_PREPASS_SHADER_ASSET_PATH: &str = "shaders/tree_material_prepass.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
 const GRASS_PREPASS_SHADER_ASSET_PATH: &str = "shaders/grass_material_prepass.wgsl";
@@ -622,6 +621,9 @@ impl Default for TwitchConnection {
 struct SelectedCell(Option<GridPos>);
 
 #[derive(Resource, Default)]
+struct SelectedActor(Option<StableId>);
+
+#[derive(Resource, Default)]
 struct SelectedRecruitGroup {
     actors: BTreeSet<StableId>,
     drag_start: Option<Vec2>,
@@ -874,10 +876,6 @@ impl MaterialExtension for TreeMaterialExtension {
 
     fn fragment_shader() -> ShaderRef {
         TREE_SHADER_ASSET_PATH.into()
-    }
-
-    fn prepass_vertex_shader() -> ShaderRef {
-        TREE_PREPASS_SHADER_ASSET_PATH.into()
     }
 }
 
@@ -1198,7 +1196,7 @@ struct MenuLoadingRuntime {
     asset_handles: Vec<UntypedHandle>,
     loaded_assets: usize,
     failed_assets: usize,
-    presented_frames: u8,
+    ready_presented_frames: u8,
 }
 
 #[derive(Resource)]
@@ -1918,6 +1916,7 @@ struct TownCameraControllerRuntime {
     home: Transform,
     move_target: Vec3,
     zoom_target_height: f32,
+    pan_velocity: Vec3,
 }
 
 impl TownCameraControllerRuntime {
@@ -1925,6 +1924,7 @@ impl TownCameraControllerRuntime {
         Self {
             move_target: home.translation,
             zoom_target_height: UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT,
+            pan_velocity: Vec3::ZERO,
             home,
         }
     }
@@ -1932,6 +1932,7 @@ impl TownCameraControllerRuntime {
     fn set_home(&mut self, home: Transform) {
         self.move_target = home.translation;
         self.zoom_target_height = UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT;
+        self.pan_velocity = Vec3::ZERO;
         self.home = home;
     }
 
@@ -1939,6 +1940,7 @@ impl TownCameraControllerRuntime {
         *transform = self.home;
         self.move_target = transform.translation;
         self.zoom_target_height = UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT;
+        self.pan_velocity = Vec3::ZERO;
     }
 }
 
@@ -2285,6 +2287,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<BuildingPlacers>()
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
+            .init_resource::<SelectedActor>()
             .init_resource::<SelectedRecruitGroup>()
             .init_resource::<GroupSelectionActions>()
             .init_resource::<EnvironmentPresentation>()
@@ -2311,15 +2314,14 @@ impl Plugin for StreamTownGamePlugin {
                 Startup,
                 (
                     setup_rendering,
+                    (spawn_loading_screen, begin_menu_loading)
+                        .chain()
+                        .after(setup_rendering),
                     setup_procedural_jukebox.after(setup_rendering),
                     start_twitch_transport,
                     apply_player_settings.after(setup_rendering),
                     sync_authored_post_processing.after(apply_player_settings),
                 ),
-            )
-            .add_systems(
-                OnEnter(GameState::Boot),
-                (spawn_loading_screen, begin_menu_loading).chain(),
             )
             .add_systems(
                 Update,
@@ -2530,7 +2532,7 @@ impl Plugin for StreamTownGamePlugin {
                         .after(move_agents),
                     update_group_selection_panel.after(recruit_group_selection_input),
                     group_selection_action_buttons.after(update_group_selection_panel),
-                    update_selection_panel,
+                    update_selection_panel.after(select_grid_cell),
                     update_vote_panels.after(move_agents),
                     update_town_goal_panel.after(move_agents),
                     update_current_event_panel.after(update_enemy_encounters),
@@ -4458,7 +4460,12 @@ fn terrain_material(
     TerrainMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
-            perceptual_roughness: authored.map_or(0.96, |material| material.perceptual_roughness),
+            // Unity Terrain.shader hard-codes Smoothness to zero. The generic
+            // material catalog value belongs to the source material inspector,
+            // not to this Shader Graph output.
+            perceptual_roughness: 1.0,
+            metallic: 0.0,
+            reflectance: 0.0,
             ..default()
         },
         extension: TerrainMaterialExtension {
@@ -5176,6 +5183,7 @@ fn presentation_texture_handle(
 fn begin_menu_loading(
     mut commands: Commands,
     content: Res<RuntimeContent>,
+    render: Option<Res<RenderAssets>>,
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
 ) {
@@ -5187,7 +5195,7 @@ fn begin_menu_loading(
     } else {
         BootDestination::MainMenu
     };
-    let asset_handles = if destination == BootDestination::MainMenu {
+    let mut asset_handles = if destination == BootDestination::MainMenu {
         asset_server.as_deref().map_or_else(Vec::new, |server| {
             main_menu_preload_paths(&content.0, &asset_root.0)
                 .into_iter()
@@ -5205,17 +5213,34 @@ fn begin_menu_loading(
     } else {
         Vec::new()
     };
+    // The loading screen is itself authored content. Keep Boot alive until its
+    // background, overlay, and spinner have decoded and have had rendered
+    // frames; otherwise a fast startup can transition while only the solid
+    // fallback layer is visible.
+    if let Some(render) = render {
+        asset_handles.extend(
+            [
+                render.loading_screen.as_ref(),
+                render.loading_overlay.as_ref(),
+                render.loading_icon.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .map(Handle::untyped),
+        );
+    }
     let asset_count = asset_handles.len();
     commands.insert_resource(MenuLoadingRuntime {
         started_at,
         destination,
         progress: 0.0,
         status: "Loading main menu".to_owned(),
-        substatus: format!("0 / {asset_count} scene assets"),
+        substatus: format!("0 / {asset_count} assets"),
         asset_handles,
         loaded_assets: 0,
         failed_assets: 0,
-        presented_frames: 0,
+        ready_presented_frames: 0,
     });
 }
 
@@ -5298,7 +5323,6 @@ fn poll_menu_loading(
     asset_server: Option<Res<AssetServer>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
-    loading.presented_frames = loading.presented_frames.saturating_add(1);
     let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &loading.asset_handles);
     loading.loaded_assets = loaded;
     loading.failed_assets = failed;
@@ -5311,12 +5335,17 @@ fn poll_menu_loading(
         "Loading main menu".to_owned()
     };
     loading.substatus = if failed == 0 {
-        format!("{loaded} / {total} scene assets")
+        format!("{loaded} / {total} assets")
     } else {
         format!("{loaded} loaded, {failed} unavailable, {total} total")
     };
-    let required_presented_frames = if asset_server.is_some() { 2 } else { 1 };
-    if loading.progress >= 1.0 && loading.presented_frames >= required_presented_frames {
+    if loading.progress >= 1.0 {
+        loading.ready_presented_frames = loading.ready_presented_frames.saturating_add(1);
+    } else {
+        loading.ready_presented_frames = 0;
+    }
+    let required_presented_frames = if asset_server.is_some() { 3 } else { 1 };
+    if loading.progress >= 1.0 && loading.ready_presented_frames >= required_presented_frames {
         info!(
             loaded_assets = loaded,
             failed_assets = failed,
@@ -5780,6 +5809,7 @@ fn spawn_main_menu(
         bake.water_height,
         true,
         Some(reference),
+        None,
     );
     commands.spawn((
         StateEntity,
@@ -6470,9 +6500,9 @@ fn main_menu_even_sample(index: usize, total: usize, budget: usize) -> bool {
 
 fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> bool {
     // Keep this policy shared by scene-material overrides and direct primitive
-    // spawns. Vertex-deformed/two-sided cards may still cast their custom
-    // prepass silhouette, but receiving that same near-coplanar shadow makes
-    // trees, bushes, and critters flash black as they animate.
+    // spawns. Vertex-deformed/two-sided cards still cast a stable silhouette,
+    // but receiving that same near-coplanar shadow makes trees, bushes, and
+    // critters flash black as their visible vertices animate.
     matches!(
         material,
         ResolvedMaterialHandle::Tree(_)
@@ -6514,7 +6544,8 @@ fn spawn_main_menu_baked_decorations(
             continue;
         }
         let position = Vec3::from_array(resource.position);
-        let visual = resource_visual_archetype(content, &resource.kind)
+        let visual_archetype = resource_visual_archetype(content, &resource.kind);
+        let visual = visual_archetype
             .and_then(default_archetype_scene)
             .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
         let material = visual.and_then(|scene| {
@@ -6532,11 +6563,14 @@ fn spawn_main_menu_baked_decorations(
                 }
                 .from_asset(scene.asset_path.clone()),
             );
+            let visual_position = visual_archetype.map_or(position, |archetype| {
+                centred_resource_visual_position(position, archetype, bake.cell_size)
+            });
             let mut entity = commands.spawn((
                 StateEntity,
                 Name::new(format!("Baked menu resource: {}", resource.id)),
                 Mesh3d(mesh),
-                Transform::from_translation(position)
+                Transform::from_translation(visual_position)
                     .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
                     .with_scale(Vec3::splat(resource_visual_scale(bake.cell_size))),
             ));
@@ -6758,6 +6792,7 @@ fn spawn_fish_school_scene(
     water_height: f32,
     state_entity: bool,
     menu_reference: Option<&MainMenuSceneReference>,
+    world_surface: Option<(&GeneratedWorld, &GameConfig)>,
 ) {
     let Some(bindings) = presentation.scene_fish_schools.get(scene_path) else {
         return;
@@ -6811,13 +6846,21 @@ fn spawn_fish_school_scene(
                 octave_scale: effect.noise_octave_scale,
                 align_to_velocity: effect.align_to_velocity,
             };
-            if menu_reference.is_some_and(|reference| {
+            let intersects_land = menu_reference.is_some_and(|reference| {
                 main_menu_surface_height_at(
                     reference,
                     particle.base_position.x,
                     particle.base_position.z,
                 ) > water_height + 0.05
-            }) {
+            }) || world_surface.is_some_and(|(world, config)| {
+                fish_school_intersects_generated_land(
+                    particle.base_position,
+                    world,
+                    config,
+                    water_height,
+                )
+            });
+            if intersects_land {
                 continue;
             }
             let mut transform = fish_school_transform(&particle, 0.0);
@@ -6847,6 +6890,16 @@ fn spawn_fish_school_scene(
             }
         }
     }
+}
+
+fn fish_school_intersects_generated_land(
+    position: Vec3,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    water_height: f32,
+) -> bool {
+    world_to_grid(position, config)
+        .is_some_and(|cell| terrain_height(world, cell) > water_height + 0.05)
 }
 
 fn animate_fish_school(time: Res<Time>, mut fish: Query<(&FishSchoolParticle, &mut Transform)>) {
@@ -9498,6 +9551,7 @@ fn generate_and_spawn_world(
         return;
     }
     selected.0 = None;
+    commands.insert_resource(SelectedActor::default());
     selected_group.actors.clear();
     selected_group.drag_start = None;
     *render_stats = WorldRenderStats::default();
@@ -9748,6 +9802,7 @@ fn generate_and_spawn_world(
         f32::from(config.0.world.water_level_centimetres) * 0.01,
         false,
         None,
+        Some((&generated, &config.0)),
     );
 
     let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
@@ -10462,6 +10517,23 @@ fn resource_visual_scale(cell_size: f32) -> f32 {
     cell_size / 200.0
 }
 
+fn centred_resource_visual_position(
+    position: Vec3,
+    archetype: &ArchetypeDef,
+    cell_size: f32,
+) -> Vec3 {
+    // Generation coordinates are gameplay authority (including Unity's wood
+    // half-cell offset). Correct only the prefab's asymmetric mesh pivot so the
+    // visible bounds are centred on that authoritative point.
+    let source_to_world = cell_size / 2.0;
+    position
+        + Vec3::new(
+            -archetype.bounds.center[0] * source_to_world,
+            0.0,
+            archetype.bounds.center[2] * source_to_world,
+        )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_resource_visual(
     commands: &mut Commands,
@@ -10489,7 +10561,8 @@ fn spawn_resource_visual(
         ));
         return;
     }
-    let visual = resource_visual_archetype(content, &resource.kind)
+    let visual_archetype = resource_visual_archetype(content, &resource.kind);
+    let visual = visual_archetype
         .and_then(default_archetype_scene)
         .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
     let mesh_index = resource_mesh_index(resource);
@@ -10508,6 +10581,9 @@ fn spawn_resource_visual(
             }
             .from_asset(scene.asset_path.clone()),
         );
+        let visual_position = visual_archetype.map_or(position, |archetype| {
+            centred_resource_visual_position(position, archetype, cell_size)
+        });
         let mut entity = commands.spawn((
             WorldEntity,
             ResourceNode {
@@ -10516,7 +10592,7 @@ fn spawn_resource_visual(
             ResourceVisual { mesh_index },
             GridLocation(resource.position),
             Mesh3d(mesh),
-            Transform::from_translation(position)
+            Transform::from_translation(visual_position)
                 .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
                 .with_scale(Vec3::splat(resource_visual_scale(cell_size))),
         ));
@@ -16173,6 +16249,11 @@ fn spawn_weather_particles(
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_xyz(x, y, z).with_scale(scale),
+            // Unity weather particles are transparent VFX. Letting these long
+            // rain meshes enter Bevy's shadow map creates fast black streaks
+            // racing over the terrain.
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
         ));
     }
 }
@@ -16581,6 +16662,15 @@ fn attach_converted_animations(
         };
         let animation_root = find_component_descendant(actor_root, &children, &native_players)
             .or_else(|| {
+                rig_animation_root_name(&spec.rig_scene)
+                    .and_then(|root| find_named_descendant(actor_root, root, &children, &names))
+            })
+            .or_else(|| {
+                controller_animation_root_names(controller, &presentation.0)
+                    .into_iter()
+                    .find_map(|root| find_named_descendant(actor_root, root, &children, &names))
+            })
+            .or_else(|| {
                 animation_root_name(root_clip)
                     .and_then(|root| find_named_descendant(actor_root, root, &children, &names))
             });
@@ -16663,6 +16753,13 @@ fn attach_converted_animations(
             "attached translated Unity animation controller"
         );
     }
+}
+
+fn rig_animation_root_name(rig_scene: &str) -> Option<&'static str> {
+    // The consolidated player GLB is rooted at CharacterArmature, while the
+    // legacy Unity controller's raw curve paths begin at an FBX-only `pelvis`
+    // node that does not exist in the converted hierarchy.
+    (rig_scene == PLAYER_ANIMATED_MODEL_PATH).then_some("CharacterArmature")
 }
 
 fn gate_animation_contract(
@@ -17122,6 +17219,24 @@ fn animation_root_name(clip: &AnimationClipDef) -> Option<&str> {
         .iter()
         .filter(|track| track.target_path != "$root")
         .find_map(|track| track.target_path.split('/').next())
+}
+
+fn controller_animation_root_names<'a>(
+    controller: &stream_town_domain::AnimationControllerDef,
+    presentation: &'a PresentationCatalog,
+) -> Vec<&'a str> {
+    // Native GLB clips intentionally have no converted transform tracks. Scan
+    // the rest of the same Unity controller for its authored armature root so
+    // the native idle/run clips can attach to the imported scene hierarchy.
+    controller
+        .states
+        .values()
+        .flat_map(|state| &state.motions)
+        .filter_map(|motion| presentation.clips.get(&motion.clip))
+        .filter_map(animation_root_name)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn find_named_descendant(
@@ -17867,6 +17982,27 @@ fn animation_target_for_track<'a>(
             targets
                 .iter()
                 .find(|(path, _)| path.ends_with(&suffix))
+                .map(|(path, target)| (path.as_str(), target))
+        })
+        .or_else(|| {
+            // The source Character controller calls its FBX root `pelvis`,
+            // while the consolidated runtime GLB calls that root
+            // `CharacterArmature`. Match the unchanged bone suffix after the
+            // differing root instead of dropping every locomotion curve.
+            let (_, bone_path) = track_path.split_once('/')?;
+            let suffix = format!("/{bone_path}");
+            targets
+                .iter()
+                .find(|(path, _)| path.ends_with(&suffix))
+                .map(|(path, target)| (path.as_str(), target))
+        })
+        .or_else(|| {
+            if track_path.contains('/') {
+                return None;
+            }
+            targets
+                .iter()
+                .find(|(path, _)| !path.contains('/'))
                 .map(|(path, target)| (path.as_str(), target))
         })
 }
@@ -19090,14 +19226,27 @@ fn camera_controls(
     let is_panning =
         !idle.0 && settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle);
     if is_panning {
-        // Winit mouse Y grows downward; Unity's input coordinate grows upward.
-        let unity_delta = Vec2::new(mouse_motion.delta.x, -mouse_motion.delta.y);
+        if mouse_buttons.just_pressed(MouseButton::Middle) {
+            // AccumulatedMouseMotion can still contain movement from before the
+            // button edge. Unity starts from the press position, so discard it.
+            controller.pan_velocity = Vec3::ZERO;
+            controller.move_target = transform.translation;
+            return;
+        }
+        // AccumulatedMouseMotion already reports the screen-space drag delta.
+        // Negating Y made vertical drags run opposite to Unity's camera.
+        let unity_delta = mouse_motion.delta;
         let movement =
             Vec3::new(unity_delta.y, 0.0, -unity_delta.x) * settings.0.camera.pan_sensitivity;
-        transform.translation +=
-            movement * (delta_seconds * UNITY_TOWN_CAMERA_PAN_SMOOTHNESS).clamp(0.0, 1.0);
+        controller.move_target = constrain_town_camera_position(transform.translation + movement);
+        transform.translation = unity_smooth_damp_vec3(
+            transform.translation,
+            controller.move_target,
+            &mut controller.pan_velocity,
+            UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
+            delta_seconds,
+        );
         transform.translation = constrain_town_camera_position(transform.translation);
-        controller.move_target = transform.translation;
     } else if !idle.0 {
         let edge_direction = if settings.0.camera.mouse_controls
             && settings.0.camera.edge_scrolling
@@ -19221,6 +19370,32 @@ fn camera_controls(
             }
         }
     }
+}
+
+fn unity_smooth_damp_vec3(
+    current: Vec3,
+    target: Vec3,
+    velocity: &mut Vec3,
+    smooth_time: f32,
+    delta_seconds: f32,
+) -> Vec3 {
+    if delta_seconds <= f32::EPSILON {
+        return current;
+    }
+    // UnityEngine.Vector3.SmoothDamp's critically damped approximation with
+    // an unbounded maximum speed, matching CameraController.cs.
+    let omega = 2.0 / smooth_time.max(0.0001);
+    let x = omega * delta_seconds;
+    let decay = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x);
+    let change = current - target;
+    let temporary = (*velocity + change * omega) * delta_seconds;
+    *velocity = (*velocity - temporary * omega) * decay;
+    let mut output = target + (change + temporary) * decay;
+    if (target - current).dot(output - target) > 0.0 {
+        output = target;
+        *velocity = Vec3::ZERO;
+    }
+    output
 }
 
 fn unity_camera_world_direction(screen_direction: Vec2) -> Vec2 {
@@ -19823,8 +19998,9 @@ fn select_grid_cell(
     cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
     spatial: Option<SpatialQuery>,
     config: Res<RuntimeConfig>,
-    agents: Query<(&GridLocation, &GlobalTransform), With<Agent>>,
+    agents: Query<(&Agent, &GridLocation, &GlobalTransform)>,
     mut selected: ResMut<SelectedCell>,
+    mut selected_actor: ResMut<SelectedActor>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -19852,18 +20028,19 @@ fn select_grid_cell(
         &SpatialQueryFilter::default(),
     );
     let terrain_distance = terrain_hit.as_ref().map_or(2_000.0, |hit| hit.distance);
-    let actor_radius = config.0.world.cell_size * 0.6;
-    let actor_height = config.0.world.cell_size * 0.9;
-    if let Some((location, _)) = agents
+    let actor_radius = config.0.world.cell_size * 0.75;
+    let actor_height = config.0.world.cell_size * 0.75;
+    if let Some((agent, location, _)) = agents
         .iter()
-        .filter_map(|(location, transform)| {
+        .filter_map(|(agent, location, transform)| {
             let centre = transform.translation() + Vec3::Y * actor_height;
             ray_sphere_distance(ray.origin, *ray.direction, centre, actor_radius)
                 .filter(|distance| *distance <= terrain_distance)
-                .map(|distance| (location, distance))
+                .map(|distance| (agent, location, distance))
         })
-        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .min_by(|(_, _, left), (_, _, right)| left.total_cmp(right))
     {
+        selected_actor.0 = Some(agent.id.clone());
         selected.0 = Some(location.0);
         return;
     }
@@ -19874,6 +20051,7 @@ fn select_grid_cell(
     let Some(cell) = world_to_grid(world_position, &config.0) else {
         return;
     };
+    selected_actor.0 = None;
     selected.0 = Some(cell);
 }
 
@@ -19909,6 +20087,7 @@ fn recruit_group_selection_input(
     content: Res<RuntimeContent>,
     mut simulation: ResMut<SimulationRuntime>,
     mut selected: ResMut<SelectedCell>,
+    mut selected_actor: ResMut<SelectedActor>,
     mut group: ResMut<SelectedRecruitGroup>,
     mut rects: Query<(&mut Node, &mut Visibility), With<GroupSelectionRect>>,
     mut agents: Query<(&mut Agent, &Transform)>,
@@ -19917,6 +20096,7 @@ fn recruit_group_selection_input(
         group.actors.clear();
         group.drag_start = None;
         selected.0 = None;
+        selected_actor.0 = None;
     }
     let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
         return;
@@ -19962,25 +20142,23 @@ fn recruit_group_selection_input(
             if recruits.len() > 1 {
                 group.actors = recruits;
                 selected.0 = None;
+                selected_actor.0 = None;
             } else if let Some(actor) = recruits.pop_first() {
                 group.actors.clear();
                 selected.0 = simulation.0.actors.get(&actor).map(|actor| actor.position);
+                selected_actor.0 = Some(actor);
             } else {
                 group.actors.clear();
                 selected.0 = None;
+                selected_actor.0 = None;
             }
-        } else if let Some(cell) = selected.0 {
-            let single_recruit = simulation
-                .0
-                .actors
-                .values()
-                .find(|actor| {
-                    actor.position == cell
-                        && (is_recruited_actor(&actor.id)
-                            || actor.user_type == StreamUserType::Broadcaster)
+        } else {
+            let single_recruit = selected_actor.0.as_ref().filter(|actor_id| {
+                simulation.0.actors.get(*actor_id).is_some_and(|actor| {
+                    is_recruited_actor(&actor.id) || actor.user_type == StreamUserType::Broadcaster
                 })
-                .map(|actor| actor.id.clone());
-            group.actors = single_recruit.into_iter().collect();
+            });
+            group.actors = single_recruit.cloned().into_iter().collect();
         }
     }
     if !mouse.just_pressed(MouseButton::Right) || pointer_over_ui || group.actors.is_empty() {
@@ -20624,6 +20802,7 @@ fn group_selection_action_buttons(
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut selected: ResMut<SelectedCell>,
+    mut selected_actor: ResMut<SelectedActor>,
     mut group: ResMut<SelectedRecruitGroup>,
     mut actions: ResMut<GroupSelectionActions>,
     mut agent_commands: ResMut<AgentCommandQueue>,
@@ -20708,6 +20887,7 @@ fn group_selection_action_buttons(
                         .0
                         .push_back(BuildingRuntimeCommand::Despawn(runtime_id.clone()));
                     selected.0 = None;
+                    selected_actor.0 = None;
                 }
                 actions.remove_armed = None;
             }
@@ -20717,13 +20897,19 @@ fn group_selection_action_buttons(
 
 fn sync_selection_outline(
     selected: Res<SelectedCell>,
+    selected_actor: Res<SelectedActor>,
     content: Res<RuntimeContent>,
     config: Res<RuntimeConfig>,
     world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
+    agents: Query<(&Agent, &GlobalTransform)>,
     mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
 ) {
-    if !selected.is_changed() && !simulation.is_changed() && !world.is_changed() {
+    if !selected.is_changed()
+        && !selected_actor.is_changed()
+        && !simulation.is_changed()
+        && !world.is_changed()
+    {
         return;
     }
     let Ok((mut transform, mut visibility)) = markers.single_mut() else {
@@ -20733,19 +20919,21 @@ fn sync_selection_outline(
         *visibility = Visibility::Hidden;
         return;
     };
+    if let Some(actor_id) = selected_actor.0.as_ref()
+        && let Some((_, actor_transform)) = agents.iter().find(|(agent, _)| &agent.id == actor_id)
+    {
+        let mut position = actor_transform.translation();
+        position.y += SELECTION_OUTLINE_SURFACE_OFFSET;
+        *transform = Transform::from_translation(position).with_scale(Vec3::new(
+            config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
+            1.0,
+            config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
+        ));
+        *visibility = Visibility::Visible;
+        return;
+    }
     let footprint = selected_structural_footprint(cell, &content.0, &simulation.0);
-    let player_selected = simulation
-        .0
-        .actors
-        .values()
-        .any(|actor| actor.position == cell);
-    *transform = selection_outline_transform(
-        cell,
-        footprint,
-        player_selected,
-        &config.0,
-        &world.generated,
-    );
+    *transform = selection_outline_transform(cell, footprint, false, &config.0, &world.generated);
     *visibility = Visibility::Visible;
 }
 
@@ -20845,6 +21033,7 @@ fn selection_outline_transform(
 
 fn update_selection_panel(
     selected: Res<SelectedCell>,
+    selected_actor: Res<SelectedActor>,
     content: Res<RuntimeContent>,
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
@@ -20861,7 +21050,11 @@ fn update_selection_panel(
         With<SelectionPanelSlider>,
     >,
 ) {
-    if !selected.is_changed() && !simulation.is_changed() && !world.is_changed() {
+    if !selected.is_changed()
+        && !selected_actor.is_changed()
+        && !simulation.is_changed()
+        && !world.is_changed()
+    {
         return;
     }
     let Some(cell) = selected.0 else {
@@ -20870,8 +21063,13 @@ fn update_selection_panel(
         }
         return;
     };
-    let Some(details) = selection_panel_details(cell, &content.0, &world.generated, &simulation.0)
-    else {
+    let details = selected_actor
+        .0
+        .as_ref()
+        .and_then(|actor| simulation.0.actors.get(actor))
+        .map(|actor| selection_panel_actor_details(actor, &content.0))
+        .or_else(|| selection_panel_details(cell, &content.0, &world.generated, &simulation.0));
+    let Some(details) = details else {
         for (_, mut visibility) in &mut panels {
             *visibility = Visibility::Hidden;
         }
@@ -21389,57 +21587,7 @@ fn selection_panel_details(
         .values()
         .find(|actor| actor.position == cell)
     {
-        let maximum = actor.max_health.max(1);
-        let progress = building_health_fraction(actor.health, maximum);
-        if actor.role.as_str() == "role:enemy" {
-            let enemy_name = actor
-                .archetype
-                .as_ref()
-                .and_then(|id| content.archetypes.get(id))
-                .and_then(|archetype| archetype.enemy.as_ref())
-                .map_or_else(
-                    || "Enemy".to_owned(),
-                    |enemy| content_label(Some(&enemy.enemy_type), "enemy:", "Enemy"),
-                );
-            return Some(SelectionPanelDetails {
-                description: format!(
-                    "{enemy_name}\nHealth {}/{}  |  Cell {},{}",
-                    actor.health.max(0),
-                    maximum,
-                    cell.x,
-                    cell.z
-                ),
-                health_progress: Some(progress),
-                experience_progress: None,
-            });
-        }
-        let name = actor.display_name.as_deref().unwrap_or(actor.id.as_str());
-        let role = content
-            .roles
-            .get(&actor.role)
-            .map_or(actor.role.as_str(), |role| role.display_name.as_str());
-        let role_progress = role_progress(actor);
-        let required_experience = stream_town_domain::required_role_experience(role_progress.level);
-        let experience_progress = if role_progress.level >= stream_town_domain::MAX_ROLE_LEVEL {
-            1.0
-        } else {
-            objective_progress_ratio(role_progress.experience, required_experience)
-        };
-        return Some(SelectionPanelDetails {
-            description: format!(
-                "{name}\n{role}  |  Level {}/{}\nHealth {}/{}  |  XP {}/{}  |  Cell {},{}",
-                role_progress.level,
-                stream_town_domain::MAX_ROLE_LEVEL,
-                actor.health.max(0),
-                maximum,
-                role_progress.experience,
-                required_experience,
-                cell.x,
-                cell.z
-            ),
-            health_progress: Some(progress),
-            experience_progress: Some(experience_progress),
-        });
+        return Some(selection_panel_actor_details(actor, content));
     }
     if let Some((building, definition)) = simulation.buildings.values().find_map(|building| {
         let definition = content
@@ -21519,6 +21667,63 @@ fn selection_panel_details(
                 experience_progress: None,
             }
         })
+}
+
+fn selection_panel_actor_details(
+    actor: &ActorState,
+    content: &ContentCatalog,
+) -> SelectionPanelDetails {
+    let maximum = actor.max_health.max(1);
+    let progress = building_health_fraction(actor.health, maximum);
+    if actor.role.as_str() == "role:enemy" {
+        let enemy_name = actor
+            .archetype
+            .as_ref()
+            .and_then(|id| content.archetypes.get(id))
+            .and_then(|archetype| archetype.enemy.as_ref())
+            .map_or_else(
+                || "Enemy".to_owned(),
+                |enemy| content_label(Some(&enemy.enemy_type), "enemy:", "Enemy"),
+            );
+        return SelectionPanelDetails {
+            description: format!(
+                "{enemy_name}\nHealth {}/{}  |  Cell {},{}",
+                actor.health.max(0),
+                maximum,
+                actor.position.x,
+                actor.position.z
+            ),
+            health_progress: Some(progress),
+            experience_progress: None,
+        };
+    }
+    let name = actor.display_name.as_deref().unwrap_or(actor.id.as_str());
+    let role = content
+        .roles
+        .get(&actor.role)
+        .map_or(actor.role.as_str(), |role| role.display_name.as_str());
+    let role_progress = role_progress(actor);
+    let required_experience = stream_town_domain::required_role_experience(role_progress.level);
+    let experience_progress = if role_progress.level >= stream_town_domain::MAX_ROLE_LEVEL {
+        1.0
+    } else {
+        objective_progress_ratio(role_progress.experience, required_experience)
+    };
+    SelectionPanelDetails {
+        description: format!(
+            "{name}\n{role}  |  Level {}/{}\nHealth {}/{}  |  XP {}/{}  |  Cell {},{}",
+            role_progress.level,
+            stream_town_domain::MAX_ROLE_LEVEL,
+            actor.health.max(0),
+            maximum,
+            role_progress.experience,
+            required_experience,
+            actor.position.x,
+            actor.position.z
+        ),
+        health_progress: Some(progress),
+        experience_progress: Some(experience_progress),
+    }
 }
 
 fn title_case(value: &str) -> String {
@@ -22489,6 +22694,7 @@ fn load_input(
         }
     };
     selected.0 = None;
+    ecs.insert_resource(SelectedActor::default());
     selected_group.actors.clear();
     selected_group.drag_start = None;
     let mut restored_config = config.0.clone();
@@ -28218,6 +28424,31 @@ mod tests {
     }
 
     #[test]
+    fn middle_drag_uses_unity_smooth_damp_without_overshoot() {
+        let mut velocity = Vec3::ZERO;
+        let current = Vec3::ZERO;
+        // A positive raw vertical drag maps to Unity's positive world-X pan.
+        let target = Vec3::new(8.0, 0.0, 0.0);
+        let first = unity_smooth_damp_vec3(
+            current,
+            target,
+            &mut velocity,
+            UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
+            1.0 / 60.0,
+        );
+        assert!(first.x > current.x && first.x < target.x);
+        let second = unity_smooth_damp_vec3(
+            first,
+            target,
+            &mut velocity,
+            UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
+            1.0 / 60.0,
+        );
+        assert!(second.x > first.x && second.x < target.x);
+        assert!(first.y.abs() < f32::EPSILON && first.z.abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn town_camera_matches_the_shipping_unity_prefab() {
         let focus = Vec3::new(7.0, 2.5, -11.0);
         let transform = unity_town_camera_transform(focus);
@@ -29734,6 +29965,21 @@ mod tests {
             one_second.length() < 15.0,
             "fish movement must remain smooth"
         );
+
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
+        let land = (0..config.world.height)
+            .flat_map(|z| (0..config.world.width).map(move |x| GridPos { x, z }))
+            .find(|position| terrain_height(&world, *position) > water_height + 0.05)
+            .expect("generated world contains land");
+        assert!(fish_school_intersects_generated_land(
+            grid_to_world(land, &config),
+            &world,
+            &config,
+            water_height,
+        ));
     }
 
     #[test]
@@ -32323,6 +32569,12 @@ mod tests {
         assert_eq!(resource_mesh_index(&resource("resource:food", 9, 6)), 0);
         assert!((resource_visual_scale(2.0) - 0.01).abs() < f32::EPSILON);
         assert!((resource_visual_scale(12.0) - 0.06).abs() < f32::EPSILON);
+        let content = embedded_content();
+        let tree =
+            resource_visual_archetype(&content, &StableId::new("resource:wood").unwrap()).unwrap();
+        let centred = centred_resource_visual_position(Vec3::ZERO, tree, 2.0);
+        assert!((centred.x + tree.bounds.center[0]).abs() < f32::EPSILON);
+        assert!((centred.z - tree.bounds.center[2]).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -32345,11 +32597,12 @@ mod tests {
         assert!(world_material.extension.parameters.wind_controls.y > 0.0);
         let shader = include_str!("../../../assets/shaders/tree_material.wgsl");
         assert!(shader.contains("get_world_from_local(in.instance_index)[3].xz"));
-        let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");
-        assert!(prepass.contains("deformed_tree_position"));
-        assert!(prepass.contains("previous_world_position"));
-        assert!(prepass.contains("@group(0) @binding(1) var<uniform> globals"));
-        assert!(!prepass.contains("@binding(100)"));
+        assert!(
+            !Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/shaders/tree_material_prepass.wgsl")
+                .exists(),
+            "an approximate wind prepass produces a second, mismatched shadow silhouette"
+        );
     }
 
     #[test]
@@ -33737,6 +33990,15 @@ mod tests {
             mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap().len(),
             mesh.count_vertices()
         );
+        let bevy::mesh::VertexAttributeValues::Float32x3(normals) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap()
+        else {
+            panic!("terrain normals must use float triples");
+        };
+        assert!(
+            normals.iter().all(|normal| normal[1] >= -f32::EPSILON),
+            "reflected row-connector winding must not point terrain faces downward"
+        );
         let centre = GridPos {
             x: config.world.width / 2,
             z: config.world.height / 2,
@@ -34251,6 +34513,9 @@ mod tests {
         );
         let terrain = terrain_material(&presentation, &GameConfig::default(), None);
         assert!(terrain.extension.grid_texture.is_none());
+        assert!((terrain.base.perceptual_roughness - 1.0).abs() < f32::EPSILON);
+        assert!(terrain.base.metallic.abs() < f32::EPSILON);
+        assert!(terrain.base.reflectance.abs() < f32::EPSILON);
         assert!((terrain.extension.parameters.texture_uv_blend_tint.z - 1.0).abs() < f32::EPSILON);
         assert!(terrain.extension.parameters.texture_uv_blend_tint.w.abs() < f32::EPSILON);
         assert_eq!(
@@ -34465,6 +34730,10 @@ mod tests {
         );
         let spec = converted_animation_spec(player, &presentation).unwrap();
         let controller = presentation.controllers.get(&spec.controller).unwrap();
+        assert_eq!(
+            rig_animation_root_name(PLAYER_ANIMATED_MODEL_PATH),
+            Some("CharacterArmature")
+        );
         assert_eq!(controller.state_machines.len(), 4);
         assert_eq!(controller.layers.len(), 2);
         assert_eq!(controller.layers[0].display_name, "Base Layer");
@@ -34593,6 +34862,18 @@ mod tests {
             .collect();
         let prefixed = retargeted_animation_clip(idle, &prefixed_targets).unwrap();
         assert_eq!(prefixed.curves().len(), retargeted.curves().len());
+        let consolidated_targets: BTreeMap<_, _> = targets
+            .iter()
+            .map(|(path, target)| {
+                let path = path.strip_prefix("pelvis/").map_or_else(
+                    || "CharacterArmature".to_owned(),
+                    |bone| format!("CharacterArmature/{bone}"),
+                );
+                (path, *target)
+            })
+            .collect();
+        let consolidated = retargeted_animation_clip(idle, &consolidated_targets).unwrap();
+        assert_eq!(consolidated.curves().len(), retargeted.curves().len());
         assert!(
             idle.rig_asset_path
                 .as_deref()

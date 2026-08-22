@@ -76,6 +76,16 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Reflatten building foundations in an existing baked main-menu reference.
+    RepairMainMenuFoundations {
+        scene: PathBuf,
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        content: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Convert a legacy JSON or schema 1-3 binary save into a validated native save.
     ImportSave {
         save: PathBuf,
@@ -199,6 +209,15 @@ fn main() -> Result<()> {
             out,
         } => {
             let report = menu_scene::bake(&scene, &config, &content, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::RepairMainMenuFoundations {
+            scene,
+            config,
+            content,
+            out,
+        } => {
+            let report = menu_scene::repair_foundations(&scene, &config, &content, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::ImportSave { save, out, config } => {

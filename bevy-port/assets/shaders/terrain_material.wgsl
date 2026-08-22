@@ -74,6 +74,16 @@ fn fragment(
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
+    // Unity's baked ambient probe keeps its saturated terrain palette legible
+    // in directional-light shadow. Bevy has no equivalent probe in this port,
+    // so restore that authored ambient floor without adding specular light.
+    out.color = vec4<f32>(
+        max(
+            out.color.rgb,
+            pbr_input.material.base_color.rgb * vec3<f32>(0.36),
+        ),
+        out.color.a,
+    );
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

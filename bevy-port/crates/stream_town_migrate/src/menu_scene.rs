@@ -374,11 +374,94 @@ pub(crate) fn bake(
     })
 }
 
+pub(crate) fn repair_foundations(
+    source: &Path,
+    config_path: &Path,
+    content_path: &Path,
+    destination: &Path,
+) -> Result<BakeReport> {
+    let encoded = fs::read_to_string(source)
+        .with_context(|| format!("failed to read {}", source.display()))?;
+    let mut reference: MainMenuSceneReference =
+        ron::from_str(&encoded).with_context(|| format!("failed to parse {}", source.display()))?;
+    ensure!(
+        reference.schema_version == 3 && reference.corrective_bake.is_some(),
+        "main-menu foundation repair requires a baked schema-3 reference"
+    );
+    ensure!(
+        reference.embedded_meshes.len() == 1,
+        "main-menu foundation repair requires exactly one embedded terrain mesh"
+    );
+    let config: GameConfig = ron::from_str(
+        &fs::read_to_string(config_path)
+            .with_context(|| format!("failed to read {}", config_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", config_path.display()))?;
+    let content: ContentCatalog = ron::from_str(
+        &fs::read_to_string(content_path)
+            .with_context(|| format!("failed to read {}", content_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", content_path.display()))?;
+    config.validate()?;
+    content.validate()?;
+
+    let foundations = building_foundations(&reference.instances, &content, &config);
+    // This repair command is deliberately narrow: the original schema-3 bake
+    // already flattened ordinary buildings. Reprocessing their shared borders
+    // would make repeated repairs drift. Only the adjacent farm grid needs the
+    // common-plateau correction.
+    let farm_foundations = foundations
+        .iter()
+        .filter(|foundation| foundation.is_farm)
+        .cloned()
+        .collect::<Vec<_>>();
+    let foundation_heights =
+        flatten_foundations(&mut reference.embedded_meshes[0], &farm_foundations);
+    for instance in &mut reference.instances {
+        let root = menu_building_root(&instance.hierarchy_path);
+        if let Some(height) = foundation_heights.get(root) {
+            instance.position[1] = *height;
+        }
+    }
+    recompute_normals(&mut reference.embedded_meshes[0]);
+
+    let bake = reference
+        .corrective_bake
+        .as_ref()
+        .expect("schema-3 reference has corrective bake");
+    let report_values = (
+        bake.seed,
+        bake.generator_hash.clone(),
+        reference.embedded_meshes[0].vertices.len(),
+        bake.resources.len(),
+        bake.foliage.len(),
+    );
+    let repaired = ron::ser::to_string_pretty(&reference, PrettyConfig::default())?;
+    let baked_hash = hex::encode(Sha256::digest(repaired.as_bytes()));
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(destination, repaired)
+        .with_context(|| format!("failed to write {}", destination.display()))?;
+    Ok(BakeReport {
+        destination: destination.display().to_string(),
+        seed: report_values.0,
+        generator_hash: report_values.1,
+        adjusted_vertices: report_values.2,
+        flattened_foundations: farm_foundations.len(),
+        resources: report_values.3,
+        foliage: report_values.4,
+        baked_hash,
+    })
+}
+
 #[derive(Clone, Debug)]
 struct BuildingFoundation {
     hierarchy_root: String,
     centre: [f32; 2],
     half_extents: [f32; 2],
+    is_farm: bool,
 }
 
 fn building_foundations(
@@ -408,6 +491,8 @@ fn building_foundations(
                     (f32::from(archetype.footprint[0]) * config.world.cell_size * 0.5).max(padding),
                     (f32::from(archetype.footprint[1]) * config.world.cell_size * 0.5).max(padding),
                 ],
+                is_farm: instance.source_path.contains("Age02_Farm")
+                    || instance.hierarchy_path.contains("/Farms/"),
             });
     }
     foundations.into_values().collect()
@@ -425,7 +510,7 @@ fn flatten_foundations(
     // the mutable mesh after each flatten lets adjacent farms/walls propagate
     // one plateau across the town and erases the generator's height variation.
     let generated_surface = mesh.clone();
-    let foundation_heights = foundations
+    let mut foundation_heights = foundations
         .iter()
         .map(|foundation| {
             (
@@ -438,6 +523,18 @@ fn flatten_foundations(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let mut farm_heights = foundations
+        .iter()
+        .filter(|foundation| foundation.is_farm)
+        .filter_map(|foundation| foundation_heights.get(&foundation.hierarchy_root).copied())
+        .collect::<Vec<_>>();
+    if !farm_heights.is_empty() {
+        farm_heights.sort_by(f32::total_cmp);
+        let farm_plateau = farm_heights[farm_heights.len() / 2];
+        for foundation in foundations.iter().filter(|foundation| foundation.is_farm) {
+            foundation_heights.insert(foundation.hierarchy_root.clone(), farm_plateau);
+        }
+    }
     for foundation in foundations {
         let height = foundation_heights[&foundation.hierarchy_root];
         for vertex in &mut mesh.vertices {
@@ -663,11 +760,13 @@ mod tests {
                 hierarchy_root: "first".to_owned(),
                 centre: [0.0, 0.0],
                 half_extents: [2.0, 1.0],
+                is_farm: false,
             },
             BuildingFoundation {
                 hierarchy_root: "second".to_owned(),
                 centre: [4.0, 0.0],
                 half_extents: [2.0, 1.0],
+                is_farm: false,
             },
         ];
 
@@ -677,5 +776,45 @@ mod tests {
         assert!((heights["second"] - 2.0).abs() < f32::EPSILON);
         assert!(mesh.vertices[0][1].abs() < f32::EPSILON);
         assert!((mesh.vertices[3][1] - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn adjacent_farm_tiles_share_one_flat_plateau() {
+        let mut mesh = MainMenuEmbeddedMesh {
+            hierarchy_path: "Terrain".to_owned(),
+            vertices: vec![
+                [0.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [6.0, 3.0, 0.0],
+            ],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uv: vec![[0.0, 0.0]; 4],
+            triangles: Vec::new(),
+        };
+        let foundations = vec![
+            BuildingFoundation {
+                hierarchy_root: "farm-a".to_owned(),
+                centre: [0.0, 0.0],
+                half_extents: [2.0, 1.0],
+                is_farm: true,
+            },
+            BuildingFoundation {
+                hierarchy_root: "farm-b".to_owned(),
+                centre: [4.0, 0.0],
+                half_extents: [2.0, 1.0],
+                is_farm: true,
+            },
+        ];
+
+        let heights = flatten_foundations(&mut mesh, &foundations);
+
+        assert!((heights["farm-a"] - 2.0).abs() < f32::EPSILON);
+        assert!((heights["farm-b"] - 2.0).abs() < f32::EPSILON);
+        assert!(
+            mesh.vertices
+                .iter()
+                .all(|vertex| (vertex[1] - 2.0).abs() < f32::EPSILON)
+        );
     }
 }

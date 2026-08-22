@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -22,9 +22,10 @@ mistaken for production-ready systems.
   eliminating chunk seams. Water uses energy-conserving bloom and bounded color
   output so the high-exposure coastline cannot clip to white; normalized foam
   cutoff, single-pass foam color, and partial seasonal tint keep its authored
-  cyan depth surface visible. Trees and foliage cast through a binding-free
-  animated shadow prepass while still declining the incompatible self-shadow
-  reception that caused black flicker. The Player now uses the animation
+  cyan depth surface visible. Trees and foliage retain stable ordinary shadow
+  silhouettes while declining the incompatible self-shadow reception that
+  caused black/blue flicker; the mismatched approximate wind prepass has been
+  removed. The Player now uses the animation
   FBX's single mesh-compatible armature instead of the TPose asset's nine
   independent skins, and suffix-resolved standalone tracks no longer detach
   body parts. The player-only broken animated shadow-skinning output is disabled
@@ -32,6 +33,29 @@ mistaken for production-ready systems.
   the shipping Unity `MainCamera.prefab`: perspective 60-degree FOV, 0.3/1000
   clipping planes, the 45-degree negative-X-side pose, physical height zoom,
   ten-pixel edge detection, movement smoothing, and serialized XZ bounds.
+- Boot loading now starts after render assets exist, preloads its authored town
+  background, overlay, and spinner as part of the readiness gate, and presents
+  decoded artwork before changing state. Terrain now follows Unity's constant
+  zero-smoothness output rather than the generic material inspector value, has
+  no metallic/specular contribution, and preserves a bounded ambient colour
+  floor under the authored rain/day lighting. Transparent rain VFX no longer
+  cast long moving cuboid shadows. Fish schools reject generated land cells,
+  while resources retain generator-authoritative coordinates and compensate
+  only for asymmetric converted prefab pivots.
+- The player controller now attaches to the consolidated GLB's explicit
+  `CharacterArmature` root and retargets Unity's FBX-only `pelvis/...` curve
+  paths by their unchanged bone suffix. Real rendered smoke runs attach all
+  five starting controllers with 20 clips and 245 targets each. Clicking uses
+  an explicit stable actor selection rather than inferring an occupant from a
+  selected cell, so overlapping/moving actors remain individually selectable.
+  Middle-button drag now uses Unity's 0.5-second `Vector3.SmoothDamp` contract,
+  discards the press-edge accumulated delta, and preserves the correct vertical
+  direction without frame-time scaling a pixel delta.
+- The one-off menu foundation repair now places all 186 adjacent farm tiles on
+  one median plateau, shifts their authored instances to that height, recomputes
+  normals, and is idempotent. The checked-in schema-3 bake has been repaired;
+  ordinary building foundations and deterministic generation coordinates are
+  not reprocessed.
 - A Bevy 0.19/Rust 1.95 workspace split into domain, game, tools, migration, and
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application

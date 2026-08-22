@@ -467,11 +467,11 @@ clearings cannot leak between world states. Resource trees use a typed
 wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree,
-bush, and grass materials run wind deformation in both visible and depth/normal
-passes so SSAO cannot sample a stale silhouette. Their shadow-only pass uses the
-shipping wind constants and binding-free procedural detail because Bevy omits
-extension-material bindings from shadow pipelines. They cast world-space
-silhouettes but decline self-shadow reception, and an
+bush, and grass materials retain visible wind deformation. Grass keeps its
+compatible depth path; trees and bushes use an ordinary stable shadow
+silhouette because Bevy's extension-less tree prepass could only approximate
+the authored wind and produced a second, flickering outline. They cast
+world-space silhouettes but decline self-shadow reception, and an
 authored-color ambient floor keeps low-poly back faces readable as they sway.
 This is a shared rendering policy, not a world-only workaround: every future
 scene override or direct primitive path using Tree, Grass, or Critter materials
