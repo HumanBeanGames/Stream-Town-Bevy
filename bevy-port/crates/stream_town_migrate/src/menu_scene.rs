@@ -278,18 +278,7 @@ pub(crate) fn bake(
     }
 
     let foundations = building_foundations(&reference.instances, &content, &config);
-    let mut foundation_heights = BTreeMap::new();
-    for foundation in &foundations {
-        let height = sample_menu_height(mesh, foundation.centre[0], foundation.centre[1]);
-        foundation_heights.insert(foundation.hierarchy_root.clone(), height);
-        for vertex in &mut mesh.vertices {
-            if (vertex[0] - foundation.centre[0]).abs() <= foundation.half_extents[0]
-                && (vertex[2] - foundation.centre[1]).abs() <= foundation.half_extents[1]
-            {
-                vertex[1] = height;
-            }
-        }
-    }
+    let foundation_heights = flatten_foundations(mesh, &foundations);
     for instance in &mut reference.instances {
         let root = menu_building_root(&instance.hierarchy_path);
         if let Some(height) = foundation_heights.get(root) {
@@ -344,7 +333,7 @@ pub(crate) fn bake(
     let adjusted_vertices = mesh.vertices.len();
     reference.schema_version = 3;
     reference.corrective_bake = Some(MainMenuCorrectiveBake {
-        version: 1,
+        version: 2,
         seed: generated.seed,
         generator_version: generated.generator_version,
         generator_hash: generated.deterministic_hash.clone(),
@@ -417,6 +406,40 @@ fn building_foundations(
 
 fn menu_building_root(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(root, _)| root)
+}
+
+fn flatten_foundations(
+    mesh: &mut MainMenuEmbeddedMesh,
+    foundations: &[BuildingFoundation],
+) -> BTreeMap<String, f32> {
+    // Sample every building from the same untouched generated surface. Sampling
+    // the mutable mesh after each flatten lets adjacent farms/walls propagate
+    // one plateau across the town and erases the generator's height variation.
+    let generated_surface = mesh.clone();
+    let foundation_heights = foundations
+        .iter()
+        .map(|foundation| {
+            (
+                foundation.hierarchy_root.clone(),
+                sample_menu_height(
+                    &generated_surface,
+                    foundation.centre[0],
+                    foundation.centre[1],
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for foundation in foundations {
+        let height = foundation_heights[&foundation.hierarchy_root];
+        for vertex in &mut mesh.vertices {
+            if (vertex[0] - foundation.centre[0]).abs() <= foundation.half_extents[0]
+                && (vertex[2] - foundation.centre[1]).abs() <= foundation.half_extents[1]
+            {
+                vertex[1] = height;
+            }
+        }
+    }
+    foundation_heights
 }
 
 fn horizontal_bounds(vertices: &[[f32; 3]]) -> Result<[f32; 4]> {
@@ -610,5 +633,40 @@ mod tests {
             right_handed_triangles(vec![0, 1, 2, 4, 5, 6]),
             vec![0, 2, 1, 4, 6, 5]
         );
+    }
+
+    #[test]
+    fn adjacent_foundations_sample_the_unmodified_generated_surface() {
+        let mut mesh = MainMenuEmbeddedMesh {
+            hierarchy_path: "Terrain".to_owned(),
+            vertices: vec![
+                [0.0, 0.0, 0.0],
+                [2.0, 1.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [6.0, 3.0, 0.0],
+            ],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uv: vec![[0.0, 0.0]; 4],
+            triangles: Vec::new(),
+        };
+        let foundations = vec![
+            BuildingFoundation {
+                hierarchy_root: "first".to_owned(),
+                centre: [0.0, 0.0],
+                half_extents: [2.0, 1.0],
+            },
+            BuildingFoundation {
+                hierarchy_root: "second".to_owned(),
+                centre: [4.0, 0.0],
+                half_extents: [2.0, 1.0],
+            },
+        ];
+
+        let heights = flatten_foundations(&mut mesh, &foundations);
+
+        assert!(heights["first"].abs() < f32::EPSILON);
+        assert!((heights["second"] - 2.0).abs() < f32::EPSILON);
+        assert!(mesh.vertices[0][1].abs() < f32::EPSILON);
+        assert!((mesh.vertices[3][1] - 2.0).abs() < f32::EPSILON);
     }
 }

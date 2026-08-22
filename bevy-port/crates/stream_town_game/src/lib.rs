@@ -126,6 +126,8 @@ const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
 const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.mat";
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
+const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
+const MAIN_MENU_CLOUD_VERTICAL_SCALE: f32 = 4.0;
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
@@ -682,6 +684,7 @@ struct WaterMaterialUniform {
     main_scale_offset: Vec4,
     noise_scale_offset: Vec4,
     depth_foam_controls: Vec4,
+    opacity_controls: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -1012,6 +1015,7 @@ struct RenderAssets {
     projectile_arrow_scene: Option<Handle<bevy::world_serialization::WorldAsset>>,
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
+    menu_water: Handle<WaterMaterial>,
     wood: Handle<StandardMaterial>,
     ore: Handle<StandardMaterial>,
     food: Handle<StandardMaterial>,
@@ -1962,6 +1966,12 @@ struct AuthoredRotatingNode {
 struct MainMenuRotatingDefinitions(Vec<stream_town_domain::RotatingNodeDef>);
 
 #[derive(Component)]
+struct MainMenuHiddenModelNodes(BTreeSet<String>);
+
+#[derive(Component)]
+struct MainMenuModelNodeProcessed;
+
+#[derive(Component)]
 struct MainMenuRotatingNode {
     axis: Vec3,
     radians_per_second: f32,
@@ -2302,8 +2312,11 @@ impl Plugin for StreamTownGamePlugin {
                     finish_menu_reveal,
                     sync_boot_loading_screen,
                     animate_fish_school,
+                    hide_main_menu_inactive_model_nodes,
                     tag_main_menu_rotating_nodes,
-                    rotate_main_menu_nodes.after(tag_main_menu_rotating_nodes),
+                    rotate_main_menu_nodes
+                        .after(tag_main_menu_rotating_nodes)
+                        .after(hide_main_menu_inactive_model_nodes),
                 )
                     .chain()
                     .run_if(in_state(GameState::MainMenu)),
@@ -3204,6 +3217,8 @@ fn setup_rendering(
                 )
             })
         });
+    let water = water_material(&presentation.0, asset_server.as_deref());
+    let menu_water = main_menu_water_material(water.clone());
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         chimney_particle: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid icosphere")),
@@ -3223,7 +3238,8 @@ fn setup_rendering(
             &config.0,
             asset_server.as_deref(),
         )),
-        water: water_materials.add(water_material(&presentation.0, asset_server.as_deref())),
+        water: water_materials.add(water),
+        menu_water: water_materials.add(menu_water),
         wood: materials.add(Color::srgb(0.16, 0.46, 0.18)),
         ore: materials.add(Color::srgb(0.46, 0.50, 0.55)),
         food: materials.add(Color::srgb(0.74, 0.64, 0.18)),
@@ -3456,7 +3472,7 @@ fn sync_authored_post_processing(
         .iter()
         .find_map(|(profile, weight)| (*weight > f32::EPSILON).then_some(*profile));
     let mut entity = commands.entity(camera);
-    entity.insert(authored_color_grading(&settings.0, &stack));
+    entity.insert(color_grading_for_state(&settings.0, &stack, *state.get()));
     if primary.is_some() {
         entity.insert(Hdr);
         let color_filter = authored_rgb_filter(&stack);
@@ -3585,6 +3601,21 @@ fn authored_color_grading(
     grading.shadows.gamma = gamma;
     grading.midtones.gamma = gamma;
     grading.highlights.gamma = gamma;
+    grading
+}
+
+fn color_grading_for_state(
+    settings: &PlayerSettings,
+    stack: &[(&PostProcessProfileDef, f32)],
+    state: GameState,
+) -> ColorGrading {
+    let mut grading = authored_color_grading(settings, stack);
+    if state == GameState::MainMenu {
+        // User testing established that the authored menu reaches its intended
+        // luminance at the old -1.5 brightness setting. Make that the scene's
+        // neutral baseline so setting 0 is now the correct exposure.
+        grading.global.exposure += MAIN_MENU_BASELINE_EXPOSURE_EV;
+    }
     grading
 }
 
@@ -4463,11 +4494,22 @@ fn water_material(
                     scalar("_FoamCuttoff", 7.81).max(0.01),
                     scalar("_FoamDepth", 0.94).max(0.01),
                 ),
+                opacity_controls: Vec4::new(0.86, 0.94, 0.0, 0.0),
             },
             main_texture: texture("_MainTexture"),
             noise_texture: texture("_NoiseTexture"),
         },
     }
+}
+
+fn main_menu_water_material(mut material: WaterMaterial) -> WaterMaterial {
+    // The static menu camera looks through a much longer stretch of water than
+    // the town camera. A nearly opaque authored surface keeps the ocean blue
+    // instead of letting the neutral ocean floor intermittently dominate the
+    // transparent blend. Fish at/above the authored surface remain visible.
+    material.extension.parameters.opacity_controls = Vec4::new(0.965, 0.985, 0.0, 0.0);
+    material.base.alpha_mode = AlphaMode::Opaque;
+    material
 }
 
 fn building_material(
@@ -5083,8 +5125,8 @@ fn main_menu_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTree
     let reference = embedded_main_menu_scene();
     let mut paths = BTreeSet::new();
     for instance in &reference.instances {
-        if let Some((_, scene)) = menu_scene_for_source_model(content, &instance.source_path)
-            .filter(|(_, scene)| converted_asset_exists(asset_root, &scene.asset_path))
+        if let Some((_, _, scene)) = menu_scene_for_source_model(content, &instance.source_path)
+            .filter(|(_, _, scene)| converted_asset_exists(asset_root, &scene.asset_path))
         {
             paths.insert(scene.asset_path.clone());
         }
@@ -5215,13 +5257,66 @@ fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
 fn menu_scene_for_source_model<'a>(
     content: &'a ContentCatalog,
     source_model: &str,
-) -> Option<(&'a ArchetypeDef, &'a ArchetypeScene)> {
+) -> Option<(&'a StableId, &'a ArchetypeDef, &'a ArchetypeScene)> {
     content
         .archetypes
+        .iter()
+        .flat_map(|(id, archetype)| {
+            archetype
+                .scenes
+                .iter()
+                .map(move |scene| (id, archetype, scene))
+        })
+        .filter(|(_, _, scene)| scene.source_model == source_model)
+        .min_by_key(|(id, _, scene)| (!scene.is_default, scene.asset_path.as_str(), id.as_str()))
+}
+
+fn main_menu_hidden_model_node_names(
+    content: &ContentCatalog,
+    archetype_id: &StableId,
+    scene: &ArchetypeScene,
+) -> BTreeSet<String> {
+    let buildings = content
+        .buildings
         .values()
-        .flat_map(|archetype| archetype.scenes.iter().map(move |scene| (archetype, scene)))
-        .filter(|(_, scene)| scene.source_model == source_model)
-        .min_by_key(|(_, scene)| (!scene.is_default, scene.asset_path.as_str()))
+        .filter(|building| building.archetype == *archetype_id)
+        .collect::<Vec<_>>();
+    let mut controlled = BTreeSet::new();
+    let mut visible = BTreeSet::new();
+    for building in buildings {
+        for model in &building.model_handlers {
+            controlled.insert(model.full_model.clone());
+            controlled.extend(model.construction_stages.iter().cloned());
+            controlled.extend(model.upgrades.iter().cloned());
+            controlled.extend(model.other_models.iter().cloned());
+            if scene.age.is_none_or(|age| model.age == age) {
+                visible.insert(model.full_model.clone());
+                visible.extend(model.upgrades.iter().cloned());
+                visible.extend(model.other_models.iter().cloned());
+            }
+        }
+        for model in &building.storage_models {
+            controlled.insert(model.empty_model.clone());
+            controlled.insert(model.half_full_model.clone());
+            controlled.insert(model.full_model.clone());
+            if scene.age.is_none_or(|age| model.age == age) {
+                visible.insert(model.full_model.clone());
+            }
+        }
+    }
+    if scene.source_model.ends_with("/Age02_Farm.fbx") {
+        // Farm growth meshes are controlled by its resource holder in Unity,
+        // not BuildingResourceModelHandler, so they are absent from the generic
+        // storage-model catalog. The menu depicts completed farms: keep Full
+        // and prevent Seeds/Half/Full from occupying the same surface.
+        controlled.extend([
+            "Age02_Farm_Seeds".to_owned(),
+            "Age02_Farm_Half".to_owned(),
+            "Age02_Farm_Full".to_owned(),
+        ]);
+        visible.insert("Age02_Farm_Full".to_owned());
+    }
+    controlled.difference(&visible).cloned().collect()
 }
 
 fn authored_scene_rotation(rotation: [f32; 4]) -> Quat {
@@ -5374,7 +5469,7 @@ fn spawn_main_menu(
             StateEntity,
             Name::new("Baked main-menu animated water"),
             Mesh3d(render.cloud_plane.clone()),
-            MeshMaterial3d(render.water.clone()),
+            MeshMaterial3d(render.menu_water.clone()),
             Transform::from_xyz(0.0, bake.water_height, 0.0)
                 .with_scale(Vec3::splat(bake.water_extent)),
             bevy::light::NotShadowCaster,
@@ -5384,9 +5479,10 @@ fn spawn_main_menu(
 
     if let Some(asset_server) = asset_server.as_deref() {
         for instance in &reference.instances {
-            let Some((archetype, scene)) =
-                menu_scene_for_source_model(&content.0, &instance.source_path)
-                    .filter(|(_, scene)| converted_asset_exists(&asset_root.0, &scene.asset_path))
+            let Some((archetype_id, archetype, scene)) =
+                menu_scene_for_source_model(&content.0, &instance.source_path).filter(
+                    |(_, _, scene)| converted_asset_exists(&asset_root.0, &scene.asset_path),
+                )
             else {
                 warn!(
                     source_model = %instance.source_path,
@@ -5417,6 +5513,10 @@ fn spawn_main_menu(
                 entity.insert(MainMenuRotatingDefinitions(
                     archetype.rotating_nodes.clone(),
                 ));
+            }
+            let hidden_nodes = main_menu_hidden_model_node_names(&content.0, archetype_id, scene);
+            if !hidden_nodes.is_empty() {
+                entity.insert(MainMenuHiddenModelNodes(hidden_nodes));
             }
         }
         spawn_main_menu_baked_decorations(
@@ -6089,10 +6189,7 @@ fn insert_main_menu_material(entity: &mut EntityCommands<'_>, material: &Resolve
             entity.insert(MeshMaterial3d(material.clone()));
         }
         ResolvedMaterialHandle::Tree(material) => {
-            entity.insert((
-                MeshMaterial3d(material.clone()),
-                bevy::light::NotShadowReceiver,
-            ));
+            entity.insert(MeshMaterial3d(material.clone()));
         }
         ResolvedMaterialHandle::Grass(material) => {
             entity.insert(MeshMaterial3d(material.clone()));
@@ -6107,6 +6204,22 @@ fn insert_main_menu_material(entity: &mut EntityCommands<'_>, material: &Resolve
             entity.insert(MeshMaterial3d(material.clone()));
         }
     }
+    if material_needs_self_shadow_suppression(material) {
+        entity.insert(bevy::light::NotShadowReceiver);
+    }
+}
+
+fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> bool {
+    // Keep this policy shared by scene-material overrides and direct primitive
+    // spawns. Vertex-deformed/two-sided cards may still cast their custom
+    // prepass silhouette, but receiving that same near-coplanar shadow makes
+    // trees, bushes, and critters flash black as they animate.
+    matches!(
+        material,
+        ResolvedMaterialHandle::Tree(_)
+            | ResolvedMaterialHandle::Grass(_)
+            | ResolvedMaterialHandle::Critter(_)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6244,6 +6357,39 @@ fn tag_main_menu_rotating_nodes(
     }
 }
 
+fn hide_main_menu_inactive_model_nodes(
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    definitions: Query<&MainMenuHiddenModelNodes>,
+    nodes: Query<(Entity, &Name), Without<MainMenuModelNodeProcessed>>,
+) {
+    for (entity, name) in &nodes {
+        if !definitions
+            .iter()
+            .any(|definitions| definitions.0.contains(name.as_str()))
+        {
+            continue;
+        }
+        let mut ancestor = entity;
+        let mut belongs_to_menu_building = false;
+        for _ in 0..64 {
+            if let Ok(definitions) = definitions.get(ancestor) {
+                belongs_to_menu_building = definitions.0.contains(name.as_str());
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+        let mut entity = commands.entity(entity);
+        entity.insert(MainMenuModelNodeProcessed);
+        if belongs_to_menu_building {
+            entity.insert(Visibility::Hidden);
+        }
+    }
+}
+
 fn rotate_main_menu_nodes(
     time: Res<Time>,
     mut nodes: Query<(&MainMenuRotatingNode, &mut Transform)>,
@@ -6288,7 +6434,7 @@ fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAsset
             Name::new(format!("Authored menu cloud layer {layer:02}")),
             Mesh3d(render.cloud_plane.clone()),
             MeshMaterial3d(render.clouds.clone()),
-            Transform::from_xyz(20.666_718, 20.0 - offset, -10.153_707)
+            Transform::from_xyz(20.666_718, main_menu_cloud_height(offset), -10.153_707)
                 // Unity's prefab applies +90 degrees to each Quad and the menu
                 // instance applies another 180 degrees around X. Plane3d is
                 // already horizontal, so this final half-turn restores the
@@ -6302,6 +6448,10 @@ fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAsset
             bevy::light::NotShadowReceiver,
         ));
     }
+}
+
+fn main_menu_cloud_height(unity_layer_offset: f32) -> f32 {
+    20.0 - unity_layer_offset * MAIN_MENU_CLOUD_VERTICAL_SCALE
 }
 
 fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
@@ -6451,12 +6601,11 @@ fn fish_school_transform(fish: &FishSchoolParticle, elapsed_seconds: f32) -> Tra
     let offset = Vec3::new(x, y, z) * fish.noise_amplitude;
     let velocity = Vec3::new(velocity_x, velocity_y, velocity_z) * fish.noise_amplitude;
     let rotation = if fish.align_to_velocity && velocity.length_squared() > 1.0e-8 {
-        // Primitive-label loading intentionally bypasses the GLB scene node.
-        // Critter_Fish3's node carries the +90° X correction that maps its raw
-        // FBX -Y forward axis to glTF -Z. Reapply that correction after velocity
-        // alignment so the fish neither points at the sky nor swims backward.
+        // Primitive-label loading intentionally bypasses the imported node
+        // transform. The raw converted fish points along +Y; rotating -90° on X
+        // maps that nose to glTF -Z before -Z is aligned to its velocity.
         Quat::from_rotation_arc(Vec3::NEG_Z, velocity.normalize())
-            * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)
+            * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)
     } else {
         Quat::IDENTITY
     };
@@ -18378,28 +18527,19 @@ fn apply_material_overrides(
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert((
-                                    MeshMaterial3d(authored.clone()),
-                                    bevy::light::NotShadowReceiver,
-                                ));
+                                .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Grass(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert((
-                                    MeshMaterial3d(authored.clone()),
-                                    bevy::light::NotShadowReceiver,
-                                ));
+                                .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Critter(authored) => {
                             commands
                                 .entity(entity)
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
-                                .insert((
-                                    MeshMaterial3d(authored.clone()),
-                                    bevy::light::NotShadowReceiver,
-                                ));
+                                .insert(MeshMaterial3d(authored.clone()));
                         }
                         ResolvedMaterialHandle::Flag(authored) => {
                             commands
@@ -18413,6 +18553,11 @@ fn apply_material_overrides(
                                 .remove::<MeshMaterial3d<StandardMaterial>>()
                                 .insert(MeshMaterial3d(authored.clone()));
                         }
+                    }
+                    if material_needs_self_shadow_suppression(authored) {
+                        commands
+                            .entity(entity)
+                            .insert(bevy::light::NotShadowReceiver);
                     }
                 }
                 if animated_player_rigs.contains(ancestor) {
@@ -27856,7 +28001,7 @@ mod tests {
         assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
         assert!(main_menu_action_enabled(MainMenuAction::NewGame, false));
         assert_eq!(menu_scene.schema_version, 3);
-        assert!(menu_scene.corrective_bake.is_some());
+        assert_eq!(menu_scene.corrective_bake.as_ref().unwrap().version, 2);
         assert_eq!(menu_scene.source_scene, MAIN_MENU_SCENE_PATH);
         assert!(
             menu_scene
@@ -27878,6 +28023,16 @@ mod tests {
         assert_eq!(menu_scene.embedded_meshes.len(), 1);
         assert_eq!(menu_scene.embedded_meshes[0].vertices.len(), 4_900);
         assert_eq!(menu_scene.embedded_meshes[0].triangles.len() / 3, 9_522);
+        assert!(
+            menu_scene
+                .instances
+                .iter()
+                .map(|instance| instance.position[1].to_bits())
+                .collect::<BTreeSet<_>>()
+                .len()
+                >= 4,
+            "the corrective bake must retain visible generated height terraces"
+        );
         let fountain = menu_scene
             .instances
             .iter()
@@ -27900,7 +28055,7 @@ mod tests {
         );
         let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         for instance in &menu_scene.instances {
-            let (_, scene) = menu_scene_for_source_model(&content, &instance.source_path)
+            let (_, _, scene) = menu_scene_for_source_model(&content, &instance.source_path)
                 .unwrap_or_else(|| panic!("unmapped menu model {}", instance.source_path));
             assert!(
                 asset_root.join(&scene.asset_path).is_file(),
@@ -27908,6 +28063,79 @@ mod tests {
                 scene.asset_path
             );
         }
+    }
+
+    #[test]
+    fn main_menu_uses_neutral_minus_one_point_five_exposure_and_thick_clouds() {
+        let settings = PlayerSettings::default();
+        let menu = color_grading_for_state(&settings, &[], GameState::MainMenu);
+        let world = color_grading_for_state(&settings, &[], GameState::InGame);
+        assert!((menu.global.exposure - MAIN_MENU_BASELINE_EXPOSURE_EV).abs() < f32::EPSILON);
+        assert!(world.global.exposure.abs() < f32::EPSILON);
+        assert!(
+            main_menu_cloud_height(0.0) - main_menu_cloud_height(1.822_999) > 7.0,
+            "menu cloud layers must read as a volume instead of one thin plane"
+        );
+    }
+
+    #[test]
+    fn menu_buildings_hide_construction_stages_but_keep_completed_models() {
+        let content = embedded_content();
+        let archetype = content
+            .archetypes
+            .get(&StableId::new("archetype:building:farm").unwrap())
+            .unwrap();
+        let scene = archetype.scenes.first().unwrap();
+        let hidden = main_menu_hidden_model_node_names(
+            &content,
+            &StableId::new("archetype:building:farm").unwrap(),
+            scene,
+        );
+        assert!(hidden.contains("Age02_Farm_Stage01"));
+        assert!(hidden.contains("Age02_Farm_Seeds"));
+        assert!(hidden.contains("Age02_Farm_Half"));
+        assert!(!hidden.contains("Age02_Farm_Base"));
+        assert!(!hidden.contains("Age02_Farm_Full"));
+
+        let mut app = App::new();
+        app.add_systems(Update, hide_main_menu_inactive_model_nodes);
+        let root = app
+            .world_mut()
+            .spawn((MainMenuHiddenModelNodes(hidden), Name::new("Farm root")))
+            .id();
+        let stage = app
+            .world_mut()
+            .spawn((Name::new("Age02_Farm_Stage01"), Visibility::Inherited))
+            .id();
+        app.world_mut().entity_mut(root).add_child(stage);
+
+        app.update();
+
+        assert_eq!(
+            *app.world().get::<Visibility>(stage).unwrap(),
+            Visibility::Hidden
+        );
+        assert!(
+            app.world()
+                .get::<MainMenuModelNodeProcessed>(stage)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn animated_card_materials_share_the_no_self_shadow_policy() {
+        assert!(material_needs_self_shadow_suppression(
+            &ResolvedMaterialHandle::Tree(Handle::default())
+        ));
+        assert!(material_needs_self_shadow_suppression(
+            &ResolvedMaterialHandle::Grass(Handle::default())
+        ));
+        assert!(material_needs_self_shadow_suppression(
+            &ResolvedMaterialHandle::Critter(Handle::default())
+        ));
+        assert!(!material_needs_self_shadow_suppression(
+            &ResolvedMaterialHandle::Standard(Handle::default())
+        ));
     }
 
     #[test]
@@ -29042,10 +29270,9 @@ mod tests {
             assert!(offset.z.abs() <= particle.noise_amplitude.z);
             let next = fish_school_transform(&particle, elapsed + 0.001);
             let movement = (next.translation - transform.translation).normalize();
-            // The converted primitive is authored longitudinally on -Y; the
-            // runtime transform reapplies the GLB node's +90-degree X axis
-            // correction before aligning its resulting -Z axis to velocity.
-            let model_forward = transform.rotation * Vec3::NEG_Y;
+            // Primitive extraction bypasses the imported node; its raw +Y nose
+            // must still face the instantaneous velocity after correction.
+            let model_forward = transform.rotation * Vec3::Y;
             assert!(model_forward.dot(movement) > 0.999);
         }
         let one_second = fish_school_transform(&particle, 1.0).translation
@@ -33598,6 +33825,16 @@ mod tests {
             water.extension.parameters.depth_foam_controls,
             Vec4::new(10.0, 0.8, 7.81, 0.94)
         );
+        assert_eq!(
+            water.extension.parameters.opacity_controls,
+            Vec4::new(0.86, 0.94, 0.0, 0.0)
+        );
+        let menu_water = main_menu_water_material(water.clone());
+        assert_eq!(
+            menu_water.extension.parameters.opacity_controls,
+            Vec4::new(0.965, 0.985, 0.0, 0.0)
+        );
+        assert_eq!(menu_water.base.alpha_mode, AlphaMode::Opaque);
         let surface = unity_shader_color([0.0, 0.764_705_9, 1.0, 1.0]);
         let target = unity_shader_color([0.05, 0.29, 0.47, 0.62]);
         assert_eq!(

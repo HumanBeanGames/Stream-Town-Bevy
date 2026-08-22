@@ -16,6 +16,7 @@ struct WaterMaterialUniform {
     main_scale_offset: vec4<f32>,
     noise_scale_offset: vec4<f32>,
     depth_foam_controls: vec4<f32>,
+    opacity_controls: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -155,7 +156,11 @@ fn fragment(
     let bounded = authored / max(1.0, peak / 0.92);
     out.color = vec4<f32>(
         bounded,
-        clamp(pbr_input.material.base_color.a, 0.86, 0.94),
+        clamp(
+            pbr_input.material.base_color.a,
+            water_material.opacity_controls.x,
+            water_material.opacity_controls.y,
+        ),
     );
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;

@@ -450,7 +450,13 @@ mistaken for production-ready systems.
   The authored camera, 285 model transforms, and island mesh are fully reflected
   from Unity's left-handed coordinates into Bevy's right-handed coordinates,
   including normals and triangle winding, so the town remains on the right of
-  the left-side menu panel.
+  the left-side menu panel. The once-off generator bake now samples all 285
+  foundations from the untouched generated surface before flattening, preserving
+  four authored town-height terraces instead of propagating adjacent farm/wall
+  plateaus. Menu model controllers show completed building/farm variants and
+  hide construction and inactive growth meshes. Menu-only exposure is normalized
+  by -1.5 EV, its water uses a stable opaque-blue pass, and the 21 cloud layers
+  span over seven vertical metres rather than collapsing into one thin sheet.
 - Presentation schema 20 converts the reachable `Fish.prefab` field used by the
   Main Menu and town: Fish3 mesh, Critters material, zero start speed,
   120-second lifetime, 40-per-second logical emission, 0.2-1.0 size range,
@@ -461,7 +467,8 @@ mistaken for production-ready systems.
   Bevy renders a deterministic prewarmed representative budget of 160 shared-
   mesh fish per binding, samples the box only for initial placement, and applies
   bounded smooth noise without adding the full 4,800 logical particles to the
-  300-agent performance gate.
+  300-agent performance gate. Primitive extraction reapplies Fish3's raw +Y nose
+  correction before velocity alignment, so menu and town fish face travel.
 - Credits now recreates both reachable `VFX_FireWorks` instances as a
   deterministic purpose-built particle effect driven by presentation schema 15.
   The converter resolves their exact Unity scene positions and graph GUID, the
