@@ -1,0 +1,18 @@
+stack
+  [ n (slow 3 "0 4 7 11 <14 11 7>")
+      # sound "superfm"
+      # legato 0.9
+      # attack 0.05
+      # release 0.7
+      # cutoff 2800
+      # delay 0.16
+      # delayt 0.3
+      # delayfb 0.25
+      # room 0.45
+  , n (slow 8 "-12 -8 -5 -10")
+      # sound "supergong"
+      # legato 2.5
+      # attack 0.4
+      # release 1.8
+      # room 0.7
+  ] # gain {{gain}}

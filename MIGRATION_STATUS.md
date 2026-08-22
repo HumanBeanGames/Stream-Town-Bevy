@@ -87,15 +87,18 @@ mistaken for production-ready systems.
   class is stable native actor state, survives save/reload, and is recovered
   from both binary and JSON legacy saves. Building-health preferences now drive
   continuously updated in-world bars using authored per-level maximum health.
-- With no redistributable Unity soundtrack in the source repository, Bevy now
-  generates provenance-documented seasonal day/night music and ambient
-  wind/birds entirely at runtime. The jukebox reselects on season and day/night
-  boundaries, uses Unity's 600–900-second deterministic inter-track window and
-  ten-second fade-out, and applies master/music/ambience/SFX settings through
-  independent gain paths. Ambience and music entities now exist only while a
-  town simulation is active, so the Main Menu remains silent. The ambient wind
-  is a seamless band-limited oscillator loop rather than sample-rate white
-  noise, removing the static-like hiss from the earlier placeholder.
+- With no redistributable Unity soundtrack in the source repository, the
+  shipping music path now uses the native Rust `bevy_tidal` scheduler and CPAL
+  renderer. Eight authored Tidal expressions provide distinct seasonal
+  day/night arrangements, switch when the simulation crosses those boundaries,
+  and incorporate master/music gain directly into the active pattern. Muting or
+  leaving the town silences track 1. The private upstream crate is pinned as a
+  source-only vendor snapshot so clean builds and CI require no repository
+  secret; its built-in synthesizers require no GHC, SuperCollider, sidecar, or
+  downloaded sample bank. Bevy Audio still owns ambience and gameplay cues on
+  their independent ambience/SFX gain paths. Ambient wind remains a seamless
+  band-limited oscillator loop rather than sample-rate white noise, avoiding the
+  earlier placeholder's static-like hiss.
 - Presentation schema 19 retains all 35 original Unity `ActionClips` GUID
   references across the 14 roles that authored them (Blacksmith authored none).
   Each reachable animation event selects its original variant deterministically

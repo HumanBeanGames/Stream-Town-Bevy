@@ -1,0 +1,40 @@
+-- Native documentation-coverage integration program.
+setcps (120/60/4)
+
+d1 $ every 4 rev $ swingBy (1/3) 4 $ sound "[bd,hh*2] ~ [sn,hh(3,8)] cp?0.8"
+  # gain "1 0.75 0.9 0.65"
+  # crush "0 5"
+  # room 0.15
+
+d2 $ rolledBy 0.3 $ n (scale "ritusen" "c'maj7 d'min9'i2 <0 2 4 6>")
+  # sound "superpiano"
+  # legato 0.8
+  # attack 0.01
+  # release 0.35
+  # cutoff (rangex 300 6000 $ slow 4 $ sine)
+  # resonance 0.25
+
+d3 $ juxBy 0.7 rev $ echo 3 0.125 0.45 $ sound "superfm supersaw supersquare supergong"
+  # n "0 7 12 19"
+  # pan (range 0.15 0.85 $ slow 2 $ saw)
+  # tremdp 0.15
+  # tremr 5
+  # delay 0.2
+  # delayt 0.25
+  # delayfb 0.35
+
+d4 $ struct "t ~ t t ~ t ~ t" $ chop 4 $ sound "breaks:0"
+  # begin 0
+  # end 1
+  # hpf 80
+  # distort 0.1
+
+d5 $ fastcat [sound "bd", sound "sn", sound "cp", sound "hh*2"]
+  # pan (quantise 4 $ segment 8 $ sine)
+
+d6 $ n (run 8) # sound "superchip" # gain 0.25 # release 0.12
+
+p "polymeter" $ sound "{bd sd cp hh, arpy cr bass}%8"
+  # gain 0.35
+
+once $ sound "supergong" # n 0 # sustain 1 # room 0.4

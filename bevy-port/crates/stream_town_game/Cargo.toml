@@ -10,6 +10,7 @@ rust-version.workspace = true
 avian3d.workspace = true
 anyhow.workspace = true
 bevy.workspace = true
+bevy_tidal.workspace = true
 keyring.workspace = true
 reqwest.workspace = true
 ron.workspace = true

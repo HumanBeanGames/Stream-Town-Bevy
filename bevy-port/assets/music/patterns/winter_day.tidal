@@ -1,0 +1,16 @@
+stack
+  [ n (slow 3 "0 2 7 9 <12 14 9 7>")
+      # sound "supergong"
+      # legato 1
+      # attack 0.06
+      # release 1.1
+      # cutoff 2500
+      # room 0.68
+  , n (slow 8 "-12 -10 -5 -8")
+      # sound "superpiano"
+      # legato 2.8
+      # attack 0.55
+      # release 2
+      # cutoff 1400
+      # room 0.75
+  ] # gain {{gain}}
