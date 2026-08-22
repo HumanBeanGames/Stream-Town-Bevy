@@ -1831,6 +1831,7 @@ fn rotating_node_definitions(asset: &UnityAsset) -> Result<Vec<RotatingNodeDef>>
         let axis = component_field_value(component, "_axis")
             .and_then(vector3)
             .with_context(|| format!("{} rotating node {node} has no axis", asset.path))?;
+        let axis = converted_rotating_axis(&node, axis);
         let degrees_per_second = component_field_value(component, "_speed")
             .and_then(Value::as_f64)
             .filter(|value| value.is_finite() && value.abs() > f64::EPSILON)
@@ -1846,12 +1847,29 @@ fn rotating_node_definitions(asset: &UnityAsset) -> Result<Vec<RotatingNodeDef>>
                 None
             },
             node,
-            axis: [axis[0] as f32, axis[1] as f32, axis[2] as f32],
+            axis,
             degrees_per_second: degrees_per_second as f32,
         });
     }
     nodes.sort_by(|left, right| (left.age, &left.node).cmp(&(right.age, &right.node)));
     Ok(nodes)
+}
+
+fn converted_rotating_axis(node: &str, unity_axis: [f64; 3]) -> [f32; 3] {
+    #[allow(clippy::cast_possible_truncation)]
+    let mut axis = [
+        unity_axis[0] as f32,
+        unity_axis[1] as f32,
+        unity_axis[2] as f32,
+    ];
+    if node.ends_with("_Windmill_Blades") {
+        // Blender bakes the two windmill FBXs' up-axis conversion into their
+        // mesh basis: the Age 1 blade plane is XZ and the Age 2 plane is XY in
+        // the emitted GLBs. Swap Unity local Y/Z so rotation follows each
+        // converted plane normal rather than making the blades tumble.
+        axis.swap(1, 2);
+    }
+    axis
 }
 
 fn component_type(component: &UnityComponent) -> &str {
@@ -2712,6 +2730,28 @@ fn normalized_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windmill_axes_follow_the_emitted_glb_mesh_normals() {
+        let matches = |actual: [f32; 3], expected: [f32; 3]| {
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        };
+        assert!(matches(
+            converted_rotating_axis("Age01_Windmill_Blades", [0.0, 0.0, 1.0]),
+            [0.0, 1.0, 0.0]
+        ));
+        assert!(matches(
+            converted_rotating_axis("Age02_Windmill_Blades", [0.0, 1.0, 0.0]),
+            [0.0, 0.0, 1.0]
+        ));
+        assert!(matches(
+            converted_rotating_axis("LoadingIcon", [0.0, 0.0, 1.0]),
+            [0.0, 0.0, 1.0]
+        ));
+    }
 
     fn field(path: &str, value: Value) -> UnityField {
         UnityField {

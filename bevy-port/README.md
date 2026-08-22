@@ -782,15 +782,31 @@ generated height by the authored shoreline mask, flattens building foundations,
 lifts model instances, and writes generated resource/foliage placements into
 `main_menu_scene.ron` for load-only runtime use. Re-run the documented
 `bake-main-menu-scene` command from an unbaked schema-2 reference whenever
-generator configuration intentionally changes. Corrective-bake version 2
+generator configuration intentionally changes. Corrective-bake version 3
 samples every foundation from the untouched generated surface before flattening;
 this prevents the dense farm/wall layout from propagating one artificial plateau
-through its neighbors and preserves the generator's authored height terraces.
+through its neighbors. It applies a presentation-only 3x vertical multiplier so
+the unchanged generator's half-metre terraces remain visible from the side-on
+menu camera; the seed, generator hash, horizontal positions, 2,565 resources,
+and 12,392 foliage records remain unchanged.
 The menu uses a -1.5 EV scene baseline at the neutral brightness setting, a
-menu-only opaque water material so the checked ocean floor cannot turn it grey,
-and a four-times vertical spread for the 21 cloud layers. Completed building and
-farm variants remain visible while construction stages and inactive crop-growth
-meshes are hidden.
+fixed-depth translucent water material over a uniform ocean floor, and 21
+non-shadowing rectangular-prism clouds. Fully submerged checker-terrain
+triangles are omitted from the menu render so one flat water plane cannot expose
+two conflicting floor colours. Menu-only trees and bushes use stable instance
+colouring and no long-range wind deformation; gameplay foliage keeps authored
+wind and moving shadows. Completed building and farm variants remain visible
+while construction stages and inactive crop-growth meshes are hidden.
+
+The checked bake remains the full parity/validation source, but the static menu
+deterministically renders at most 900 visible resources and 3,200 visible foliage
+instances to bound startup work. The 186 repeated completed farms bypass generic
+scene spawning and load their exact Base/Full GLB primitives. Boot preloads the
+same `Scene(0)` handles later consumed by the menu, and the loading overlay stays
+up until every remaining scene root has children. Diagnostic logs report boot
+asset time and menu-scene reveal time separately; on the recorded DX12 debug
+machine asset I/O is about 0.4s while first-use scene/material GPU preparation is
+still about 12s and is the dominant remaining startup cost.
 
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/

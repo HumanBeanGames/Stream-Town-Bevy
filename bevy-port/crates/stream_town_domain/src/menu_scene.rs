@@ -26,6 +26,11 @@ pub struct MainMenuCorrectiveBake {
     pub generator_version: u32,
     pub generator_hash: String,
     pub cell_size: f32,
+    /// Presentation-only vertical amplification applied after deterministic
+    /// generation. The side-on menu camera needs stronger relief than the
+    /// overhead game camera, while resource counts and horizontal coordinates
+    /// continue to come from the unchanged shipping generator.
+    pub terrain_height_multiplier: f32,
     pub water_height: f32,
     pub water_extent: f32,
     pub ocean_floor_height: f32,

@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result as AnyResult};
@@ -127,7 +127,8 @@ const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.ma
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
-const MAIN_MENU_CLOUD_VERTICAL_SCALE: f32 = 4.0;
+const MAIN_MENU_RESOURCE_RENDER_BUDGET: usize = 900;
+const MAIN_MENU_FOLIAGE_RENDER_BUDGET: usize = 3_200;
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
@@ -1045,7 +1046,10 @@ struct RenderAssets {
     healing_disc_materials: BTreeMap<StableId, Vec<Handle<StandardMaterial>>>,
     authored_building: Handle<BuildingMaterial>,
     clouds: Handle<CloudMaterial>,
+    menu_cloud: Handle<StandardMaterial>,
+    menu_ocean_floor: Handle<StandardMaterial>,
     tree: Handle<TreeMaterial>,
+    menu_tree: Handle<StandardMaterial>,
     grass: Handle<GrassMaterial>,
     game_logo: Option<Handle<Image>>,
     loading_screen: Option<Handle<Image>>,
@@ -1176,6 +1180,7 @@ enum BootDestination {
 
 #[derive(Resource)]
 struct MenuLoadingRuntime {
+    started_at: Instant,
     destination: BootDestination,
     progress: f32,
     status: String,
@@ -1186,10 +1191,21 @@ struct MenuLoadingRuntime {
     presented_frames: u8,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct MenuRevealRuntime {
+    started_at: Instant,
     rendered_frames: u16,
     scene_ready_frames: u8,
+}
+
+impl Default for MenuRevealRuntime {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+            rendered_frames: 0,
+            scene_ready_frames: 0,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -2975,6 +2991,18 @@ fn setup_rendering(
     let authored_building =
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
+    let menu_cloud = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.96, 0.98, 1.0),
+        perceptual_roughness: 1.0,
+        unlit: true,
+        ..default()
+    });
+    let menu_ocean_floor = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.025, 0.20, 0.30),
+        perceptual_roughness: 1.0,
+        unlit: true,
+        ..default()
+    });
     let godrays = godray_materials.add(godray_material(&presentation.0));
     let giraffe = giraffe_materials.add(giraffe_material(&presentation.0, asset_server.as_deref()));
     let authored_bounds = bounds_materials.add(bounds_material(&presentation.0, None));
@@ -2987,6 +3015,18 @@ fn setup_rendering(
         Some(BUILDING_PLACEMENT_FAIL_COLOR),
     ));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
+    // Menu foliage is viewed as a dense, distant silhouette. A dedicated
+    // unlit material keeps it stably green across the shared-atlas palette and
+    // blue ambient light while the gameplay TreeMaterial retains seasons,
+    // wind, and its animated shadow prepass.
+    let menu_tree = materials.add(StandardMaterial {
+        // Compensate for the menu's authored -1.5 EV exposure so the stable
+        // green silhouette remains readable rather than collapsing to black.
+        base_color: Color::srgb(0.42, 0.72, 0.16),
+        perceptual_roughness: 1.0,
+        unlit: true,
+        ..default()
+    });
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
     let flag = flag_materials.add(flag_material(&presentation.0, asset_server.as_deref()));
@@ -3334,7 +3374,10 @@ fn setup_rendering(
         healing_disc_materials,
         authored_building,
         clouds,
+        menu_cloud,
+        menu_ocean_floor,
         tree,
+        menu_tree,
         grass,
         game_logo,
         loading_screen,
@@ -4503,12 +4546,12 @@ fn water_material(
 }
 
 fn main_menu_water_material(mut material: WaterMaterial) -> WaterMaterial {
-    // The static menu camera looks through a much longer stretch of water than
-    // the town camera. A nearly opaque authored surface keeps the ocean blue
-    // instead of letting the neutral ocean floor intermittently dominate the
-    // transparent blend. Fish at/above the authored surface remain visible.
-    material.extension.parameters.opacity_controls = Vec4::new(0.965, 0.985, 0.0, 0.0);
-    material.base.alpha_mode = AlphaMode::Opaque;
+    // The menu uses one flat plane, so z/w request a fixed mid-water depth
+    // instead of converting broad animated noise into a second blue region.
+    // Restore transparent blending at a lower alpha than gameplay water so the
+    // shoreline and fish remain legible without the former grey wash.
+    material.extension.parameters.opacity_controls = Vec4::new(0.68, 0.78, 1.0, 0.46);
+    material.base.alpha_mode = AlphaMode::Blend;
     material
 }
 
@@ -5091,6 +5134,7 @@ fn begin_menu_loading(
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
 ) {
+    let started_at = Instant::now();
     let destination = if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
         BootDestination::Credits
     } else if std::env::var_os("STREAM_TOWN_AUTOSTART").is_some() {
@@ -5102,7 +5146,15 @@ fn begin_menu_loading(
         asset_server.as_deref().map_or_else(Vec::new, |server| {
             main_menu_preload_paths(&content.0, &asset_root.0)
                 .into_iter()
-                .map(|path| server.load_builder().load_untyped(path).untyped())
+                .map(|path| {
+                    // Preload the exact scene sub-asset instantiated by
+                    // WorldAssetRoot. Loading only the untyped GLB container
+                    // reported 100% while Bevy still had to create Scene(0)
+                    // after entering MainMenu, producing a long second wait.
+                    let scene: Handle<bevy::world_serialization::WorldAsset> =
+                        server.load(GltfAssetLabel::Scene(0).from_asset(path));
+                    scene.untyped()
+                })
                 .collect()
         })
     } else {
@@ -5110,6 +5162,7 @@ fn begin_menu_loading(
     };
     let asset_count = asset_handles.len();
     commands.insert_resource(MenuLoadingRuntime {
+        started_at,
         destination,
         progress: 0.0,
         status: "Loading main menu".to_owned(),
@@ -5222,6 +5275,7 @@ fn poll_menu_loading(
         info!(
             loaded_assets = loaded,
             failed_assets = failed,
+            elapsed_seconds = loading.started_at.elapsed().as_secs_f64(),
             "Stream Town boot loading complete"
         );
         next_state.set(match loading.destination {
@@ -5319,21 +5373,134 @@ fn main_menu_hidden_model_node_names(
     controlled.difference(&visible).cloned().collect()
 }
 
+fn spawn_completed_main_menu_farm(
+    commands: &mut Commands,
+    instance: &stream_town_domain::MainMenuModelInstance,
+    scene: &ArchetypeScene,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+) -> bool {
+    if !scene.asset_path.ends_with("/Age02_Farm.glb") {
+        return false;
+    }
+    let material = presentation
+        .model_materials
+        .get(&scene.source_model)
+        .and_then(|materials| materials.get("MainMaterial"))
+        .and_then(|id| render.presentation_materials.get(id));
+    let root_rotation = authored_scene_rotation(instance.rotation);
+    let root_scale = Vec3::from_array(instance.scale);
+    for (mesh_index, node_name) in [(0, "Age02_Farm_Base"), (1, "Age02_Farm_Full")] {
+        let mesh = asset_server.load(
+            GltfAssetLabel::Primitive {
+                mesh: mesh_index,
+                primitive: 0,
+            }
+            .from_asset(scene.asset_path.clone()),
+        );
+        let mut entity = commands.spawn((
+            StateEntity,
+            Name::new(format!("Direct menu farm: {node_name}")),
+            Mesh3d(mesh),
+            Transform::from_translation(Vec3::from_array(instance.position))
+                .with_rotation(root_rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                .with_scale(root_scale * 0.01),
+        ));
+        if let Some(material) = material {
+            insert_main_menu_material(&mut entity, material, render);
+        } else {
+            entity.insert(MeshMaterial3d(render.authored_building.clone()));
+        }
+    }
+    true
+}
+
 fn authored_scene_rotation(rotation: [f32; 4]) -> Quat {
     // Main-menu reference schema 2 stores rotations in Bevy's right-handed space.
     Quat::from_array(rotation).normalize()
 }
 
-fn authored_main_menu_mesh(reference: &stream_town_domain::MainMenuEmbeddedMesh) -> Mesh {
+fn authored_main_menu_mesh(
+    reference: &stream_town_domain::MainMenuEmbeddedMesh,
+    water_height: f32,
+) -> Mesh {
+    let (positions, normals, uv) = clipped_main_menu_geometry(reference, water_height);
+    let vertex_count = u32::try_from(positions.len()).expect("menu shoreline mesh fits u32");
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, reference.vertices.clone())
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, reference.normals.clone())
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, reference.uv.clone())
-    // The converter has already reflected Unity's vertices and reversed winding.
-    .with_inserted_indices(Indices::U32(reference.triangles.clone()))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
+    .with_inserted_indices(Indices::U32((0..vertex_count).collect()))
+}
+
+#[derive(Clone, Copy)]
+struct MainMenuClipVertex {
+    position: Vec3,
+    normal: Vec3,
+    uv: Vec2,
+}
+
+type MainMenuMeshGeometry = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>);
+
+fn clipped_main_menu_geometry(
+    reference: &stream_town_domain::MainMenuEmbeddedMesh,
+    water_height: f32,
+) -> MainMenuMeshGeometry {
+    let source_vertex = |index: u32| {
+        let index = usize::try_from(index).expect("validated main-menu mesh index");
+        MainMenuClipVertex {
+            position: Vec3::from_array(reference.vertices[index]),
+            normal: Vec3::from_array(reference.normals[index]),
+            uv: Vec2::from_array(reference.uv[index]),
+        }
+    };
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uv = Vec::new();
+    for triangle in reference.triangles.chunks_exact(3) {
+        let source = [
+            source_vertex(triangle[0]),
+            source_vertex(triangle[1]),
+            source_vertex(triangle[2]),
+        ];
+        let mut polygon = Vec::with_capacity(4);
+        let mut previous = source[2];
+        let mut previous_inside = previous.position.y >= water_height;
+        for current in source {
+            let current_inside = current.position.y >= water_height;
+            if current_inside != previous_inside {
+                let progress = (water_height - previous.position.y)
+                    / (current.position.y - previous.position.y);
+                let mut position = previous.position.lerp(current.position, progress);
+                position.y = water_height;
+                polygon.push(MainMenuClipVertex {
+                    position,
+                    normal: previous
+                        .normal
+                        .lerp(current.normal, progress)
+                        .normalize_or(Vec3::Y),
+                    uv: previous.uv.lerp(current.uv, progress),
+                });
+            }
+            if current_inside {
+                polygon.push(current);
+            }
+            previous = current;
+            previous_inside = current_inside;
+        }
+        for corner in 1..polygon.len().saturating_sub(1) {
+            for vertex in [polygon[0], polygon[corner], polygon[corner + 1]] {
+                positions.push(vertex.position.to_array());
+                normals.push(vertex.normal.to_array());
+                uv.push(vertex.uv.to_array());
+            }
+        }
+    }
+    (positions, normals, uv)
 }
 
 fn apply_authored_main_menu_camera(
@@ -5449,7 +5616,7 @@ fn spawn_main_menu(
             commands.spawn((
                 StateEntity,
                 Name::new(format!("Authored menu mesh: {}", embedded.hierarchy_path)),
-                Mesh3d(meshes.add(authored_main_menu_mesh(embedded))),
+                Mesh3d(meshes.add(authored_main_menu_mesh(embedded, bake.water_height))),
                 MeshMaterial3d(render.ground.clone()),
             ));
         }
@@ -5461,7 +5628,7 @@ fn spawn_main_menu(
             StateEntity,
             Name::new("Baked main-menu ocean floor"),
             Mesh3d(render.cloud_plane.clone()),
-            MeshMaterial3d(render.ground.clone()),
+            MeshMaterial3d(render.menu_ocean_floor.clone()),
             Transform::from_xyz(0.0, bake.ocean_floor_height, 0.0)
                 .with_scale(Vec3::splat(bake.terrain_extent)),
         ));
@@ -5478,7 +5645,24 @@ fn spawn_main_menu(
     }
 
     if let Some(asset_server) = asset_server.as_deref() {
-        for instance in &reference.instances {
+        let visible_instances = reference
+            .instances
+            .iter()
+            .filter(|instance| {
+                menu_baked_position_visible(reference, Vec3::from_array(instance.position))
+            })
+            .collect::<Vec<_>>();
+        let direct_farms = visible_instances
+            .iter()
+            .filter(|instance| instance.source_path.ends_with("/Age02_Farm.fbx"))
+            .count();
+        info!(
+            baked_instances = reference.instances.len(),
+            rendered_instances = visible_instances.len(),
+            direct_farms,
+            "culled static main-menu model instances"
+        );
+        for instance in visible_instances {
             let Some((archetype_id, archetype, scene)) =
                 menu_scene_for_source_model(&content.0, &instance.source_path).filter(
                     |(_, _, scene)| converted_asset_exists(&asset_root.0, &scene.asset_path),
@@ -5491,6 +5675,16 @@ fn spawn_main_menu(
                 );
                 continue;
             };
+            if spawn_completed_main_menu_farm(
+                &mut commands,
+                instance,
+                scene,
+                &presentation.0,
+                &render,
+                asset_server,
+            ) {
+                continue;
+            }
             let mut entity = commands.spawn((
                 StateEntity,
                 Name::new(format!(
@@ -6125,6 +6319,11 @@ fn finish_menu_reveal(
     for entity in &loading_entities {
         commands.entity(entity).despawn();
     }
+    info!(
+        scene_roots = root_count,
+        elapsed_seconds = reveal.started_at.elapsed().as_secs_f64(),
+        "Stream Town main-menu scene reveal complete"
+    );
     commands.remove_resource::<MenuLoadingRuntime>();
     commands.remove_resource::<MenuRevealRuntime>();
 }
@@ -6168,7 +6367,11 @@ fn menu_baked_position_visible(reference: &MainMenuSceneReference, position: Vec
     local.x.abs() <= horizontal * 1.25 + 12.0 && local.y.abs() <= vertical * 1.45 + 18.0
 }
 
-fn insert_main_menu_material(entity: &mut EntityCommands<'_>, material: &ResolvedMaterialHandle) {
+fn insert_main_menu_material(
+    entity: &mut EntityCommands<'_>,
+    material: &ResolvedMaterialHandle,
+    render: &RenderAssets,
+) {
     match material {
         ResolvedMaterialHandle::Standard(material) => {
             entity.insert(MeshMaterial3d(material.clone()));
@@ -6189,7 +6392,8 @@ fn insert_main_menu_material(entity: &mut EntityCommands<'_>, material: &Resolve
             entity.insert(MeshMaterial3d(material.clone()));
         }
         ResolvedMaterialHandle::Tree(material) => {
-            entity.insert(MeshMaterial3d(material.clone()));
+            let _ = material;
+            entity.insert(MeshMaterial3d(render.menu_tree.clone()));
         }
         ResolvedMaterialHandle::Grass(material) => {
             entity.insert(MeshMaterial3d(material.clone()));
@@ -6207,6 +6411,15 @@ fn insert_main_menu_material(entity: &mut EntityCommands<'_>, material: &Resolve
     if material_needs_self_shadow_suppression(material) {
         entity.insert(bevy::light::NotShadowReceiver);
     }
+}
+
+fn main_menu_even_sample(index: usize, total: usize, budget: usize) -> bool {
+    if total <= budget {
+        return true;
+    }
+    let before = index.saturating_mul(budget) / total;
+    let after = index.saturating_add(1).saturating_mul(budget) / total;
+    after > before
 }
 
 fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> bool {
@@ -6236,11 +6449,25 @@ fn spawn_main_menu_baked_decorations(
         .corrective_bake
         .as_ref()
         .expect("validated main-menu corrective bake");
-    for resource in &bake.resources {
-        let position = Vec3::from_array(resource.position);
-        if !menu_baked_position_visible(reference, position) {
+    let visible_resources = bake
+        .resources
+        .iter()
+        .filter(|resource| {
+            menu_baked_position_visible(reference, Vec3::from_array(resource.position))
+        })
+        .collect::<Vec<_>>();
+    let rendered_resources = visible_resources
+        .len()
+        .min(MAIN_MENU_RESOURCE_RENDER_BUDGET);
+    for (visible_index, resource) in visible_resources.iter().enumerate() {
+        if !main_menu_even_sample(
+            visible_index,
+            visible_resources.len(),
+            MAIN_MENU_RESOURCE_RENDER_BUDGET,
+        ) {
             continue;
         }
+        let position = Vec3::from_array(resource.position);
         let visual = resource_visual_archetype(content, &resource.kind)
             .and_then(default_archetype_scene)
             .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
@@ -6268,17 +6495,29 @@ fn spawn_main_menu_baked_decorations(
                     .with_scale(Vec3::splat(resource_visual_scale(bake.cell_size))),
             ));
             if let Some(material) = material {
-                insert_main_menu_material(&mut entity, material);
+                insert_main_menu_material(&mut entity, material, render);
             } else {
                 entity.insert(MeshMaterial3d(render.food.clone()));
             }
         }
     }
-    for foliage in &bake.foliage {
-        let position = Vec3::from_array(foliage.position);
-        if !menu_baked_position_visible(reference, position) {
+    let visible_foliage = bake
+        .foliage
+        .iter()
+        .filter(|foliage| {
+            menu_baked_position_visible(reference, Vec3::from_array(foliage.position))
+        })
+        .collect::<Vec<_>>();
+    let rendered_foliage = visible_foliage.len().min(MAIN_MENU_FOLIAGE_RENDER_BUDGET);
+    for (visible_index, foliage) in visible_foliage.iter().enumerate() {
+        if !main_menu_even_sample(
+            visible_index,
+            visible_foliage.len(),
+            MAIN_MENU_FOLIAGE_RENDER_BUDGET,
+        ) {
             continue;
         }
+        let position = Vec3::from_array(foliage.position);
         let Some(layer) = content
             .foliage
             .iter()
@@ -6320,11 +6559,20 @@ fn spawn_main_menu_baked_decorations(
             bevy::light::NotShadowReceiver,
         ));
         if let Some(material) = material {
-            insert_main_menu_material(&mut entity, material);
+            insert_main_menu_material(&mut entity, material, render);
         } else {
             entity.insert(MeshMaterial3d(render.food.clone()));
         }
     }
+    info!(
+        baked_resources = bake.resources.len(),
+        visible_resources = visible_resources.len(),
+        rendered_resources,
+        baked_foliage = bake.foliage.len(),
+        visible_foliage = visible_foliage.len(),
+        rendered_foliage,
+        "spawned deterministic main-menu decoration sample"
+    );
 }
 
 fn tag_main_menu_rotating_nodes(
@@ -6405,53 +6653,37 @@ fn rotate_main_menu_nodes(
 }
 
 fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAssets) {
-    const UNITY_LAYER_OFFSETS: [f32; 21] = [
-        0.0,
-        0.100_000_38,
-        0.199_999_81,
-        0.300_000_2,
-        0.399_999_62,
-        0.5,
-        0.600_000_4,
-        0.699_999_8,
-        0.800_000_2,
-        0.899_999_6,
-        1.022_999_8,
-        1.022_999_8,
-        1.122_999_2,
-        1.222_999_6,
-        1.322_999,
-        1.422_999_4,
-        1.522_999_8,
-        1.622_999_2,
-        1.722_999_6,
-        1.822_999,
-        0.100_000_38,
-    ];
-    for (layer, offset) in UNITY_LAYER_OFFSETS.into_iter().enumerate() {
+    for layer in 0..21 {
         commands.spawn((
             StateEntity,
-            Name::new(format!("Authored menu cloud layer {layer:02}")),
-            Mesh3d(render.cloud_plane.clone()),
-            MeshMaterial3d(render.clouds.clone()),
-            Transform::from_xyz(20.666_718, main_menu_cloud_height(offset), -10.153_707)
-                // Unity's prefab applies +90 degrees to each Quad and the menu
-                // instance applies another 180 degrees around X. Plane3d is
-                // already horizontal, so this final half-turn restores the
-                // authored downward front face for back-face culling.
-                .with_rotation(Quat::from_rotation_x(std::f32::consts::PI))
-                .with_scale(Vec3::splat(1_524.212_5)),
-            // The Unity shader explicitly disables both casting and receiving
-            // shadows. Bevy's generic transparent shadow pass otherwise treats
-            // each enormous quad as opaque and darkens the entire town.
+            Name::new(format!("Menu cloud prism {layer:02}")),
+            Mesh3d(render.cube.clone()),
+            MeshMaterial3d(render.menu_cloud.clone()),
+            main_menu_cloud_prism_transform(layer),
             bevy::light::NotShadowCaster,
             bevy::light::NotShadowReceiver,
         ));
     }
 }
 
-fn main_menu_cloud_height(unity_layer_offset: f32) -> f32 {
-    20.0 - unity_layer_offset * MAIN_MENU_CLOUD_VERTICAL_SCALE
+fn main_menu_cloud_prism_transform(layer: usize) -> Transform {
+    let column = layer % 7;
+    let row = layer / 7;
+    #[allow(clippy::cast_precision_loss)]
+    let (column_f, row_f) = (column as f32, row as f32);
+    let small =
+        |value: usize| f32::from(u8::try_from(value).expect("menu cloud pattern value fits in u8"));
+    let position = Vec3::new(
+        55.0 - column_f * 24.0 - row_f * 8.0,
+        28.0 + row_f * 6.0 + small((column * 2 + row) % 3) * 2.1,
+        95.0 + row_f * 42.0 + small(column % 2) * 5.0,
+    );
+    let scale = Vec3::new(
+        22.0 + small((column + row) % 3) * 9.0,
+        2.6 + small((column + row * 2) % 3) * 0.6,
+        10.0 + small((column * 2 + row) % 4) * 4.0,
+    );
+    Transform::from_translation(position).with_scale(scale)
 }
 
 fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
@@ -28001,7 +28233,9 @@ mod tests {
         assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
         assert!(main_menu_action_enabled(MainMenuAction::NewGame, false));
         assert_eq!(menu_scene.schema_version, 3);
-        assert_eq!(menu_scene.corrective_bake.as_ref().unwrap().version, 2);
+        let corrective_bake = menu_scene.corrective_bake.as_ref().unwrap();
+        assert_eq!(corrective_bake.version, 3);
+        assert!((corrective_bake.terrain_height_multiplier - 3.0).abs() < f32::EPSILON);
         assert_eq!(menu_scene.source_scene, MAIN_MENU_SCENE_PATH);
         assert!(
             menu_scene
@@ -28032,6 +28266,19 @@ mod tests {
                 .len()
                 >= 4,
             "the corrective bake must retain visible generated height terraces"
+        );
+        let (minimum_height, maximum_height) = menu_scene.instances.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(minimum, maximum), instance| {
+                (
+                    minimum.min(instance.position[1]),
+                    maximum.max(instance.position[1]),
+                )
+            },
+        );
+        assert!(
+            maximum_height - minimum_height >= 4.5,
+            "the side-on menu bake must visibly amplify generated relief"
         );
         let fountain = menu_scene
             .instances
@@ -28066,15 +28313,64 @@ mod tests {
     }
 
     #[test]
-    fn main_menu_uses_neutral_minus_one_point_five_exposure_and_thick_clouds() {
+    fn main_menu_uses_neutral_minus_one_point_five_exposure_and_prism_clouds() {
         let settings = PlayerSettings::default();
         let menu = color_grading_for_state(&settings, &[], GameState::MainMenu);
         let world = color_grading_for_state(&settings, &[], GameState::InGame);
         assert!((menu.global.exposure - MAIN_MENU_BASELINE_EXPOSURE_EV).abs() < f32::EPSILON);
         assert!(world.global.exposure.abs() < f32::EPSILON);
+        let prisms = (0..21)
+            .map(main_menu_cloud_prism_transform)
+            .collect::<Vec<_>>();
+        assert!(prisms.iter().all(|cloud| cloud.scale.min_element() > 2.0));
         assert!(
-            main_menu_cloud_height(0.0) - main_menu_cloud_height(1.822_999) > 7.0,
-            "menu cloud layers must read as a volume instead of one thin plane"
+            prisms
+                .iter()
+                .map(|cloud| cloud.translation.to_array().map(f32::to_bits))
+                .collect::<BTreeSet<_>>()
+                .len()
+                == 21,
+            "menu cloud prisms must not overlap exactly and z-fight"
+        );
+    }
+
+    #[test]
+    fn main_menu_decoration_sampling_is_even_and_budgeted() {
+        let selected = (0..12_392)
+            .filter(|index| main_menu_even_sample(*index, 12_392, 3_200))
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 3_200);
+        assert!(selected.windows(2).all(|pair| pair[1] > pair[0]));
+        assert!((0..500).all(|index| main_menu_even_sample(index, 500, 900)));
+    }
+
+    #[test]
+    fn main_menu_shoreline_is_clipped_to_water_without_diagonal_holes() {
+        let mesh = stream_town_domain::MainMenuEmbeddedMesh {
+            hierarchy_path: "Terrain".to_owned(),
+            vertices: vec![
+                [-1.0, 1.0, 0.0],
+                [1.0, -2.0, -1.0],
+                [1.0, -2.0, 1.0],
+                [-1.0, 1.0, 2.0],
+            ],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uv: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            triangles: vec![0, 1, 2, 0, 2, 3],
+        };
+
+        let (positions, normals, uv) = clipped_main_menu_geometry(&mesh, 0.0);
+
+        assert_eq!(positions.len(), 9);
+        assert_eq!(normals.len(), positions.len());
+        assert_eq!(uv.len(), positions.len());
+        assert!(positions.iter().all(|position| position[1] >= 0.0));
+        assert!(
+            positions
+                .iter()
+                .filter(|position| position[1].abs() < f32::EPSILON)
+                .count()
+                >= 4
         );
     }
 
@@ -30999,34 +31295,34 @@ mod tests {
     }
 
     #[test]
-    fn windmill_rotation_preserves_unity_axes_and_speed() {
+    fn windmill_rotation_uses_converted_mesh_axes_and_unity_speed() {
         let content = embedded_content();
         let windmill = &content.buildings[&StableId::new("building:windmill").unwrap()];
         let rotors = &content.archetypes[&windmill.archetype].rotating_nodes;
         assert_eq!(rotors.len(), 2);
         assert_eq!(rotors[0].age, Some(1));
         assert_eq!(rotors[0].node, "Age01_Windmill_Blades");
-        assert!(Vec3::from_array(rotors[0].axis).abs_diff_eq(Vec3::Z, f32::EPSILON));
+        assert!(Vec3::from_array(rotors[0].axis).abs_diff_eq(Vec3::Y, f32::EPSILON));
         assert!((rotors[0].degrees_per_second - 35.0).abs() < f32::EPSILON);
         assert_eq!(rotors[1].age, Some(2));
         assert_eq!(rotors[1].node, "Age02_Windmill_Blades");
-        assert!(Vec3::from_array(rotors[1].axis).abs_diff_eq(Vec3::Y, f32::EPSILON));
+        assert!(Vec3::from_array(rotors[1].axis).abs_diff_eq(Vec3::Z, f32::EPSILON));
         assert!((rotors[1].degrees_per_second - 35.0).abs() < f32::EPSILON);
 
         let mut age_one = Transform::default();
-        apply_authored_local_rotation(&mut age_one, Vec3::Z, 35.0_f32.to_radians(), 1.0);
+        apply_authored_local_rotation(&mut age_one, Vec3::Y, 35.0_f32.to_radians(), 1.0);
         assert!(
             age_one
                 .rotation
-                .abs_diff_eq(Quat::from_rotation_z(35.0_f32.to_radians()), 1e-6)
+                .abs_diff_eq(Quat::from_rotation_y(35.0_f32.to_radians()), 1e-6)
         );
 
         let mut age_two = Transform::default();
-        apply_authored_local_rotation(&mut age_two, Vec3::Y, 35.0_f32.to_radians(), 0.5);
+        apply_authored_local_rotation(&mut age_two, Vec3::Z, 35.0_f32.to_radians(), 0.5);
         assert!(
             age_two
                 .rotation
-                .abs_diff_eq(Quat::from_rotation_y(17.5_f32.to_radians()), 1e-6)
+                .abs_diff_eq(Quat::from_rotation_z(17.5_f32.to_radians()), 1e-6)
         );
     }
 
@@ -31888,6 +32184,10 @@ mod tests {
             Vec4::new(0.0, 0.5, 0.0, 0.0)
         );
         assert!(TreeMaterialExtension::enable_shadows());
+        let world_material = tree_material(&embedded_presentation(), None);
+        assert!(world_material.extension.parameters.wind_controls.y > 0.0);
+        let shader = include_str!("../../../assets/shaders/tree_material.wgsl");
+        assert!(shader.contains("get_world_from_local(in.instance_index)[3].xz"));
         let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");
         assert!(prepass.contains("deformed_tree_position"));
         assert!(prepass.contains("previous_world_position"));
@@ -33832,9 +34132,9 @@ mod tests {
         let menu_water = main_menu_water_material(water.clone());
         assert_eq!(
             menu_water.extension.parameters.opacity_controls,
-            Vec4::new(0.965, 0.985, 0.0, 0.0)
+            Vec4::new(0.68, 0.78, 1.0, 0.46)
         );
-        assert_eq!(menu_water.base.alpha_mode, AlphaMode::Opaque);
+        assert_eq!(menu_water.base.alpha_mode, AlphaMode::Blend);
         let surface = unity_shader_color([0.0, 0.764_705_9, 1.0, 1.0]);
         let target = unity_shader_color([0.05, 0.29, 0.47, 0.62]);
         assert_eq!(

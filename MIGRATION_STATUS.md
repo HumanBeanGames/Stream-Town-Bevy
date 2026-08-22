@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -81,6 +81,23 @@ mistaken for production-ready systems.
   when it is smaller than a screen pixel. This recreates Unity's mipmapped TGA
   sampling without the prior moving white-static aliasing on menu and credits
   cloud planes.
+- The authored main menu corrective bake is now version 3. It retains the
+  generator seed/hash and all 2,565 resource plus 12,392 foliage records while
+  applying a menu-only 3x vertical scale, independently sampled/flattened
+  foundations, and recomputed normals. Its water uses one fixed depth and lower
+  alpha over a uniform floor; submerged checker triangles no longer split the
+  ocean into dark/light regions. Menu foliage has stable object-space colour
+  variation and a static no-wind material to eliminate blue/black temporal
+  flashes. Clouds are explicit non-shadowing cuboids, and both windmill ages
+  rotate around the normal of their emitted GLB blade plane rather than the
+  pre-conversion Unity FBX axis.
+- Main-menu startup keeps the complete bake for deterministic validation but
+  evenly samples the static presentation to 900 visible resources and 3,200
+  visible foliage entities. The 186 repeated farms spawn only their completed
+  Base/Full primitives, reducing asynchronous scene roots from 285 to 99, and
+  boot tracks the exact `Scene(0)` handles consumed after transition. Runtime
+  timing logs distinguish the approximately 0.4s asset preload from the
+  remaining approximately 12s first-use DX12 scene/material preparation cost.
 - Unity shader color properties are now converted from authored sRGB into the
   linear values Bevy's PBR passes require. Terrain, water, grass, building
   detail/emission, placement bounds, and flags therefore retain detail under

@@ -69,6 +69,13 @@ fn fragment(
 #ifdef VERTEX_COLORS
     depth = clamp(in.color.r, 0.0, 1.0);
 #endif
+    // A flat menu plane has no vertex-depth data. Treating animated broad
+    // noise as physical depth divided it into conspicuous light- and dark-blue
+    // regions, so menu materials can request one fixed authored depth through
+    // opacity_controls.z/w while the generated world keeps its vertex depth.
+    if water_material.opacity_controls.z > 0.5 {
+        depth = clamp(water_material.opacity_controls.w, 0.0, 1.0);
+    }
     let shallow = pow(1.0 - depth, water_material.depth_foam_controls.y);
     var color = mix(water_material.deep_color, water_material.surface_color, shallow);
     color = mix(color, vec4<f32>(1.0, 1.0, 1.0, 0.0), clamp(wind_noise, 0.0, 1.0));

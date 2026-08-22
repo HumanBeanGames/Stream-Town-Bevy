@@ -10,6 +10,8 @@ use stream_town_domain::{
     MainMenuResourceVisual, MainMenuSceneReference, generate_world_with_content,
 };
 
+const MAIN_MENU_TERRAIN_HEIGHT_MULTIPLIER: f32 = 3.0;
+
 #[derive(Debug, Serialize)]
 pub(crate) struct ConversionReport {
     destination: String,
@@ -274,7 +276,13 @@ pub(crate) fn bake(
         // -3.5m beach shelf, and 0m land. Weighting ordinary generated height
         // by that existing shoreline mask preserves its silhouette.
         let shoreline_weight = ((source_vertex[1] + 7.0) / 7.0).clamp(0.0, 1.0);
-        vertex[1] = source_vertex[1] + generated_height * shoreline_weight;
+        // The authored menu camera views the town almost side-on. Ordinary
+        // gameplay relief (0.5m steps) reads as flat from that distance, so
+        // amplify only the baked presentation height. Squaring the shoreline
+        // mask keeps the -3.5m beach shelf submerged instead of lifting it out
+        // of the ocean as land relief is exaggerated.
+        vertex[1] = source_vertex[1]
+            + generated_height * shoreline_weight.powi(2) * MAIN_MENU_TERRAIN_HEIGHT_MULTIPLIER;
     }
 
     let foundations = building_foundations(&reference.instances, &content, &config);
@@ -333,11 +341,12 @@ pub(crate) fn bake(
     let adjusted_vertices = mesh.vertices.len();
     reference.schema_version = 3;
     reference.corrective_bake = Some(MainMenuCorrectiveBake {
-        version: 2,
+        version: 3,
         seed: generated.seed,
         generator_version: generated.generator_version,
         generator_hash: generated.deterministic_hash.clone(),
         cell_size: config.world.cell_size,
+        terrain_height_multiplier: MAIN_MENU_TERRAIN_HEIGHT_MULTIPLIER,
         water_height,
         water_extent: 620.0,
         ocean_floor_height: -7.05,

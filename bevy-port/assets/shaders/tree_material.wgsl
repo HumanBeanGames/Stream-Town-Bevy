@@ -162,9 +162,28 @@ fn fragment(
     vertex_color = in.color;
 #endif
     let main_sample = textureSample(main_texture, main_sampler, uv);
-    let cell = floor(in.world_position.xz / 32.0);
+    // Seasonal variation belongs to the tree instance, not to each deformed
+    // fragment. Hashing animated world positions made vertices crossing a
+    // 32m boundary jump between green/teal palettes as the canopy swayed.
+    var variation_position = in.world_position.xz;
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    variation_position = mesh_functions::get_world_from_local(in.instance_index)[3].xz;
+#endif
+    let cell = floor(variation_position / 32.0);
     let seed = fract(sin(dot(cell + vec2<f32>(1.0), vec2<f32>(12.9898, 78.233))) * 43758.55);
-    let summer = mix(main_sample.rgb, summer_color(seed), 0.3 * (1.0 - vertex_color.b));
+    // COLOR_0.b is the trunk/branch mask. The atlas contains blue water cells
+    // next to the foliage palette; retaining 70% of that atlas sample on leaf
+    // vertices made distant pines and bushes flash blue. Canopy vertices use
+    // the deterministic seasonal palette while woody vertices keep the atlas.
+    let atlas_blue_leak = smoothstep(
+        0.04,
+        0.22,
+        main_sample.b - max(main_sample.r, main_sample.g),
+    );
+    // Red is also the authored wind mask and is the more reliable canopy mask
+    // on the pine variant, whose blue-channel mask is fully set.
+    let canopy_weight = max(max(1.0 - vertex_color.b, vertex_color.r), atlas_blue_leak);
+    let summer = mix(main_sample.rgb, summer_color(seed), canopy_weight);
     let autumn = mix(autumn_color(seed), main_sample.rgb, vertex_color.b);
     var authored_color = mix(summer, autumn, tree_material.season_controls.x);
     let snow_target = mix(authored_color, vec3<f32>(1.0), vertex_color.g);
