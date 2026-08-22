@@ -4055,6 +4055,34 @@ mod tests {
         }
     }
 
+    fn tracked_unity_asset(root: &Path, path: &str, kind: &str) -> UnityAsset {
+        let meta_path = root.join(format!("{path}.meta"));
+        let meta = fs::read_to_string(&meta_path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", meta_path.display()));
+        let guid = meta
+            .lines()
+            .find_map(|line| line.strip_prefix("guid: "))
+            .unwrap_or_else(|| panic!("{} has no Unity GUID", meta_path.display()));
+        let name = Path::new(path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_else(|| panic!("{path} has no portable file stem"));
+        fixture_asset(guid, path, kind, name)
+    }
+
+    fn tracked_unity_export(
+        root: &Path,
+        assets: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> UnityExport {
+        UnityExport {
+            schema_version: 1,
+            assets: assets
+                .into_iter()
+                .map(|(path, kind)| tracked_unity_asset(root, path, kind))
+                .collect(),
+        }
+    }
+
     #[test]
     fn parses_authored_volume_parameters() {
         let documents = parse_yaml_documents(
@@ -4205,10 +4233,32 @@ MonoBehaviour:
     #[test]
     fn converts_shipping_fish_schools_and_role_audio_references() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let export: UnityExport = serde_json::from_str(
-            &fs::read_to_string(root.join("bevy-port/generated/unity-export.json")).unwrap(),
-        )
-        .unwrap();
+        let mut export = tracked_unity_export(
+            &root,
+            [
+                ("Assets/Prefabs/VFX/Environment/Fish.prefab", "prefab"),
+                ("Assets/Models/Critters/Critter_Fish3.fbx", "model"),
+                ("Assets/Scenes/Menu/Main_Menu_02.unity", "scene"),
+                ("Assets/Scenes/Worlds/World_Town.unity", "scene"),
+            ],
+        );
+        let role_root = root.join("Assets/Resources/ScriptableObjects/Roles");
+        let mut role_assets = fs::read_dir(&role_root)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", role_root.display()))
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_stem()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("RoleData_"))
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("asset"))
+            })
+            .map(|path| normalized_path(path.strip_prefix(&root).unwrap()))
+            .map(|path| tracked_unity_asset(&root, &path, "scriptable_object"))
+            .collect::<Vec<_>>();
+        role_assets.sort_by(|left, right| left.path.cmp(&right.path));
+        export.assets.extend(role_assets);
         let (effects, bindings) = convert_fish_schools(&export, &root).unwrap();
         let effect = effects.values().next().unwrap();
         assert_eq!(effects.len(), 1);
@@ -4285,10 +4335,20 @@ MonoBehaviour:
     #[test]
     fn converts_authored_healing_graphs_and_prefab_overrides() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let export: UnityExport = serde_json::from_str(
-            &fs::read_to_string(root.join("bevy-port/generated/unity-export.json")).unwrap(),
-        )
-        .unwrap();
+        let export = tracked_unity_export(
+            &root,
+            [
+                (
+                    "Assets/Prefabs/VFX/Player/VFX_Healing_Channeling.prefab",
+                    "prefab",
+                ),
+                ("Assets/VFX/vfx_channeling.vfx", "visual_effect_graph"),
+                ("Assets/Prefabs/VFX/Player/VFX_healing.prefab", "prefab"),
+                ("Assets/VFX/vfx_healed.vfx", "visual_effect_graph"),
+                ("Assets/Models/VFX/VFX_Plus.fbx", "model"),
+                ("Assets/Sprites/VFX/Particle_02.png", "texture"),
+            ],
+        );
         let (channels, bursts) = convert_healing_vfx(&export, &root).unwrap();
         let channel = channels.values().next().unwrap();
         assert_eq!(channel.particle_capacity, 32);
