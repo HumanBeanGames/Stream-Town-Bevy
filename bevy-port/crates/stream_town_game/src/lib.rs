@@ -19164,6 +19164,18 @@ fn camera_controls(
                 .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
         }
     }
+    if !idle.0 {
+        let keyboard_zoom = if keyboard.pressed(KeyCode::KeyQ) {
+            1.0
+        } else if keyboard.pressed(KeyCode::KeyE) {
+            -1.0
+        } else {
+            0.0
+        };
+        controller.zoom_target_height = (controller.zoom_target_height
+            + keyboard_zoom * settings.0.camera.zoom_sensitivity * delta_seconds)
+            .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+    }
     transform.translation.y = transform.translation.y.lerp(
         controller.zoom_target_height,
         (delta_seconds * UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS).clamp(0.0, 1.0),
