@@ -28,8 +28,10 @@ mistaken for production-ready systems.
   FBX's single mesh-compatible armature instead of the TPose asset's nine
   independent skins, and suffix-resolved standalone tracks no longer detach
   body parts. The player-only broken animated shadow-skinning output is disabled
-  while all other world shadows remain live. Camera edge mapping, default
-  distance/span, and close-zoom range now follow the shipping Unity controller.
+  while all other world shadows remain live. The in-game camera now reproduces
+  the shipping Unity `MainCamera.prefab`: perspective 60-degree FOV, 0.3/1000
+  clipping planes, the 45-degree negative-X-side pose, physical height zoom,
+  ten-pixel edge detection, movement smoothing, and serialized XZ bounds.
 - A Bevy 0.19/Rust 1.95 workspace split into domain, game, tools, migration, and
   `xtask` crates.
 - The `Boot`, `MainMenu`, `WorldLoading`, `InGame`, and `Credits` application
@@ -114,8 +116,8 @@ mistaken for production-ready systems.
   636,804-vertex/318,402-triangle Bevy terrain surface generated directly from
   the 200x200 navigation height field.
 - A runnable explicit 300-agent ECS benchmark, dynamic obstacles, path
-  following, a town hall, resources, a status HUD, orthographic 3D pan/zoom
-  camera controls, collider-backed surface picking, screenshot capture,
+  following, a town hall, resources, a status HUD, Unity-matched perspective
+  3D pan/zoom camera controls, collider-backed surface picking, screenshot capture,
   directional lighting, converted representative GLB scenes with primitive
   fallbacks, and an explicit idle/moving visual state machine. Terrain vertex
   colors encode elevation, a translucent water surface uses the authored water

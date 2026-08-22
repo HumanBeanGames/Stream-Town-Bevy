@@ -197,10 +197,13 @@ local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass
 In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
 J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
 save/load, F12 to capture a screenshot, and Escape to open the game menu. Use
-the screen edges for the same Unity-relative pan directions. The shipping-scale
-camera starts with a 72-unit vertical span, can zoom down to roughly the Unity
-15-unit close view, and keeps the original isometric pitch at a matching camera
-distance. Use
+the screen edges for the same Unity-relative pan directions. Gameplay now uses
+the shipping `MainCamera.prefab` contract directly: a 60-degree perspective
+lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
+the town's negative-X side, physical 11-60 height zoom, its ten-pixel edge band,
+and its serialized XZ movement bounds. The pose is translated to the generated
+Town Hall so different deterministic terrain seeds retain Unity's opening
+composition. Use
 arrow keys and Enter to select Save Game, Load Game, Settings, Exit Game, or
 Idle Mode. Settings retain keyboard control: Tab/Shift+Tab changes category,
 arrow keys select or change values, Enter confirms, and Escape invokes the same

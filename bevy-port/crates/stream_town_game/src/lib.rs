@@ -90,12 +90,22 @@ const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
 // stress-test crowds still retain a bounded fallback, which can be overridden
 // explicitly with STREAM_TOWN_ACTOR_SCENE_BUDGET/STREAM_TOWN_ANIMATION_BUDGET.
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 64;
-// The original Unity camera starts at the bottom of its 15-30 unit height
-// range. A 520-unit orthographic span was useful while the Bevy terrain was a
-// tiny prototype, but leaves the shipping-scale town illegibly far away.
-const DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT: f32 = 72.0;
-const MIN_TOWN_CAMERA_SCALE: f32 = 0.20;
-const MAX_TOWN_CAMERA_SCALE: f32 = 4.0;
+// Orthographic framing is retained only for deterministic close-up smoke tests.
+// Shipping gameplay uses the perspective camera authored in MainCamera.prefab.
+const UNITY_TOWN_CAMERA_FOV_DEGREES: f32 = 60.0;
+const UNITY_TOWN_CAMERA_NEAR: f32 = 0.3;
+const UNITY_TOWN_CAMERA_FAR: f32 = 1_000.0;
+const UNITY_TOWN_CAMERA_OFFSET: Vec3 = Vec3::new(-26.8, 26.592_45, 0.0);
+const UNITY_TOWN_CAMERA_MIN_HEIGHT: f32 = 11.0;
+const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
+const UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT: f32 = 15.0;
+const UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT: f32 = 20.0;
+const UNITY_TOWN_CAMERA_MIN_POSITION: Vec2 = Vec2::new(-142.0, -124.0);
+const UNITY_TOWN_CAMERA_MAX_POSITION: Vec2 = Vec2::new(124.0, 124.0);
+const UNITY_TOWN_CAMERA_PAN_SMOOTHNESS: f32 = 0.5;
+const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
+const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 10.0;
+const UNITY_TOWN_CAMERA_EDGE_SIZE: f32 = 10.0;
 const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
 const PLAYER_ANIMATED_SOURCE_MODEL: &str = "Assets/Models/Characters/Characters.fbx";
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
@@ -1903,6 +1913,35 @@ struct GroupSelectionRect;
 #[derive(Component)]
 struct TownCamera;
 
+#[derive(Component, Clone)]
+struct TownCameraControllerRuntime {
+    home: Transform,
+    move_target: Vec3,
+    zoom_target_height: f32,
+}
+
+impl TownCameraControllerRuntime {
+    fn new(home: Transform) -> Self {
+        Self {
+            move_target: home.translation,
+            zoom_target_height: UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT,
+            home,
+        }
+    }
+
+    fn set_home(&mut self, home: Transform) {
+        self.move_target = home.translation;
+        self.zoom_target_height = UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT;
+        self.home = home;
+    }
+
+    fn reset(&mut self, transform: &mut Transform) {
+        *transform = self.home;
+        self.move_target = transform.translation;
+        self.zoom_target_height = UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT;
+    }
+}
+
 #[derive(Component)]
 struct ActivePetVisual {
     owner: StableId,
@@ -2911,54 +2950,61 @@ fn setup_rendering(
     let placement_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some();
     let fish_school_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some();
     let role_audio_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ROLE_AUDIO").is_some();
+    let smoke_viewport_height = if material_closeup {
+        Some(96.0)
+    } else if animation_closeup {
+        Some(8.0)
+    } else if resource_closeup {
+        Some(24.0)
+    } else if healing_closeup {
+        Some(42.0)
+    } else if combat_closeup {
+        Some(48.0)
+    } else if building_closeup {
+        Some(58.0)
+    } else if ping_closeup {
+        Some(30.0)
+    } else if foliage_closeup {
+        Some(45.0)
+    } else if shoreline_closeup {
+        Some(80.0)
+    } else if overlay_closeup {
+        Some(105.0)
+    } else if seagull_closeup {
+        Some(80.0)
+    } else if flag_closeup {
+        Some(52.0)
+    } else if godray_closeup {
+        Some(86.0)
+    } else if giraffe_closeup {
+        Some(42.0)
+    } else if placement_closeup {
+        Some(52.0)
+    } else if fish_school_closeup {
+        Some(42.0)
+    } else if role_audio_closeup {
+        Some(30.0)
+    } else {
+        None
+    };
+    let initial_camera_transform = default_town_camera_transform();
+    let initial_projection = smoke_viewport_height.map_or_else(
+        || town_camera_projection(UNITY_TOWN_CAMERA_FOV_DEGREES),
+        |viewport_height| {
+            Projection::from(OrthographicProjection {
+                scaling_mode: ScalingMode::FixedVertical { viewport_height },
+                near: -2_000.0,
+                far: 2_000.0,
+                ..OrthographicProjection::default_3d()
+            })
+        },
+    );
     commands.spawn((
         TownCamera,
+        TownCameraControllerRuntime::new(initial_camera_transform),
         Camera3d::default(),
         SpatialListener::new(0.2),
-        Projection::from(OrthographicProjection {
-            scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: if material_closeup {
-                    96.0
-                } else if animation_closeup {
-                    8.0
-                } else if resource_closeup {
-                    24.0
-                } else if healing_closeup {
-                    42.0
-                } else if combat_closeup {
-                    48.0
-                } else if building_closeup {
-                    58.0
-                } else if ping_closeup {
-                    30.0
-                } else if foliage_closeup {
-                    45.0
-                } else if shoreline_closeup {
-                    80.0
-                } else if overlay_closeup {
-                    105.0
-                } else if seagull_closeup {
-                    80.0
-                } else if flag_closeup {
-                    52.0
-                } else if godray_closeup {
-                    86.0
-                } else if giraffe_closeup {
-                    42.0
-                } else if placement_closeup {
-                    52.0
-                } else if fish_school_closeup {
-                    42.0
-                } else if role_audio_closeup {
-                    30.0
-                } else {
-                    DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT
-                },
-            },
-            near: -2_000.0,
-            far: 2_000.0,
-            ..OrthographicProjection::default_3d()
-        }),
+        initial_projection,
         AmbientLight {
             color: Color::srgb(0.70, 0.82, 0.92),
             brightness: 90.0,
@@ -2972,7 +3018,7 @@ fn setup_rendering(
             },
             ..default()
         },
-        default_town_camera_transform(),
+        initial_camera_transform,
     ));
     commands.spawn((
         TownSun,
@@ -3425,9 +3471,8 @@ fn apply_player_settings(
     }
     let msaa = player_msaa(&settings.0);
     for (entity, mut projection) in &mut cameras {
-        if let Projection::Orthographic(orthographic) = &mut *projection {
-            orthographic.scale =
-                town_camera_scale(f32::from(settings.0.camera.field_of_view_degrees) / 60.0);
+        if let Projection::Perspective(perspective) = &mut *projection {
+            perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
         }
         let mut entity_commands = commands.entity(entity);
         entity_commands.insert(msaa);
@@ -5542,20 +5587,21 @@ fn apply_authored_main_menu_camera(
     }
 }
 
-fn restore_town_camera_for_world(mut cameras: TownCameraMutQuery, mut sun: TownSunMutQuery) {
+fn restore_town_camera_for_world(
+    settings: Res<RuntimePlayerSettings>,
+    mut cameras: TownCameraMutQuery,
+    mut controllers: Query<&mut TownCameraControllerRuntime, With<TownCamera>>,
+    mut sun: TownSunMutQuery,
+) {
     for (mut camera, mut projection, mut transform, mut ambient) in &mut cameras {
         camera.clear_color = bevy::camera::ClearColorConfig::Default;
-        *projection = Projection::from(OrthographicProjection {
-            scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT,
-            },
-            near: -2_000.0,
-            far: 2_000.0,
-            ..OrthographicProjection::default_3d()
-        });
+        *projection = town_camera_projection(f32::from(settings.0.camera.field_of_view_degrees));
         *transform = default_town_camera_transform();
         ambient.color = Color::srgb(0.70, 0.82, 0.92);
         ambient.brightness = 90.0;
+    }
+    if let Ok(mut controller) = controllers.single_mut() {
+        controller.set_home(default_town_camera_transform());
     }
     if let Ok((mut light, mut transform)) = sun.single_mut() {
         light.color = Color::WHITE;
@@ -9446,7 +9492,7 @@ fn generate_and_spawn_world(
     mut placers: ResMut<BuildingPlacers>,
     mut agent_commands: ResMut<AgentCommandQueue>,
     mut render_stats: ResMut<WorldRenderStats>,
-    mut cameras: Query<&mut Transform, With<TownCamera>>,
+    mut cameras: Query<(&mut Transform, &mut TownCameraControllerRuntime), With<TownCamera>>,
 ) {
     if loading.phase != WorldLoadingPhase::Spawning {
         return;
@@ -9473,8 +9519,9 @@ fn generate_and_spawn_world(
     let town_hall_definition = &content.0.buildings[&town_hall_id];
     let town_hall_placement =
         town_hall_placement_position(&config.0, town_hall_definition.footprint);
-    if let Ok(mut camera) = cameras.single_mut() {
-        *camera = if std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some() {
+    let town_hall_focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
+    if let Ok((mut camera, mut controller)) = cameras.single_mut() {
+        let transform = if std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some() {
             let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
             let focus = Vec3::new(145.0, water_height - 2.0, 0.0);
             Transform::from_translation(focus + Vec3::new(0.0, 45.0, 0.01))
@@ -9579,8 +9626,10 @@ fn generate_and_spawn_world(
             let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
             Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
         } else {
-            default_town_camera_transform()
+            unity_town_camera_transform(town_hall_focus)
         };
+        *camera = transform;
+        controller.set_home(transform);
     }
     let town_hall_region = building_region(
         town_hall_placement,
@@ -9736,7 +9785,7 @@ fn generate_and_spawn_world(
         }
     }
 
-    let hall = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
+    let hall = town_hall_focus;
     let mut hall_entity = commands.spawn((
         WorldEntity,
         TownHall,
@@ -9946,14 +9995,16 @@ fn generate_and_spawn_world(
         let world_position = grid_to_world_on_surface(position, &config.0, &generated);
         if spawned == 0
             && std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
-            && let Ok(mut camera) = cameras.single_mut()
+            && let Ok((mut camera, mut controller)) = cameras.single_mut()
         {
-            *camera = Transform::from_xyz(
+            let transform = Transform::from_xyz(
                 world_position.x + 7.0,
                 world_position.y + 6.0,
                 world_position.z + 7.0,
             )
             .looking_at(world_position + Vec3::Y * 1.6, Vec3::Y);
+            *camera = transform;
+            controller.set_home(transform);
         }
         let (actor_id, initial_role) = initial_actor_identity(spawned);
         let actor_id = StableId::new(actor_id).expect("generated ID");
@@ -19016,98 +19067,143 @@ fn camera_controls(
     settings: Res<RuntimePlayerSettings>,
     mut requests: ResMut<CameraCommandQueue>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut cameras: Query<(&mut Transform, &mut Projection), With<TownCamera>>,
+    mut cameras: Query<
+        (
+            &mut Transform,
+            &mut Projection,
+            &mut TownCameraControllerRuntime,
+        ),
+        With<TownCamera>,
+    >,
 ) {
     if menu.page != MenuPage::Closed {
         return;
     }
-    let Ok((mut transform, mut projection)) = cameras.single_mut() else {
+    let Ok((mut transform, mut projection, mut controller)) = cameras.single_mut() else {
         return;
     };
-    let mut screen_direction = Vec2::ZERO;
-    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyA) {
-        screen_direction.x -= 1.0;
+    let delta_seconds = time.delta_secs();
+    if let Projection::Perspective(perspective) = &mut *projection {
+        perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
     }
-    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyD) {
-        screen_direction.x += 1.0;
-    }
-    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyS) {
-        screen_direction.y -= 1.0;
-    }
-    if !idle.0 && settings.0.camera.keyboard_movement && keyboard.pressed(KeyCode::KeyW) {
-        screen_direction.y += 1.0;
-    }
-    if !idle.0
-        && settings.0.camera.mouse_controls
-        && settings.0.camera.edge_scrolling
-        && let Ok(window) = windows.single()
-        && let Some(cursor) = window.cursor_position()
-    {
-        let edge = 5.0;
-        if cursor.x <= edge {
-            screen_direction.x -= settings.0.camera.edge_scroll_sensitivity / 10.0;
-        } else if cursor.x >= window.width() - edge {
-            screen_direction.x += settings.0.camera.edge_scroll_sensitivity / 10.0;
-        }
-        if cursor.y <= edge {
-            // Winit cursor Y is top-down; convert it to Unity's bottom-up
-            // screen vector before applying the shipping screen-to-world map.
-            screen_direction.y += settings.0.camera.edge_scroll_sensitivity / 10.0;
-        } else if cursor.y >= window.height() - edge {
-            screen_direction.y -= settings.0.camera.edge_scroll_sensitivity / 10.0;
-        }
-    }
-    let direction = unity_camera_world_direction(screen_direction);
-    if direction != Vec2::ZERO {
-        let speed = 42.0 * settings.0.camera.keyboard_pan_sensitivity * time.delta_secs();
-        let direction = direction.normalize();
-        transform.translation += Vec3::new(direction.x, 0.0, direction.y) * speed;
-    }
-    if !idle.0 && settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle) {
-        let pan = mouse_motion.delta * settings.0.camera.pan_sensitivity * 0.12;
-        transform.translation += Vec3::new(pan.y, 0.0, -pan.x);
-    }
-    let wheel_zoom = if settings.0.camera.mouse_controls {
-        mouse_scroll.delta.y * settings.0.camera.zoom_sensitivity * 0.004
-    } else {
-        0.0
-    };
-    let zoom_factor = if wheel_zoom.abs() > f32::EPSILON {
-        (1.0 - wheel_zoom).clamp(0.5, 1.5)
-    } else if keyboard.pressed(KeyCode::KeyQ) {
-        1.0 + time.delta_secs() * settings.0.camera.zoom_sensitivity / 10.0
-    } else if keyboard.pressed(KeyCode::KeyE) {
-        1.0 - time.delta_secs() * 0.65 * settings.0.camera.zoom_sensitivity / 10.0
-    } else {
-        1.0
-    };
-    if let Projection::Orthographic(orthographic) = &mut *projection {
-        orthographic.scale = town_camera_scale(orthographic.scale * zoom_factor);
-    }
-    if let Some(request) = requests.0.pop_front() {
-        if request.reset {
-            *transform = default_town_camera_transform();
-            if let Projection::Orthographic(orthographic) = &mut *projection {
-                orthographic.scale = 1.0;
+
+    let is_panning =
+        !idle.0 && settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle);
+    if is_panning {
+        // Winit mouse Y grows downward; Unity's input coordinate grows upward.
+        let unity_delta = Vec2::new(mouse_motion.delta.x, -mouse_motion.delta.y);
+        let movement =
+            Vec3::new(unity_delta.y, 0.0, -unity_delta.x) * settings.0.camera.pan_sensitivity;
+        transform.translation +=
+            movement * (delta_seconds * UNITY_TOWN_CAMERA_PAN_SMOOTHNESS).clamp(0.0, 1.0);
+        transform.translation = constrain_town_camera_position(transform.translation);
+        controller.move_target = transform.translation;
+    } else if !idle.0 {
+        let edge_direction = if settings.0.camera.mouse_controls
+            && settings.0.camera.edge_scrolling
+            && let Ok(window) = windows.single()
+            && let Some(cursor) = window.cursor_position()
+        {
+            let mut screen = Vec2::ZERO;
+            if cursor.x >= window.width() - UNITY_TOWN_CAMERA_EDGE_SIZE {
+                screen.x = 1.0;
+            } else if cursor.x <= UNITY_TOWN_CAMERA_EDGE_SIZE {
+                screen.x = -1.0;
             }
+            if cursor.y <= UNITY_TOWN_CAMERA_EDGE_SIZE {
+                screen.y = 1.0;
+            } else if cursor.y >= window.height() - UNITY_TOWN_CAMERA_EDGE_SIZE {
+                screen.y = -1.0;
+            }
+            (screen != Vec2::ZERO).then_some(screen)
+        } else {
+            None
+        };
+
+        let movement_per_second = if let Some(screen) = edge_direction {
+            let direction = unity_camera_world_direction(screen).normalize_or_zero();
+            direction * settings.0.camera.edge_scroll_sensitivity
+        } else if settings.0.camera.keyboard_movement {
+            let mut screen = Vec2::ZERO;
+            if keyboard.pressed(KeyCode::KeyA) {
+                screen.x -= 1.0;
+            }
+            if keyboard.pressed(KeyCode::KeyD) {
+                screen.x += 1.0;
+            }
+            if keyboard.pressed(KeyCode::KeyS) {
+                screen.y -= 1.0;
+            }
+            if keyboard.pressed(KeyCode::KeyW) {
+                screen.y += 1.0;
+            }
+            let zoom_ratio = controller.zoom_target_height
+                / (UNITY_TOWN_CAMERA_MAX_HEIGHT - UNITY_TOWN_CAMERA_MIN_HEIGHT);
+            let zoom_out_boost = (zoom_ratio + 1.0).powf(zoom_ratio + 1.0);
+            unity_camera_world_direction(screen)
+                * (zoom_out_boost * settings.0.camera.keyboard_pan_sensitivity)
+        } else {
+            Vec2::ZERO
+        };
+        controller.move_target +=
+            Vec3::new(movement_per_second.x, 0.0, movement_per_second.y) * delta_seconds;
+        controller.move_target = constrain_town_camera_position(controller.move_target);
+        let current_height = transform.translation.y;
+        transform.translation = transform.translation.lerp(
+            controller.move_target,
+            (delta_seconds * UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS).clamp(0.0, 1.0),
+        );
+        transform.translation.y = current_height;
+    }
+
+    if !idle.0 && settings.0.camera.mouse_controls {
+        let scroll = unity_mouse_scroll_delta(&mouse_scroll);
+        if scroll.abs() > f32::EPSILON {
+            controller.zoom_target_height = (controller.zoom_target_height
+                - scroll * settings.0.camera.zoom_sensitivity * 0.004)
+                .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+        }
+    }
+    transform.translation.y = transform.translation.y.lerp(
+        controller.zoom_target_height,
+        (delta_seconds * UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS).clamp(0.0, 1.0),
+    );
+    controller.move_target.y = transform.translation.y;
+
+    if idle.0
+        && let Some(request) = requests.0.pop_front()
+    {
+        if request.reset {
+            controller.reset(&mut transform);
         } else {
             for action in request.actions {
                 let amount = i16::try_from(action.amount.clamp(-100, 100)).map_or(0.0, f32::from);
                 match action.direction {
-                    CameraDirection::Up => transform.translation.z += amount * 12.0,
-                    CameraDirection::Down => transform.translation.z -= amount * 12.0,
-                    CameraDirection::Left => transform.translation.x -= amount * 12.0,
-                    CameraDirection::Right => transform.translation.x += amount * 12.0,
+                    CameraDirection::Up
+                    | CameraDirection::Down
+                    | CameraDirection::Left
+                    | CameraDirection::Right => {
+                        let screen = match action.direction {
+                            CameraDirection::Up => Vec2::Y,
+                            CameraDirection::Down => Vec2::NEG_Y,
+                            CameraDirection::Left => Vec2::NEG_X,
+                            CameraDirection::Right => Vec2::X,
+                            CameraDirection::In | CameraDirection::Out => unreachable!(),
+                        };
+                        let direction = unity_camera_world_direction(screen);
+                        controller.move_target +=
+                            Vec3::new(direction.x, 0.0, direction.y) * amount * 12.0;
+                        controller.move_target =
+                            constrain_town_camera_position(controller.move_target);
+                    }
                     CameraDirection::In | CameraDirection::Out => {
-                        if let Projection::Orthographic(orthographic) = &mut *projection {
-                            let signed = if action.direction == CameraDirection::In {
-                                -amount
-                            } else {
-                                amount
-                            };
-                            orthographic.scale =
-                                town_camera_scale(orthographic.scale * 1.12_f32.powf(signed));
-                        }
+                        let signed = if action.direction == CameraDirection::In {
+                            -amount
+                        } else {
+                            amount
+                        };
+                        controller.zoom_target_height = (controller.zoom_target_height + signed)
+                            .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
                     }
                 }
             }
@@ -19119,8 +19215,25 @@ fn unity_camera_world_direction(screen_direction: Vec2) -> Vec2 {
     Vec2::new(screen_direction.y, -screen_direction.x)
 }
 
-fn town_camera_scale(scale: f32) -> f32 {
-    scale.clamp(MIN_TOWN_CAMERA_SCALE, MAX_TOWN_CAMERA_SCALE)
+fn unity_mouse_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
+    match scroll.unit {
+        bevy::input::mouse::MouseScrollUnit::Line => scroll.delta.y * 120.0,
+        bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta.y,
+    }
+}
+
+fn constrain_town_camera_position(position: Vec3) -> Vec3 {
+    Vec3::new(
+        position.x.clamp(
+            UNITY_TOWN_CAMERA_MIN_POSITION.x,
+            UNITY_TOWN_CAMERA_MAX_POSITION.x,
+        ),
+        position.y,
+        position.z.clamp(
+            UNITY_TOWN_CAMERA_MIN_POSITION.y,
+            UNITY_TOWN_CAMERA_MAX_POSITION.y,
+        ),
+    )
 }
 
 fn camera_ground_focus(transform: &Transform) -> Vec2 {
@@ -19350,10 +19463,24 @@ fn sync_active_pets(
 }
 
 fn default_town_camera_transform() -> Transform {
-    // Preserve the old isometric pitch while bringing the physical camera
-    // distance into line with the 72/520 viewport-height correction. This also
-    // keeps the visible town inside Bevy's directional-shadow cascades.
-    Transform::from_xyz(50.0, 58.0, 50.0).looking_at(Vec3::ZERO, Vec3::Y)
+    unity_town_camera_transform(Vec3::ZERO)
+}
+
+fn unity_town_camera_transform(focus: Vec3) -> Transform {
+    // Unity MainCamera.prefab: position (-26.8, 26.59245, 0), Euler (45, 90, 0).
+    // Unity's +Z reflection changes handedness, but this side-on pose has no Z
+    // offset; looking along +X/down reproduces the authored rotation directly.
+    Transform::from_translation(focus + UNITY_TOWN_CAMERA_OFFSET)
+        .looking_to(Vec3::new(1.0, -1.0, 0.0).normalize(), Vec3::Y)
+}
+
+fn town_camera_projection(field_of_view_degrees: f32) -> Projection {
+    Projection::Perspective(PerspectiveProjection {
+        fov: field_of_view_degrees.to_radians(),
+        near: UNITY_TOWN_CAMERA_NEAR,
+        far: UNITY_TOWN_CAMERA_FAR,
+        ..default()
+    })
 }
 
 fn ping_pointer_scale(elapsed_seconds: f32) -> f32 {
@@ -28079,15 +28206,33 @@ mod tests {
     }
 
     #[test]
-    fn town_camera_starts_close_and_can_reach_unity_scale_detail() {
-        assert!((DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT - 72.0).abs() < f32::EPSILON);
-        assert!((town_camera_scale(0.0) - MIN_TOWN_CAMERA_SCALE).abs() < f32::EPSILON);
-        assert!((town_camera_scale(10.0) - MAX_TOWN_CAMERA_SCALE).abs() < f32::EPSILON);
-        let closest_span =
-            DEFAULT_TOWN_CAMERA_VIEWPORT_HEIGHT * town_camera_scale(f32::NEG_INFINITY);
+    fn town_camera_matches_the_shipping_unity_prefab() {
+        let focus = Vec3::new(7.0, 2.5, -11.0);
+        let transform = unity_town_camera_transform(focus);
         assert!(
-            closest_span < 18.0,
-            "minimum span should reach approximately Unity's 15-unit close view"
+            transform
+                .translation
+                .distance(focus + Vec3::new(-26.8, 26.592_45, 0.0))
+                < 0.000_1
+        );
+        assert!(
+            transform
+                .forward()
+                .as_vec3()
+                .distance(Vec3::new(1.0, -1.0, 0.0).normalize())
+                < 0.000_1
+        );
+        let Projection::Perspective(projection) =
+            town_camera_projection(UNITY_TOWN_CAMERA_FOV_DEGREES)
+        else {
+            panic!("shipping town camera must remain perspective");
+        };
+        assert!((projection.fov.to_degrees() - 60.0).abs() < 0.000_1);
+        assert!((projection.near - 0.3).abs() < 0.000_1);
+        assert!((projection.far - 1_000.0).abs() < 0.000_1);
+        assert_eq!(
+            constrain_town_camera_position(Vec3::new(-200.0, 15.0, 200.0)),
+            Vec3::new(-142.0, 15.0, 124.0)
         );
     }
 
@@ -33705,7 +33850,11 @@ mod tests {
         assert_eq!(terrain_lod_samples(16, 4), vec![0, 4, 8, 12, 16]);
 
         let focus = camera_ground_focus(&default_town_camera_transform());
-        assert!(focus.length() < 0.01);
+        let authored_focus = Vec2::new(
+            UNITY_TOWN_CAMERA_OFFSET.x + UNITY_TOWN_CAMERA_OFFSET.y,
+            UNITY_TOWN_CAMERA_OFFSET.z,
+        );
+        assert!(focus.distance(authored_focus) < 0.000_1);
     }
 
     #[test]
