@@ -6,6 +6,7 @@
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing, visibility_range_dither},
     view_transformations::position_world_to_clip,
 }
+#import "shaders/tree_wind.wgsl"::{stream_town_tree_deformed_position}
 
 struct TreeMaterialUniform {
     wind_direction_smoothness: vec4<f32>,
@@ -34,32 +35,16 @@ fn vertex(vertex: Vertex) -> VertexOutput {
         world_from_local,
         vec4<f32>(local_position, 1.0),
     );
-    let direction = tree_material.wind_direction_smoothness.xy;
-    let sync = tree_material.wind_controls.x;
-    let wind_strength = tree_material.wind_controls.y;
-    let detail_strength = tree_material.wind_controls.z;
-    let detail_scale = tree_material.wind_controls.w;
-    var wind_weight = 1.0;
+    var vertex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
 #ifdef VERTEX_COLORS
-    wind_weight = vertex.color.r;
+    vertex_color = vertex.color;
 #endif
-    let gust = sin(
-        view_bindings::globals.time
-            + (source_world_position.x + source_world_position.z) * sync,
+    local_position = stream_town_tree_deformed_position(
+        local_position,
+        source_world_position.xyz,
+        vertex_color,
+        view_bindings::globals.time,
     );
-    let detail_uv = fract(
-        (vertex.position.xy + view_bindings::globals.time * direction) * detail_scale
-            + vec2<f32>(detail_scale),
-    );
-    let detail_noise = textureSampleLevel(noise_texture, noise_sampler, detail_uv, 0.0).a;
-    let detail = smoothstep(
-        tree_material.wind_direction_smoothness.z,
-        tree_material.wind_direction_smoothness.w,
-        detail_noise,
-    );
-    let displacement = vec3<f32>(direction.x, 0.0, direction.y) * gust * wind_strength
-        + vec3<f32>(detail_strength * detail);
-    local_position += displacement * wind_weight;
 
 #ifdef VERTEX_NORMALS
     out.world_normal = mesh_functions::mesh_normal_local_to_world(

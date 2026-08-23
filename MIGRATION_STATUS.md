@@ -22,15 +22,17 @@ mistaken for production-ready systems.
   eliminating chunk seams. Water uses energy-conserving bloom and bounded color
   output so the high-exposure coastline cannot clip to white; normalized foam
   cutoff, single-pass foam color, and partial seasonal tint keep its authored
-  cyan depth surface visible. Tree/foliage shadow casting, self-shadow
-  suppression, object-stable colour variation, and removal of the mismatched
-  approximate wind prepass are implemented, but user testing still observes
-  in-game flicker; see the dedicated visual-regression ledger. The Player now
+  cyan depth surface visible. Tree/foliage shadow casting and object-stable
+  colour variation are joined by one shared visible/shadow tree deformation.
+  Trees now cast and receive shadows and remain PBR-lit; a fixed local
+  before/after capture removes the large black facets, pending user confirmation.
+  The Player now
   uses the animation FBX's single mesh-compatible armature instead of the TPose
-  asset's nine independent skins, and suffix-resolved standalone tracks no
-  longer detach body parts. Controller attachment and retargeting tests pass,
-  but user testing still observes a static visible character; see the dedicated
-  animation ledger. The player-only broken animated shadow-skinning output is
+  asset's nine independent skins. Its translated controller now sources each
+  motion from the matching native take on that same armature. Live diagnostics
+  measure advancing clip time, non-zero named-joint rotation, and references
+  from those joints into the rendered skin, pending user visual confirmation;
+  see the dedicated animation ledger. The player-only broken animated shadow-skinning output is
   disabled while all other world shadows remain live. The in-game camera now reproduces
   the shipping Unity `MainCamera.prefab`: perspective 60-degree FOV, 0.3/1000
   clipping planes, the 45-degree negative-X-side pose, physical height zoom,
@@ -782,14 +784,15 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Visible character animation. Converted clip/controller data, graph selection,
-  attachment, and retargeted-curve tests pass, but the current user-tested build
-  remains visibly static. The evidence and next one-variable diagnostics are in
+- User confirmation of visible character animation. The current candidate keeps
+  the full translated controller while binding all motions to the visible
+  armature's native takes; numeric runtime diagnostics prove joint and skin
+  motion, but the ordinary visual acceptance run is still outstanding. Evidence is in
   `bevy-port/docs/visual-regressions/character-animation.md`.
-- Stable in-game tree and foliage rendering. Object-stable colour variation
-  removed one blue-flash mechanism and the approximate wind prepass was removed,
-  but the current user-tested build still flickers. The failed approaches and
-  isolation matrix are in
+- User confirmation of stable, lit in-game tree rendering. Object-stable colour
+  variation removes palette flashes; one shared function now deforms visible
+  and shadow vertices; and trees cast and receive light/shadows. The prior flat
+  no-receiver partial was rejected and removed. The remaining acceptance matrix is in
   `bevy-port/docs/visual-regressions/tree-foliage-flicker.md`.
 - Exact animated-player shadow parity. The visible single-armature rig and full
   controller data path is present, but Bevy's imported shadow-skinning pass

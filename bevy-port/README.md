@@ -468,11 +468,14 @@ wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree,
 bush, and grass materials retain visible wind deformation. Grass keeps its
-compatible depth path; the mismatched approximate tree wind prepass has been
-removed, while trees and bushes cast ordinary shadows and decline self-shadow
-reception. Object-stable palette hashing fixed a separate blue-flash mechanism,
-but user testing still observes in-game tree flicker. Do not broaden or repeat
-the previous shadow/material changes without consulting
+existing depth path; tree visible and shadow vertices now import one identical
+bind-group-free deformation function, replacing both the mismatched approximate
+prepass and the later undeformed shadow silhouette. Trees and bushes cast and
+receive ordinary shadows and remain PBR-lit; only the older unsynchronized
+Grass/Critter paths retain self-shadow suppression. Object-stable palette
+hashing separately prevents blue palette flashes. The synchronized lit result
+has local before/after evidence but still awaits user confirmation. Do not
+broaden or repeat the previous shadow/material changes without consulting
 [`docs/visual-regressions/tree-foliage-flicker.md`](docs/visual-regressions/tree-foliage-flicker.md),
 which records the failed approaches and the next isolation matrix.
 Missing converted assets retain the resource-cube fallback.
@@ -540,15 +543,15 @@ land/water boundary for a repeatable depth-blend and edge-foam capture.
 `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames the converted-controller diagnostic.
 The runtime uses `Characters.glb`'s single authoritative armature and matching
 renderer variants instead of applying animation curves to the TPose export's
-nine independent skins. Standalone Unity tracks resolve by rig-path suffix,
-keep joint rotations, limit translation curves to the skeleton root, and drop
-animation scale curves. The full translated Animator controller takes priority
-over any single imported-clip fallback, its absolute base layer uses override
-composition, and Blender's `_Starter` tool suffix is normalized before role
-visibility is evaluated. Controller attachment/retargeting tests pass, but the
-current user-tested character is still visibly static; follow
+nine independent skins. The full translated Animator controller keeps its
+authored states, layers, transitions, blends, speeds, and actions, while each of
+its 20 motions now resolves to the matching native take on that same visible
+armature. `STREAM_TOWN_DEBUG_ANIMATION_BINDINGS=1` logs consecutive-frame clip
+time, representative joint rotation deltas, and exact `SkinnedMesh` joint
+references; the current local run proves non-zero motion through the visible
+skin, but still awaits the user's visual confirmation. Follow
 [`docs/visual-regressions/character-animation.md`](docs/visual-regressions/character-animation.md)
-before changing this path. The visible player remains shadow-free because
+before changing clip priority or retargeting. The visible player remains shadow-free because
 Bevy's imported shadow-skinning path otherwise emits a terrain-sized invalid
 silhouette; all other world shadows remain enabled.
 `STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
@@ -600,9 +603,8 @@ can be captured without pointer or keyboard automation.
 capture so GPU smoke runs can terminate without an external process killer.
 Compatible embedded GLB clips and translated standalone clips share Bevy
 animation graphs. The nine shipping enemy prefabs resolve their authored rig and
-full controller clip sets; the Player controller builds 19 converted clips on
-the single mesh-compatible `Characters.glb` armature, while standalone clip
-paths retarget onto matching suffixes in that hierarchy. An engine-independent interpreter evaluates
+full controller clip sets; the Player controller binds all 20 reachable motions
+to skin-compatible takes on the single `Characters.glb` armature. An engine-independent interpreter evaluates
 typed parameters, trigger consumption, direct transitions, exit gates, and 1D
 threshold blending; runtime movement feeds the authored velocity/5 `Move Speed`
 parameter into Idle/Walk/Run. Converted renderer descendants receive cached Bevy

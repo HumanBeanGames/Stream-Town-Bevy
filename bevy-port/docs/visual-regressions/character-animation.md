@@ -23,12 +23,13 @@ Do not mark this regression fixed until all of the following are true in the sam
 - [x] **Visible facing was corrected separately.** `2a66489` aligned the character's visible local `+Z` axis to movement. Later reports no longer describe ordinary characters as walking backward. Do not revisit facing while diagnosing static bones unless a new capture disproves it.
 - [x] **A repeatable close-up path exists.** `STREAM_TOWN_SMOKE_STATIC_RIG=1` isolates the static rig and `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames the controller path. These are diagnostic entry points only; a still smoke capture is not an animation acceptance test.
 - [x] **The runtime can construct and select controller nodes.** Current tests cover converted clip records, graph composition, layer masks, transition selection, state speed, crossfades, action contracts, and retargeted curve creation. Attachment logs have reported controllers, clips, and targets. This narrows the remaining fault to live playback/target/skin application rather than missing controller RON.
+- [x] **The visible skin now receives motion from clips authored for its own consolidated armature (current candidate).** The full translated controller remains authoritative, but each of its 20 motions resolves to the matching native take inside `Characters.glb` when available. This is materially different from the old single native-fallback preference: it preserves layers, transitions, actions, weights, and crossfades while replacing only the incompatible standalone-rig curve source. A live `STREAM_TOWN_DEBUG_ANIMATION_BINDINGS=1` run measured advancing playback and 0.53–0.92-radian rotation deltas on `Thigh_L`/`UpperArm_L`; the measured joints were referenced by the visible glTF skin. This is strong internal evidence, but the visual regression stays open until the acceptance gate and user check pass.
 
 ## What did not fix visible animation
 
 - [ ] **FAILED AS A VISUAL FIX — initial Idle/Walk retargeting (`3965dd2`).** It built Bevy curves and an `AnimationGraph`, but subsequent user checks still found characters unanimated.
 - [ ] **FAILED AS A VISUAL FIX — full translated controller execution (`c49844d` plus the controller series listed above).** Typed transitions and weights execute in isolation, but adding more controller semantics did not make the rendered skeleton move.
-- [ ] **FAILED AS A VISUAL FIX — native imported-clip preference.** Earlier runtime code preferred a native GLB clip when available. The characters remained wrong/static, and an embedded bind/default-pose take could win without exercising the authored controller.
+- [ ] **FAILED AS A VISUAL FIX — single native imported-clip preference.** Earlier runtime code replaced the controller with one available native GLB take. The characters remained wrong/static, and an embedded bind/default-pose take could win without exercising the authored controller. Do not confuse that failed shortcut with the current per-motion, skin-compatible sources inside the complete translated controller.
 - [ ] **FAILED AS A VISUAL FIX — converted-controller preference and override composition (`2a66489`).** This made the full controller take priority and changed the outer graph from additive to override blending. The user subsequently reported that characters were still not animated.
 - [ ] **FAILED AS A VISUAL FIX — broad rig/path suffix retargeting (`e00431e`).** Matching standalone track paths by suffix, keeping joint rotation, limiting skeletal translation, and dropping skeletal scale curves prevented detached body parts, but did not establish visible animation.
 - [ ] **FAILED AS A VISUAL FIX — explicit `CharacterArmature` root plus `pelvis/...` suffix mapping (`207e641`).** Tests showed retargeted curves and smoke logs reported five attached starting controllers, 20 clips, and 245 targets per controller. The current user report disproves the claim that this produced visible motion.
@@ -58,6 +59,17 @@ Run these in order and record the result before changing behavior:
 - [ ] Add an integration test that advances real Bevy time and asserts a named real joint transform changes. Keep the existing contract tests, but do not treat them as a substitute.
 - [ ] Capture a short idle-to-walk-to-idle video using the same actor and camera. Compare motion, not just pose or attachment logs.
 - [ ] Identify the user-observed known-good revision by replaying the same capture while bisecting. No exact known-good commit is currently proven, so do not label a candidate solely from its commit message.
+
+## Current attempt
+
+- [ ] **`pending` — preserve the full controller but source every motion from the visible skin's native armature**
+  - Changed: clip source binding only; standalone `PlayerChar_TPose.glb` motion tracks are mapped by authored name to the corresponding `Characters.glb` take.
+  - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`, `npc:starting_logger`, `npc:starting_miner`, `npc:starting_gatherer`, and `npc:starting_builder`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
+  - Player elapsed delta: `0.0295718` seconds in the sampled rendered frame.
+  - Named joint transform delta: `Thigh_L = 0.4646586` radians; `UpperArm_L = 0.9139379` radians.
+  - Visible skin result: every sampled joint had `joint_skin_references = 123`; local still capture at `.stream-town/diagnostics/animation-binding-proof.png` (not accepted as motion evidence).
+  - User result: `not checked`.
+  - Reuse rule: do not change clip priority or retargeting again unless the diagnostic reports zero elapsed time, zero joint delta, or a joint unused by the rendered skin.
 
 ## Attempt record template
 

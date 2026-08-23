@@ -34,6 +34,7 @@ use bevy::{
     light::DirectionalLightShadowMap,
     math::Affine2,
     mesh::Indices,
+    mesh::skinning::SkinnedMesh,
     pbr::ScreenSpaceAmbientOcclusion,
     pbr::{ExtendedMaterial, MaterialExtension},
     post_process::{
@@ -156,6 +157,7 @@ const GIRAFFE_MATERIAL_PATH: &str = "Assets/Materials/Character/Giraffe.mat";
 const BOUNDS_SHADER_ASSET_PATH: &str = "shaders/bounds_material.wgsl";
 const BOUNDS_MATERIAL_PATH: &str = "Assets/Materials/BoundsVisualizer.mat";
 const TREE_SHADER_ASSET_PATH: &str = "shaders/tree_material.wgsl";
+const TREE_PREPASS_SHADER_ASSET_PATH: &str = "shaders/tree_material_prepass.wgsl";
 const TREE_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Tree.mat";
 const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
 const GRASS_PREPASS_SHADER_ASSET_PATH: &str = "shaders/grass_material_prepass.wgsl";
@@ -873,6 +875,10 @@ impl MaterialExtension for TreeMaterialExtension {
 
     fn fragment_shader() -> ShaderRef {
         TREE_SHADER_ASSET_PATH.into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        TREE_PREPASS_SHADER_ASSET_PATH.into()
     }
 }
 
@@ -2490,6 +2496,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                report_animation_binding_diagnostics
+                    .after(drive_converted_animations)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 animate_fish_school.run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3057,16 +3069,14 @@ fn setup_rendering(
         Some(BUILDING_PLACEMENT_FAIL_COLOR),
     ));
     let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
-    // Menu foliage is viewed as a dense, distant silhouette. A dedicated
-    // unlit material keeps it stably green across the shared-atlas palette and
-    // blue ambient light while the gameplay TreeMaterial retains seasons,
-    // wind, and its animated shadow prepass.
+    // Menu foliage keeps a dedicated solid-colour material so the shared atlas
+    // cannot leak blue, but remains lit so it responds to the authored sun and
+    // receives the same ordinary world shadows as gameplay foliage.
     let menu_tree = materials.add(StandardMaterial {
         // Compensate for the menu's authored -1.5 EV exposure so the stable
         // green silhouette remains readable rather than collapsing to black.
         base_color: Color::srgb(0.42, 0.72, 0.16),
         perceptual_roughness: 1.0,
-        unlit: true,
         ..default()
     });
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
@@ -3507,6 +3517,12 @@ fn apply_player_settings(
                     UpdateMode::reactive(Duration::from_secs_f64(1.0 / f64::from(limit)))
                 })
         };
+        if animation_binding_diagnostics_enabled() {
+            // Automated GPU smoke windows cannot take focus away from the
+            // desktop host. Keep only this explicit diagnostic path updating
+            // continuously so elapsed/joint samples represent real frames.
+            winit.unfocused_mode = UpdateMode::Continuous;
+        }
     }
 }
 
@@ -6351,15 +6367,12 @@ fn main_menu_even_sample(index: usize, total: usize, budget: usize) -> bool {
 }
 
 fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> bool {
-    // Keep this policy shared by scene-material overrides and direct primitive
-    // spawns. Vertex-deformed/two-sided cards still cast a stable silhouette,
-    // but receiving that same near-coplanar shadow makes trees, bushes, and
-    // critters flash black as their visible vertices animate.
+    // Tree geometry has an exact matching shadow deformation and must receive
+    // light/shadows. Keep suppression only for the older animated materials
+    // whose shadow pass is not yet sourced from their visible deformation.
     matches!(
         material,
-        ResolvedMaterialHandle::Tree(_)
-            | ResolvedMaterialHandle::Grass(_)
-            | ResolvedMaterialHandle::Critter(_)
+        ResolvedMaterialHandle::Grass(_) | ResolvedMaterialHandle::Critter(_)
     )
 }
 
@@ -6488,7 +6501,6 @@ fn spawn_main_menu_baked_decorations(
                         * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
                 )
                 .with_scale(scale),
-            bevy::light::NotShadowReceiver,
         ));
         if let Some(material) = material {
             insert_main_menu_material(&mut entity, material, render);
@@ -10468,15 +10480,7 @@ fn spawn_resource_visual(
                 entity.insert(MeshMaterial3d(material.clone()));
             }
             ResolvedMaterialHandle::Tree(material) => {
-                entity.insert((
-                    MeshMaterial3d(material.clone()),
-                    // The visible tree vertices sway, but Bevy's generic
-                    // shadow pass cannot replay this custom vertex function.
-                    // Receiving the static self-shadow makes leaves flash
-                    // black as they move through it; the tree still casts a
-                    // stable shadow onto the ground.
-                    bevy::light::NotShadowReceiver,
-                ));
+                entity.insert(MeshMaterial3d(material.clone()));
             }
             ResolvedMaterialHandle::Grass(material) => {
                 entity.insert(MeshMaterial3d(material.clone()));
@@ -10579,9 +10583,6 @@ fn spawn_foliage_visual(
             end_margin: (visibility_end - FOLIAGE_VISIBILITY_FADE)..visibility_end,
             use_aabb: true,
         },
-        // Cast a stable silhouette into the world, but do not let these
-        // low-poly, two-sided foliage cards self-shadow into flickering black.
-        bevy::light::NotShadowReceiver,
     ));
     match material {
         Some(ResolvedMaterialHandle::Standard(material)) => {
@@ -10614,6 +10615,9 @@ fn spawn_foliage_visual(
         | None => {
             entity.insert(MeshMaterial3d(render.food.clone()));
         }
+    }
+    if material.is_some_and(material_needs_self_shadow_suppression) {
+        entity.insert(bevy::light::NotShadowReceiver);
     }
     true
 }
@@ -16888,7 +16892,11 @@ fn build_converted_animation(
             continue;
         }
         let source = presentation.clips.get(&motion.clip)?;
-        let handle = if source.transform_tracks.is_empty() {
+        let handle = if let Some((path, index)) =
+            skin_compatible_animation_request(source, &spec.rig_scene, presentation)
+        {
+            asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
+        } else if source.transform_tracks.is_empty() {
             let path = source.converted_asset_path.as_ref()?;
             let index = usize::try_from(source.gltf_animation_index?).ok()?;
             asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
@@ -16974,6 +16982,59 @@ fn build_converted_animation(
         layers,
         clip_count: converted.len(),
     })
+}
+
+fn skin_compatible_animation_request(
+    source: &AnimationClipDef,
+    rig_scene: &str,
+    presentation: &PresentationCatalog,
+) -> Option<(String, usize)> {
+    if source.rig_asset_path.as_deref() == Some(rig_scene) {
+        let path = source.converted_asset_path.clone()?;
+        let index = usize::try_from(source.gltf_animation_index?).ok()?;
+        return Some((path, index));
+    }
+    if rig_scene != PLAYER_ANIMATED_MODEL_PATH {
+        return None;
+    }
+    let native_name = native_character_animation_name(&source.display_name)?;
+    presentation.clips.values().find_map(|candidate| {
+        if candidate.display_name == native_name
+            && candidate.rig_asset_path.as_deref() == Some(rig_scene)
+            && candidate.converted_asset_path.as_deref() == Some(rig_scene)
+        {
+            Some((
+                rig_scene.to_owned(),
+                usize::try_from(candidate.gltf_animation_index?).ok()?,
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+fn native_character_animation_name(source_name: &str) -> Option<&'static str> {
+    match source_name {
+        "PlayerChar_Idle_01" => Some("CharacterIdleBase"),
+        "PlayerChar_Walk_01" => Some("CharacterWalk"),
+        "PlayerChar_Run_01" => Some("CharacterRun"),
+        "PlayerChar_Logging_05" => Some("CharacterWoodCutting"),
+        "PlayerChar_SpearAttack_01" => Some("CharacterSpearAttack"),
+        "PlayerChar_Building_01" => Some("CharacterBuild"),
+        "PlayerChar_Farming_01" => Some("CharacterFarming"),
+        "PlayerChar_DEATH_01" => Some("CharacterDeath"),
+        "PlayerChar_Healing" => Some("CharacterHeal"),
+        "PlayerChar_HammerAttack_01" => Some("CharacterHammerAttack"),
+        "PlayerChar_BowShoot_01" => Some("CharacterBowShoot"),
+        "PlayerChar_LoggerCarryWood_01" => Some("Carry_Wood"),
+        "PlayerChar_Gathering_01" => Some("CharacterGathering"),
+        "PlayerChar_Summon" | "PlayerChar_Magic" => Some("CharacterCasting"),
+        "PlayerChar_Fishing_01" => Some("CharacterFishing"),
+        "PlayerChar_Mining_02" => Some("CharacterMining"),
+        "PlayerChar_SwordAttack_01" => Some("CharacterLongSwordAttack"),
+        "PlayerChar_CarryItems_01" => Some("CarryAtHip"),
+        _ => None,
+    }
 }
 
 fn add_animation_composition(graph: &mut AnimationGraph) -> AnimationNodeIndex {
@@ -18714,6 +18775,87 @@ fn apply_animation_blend(
                 player.play(*node)
             };
         animation.repeat().set_weight(*weight).set_speed(*speed);
+    }
+}
+
+fn animation_binding_diagnostics_enabled() -> bool {
+    std::env::var_os("STREAM_TOWN_DEBUG_ANIMATION_BINDINGS").is_some()
+        || std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
+}
+
+fn report_animation_binding_diagnostics(
+    agents: Query<&Agent>,
+    players: Query<(Entity, &AnimationPlayer, &ConvertedAnimationDriver)>,
+    targets: Query<(Entity, &Name, &Transform, &AnimatedBy)>,
+    skins: Query<&SkinnedMesh>,
+    mut announced: Local<bool>,
+    mut samples: Local<u8>,
+    mut previous: Local<HashMap<Entity, (f32, Quat)>>,
+) {
+    if !animation_binding_diagnostics_enabled() {
+        return;
+    }
+    if !*announced {
+        info!("animation binding diagnostics enabled");
+        *announced = true;
+    }
+    // Capture consecutive real frames. This distinguishes an active graph from
+    // an animation that actually changes a joint used by the visible skin,
+    // even in automated windows whose wall-clock updates can be throttled.
+    if *samples >= 8 {
+        return;
+    }
+    *samples += 1;
+    for (player_entity, player, driver) in &players {
+        let stable_id = agents
+            .get(driver.actor_root)
+            .map_or("<non-agent>", |agent| agent.id.as_str());
+        let player_elapsed = player
+            .playing_animations()
+            .map(|(_, animation)| animation.elapsed())
+            .fold(0.0, f32::max);
+        let Some((joint, name, transform, _)) = targets.iter().find(|(_, name, _, animated_by)| {
+            animated_by.0 == player_entity
+                && matches!(name.as_str(), "UpperArm_L" | "Thigh_L" | "Body")
+        }) else {
+            warn!(
+                actor = ?driver.actor_root,
+                stable_id,
+                player = ?player_entity,
+                player_elapsed,
+                "animation binding diagnostic found no representative joint"
+            );
+            continue;
+        };
+        let skinned_meshes = skins.iter().count();
+        let joint_skin_references = skins
+            .iter()
+            .filter(|skin| skin.joints.contains(&joint))
+            .count();
+        let (elapsed_delta, rotation_delta) =
+            previous
+                .get(&player_entity)
+                .map_or((0.0, 0.0), |(old_elapsed, old_rotation)| {
+                    (
+                        player_elapsed - old_elapsed,
+                        old_rotation.angle_between(transform.rotation),
+                    )
+                });
+        info!(
+            actor = ?driver.actor_root,
+            stable_id,
+            player = ?player_entity,
+            active_nodes = player.playing_animations().count(),
+            player_elapsed,
+            elapsed_delta,
+            joint = %name,
+            joint_entity = ?joint,
+            rotation_delta,
+            joint_skin_references,
+            skinned_meshes,
+            "animation binding diagnostic"
+        );
+        previous.insert(player_entity, (player_elapsed, transform.rotation));
     }
 }
 
@@ -28659,8 +28801,8 @@ mod tests {
     }
 
     #[test]
-    fn animated_card_materials_share_the_no_self_shadow_policy() {
-        assert!(material_needs_self_shadow_suppression(
+    fn synchronized_tree_shadows_receive_light_while_older_card_materials_do_not() {
+        assert!(!material_needs_self_shadow_suppression(
             &ResolvedMaterialHandle::Tree(Handle::default())
         ));
         assert!(material_needs_self_shadow_suppression(
@@ -32414,13 +32556,14 @@ mod tests {
         let world_material = tree_material(&embedded_presentation(), None);
         assert!(world_material.extension.parameters.wind_controls.y > 0.0);
         let shader = include_str!("../../../assets/shaders/tree_material.wgsl");
+        let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");
+        let shared_wind = include_str!("../../../assets/shaders/tree_wind.wgsl");
         assert!(shader.contains("get_world_from_local(in.instance_index)[3].xz"));
-        assert!(
-            !Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../assets/shaders/tree_material_prepass.wgsl")
-                .exists(),
-            "an approximate wind prepass produces a second, mismatched shadow silhouette"
-        );
+        assert!(shader.contains("stream_town_tree_deformed_position"));
+        assert!(prepass.contains("stream_town_tree_deformed_position"));
+        assert!(!prepass.contains("TreeMaterialUniform"));
+        assert!(shared_wind.contains("let wind_strength = 0.79"));
+        assert!(shared_wind.contains("let sync = 0.7"));
     }
 
     #[test]
@@ -34705,6 +34848,64 @@ mod tests {
         assert!(idle.transform_tracks.iter().any(|track| {
             track.target_path.starts_with("pelvis/") && !track.translation.is_empty()
         }));
+    }
+
+    #[test]
+    fn player_controller_uses_skin_compatible_native_clips() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let player =
+            archetype_by_source(&content, ArchetypeKind::Player, "Player_Character.prefab")
+                .unwrap();
+        let spec = converted_animation_spec(player, &presentation).unwrap();
+        let controller = presentation.controllers.get(&spec.controller).unwrap();
+        let requests: BTreeMap<_, _> = controller
+            .states
+            .values()
+            .flat_map(|state| &state.motions)
+            .map(|motion| {
+                let source = presentation.clips.get(&motion.clip).unwrap();
+                let request = skin_compatible_animation_request(
+                    source,
+                    PLAYER_ANIMATED_MODEL_PATH,
+                    &presentation,
+                )
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} has no native clip compatible with the visible player skin",
+                        source.display_name
+                    )
+                });
+                assert_eq!(request.0, PLAYER_ANIMATED_MODEL_PATH);
+                (source.display_name.clone(), request.1)
+            })
+            .collect();
+        let expected: BTreeMap<_, _> = [
+            ("PlayerChar_Idle_01", 13),
+            ("PlayerChar_Walk_01", 23),
+            ("PlayerChar_Run_01", 18),
+            ("PlayerChar_Logging_05", 24),
+            ("PlayerChar_SpearAttack_01", 20),
+            ("PlayerChar_Building_01", 4),
+            ("PlayerChar_Farming_01", 7),
+            ("PlayerChar_DEATH_01", 6),
+            ("PlayerChar_Healing", 11),
+            ("PlayerChar_HammerAttack_01", 10),
+            ("PlayerChar_BowShoot_01", 3),
+            ("PlayerChar_LoggerCarryWood_01", 1),
+            ("PlayerChar_Gathering_01", 9),
+            ("PlayerChar_Summon", 5),
+            ("PlayerChar_Fishing_01", 8),
+            ("PlayerChar_Mining_02", 17),
+            ("PlayerChar_SwordAttack_01", 16),
+            ("PlayerChar_CarryItems_01", 2),
+            ("PlayerChar_Magic", 5),
+            ("CharacterStaffMagicAttack", 22),
+        ]
+        .into_iter()
+        .map(|(name, index)| (name.to_owned(), index))
+        .collect();
+        assert_eq!(requests, expected);
     }
 
     #[test]
