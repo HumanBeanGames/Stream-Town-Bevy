@@ -1,6 +1,6 @@
 # Tree and Foliage Flicker Regression Checklist
 
-Status: **OPEN — trees are visibly flickering in the current user-tested build.**
+Status: **OPEN/PARTIAL — the latest user check says the trees look okay; the two-sided leaf-card audit is corrected locally, while moving-camera confirmation remains outstanding.**
 
 Baseline audited: `3914e90` on 2026-08-23. The most recent explicit scope was in-game trees; earlier reports also covered menu trees and berry bushes, while ore did not exhibit the same problem. Menu and gameplay materials must therefore be tested separately.
 
@@ -26,6 +26,7 @@ Do not mark this regression fixed until all of the following are true:
 - [x] **The menu has a separate stable-material path (`f0ed3e9`, updated in the current candidate).** Dense menu trees use a dedicated solid-colour `menu_tree` material instead of the gameplay atlas/wind material. It is now lit and shadow-receiving rather than unlit, so it remains protected from atlas-blue leakage while responding to the authored menu light. This is not evidence that the gameplay path is fixed.
 - [x] **The old self-shadow suppression was isolated and retired for trees.** `NotShadowReceiver` was consistently reaching Tree/Grass/Critter renderers, so missing propagation was not the cause. Once the tree silhouette was synchronized, the component was proven to make canopies flat and insensitive to authored light; Tree materials no longer receive it. Grass/Critter retain the workaround until their passes are independently synchronized.
 - [x] **Visible and shadow tree vertices now share one deformation implementation (current candidate).** Both shaders import the same bind-group-free `stream_town_tree_deformed_position` function with the serialized `Env_Tree.mat` constants. The fixed foliage smoke view changed from large black canopy facets to a coherent lit surface while keeping ground shadows. Unlike the failed approximate prepass, there is no separately maintained shadow wind equation. User confirmation and a moving capture are still required.
+- [x] **The imported leaf-card two-sided contract is preserved (current candidate).** `Env_Tree.glb` explicitly declares `doubleSided: true`, but the typed gameplay and menu material overrides previously fell back to Bevy's back-face culling. Both overrides now set `double_sided = true` and `cull_mode = None`. Bevy's standard PBR input flips the back-face normal under this flag, so card backs receive outward-facing lighting instead of merely being exposed with inside-out normals.
 
 ## What did not fix the flicker
 
@@ -86,8 +87,19 @@ Use the same fixed seed, camera, day, season, and tree for every toggle. Change 
   - Stationary-camera result: local capture `.stream-town/diagnostics/foliage-lit-synchronized-shadow.png` shows coherent face lighting, canopy self-shadow detail, and ground shadows without the former large black facets.
   - Moving-camera result: not checked.
   - Shadows still cast: yes; trees now also receive them.
-  - User result: `not checked`.
+  - User result: `partial` — the latest report says the trees look okay and asks for a final card-normal/two-sided audit.
   - Reuse rule: if flicker remains, measure duplicate renderers or range dithering before changing lighting, shadow bias, or the shared deformation.
+
+- [ ] **`pending-c` — preserve the converted tree GLB's two-sided leaf-card material contract**
+  - Object/spawn path: gameplay resource/foliage tree typed material and the dedicated menu tree material.
+  - Fixed seed/camera/day/season: material contract audit; the latest user-visible run is reported stable.
+  - Single changed variable: enabled two-sided PBR normal handling and disabled back-face culling on both tree overrides.
+  - Duplicate renderer count: unchanged by this pass.
+  - Stationary-camera result: user reports that the trees look okay before this final contract correction; the final GPU capture `.stream-town/diagnostics/foliage-double-sided-final.png` shows lit card fronts/backs and coherent ground shadows without a render or shader error.
+  - Moving-camera result: not checked after this correction.
+  - Shadows still cast: yes; no caster/receiver suppression was added.
+  - User result: `not checked` after the two-sided correction.
+  - Reuse rule: do not flip or rebuild mesh normals unless a captured exact primitive remains incorrectly lit with Bevy's two-sided face-normal correction active.
 
 ## Attempt record template
 

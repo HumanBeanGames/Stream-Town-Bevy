@@ -2479,7 +2479,8 @@ impl Plugin for StreamTownGamePlugin {
                         .after(attach_converted_animations),
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
-                    camera_controls,
+                    follow_animation_closeup_camera.after(move_agents),
+                    camera_controls.after(follow_animation_closeup_camera),
                     sync_active_pets.after(move_agents),
                     select_grid_cell,
                     game_input,
@@ -3072,13 +3073,7 @@ fn setup_rendering(
     // Menu foliage keeps a dedicated solid-colour material so the shared atlas
     // cannot leak blue, but remains lit so it responds to the authored sun and
     // receives the same ordinary world shadows as gameplay foliage.
-    let menu_tree = materials.add(StandardMaterial {
-        // Compensate for the menu's authored -1.5 EV exposure so the stable
-        // green silhouette remains readable rather than collapsing to black.
-        base_color: Color::srgb(0.42, 0.72, 0.16),
-        perceptual_roughness: 1.0,
-        ..default()
-    });
+    let menu_tree = materials.add(menu_tree_material());
     let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
     let flag = flag_materials.add(flag_material(&presentation.0, asset_server.as_deref()));
@@ -4767,6 +4762,13 @@ fn tree_material(
         base: StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 1.0,
+            // Env_Tree.glb carries `doubleSided: true`. Preserve that contract
+            // when replacing the imported material with this typed material:
+            // disabling culling exposes both sides of each leaf card, while
+            // `double_sided` makes StandardMaterial correct the back-face
+            // normal for lighting instead of shading it inside-out.
+            double_sided: true,
+            cull_mode: None,
             ..default()
         },
         extension: TreeMaterialExtension {
@@ -4794,6 +4796,21 @@ fn tree_material(
             main_texture: texture("_MainTexture"),
             noise_texture: texture("_NoiseTexture"),
         },
+    }
+}
+
+fn menu_tree_material() -> StandardMaterial {
+    StandardMaterial {
+        // Compensate for the menu's authored -1.5 EV exposure so the stable
+        // green silhouette remains readable rather than collapsing to black.
+        base_color: Color::srgb(0.42, 0.72, 0.16),
+        perceptual_roughness: 1.0,
+        // The converted tree GLB deliberately marks its material double-sided.
+        // Leaf cards must remain visible from either side, and Bevy uses this
+        // flag to flip the back-face normal before ordinary PBR lighting.
+        double_sided: true,
+        cull_mode: None,
+        ..default()
     }
 }
 
@@ -17210,6 +17227,13 @@ fn canonical_equipment_node_name(name: &str) -> &str {
     name.strip_suffix("_Starter").unwrap_or(name)
 }
 
+fn player_equipment_slot_node(name: &str) -> bool {
+    let name = canonical_equipment_node_name(name);
+    ["Body_", "Back_", "LHand_", "RHand_", "Helmet_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct EnemyModelSelection {
     base_model: Option<usize>,
@@ -17460,13 +17484,21 @@ fn sync_enemy_model_nodes(
 fn tag_equipment_nodes(
     mut commands: Commands,
     content: Res<RuntimeContent>,
-    agents: Query<Entity, With<Agent>>,
+    agents: Query<Entity, (With<Agent>, With<PlayerAnimatedRig>)>,
     parents: Query<&ChildOf>,
     nodes: Query<(Entity, &Name), (Without<EquipmentNode>, Without<Agent>)>,
 ) {
     let names = equipment_node_names(&content.0);
     for (entity, name) in &nodes {
-        if !names.contains(canonical_equipment_node_name(name.as_str())) {
+        // Characters.glb includes a handful of model slots that are inactive
+        // in Player_Character.prefab and therefore absent from the serialized
+        // role equipment list (the three Body_Default variants and commander
+        // banner). Treat every player equipment-shaped node as a controlled
+        // slot so those imported defaults cannot leak through underneath the
+        // selected role body and z-fight around the shoulders.
+        if !names.contains(canonical_equipment_node_name(name.as_str()))
+            && !player_equipment_slot_node(name.as_str())
+        {
             continue;
         }
         let mut ancestor = entity;
@@ -17520,14 +17552,24 @@ fn sync_equipment_nodes(
             .get(&actor.role)
             .and_then(|role| role.equipment.as_ref());
         let carrying = actor.inventory.values().any(|amount| *amount > 0);
-        let visible = equipment.is_some_and(|equipment| {
-            equipment_node_visible(
-                equipment,
-                actor.customization.body_type,
-                &node.name,
-                carrying,
-            )
-        });
+        let visible = equipment.map_or_else(
+            || {
+                [
+                    "Body_Default_Slim",
+                    "Body_Default_Bulk",
+                    "Body_Default_Feminine",
+                ][usize::from(actor.customization.body_type).min(2)]
+                    == canonical_equipment_node_name(&node.name)
+            },
+            |equipment| {
+                equipment_node_visible(
+                    equipment,
+                    actor.customization.body_type,
+                    &node.name,
+                    carrying,
+                )
+            },
+        );
         *visibility = if visible {
             Visibility::Inherited
         } else {
@@ -18787,7 +18829,14 @@ fn report_animation_binding_diagnostics(
     agents: Query<&Agent>,
     players: Query<(Entity, &AnimationPlayer, &ConvertedAnimationDriver)>,
     targets: Query<(Entity, &Name, &Transform, &AnimatedBy)>,
-    skins: Query<&SkinnedMesh>,
+    skins: Query<(
+        Entity,
+        &SkinnedMesh,
+        Option<&Visibility>,
+        Option<&InheritedVisibility>,
+    )>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
     mut announced: Local<bool>,
     mut samples: Local<u8>,
     mut previous: Local<HashMap<Entity, (f32, Quat)>>,
@@ -18827,11 +18876,59 @@ fn report_animation_binding_diagnostics(
             );
             continue;
         };
-        let skinned_meshes = skins.iter().count();
+        let actor_skins: Vec<_> = skins
+            .iter()
+            .filter(|(entity, _, _, _)| {
+                let mut ancestor = *entity;
+                for _ in 0..64 {
+                    if ancestor == driver.actor_root {
+                        return true;
+                    }
+                    let Ok(parent) = parents.get(ancestor) else {
+                        break;
+                    };
+                    ancestor = parent.parent();
+                }
+                false
+            })
+            .collect();
+        let skinned_meshes = actor_skins.len();
         let joint_skin_references = skins
             .iter()
-            .filter(|skin| skin.joints.contains(&joint))
+            .filter(|(_, skin, _, _)| skin.joints.contains(&joint))
             .count();
+        let visible_skinned_meshes = actor_skins
+            .iter()
+            .filter(|(_, _, visibility, inherited)| {
+                !matches!(visibility, Some(Visibility::Hidden))
+                    && inherited.is_none_or(|visibility| visibility.get())
+            })
+            .count();
+        let visible_skin_names = if visible_skinned_meshes < skinned_meshes {
+            actor_skins
+                .iter()
+                .filter(|(_, _, visibility, inherited)| {
+                    !matches!(visibility, Some(Visibility::Hidden))
+                        && inherited.is_none_or(|visibility| visibility.get())
+                })
+                .filter_map(|(entity, _, _, _)| {
+                    let mut ancestor = *entity;
+                    for _ in 0..8 {
+                        if let Ok(name) = names.get(ancestor)
+                            && (player_equipment_slot_node(name.as_str())
+                                || cosmetic_node(name.as_str()).is_some()
+                                || name.as_str() == "Head_Box")
+                        {
+                            return Some(name.as_str().to_owned());
+                        }
+                        ancestor = parents.get(ancestor).ok()?.parent();
+                    }
+                    None
+                })
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
         let (elapsed_delta, rotation_delta) =
             previous
                 .get(&player_entity)
@@ -18853,6 +18950,8 @@ fn report_animation_binding_diagnostics(
             rotation_delta,
             joint_skin_references,
             skinned_meshes,
+            visible_skinned_meshes,
+            visible_skin_names = ?visible_skin_names,
             "animation binding diagnostic"
         );
         previous.insert(player_entity, (player_elapsed, transform.rotation));
@@ -19212,6 +19311,14 @@ fn camera_controls(
     let Ok((mut transform, mut projection, mut controller)) = cameras.single_mut() else {
         return;
     };
+    // Keep deterministic close-up diagnostics pinned to their authored focus.
+    // An unfocused automated window can leave its cursor at an edge and would
+    // otherwise pan away before the delayed animation capture is written.
+    if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
+        controller.move_target = transform.translation;
+        controller.pan_velocity = Vec3::ZERO;
+        return;
+    }
     let delta_seconds = time.delta_secs();
     if let Projection::Perspective(perspective) = &mut *projection {
         perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
@@ -19364,6 +19471,33 @@ fn camera_controls(
             }
         }
     }
+}
+
+#[allow(clippy::type_complexity)]
+fn follow_animation_closeup_camera(
+    agents: Query<(&Agent, &Transform), Without<TownCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut TownCameraControllerRuntime),
+        (With<TownCamera>, Without<Agent>),
+    >,
+) {
+    if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_none() {
+        return;
+    }
+    let Some((_, actor)) = agents
+        .iter()
+        .find(|(agent, _)| agent.id.as_str() == "npc:starting_defender")
+    else {
+        return;
+    };
+    let Ok((mut camera, mut controller)) = cameras.single_mut() else {
+        return;
+    };
+    let focus = actor.translation;
+    let transform = Transform::from_xyz(focus.x + 7.0, focus.y + 6.0, focus.z + 7.0)
+        .looking_at(focus + Vec3::Y * 1.6, Vec3::Y);
+    *camera = transform;
+    controller.set_home(transform);
 }
 
 fn unity_smooth_damp_vec3(
@@ -29598,6 +29732,16 @@ mod tests {
             canonical_equipment_node_name("Helmet_Ruler"),
             "Helmet_Ruler"
         );
+        assert!(player_equipment_slot_node("Body_Default_Slim"));
+        assert!(player_equipment_slot_node("Back_CommanderBanner"));
+        assert!(player_equipment_slot_node("RHand_LoggerToolAxe_Starter"));
+        assert!(!player_equipment_slot_node("Head_Box"));
+        assert!(!equipment_node_visible(
+            defender,
+            0,
+            "Body_Default_Slim",
+            false
+        ));
     }
 
     #[test]
@@ -32554,6 +32698,11 @@ mod tests {
         );
         assert!(TreeMaterialExtension::enable_shadows());
         let world_material = tree_material(&embedded_presentation(), None);
+        assert!(world_material.base.double_sided);
+        assert!(world_material.base.cull_mode.is_none());
+        let menu_material = menu_tree_material();
+        assert!(menu_material.double_sided);
+        assert!(menu_material.cull_mode.is_none());
         assert!(world_material.extension.parameters.wind_controls.y > 0.0);
         let shader = include_str!("../../../assets/shaders/tree_material.wgsl");
         let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");

@@ -547,13 +547,15 @@ nine independent skins. The full translated Animator controller keeps its
 authored states, layers, transitions, blends, speeds, and actions, while each of
 its 20 motions now resolves to the matching native take on that same visible
 armature. `STREAM_TOWN_DEBUG_ANIMATION_BINDINGS=1` logs consecutive-frame clip
-time, representative joint rotation deltas, and exact `SkinnedMesh` joint
-references; the current local run proves non-zero motion through the visible
-skin, but still awaits the user's visual confirmation. Follow
+time, representative joint rotation deltas, exact `SkinnedMesh` joint
+references, and the inherited-visible model slots. The runtime now controls
+every equipment-shaped GLB node, including inactive source-only defaults that
+are absent from the Unity role list, so `Body_Default_*` and the commander
+banner cannot overlap the selected role body. Follow
 [`docs/visual-regressions/character-animation.md`](docs/visual-regressions/character-animation.md)
-before changing clip priority or retargeting. The visible player remains shadow-free because
-Bevy's imported shadow-skinning path otherwise emits a terrain-sized invalid
-silhouette; all other world shadows remain enabled.
+before changing clip priority or retargeting. Player skins cast ordinary world
+shadows but decline incoming self-shadow input because the imported
+shadow-skinning receiver path otherwise produces unstable body facets.
 `STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
 repeatable axis and retargeting checks.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while

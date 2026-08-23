@@ -1,6 +1,6 @@
 # Character Animation Regression Checklist
 
-Status: **OPEN — characters are visibly static in the current user-tested build.**
+Status: **OPEN — the overlapping visible-skin defect is corrected locally and motion is visible in separated captures; user confirmation is still required.**
 
 Baseline audited: `3914e90` on 2026-08-23. This ledger records what the repository actually proves and what the user's visual checks disproved. Passing tests, successful controller attachment logs, or a still screenshot do not establish visible animation.
 
@@ -20,6 +20,7 @@ Do not mark this regression fixed until all of the following are true in the sam
 
 - [x] **The source animation data is present.** `3965dd2` converted the standalone Unity transform clips, and the later controller series (`c49844d`, `78016d6`, `646596e`, `26264ec`, `e6e86c6`, `522ae54`, `2412ed1`, and `0f24912`) preserved controller state, action parameters, speeds, hierarchy, layers, masks, property curves, and crossfades. This is useful infrastructure, but it proves data and state-machine behavior rather than visible skin deformation.
 - [x] **The overlapping-character-variant problem was narrowed separately from animation.** `29a5966` added body/equipment/cosmetic visibility, `e00431e` switched players from the nine independently skinned T-pose export to `Characters.glb`'s single armature, and `2a66489` normalized `_Starter` equipment names. Later user reports stopped describing every character variant as simultaneously visible. Preserve this hierarchy/visibility work while debugging motion.
+- [x] **The remaining shoulder overlap was measured and removed (current candidate).** The live inherited-visibility trace showed all three `Body_Default_*` nodes and `Back_CommanderBanner` still rendered under every selected role body because those inactive Unity source nodes are absent from the serialized role list. All equipment-shaped player nodes now enter the same visibility controller. The settled defender trace contains only `Body_Defender_Slim`, its selected face parts, permanent head, helmet, shield, and spear.
 - [x] **Visible facing was corrected separately.** `2a66489` aligned the character's visible local `+Z` axis to movement. Later reports no longer describe ordinary characters as walking backward. Do not revisit facing while diagnosing static bones unless a new capture disproves it.
 - [x] **A repeatable close-up path exists.** `STREAM_TOWN_SMOKE_STATIC_RIG=1` isolates the static rig and `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames the controller path. These are diagnostic entry points only; a still smoke capture is not an animation acceptance test.
 - [x] **The runtime can construct and select controller nodes.** Current tests cover converted clip records, graph composition, layer masks, transition selection, state speed, crossfades, action contracts, and retargeted curve creation. Attachment logs have reported controllers, clips, and targets. This narrows the remaining fault to live playback/target/skin application rather than missing controller RON.
@@ -68,8 +69,17 @@ Run these in order and record the result before changing behavior:
   - Player elapsed delta: `0.0295718` seconds in the sampled rendered frame.
   - Named joint transform delta: `Thigh_L = 0.4646586` radians; `UpperArm_L = 0.9139379` radians.
   - Visible skin result: every sampled joint had `joint_skin_references = 123`; local still capture at `.stream-town/diagnostics/animation-binding-proof.png` (not accepted as motion evidence).
-  - User result: `not checked`.
+  - User result: `failed` — the next user check still reported visibly static characters and shoulder flicker.
   - Reuse rule: do not change clip priority or retargeting again unless the diagnostic reports zero elapsed time, zero joint delta, or a joint unused by the rendered skin.
+
+- [ ] **`pending` — control inactive source-only model slots and compare the visible skin over separated frames**
+  - Changed: model-slot visibility only; `Body_Default_*` and `Back_CommanderBanner` can no longer remain inherited-visible beneath a role body. The animation graph, clip mapping, axis correction, material, and shadow policy were not changed.
+  - Fixed seed/actor/camera: default deterministic smoke seed; followed `npc:starting_defender`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
+  - Player elapsed delta: `0.0143754` seconds in the sampled rendered frame.
+  - Named joint transform delta: `Body = 0.2566451` radians; `Thigh_L = 0.5331674` radians on the other starting actors.
+  - Visible skin result: settled defender renderers reduced from 123 to 7 primitives across exactly the selected logical slots. The animated poses in `.stream-town/diagnostics/animation-visible-after-slot-fix.png` and `animation-visible-after-slot-fix-frame-2.png` differ from each other and from `animation-static-after-slot-fix.png` while the camera follows the same actor.
+  - User result: `not checked`.
+  - Reuse rule: if the user still sees no motion, record a short ordinary-run video before changing controller or retargeting code; if shoulder flicker remains, inspect only the seven logged selected primitives and their material/shadow passes.
 
 ## Attempt record template
 
