@@ -22,14 +22,16 @@ mistaken for production-ready systems.
   eliminating chunk seams. Water uses energy-conserving bloom and bounded color
   output so the high-exposure coastline cannot clip to white; normalized foam
   cutoff, single-pass foam color, and partial seasonal tint keep its authored
-  cyan depth surface visible. Trees and foliage retain stable ordinary shadow
-  silhouettes while declining the incompatible self-shadow reception that
-  caused black/blue flicker; the mismatched approximate wind prepass has been
-  removed. The Player now uses the animation
-  FBX's single mesh-compatible armature instead of the TPose asset's nine
-  independent skins, and suffix-resolved standalone tracks no longer detach
-  body parts. The player-only broken animated shadow-skinning output is disabled
-  while all other world shadows remain live. The in-game camera now reproduces
+  cyan depth surface visible. Tree/foliage shadow casting, self-shadow
+  suppression, object-stable colour variation, and removal of the mismatched
+  approximate wind prepass are implemented, but user testing still observes
+  in-game flicker; see the dedicated visual-regression ledger. The Player now
+  uses the animation FBX's single mesh-compatible armature instead of the TPose
+  asset's nine independent skins, and suffix-resolved standalone tracks no
+  longer detach body parts. Controller attachment and retargeting tests pass,
+  but user testing still observes a static visible character; see the dedicated
+  animation ledger. The player-only broken animated shadow-skinning output is
+  disabled while all other world shadows remain live. The in-game camera now reproduces
   the shipping Unity `MainCamera.prefab`: perspective 60-degree FOV, 0.3/1000
   clipping planes, the 45-degree negative-X-side pose, physical height zoom,
   ten-pixel edge detection, movement smoothing, and serialized XZ bounds.
@@ -42,10 +44,12 @@ mistaken for production-ready systems.
   cast long moving cuboid shadows. Fish schools reject generated land cells,
   while resources retain generator-authoritative coordinates and compensate
   only for asymmetric converted prefab pivots.
-- The player controller now attaches to the consolidated GLB's explicit
+- The player controller attachment path targets the consolidated GLB's explicit
   `CharacterArmature` root and retargets Unity's FBX-only `pelvis/...` curve
-  paths by their unchanged bone suffix. Real rendered smoke runs attach all
-  five starting controllers with 20 clips and 245 targets each. Clicking uses
+  paths by their unchanged bone suffix. Rendered smoke runs report all five
+  starting controllers with 20 clips and 245 targets each, but these counts have
+  not translated into user-visible motion and are not treated as visual proof.
+  Clicking uses
   an explicit stable actor selection rather than inferring an occupant from a
   selected cell, so overlapping/moving actors remain individually selectable.
   Middle-button drag now uses Unity's 0.5-second `Vector3.SmoothDamp` contract,
@@ -778,10 +782,20 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
+- Visible character animation. Converted clip/controller data, graph selection,
+  attachment, and retargeted-curve tests pass, but the current user-tested build
+  remains visibly static. The evidence and next one-variable diagnostics are in
+  `bevy-port/docs/visual-regressions/character-animation.md`.
+- Stable in-game tree and foliage rendering. Object-stable colour variation
+  removed one blue-flash mechanism and the approximate wind prepass was removed,
+  but the current user-tested build still flickers. The failed approaches and
+  isolation matrix are in
+  `bevy-port/docs/visual-regressions/tree-foliage-flicker.md`.
 - Exact animated-player shadow parity. The visible single-armature rig and full
-  controller are live, but Bevy's imported shadow-skinning pass produces an
-  invalid terrain-sized silhouette for this converted asset, so only the player
-  renderer's shadow casting is disabled pending a custom compatible shadow pass.
+  controller data path is present, but Bevy's imported shadow-skinning pass
+  produces an invalid terrain-sized silhouette for this converted asset, so only
+  the player renderer's shadow casting is disabled pending a custom compatible
+  shadow pass.
 - Any remaining animation-event behavior discovered outside the ten reachable
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable

@@ -468,15 +468,13 @@ wind, per-object color variation, and spring/autumn/winter controls. The Blender
 pipeline promotes Unity's FBX `colorSet1` masks to glTF `COLOR_0`, preserving
 the red wind, green snow, and blue bark-exclusion channels Bevy consumes. Tree,
 bush, and grass materials retain visible wind deformation. Grass keeps its
-compatible depth path; trees and bushes use an ordinary stable shadow
-silhouette because Bevy's extension-less tree prepass could only approximate
-the authored wind and produced a second, flickering outline. They cast
-world-space silhouettes but decline self-shadow reception, and an
-authored-color ambient floor keeps low-poly back faces readable as they sway.
-This is a shared rendering policy, not a world-only workaround: every future
-scene override or direct primitive path using Tree, Grass, or Critter materials
-must retain `NotShadowReceiver` while leaving shadow casting enabled. Otherwise
-the near-coplanar animated cards regress to black flicker.
+compatible depth path; the mismatched approximate tree wind prepass has been
+removed, while trees and bushes cast ordinary shadows and decline self-shadow
+reception. Object-stable palette hashing fixed a separate blue-flash mechanism,
+but user testing still observes in-game tree flicker. Do not broaden or repeat
+the previous shadow/material changes without consulting
+[`docs/visual-regressions/tree-foliage-flicker.md`](docs/visual-regressions/tree-foliage-flicker.md),
+which records the failed approaches and the next isolation matrix.
 Missing converted assets retain the resource-cube fallback.
 
 Content schema 21 also preserves each building prefab's authored base maximum
@@ -539,7 +537,7 @@ repeatable land/shoreline visual capture.
 `STREAM_TOWN_SMOKE_SHORELINE=1` finds and frames the nearest generated
 land/water boundary for a repeatable depth-blend and edge-foam capture.
 `STREAM_TOWN_SMOKE_STATIC_RIG=1` frames the unanimated shipping Player rig, and
-`STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames its live converted controller.
+`STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames the converted-controller diagnostic.
 The runtime uses `Characters.glb`'s single authoritative armature and matching
 renderer variants instead of applying animation curves to the TPose export's
 nine independent skins. Standalone Unity tracks resolve by rig-path suffix,
@@ -547,7 +545,10 @@ keep joint rotations, limit translation curves to the skeleton root, and drop
 animation scale curves. The full translated Animator controller takes priority
 over any single imported-clip fallback, its absolute base layer uses override
 composition, and Blender's `_Starter` tool suffix is normalized before role
-visibility is evaluated. The visible animated player remains shadow-free because
+visibility is evaluated. Controller attachment/retargeting tests pass, but the
+current user-tested character is still visibly static; follow
+[`docs/visual-regressions/character-animation.md`](docs/visual-regressions/character-animation.md)
+before changing this path. The visible player remains shadow-free because
 Bevy's imported shadow-skinning path otherwise emits a terrain-sized invalid
 silhouette; all other world shadows remain enabled.
 `STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
