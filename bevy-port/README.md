@@ -679,8 +679,10 @@ but correctly has zero pose influence. The ten converted `PlayRoleActionAudio`
 events dispatch once per animation cycle from Bevy's monotonic clip clock and play
 short deterministic procedural cues; their no-sample provenance is documented in
 [`assets/audio/PROVENANCE.md`](assets/audio/PROVENANCE.md). The same provenance
-record also covers the synthesized ambience. Seasonal music now comes from the
-pinned native Rust `bevy_tidal` library and the eight authored expressions in
+record also covers the synthesized ambience. Seasonal music now comes directly
+from the revision-pinned public native Rust
+[`bevy_tidal`](https://github.com/HumanBeanGames/bevy-tidal) library and the
+eight authored expressions in
 [`assets/music/patterns`](assets/music/patterns); the renderer runs in-process
 without TidalCycles, SuperCollider, or a sidecar and applies the player's
 master/music gain to the active season/day-night pattern. The reachable town

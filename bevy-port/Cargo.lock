@@ -1966,6 +1966,7 @@ dependencies = [
 [[package]]
 name = "bevy_tidal"
 version = "0.3.0"
+source = "git+https://github.com/HumanBeanGames/bevy-tidal.git?rev=f9decb648f26d9fb7ff797707e06c0370676252a#f9decb648f26d9fb7ff797707e06c0370676252a"
 dependencies = [
  "bevy",
  "cpal",

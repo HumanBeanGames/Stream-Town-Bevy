@@ -92,13 +92,14 @@ mistaken for production-ready systems.
   renderer. Eight authored Tidal expressions provide distinct seasonal
   day/night arrangements, switch when the simulation crosses those boundaries,
   and incorporate master/music gain directly into the active pattern. Muting or
-  leaving the town silences track 1. The private upstream crate is pinned as a
-  source-only vendor snapshot so clean builds and CI require no repository
-  secret; its built-in synthesizers require no GHC, SuperCollider, sidecar, or
-  downloaded sample bank. Bevy Audio still owns ambience and gameplay cues on
-  their independent ambience/SFX gain paths. Ambient wind remains a seamless
-  band-limited oscillator loop rather than sample-rate white noise, avoiding the
-  earlier placeholder's static-like hiss.
+  leaving the town silences track 1. The public upstream crate is consumed
+  directly from GitHub at a pinned revision, so clean builds and CI use the
+  library without copied source or repository credentials. Its built-in
+  synthesizers require no GHC, SuperCollider, sidecar, or downloaded sample
+  bank. Bevy Audio still owns ambience and gameplay cues on their independent
+  ambience/SFX gain paths. Ambient wind remains a seamless band-limited
+  oscillator loop rather than sample-rate white noise, avoiding the earlier
+  placeholder's static-like hiss.
 - Presentation schema 19 retains all 35 original Unity `ActionClips` GUID
   references across the 14 roles that authored them (Blacksmith authored none).
   Each reachable animation event selects its original variant deterministically
