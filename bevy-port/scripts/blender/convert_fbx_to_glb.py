@@ -258,6 +258,32 @@ def preserve_all_fbx_animation_takes() -> None:
         action.use_fake_user = True
 
 
+def rebase_all_fbx_animation_takes() -> None:
+    """Start every exported take at frame zero.
+
+    Unity FBX takes conventionally begin at frame one. Blender's glTF exporter
+    preserves that absolute timestamp, which inserts one held sample before the
+    first pose and makes looping clips visibly pause at every seam. Shifting the
+    key and handle times keeps the authored duration and values unchanged while
+    producing a zero-based glTF animation timeline.
+    """
+    for action in bpy.data.actions:
+        keyframes = [
+            keyframe
+            for curve in action.fcurves
+            for keyframe in curve.keyframe_points
+        ]
+        if not keyframes:
+            continue
+        frame_start = min(float(keyframe.co[0]) for keyframe in keyframes)
+        if math.isclose(frame_start, 0.0, rel_tol=0.0, abs_tol=1.0e-7):
+            continue
+        for keyframe in keyframes:
+            keyframe.co[0] -= frame_start
+            keyframe.handle_left[0] -= frame_start
+            keyframe.handle_right[0] -= frame_start
+
+
 def inspect_glb(path: Path) -> dict[str, int]:
     payload = path.read_bytes()
     if len(payload) < 20:
@@ -327,6 +353,7 @@ def convert(
     reset_scene()
     bpy.ops.import_scene.fbx(filepath=str(source), use_anim=True)
     preserve_all_fbx_animation_takes()
+    rebase_all_fbx_animation_takes()
     name_unnamed_attributes()
     preserve_unity_vertex_colors()
     normalization_scale, output_bounds = normalize_to_unity_bounds(target_bounds)

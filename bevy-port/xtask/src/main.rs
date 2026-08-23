@@ -137,7 +137,7 @@ fn validate() -> Result<()> {
     for (field, expected) in [
         ("/schema_version", 3_u64),
         ("/models", 253),
-        ("/bytes", 96_889_124),
+        ("/bytes", 96_885_184),
         ("/meshes", 820),
         ("/skins", 43),
         ("/animations", 165),

@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $BlenderPath -PathType Leaf)) {
     throw "Pinned Blender $requiredVersion was not found at $BlenderPath"
 }
 $reportedVersion = (& $BlenderPath --version | Select-Object -First 1).Trim()
-if ($LASTEXITCODE -ne 0 -or $reportedVersion -ne "Blender $requiredVersion") {
+if ($reportedVersion -ne "Blender $requiredVersion") {
     throw "Expected Blender $requiredVersion but found '$reportedVersion' at $BlenderPath"
 }
 

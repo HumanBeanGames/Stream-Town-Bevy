@@ -142,6 +142,7 @@ pub fn validate(
             bail!("GLB byte count changed for {}", entry.output);
         }
         validate_glb_header(&output, entry.output_bytes)?;
+        validate_glb_animation_timelines(&output)?;
         validate_normalization(&entry)?;
         summary.bytes = summary.bytes.saturating_add(entry.output_bytes);
         summary.meshes += entry.meshes;
@@ -239,6 +240,63 @@ fn validate_glb_header(path: &Path, expected_length: u64) -> Result<()> {
     Ok(())
 }
 
+fn validate_glb_animation_timelines(path: &Path) -> Result<()> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() < 20 {
+        bail!("{} is shorter than a GLB header", path.display());
+    }
+    let json_length = usize::try_from(u32::from_le_bytes(
+        bytes[12..16].try_into().expect("four bytes"),
+    ))
+    .expect("u32 fits usize on supported targets");
+    let json_end = 20_usize
+        .checked_add(json_length)
+        .filter(|end| *end <= bytes.len())
+        .with_context(|| format!("{} has a truncated JSON chunk", path.display()))?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes[20..json_end])
+        .with_context(|| format!("{} has invalid glTF JSON", path.display()))?;
+    let accessors = document
+        .get("accessors")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for animation in document
+        .get("animations")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        for sampler in animation
+            .get("samplers")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            let input = sampler
+                .get("input")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|index| usize::try_from(index).ok())
+                .and_then(|index| accessors.get(index))
+                .with_context(|| format!("{} has an invalid animation input", path.display()))?;
+            let start = input
+                .get("min")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|minimum| minimum.first())
+                .and_then(serde_json::Value::as_f64)
+                .with_context(|| {
+                    format!("{} animation input has no minimum time", path.display())
+                })?;
+            if !start.is_finite() || start.abs() > 1.0e-6 {
+                bail!(
+                    "{} animation timeline starts at {start}; expected zero",
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -264,5 +322,34 @@ mod tests {
         fs::write(&path, header).unwrap();
         validate_glb_header(&path, 20).unwrap();
         assert!(validate_glb_header(&path, 21).is_err());
+    }
+
+    #[test]
+    fn rejects_animation_timeline_with_a_held_leading_sample() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("animation.glb");
+        let write_fixture = |start: f64| {
+            let mut json = serde_json::to_vec(&serde_json::json!({
+                "asset": { "version": "2.0" },
+                "accessors": [{ "min": [start] }],
+                "animations": [{ "samplers": [{ "input": 0, "output": 0 }] }]
+            }))
+            .unwrap();
+            json.resize(json.len().next_multiple_of(4), b' ');
+            let length = u32::try_from(20 + json.len()).unwrap();
+            let mut glb = Vec::new();
+            glb.extend_from_slice(b"glTF");
+            glb.extend_from_slice(&2_u32.to_le_bytes());
+            glb.extend_from_slice(&length.to_le_bytes());
+            glb.extend_from_slice(&u32::try_from(json.len()).unwrap().to_le_bytes());
+            glb.extend_from_slice(&0x4E4F_534A_u32.to_le_bytes());
+            glb.extend_from_slice(&json);
+            fs::write(&path, glb).unwrap();
+        };
+
+        write_fixture(1.0 / 60.0);
+        assert!(validate_glb_animation_timelines(&path).is_err());
+        write_fixture(0.0);
+        validate_glb_animation_timelines(&path).unwrap();
     }
 }
