@@ -1,6 +1,6 @@
 # Character Animation Regression Checklist
 
-Status: **OPEN — the scene-lifecycle defect is corrected locally and visible motion is present in a short internal capture; user confirmation is still required.**
+Status: **INTERNAL FIX CANDIDATE — visible animation is user-confirmed; the run player now survives and completes repeated wraps, but the user has not yet checked this final loop fix.**
 
 Baseline audited: `3914e90` on 2026-08-23. This ledger records what the repository actually proves and what the user's visual checks disproved. Passing tests, successful controller attachment logs, or a still screenshot do not establish visible animation.
 
@@ -13,8 +13,9 @@ Do not mark this regression fixed until all of the following are true in the sam
 - [ ] At least one reachable role action visibly enters and exits its authored action animation.
 - [ ] The selected body, equipment, hair, facial-hair, and eye variants remain the only visible variants.
 - [ ] The character still faces its movement/action direction.
-- [ ] A short moving capture demonstrates the result; a still screenshot is insufficient.
+- [x] A short moving capture demonstrates the result; a still screenshot is insufficient.
 - [ ] The user confirms that the visible result is fixed.
+- [x] The user confirms that characters now visibly animate.
 
 ## What did work
 
@@ -24,9 +25,12 @@ Do not mark this regression fixed until all of the following are true in the sam
 - [x] **Visible facing was corrected separately.** `2a66489` aligned the character's visible local `+Z` axis to movement. Later reports no longer describe ordinary characters as walking backward. Do not revisit facing while diagnosing static bones unless a new capture disproves it.
 - [x] **A repeatable close-up path exists.** `STREAM_TOWN_SMOKE_STATIC_RIG=1` isolates the static rig and `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames the controller path. These are diagnostic entry points only; a still smoke capture is not an animation acceptance test.
 - [x] **The runtime can construct and select controller nodes.** Current tests cover converted clip records, graph composition, layer masks, transition selection, state speed, crossfades, action contracts, and retargeted curve creation. Attachment logs have reported controllers, clips, and targets. This narrows the remaining fault to live playback/target/skin application rather than missing controller RON.
-- [x] **The visible skin now receives motion from clips authored for its own consolidated armature (current candidate).** The full translated controller remains authoritative, but each of its 20 motions resolves to the matching native take inside `Characters.glb` when available. This is materially different from the old single native-fallback preference: it preserves layers, transitions, actions, weights, and crossfades while replacing only the incompatible standalone-rig curve source. A live `STREAM_TOWN_DEBUG_ANIMATION_BINDINGS=1` run measured advancing playback and 0.53–0.92-radian rotation deltas on `Thigh_L`/`UpperArm_L`; the measured joints were referenced by the visible glTF skin. This is strong internal evidence, but the visual regression stays open until the acceptance gate and user check pass.
-- [x] **The exported defender skin and native run clip deform correctly without Bevy runtime assumptions.** Direct GLB evaluation moved all 476 `Body_Defender_Slim` vertices at a quarter-cycle (mean `1.071888`, maximum `2.59697` model units), changed the joint skin matrices by up to `4.2767`, and found normalized vertex weights. Do not revisit the Blender export, weights, or inverse bind poses unless this calculation regresses.
+- [x] **The finalized visible skin accepts the translated Unity curves.** After the scene-lifecycle repair, the migrated `.anim` tracks deform the consolidated `Characters.glb` armature correctly. Runtime binding now prefers those authored controller curves and retains same-name native FBX takes only as a fallback. This avoids silently substituting the 0.833-second `CharacterRun` take for the controller's different 0.767-second `PlayerChar_Run_01` motion.
+- [x] **The exported defender skin and native run clip deform correctly without Bevy runtime assumptions.** Direct GLB evaluation moved all 476 `Body_Defender_Slim` vertices at a quarter-cycle (mean `1.071888`, maximum `2.59697` model units), changed the joint skin matrices by up to `4.2767`, and found normalized vertex weights. This proves skinning, weights, and inverse bind poses; it does not prove that the exported clip timeline has a seamless zero-based loop.
 - [x] **The first live animation player was being discarded by Bevy scene finalization, and the replacement now rebinds (current candidate).** The same frame previously contained one active converted player during `Update` and zero before Bevy animation evaluation in `PostUpdate`. Converted rigs now wait for `WorldInstanceReady`; a later instance-ready event clears the stale applied marker, and a fallback system detects any root whose player disappeared. After replacement, one player remained active while seek time advanced from `0.028` to `0.528` seconds and visible-body vertex deltas reached `1.1801` model units. Twenty internal GPU screenshots were assembled into `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4`, which visibly contains changing character poses.
+- [x] **Short navigation gaps no longer restart locomotion.** `AgentLocomotion` derives the controller signal from measured displacement, preserves the authored playback speed, and applies a 120-ms stop grace so a one-frame path/occupancy handoff does not produce Run → Idle → Run chatter.
+- [x] **Root state-machine exits no longer replay the active fallback loop.** The decisive live heartbeat previously showed the run player's elapsed time falling from `0.489` to `0.320` and its completion count remaining at zero. A destination-less root Exit was re-entering the already-active locomotion fallback and calling `AnimationPlayer::start`. That no-op exit is now ignored. The final GPU run advanced the same defender player monotonically to `39.15` seconds and 51 completed wraps without a playback restart.
+- [x] **Looping authored curves close at the actual clip boundary.** The raw run fixture contains a measured `0.54435`-radian end/start leg-pose gap and some sparse tracks end before the declared duration. Only looping curves receive a progressive end-to-start correction plus an explicit boundary key; non-looping attacks/death remain unchanged. Regression tests retain the raw seam assertion and prove corrected translation/rotation/scale endpoints close at the declared duration.
 
 ## What did not fix visible animation
 
@@ -40,6 +44,8 @@ Do not mark this regression fixed until all of the following are true in the sam
 - [ ] **NOT EVIDENCE — `embedded_presentation_binds_native_and_converted_animation_paths`.** It proves catalog contents, controller decisions, and synthetic curve counts. Its targets are placeholders; it does not prove that the visible mesh's real joints change at runtime.
 - [ ] **NOT EVIDENCE — controller/crossfade/action unit tests.** They prove state selection and weights, not that `AnimationPlayer` reaches the skin used by the rendered primitives.
 - [ ] **NOT EVIDENCE — a successful still screenshot or attachment log.** A static pose can satisfy both.
+- [ ] **FAILED AS A LOOP FIX — zero-basing the native FBX timelines alone.** Re-exporting the takes removed their nonzero first timestamp, but the user still reported a broken run loop. The active controller motion was also not the same take as the native name-based substitute.
+- [ ] **FAILED AS A COMPLETE LOOP FIX — curve seam correction without controller-lifecycle tracing.** Closing the endpoint pose was necessary, but it could not help while a destination-less root Exit replayed the locomotion state before Bevy recorded a completion.
 
 ## Do not retry unchanged
 
@@ -48,6 +54,9 @@ Do not mark this regression fixed until all of the following are true in the sam
 - [ ] Do not add more controller states, layer logic, crossfades, or action mappings as a response to a completely static mesh.
 - [ ] Do not replace the player model, axis correction, cosmetic visibility, materials, or shadow policy in the same change as the motion diagnosis.
 - [ ] Do not call clip counts, graph-node counts, attachment logs, unit tests, or still captures a visual fix.
+- [ ] Do not revisit hierarchy binding, retargeting, or skin weights for a loop-seam hold while visible motion continues to work.
+- [ ] Do not map the player controller back to same-name native FBX takes while its migrated `.anim` tracks remain compatible with the finalized visible rig.
+- [ ] Do not smooth or replace the run again unless a live heartbeat first proves that elapsed time remains monotonic and completion counts increase.
 
 ## Next narrow diagnostic pass
 
@@ -61,6 +70,7 @@ Run these in order and record the result before changing behavior:
 - [x] Prove the full controller can drive the same visible skin after the lifecycle repair. The controller retains 20 clips/two layers and produces visible internal screenshot sequences.
 - [x] Add a lifecycle regression test that verifies a replaced hierarchy becomes eligible for rebinding while a live driver keeps its marker.
 - [x] Capture a short same-actor sequence from GPU-rendered frames. `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4` covers 20 consecutive internal captures.
+- [x] Inspect the actual native GLB sampler timelines. Character idle/run/walk began at `0.0166667` seconds rather than zero and ended one sample later than the Unity duration, creating a held leading sample at every repeat seam.
 - [ ] Identify the user-observed known-good revision by replaying the same capture while bisecting. No exact known-good commit is currently proven, so do not label a candidate solely from its commit message.
 
 ## Current attempt
@@ -83,14 +93,32 @@ Run these in order and record the result before changing behavior:
   - User result: `failed` — the latest user check still reported no visible animation, which led to the scene-lifecycle diagnosis below.
   - Reuse rule: if the user still sees no motion, record a short ordinary-run video before changing controller or retargeting code; if shoulder flicker remains, inspect only the seven logged selected primitives and their material/shadow passes.
 
-- [ ] **`current lifecycle candidate` — bind only to a finalized imported hierarchy and recover after instance replacement**
+- [x] **`0aaced7` — bind only to a finalized imported hierarchy and recover after instance replacement**
   - Changed: scene/player lifecycle only; converted rigs wait for `WorldInstanceReady`, rebind on later instance-ready events, and clear stale applied markers if a driver disappears. Clip selection, retargeting, controller logic, visibility, facing, materials, and shadows were not changed.
   - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`; `STREAM_TOWN_DEBUG_INITIAL_AGENTS=1`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
   - Player elapsed delta: replacement player advanced from `0.0281846` to `0.5281846` seconds and remained active in every later sampled stage.
   - Named joint transform delta: `Body = 0.3868502` radians between sampled frames; playback remained at speed `1.0`.
   - Visible skin result: `Body_Defender_Slim` has 476 vertices/25 joints; live mean vertex deltas reached `0.3845894` and maximum deltas reached `1.1801370`. Visible motion is recorded in `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4`.
-  - User result: `not checked`.
+  - User result: `partial` — the user confirmed that characters now animate, but reported that the loop does not look correct.
   - Reuse rule: if this still fails for the user, first check whether their log contains a second `attached translated Unity animation controller` after scene finalization and capture ordinary-run frames after that point; do not alter clip or rig data without evidence that the replacement player survives but renders statically.
+
+- [ ] **`failed` — zero-base native take timelines and preserve authored repeat modes**
+  - Changed: animation seam timing and repeat policy only; every FBX action is rebased from its first authored frame to frame zero before glTF export, and runtime playback uses each migrated clip's `looping` flag instead of forcing every state to repeat forever.
+  - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
+  - Player elapsed delta: playback advanced, but subsequent traces proved the controller replayed locomotion before recording a completion.
+  - Named joint transform delta: already established by the accepted lifecycle candidate; this pass must not change skin binding.
+  - Visible skin result: visible motion remained, but its repeat seam remained incorrect.
+  - User result: `failed` — the user reported the run still did not loop cleanly twice.
+  - Reuse rule: if the seam remains, compare the final two and first two samples of the active take before changing controller transitions or blend weights.
+
+- [ ] **`current working tree` — preserve continuous playback and close the authored boundary**
+  - Changed: the controller now uses the migrated Unity source curves; looping curves close at the declared duration; short movement gaps use locomotion grace; and a destination-less root Exit cannot replay an already-active fallback state.
+  - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
+  - Player elapsed delta: `39.1476` seconds continuous in the final trace, with no reset.
+  - Loop completion evidence: `51` consecutive `PlayerChar_Run_01` completions on the same player; the earlier failing trace remained at `0` while elapsed repeatedly reset.
+  - Visible skin result: 12-second ordinary GPU capture at `.stream-town/diagnostics/animation-run-final-visual.mp4`; runtime log at `.stream-town/diagnostics/animation-run-final-live.log`.
+  - User result: `not checked`.
+  - Reuse rule: if the user still sees a hitch, retain continuous playback and isolate derivative/tangent continuity at the exact reported action; do not reintroduce controller restarts or native name substitution.
 
 ## Attempt record template
 

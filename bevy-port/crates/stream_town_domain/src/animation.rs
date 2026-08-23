@@ -201,44 +201,70 @@ impl AnimationControllerRuntime {
                 self.current_state.clone(),
             ));
         }
-        let transition = controller.transitions.iter().find(|transition| {
-            !transition.is_entry
-                && self.transition_source_is_active(controller, transition)
-                && transition.destination.as_ref() != Some(&self.current_state)
-                && (!transition.has_exit_time || normalized_time >= transition.exit_time)
-                && transition
+        let transition = controller.transitions.iter().find_map(|transition| {
+            if transition.is_entry
+                || !self.transition_source_is_active(controller, transition)
+                || transition.has_exit_time && normalized_time < transition.exit_time
+                || !transition
                     .conditions
                     .iter()
                     .all(|condition| self.condition_satisfied(condition))
-        });
-        let Some(transition) = transition else {
-            return Ok(AnimationTransitionOutcome::None);
-        };
-        let entry_transition = transition
-            .destination_state_machine
-            .as_ref()
-            .and_then(|machine| {
-                controller.transitions.iter().find(|candidate| {
-                    candidate.is_entry
-                        && candidate.source_state_machine.as_ref() == Some(machine)
-                        && candidate
-                            .conditions
-                            .iter()
-                            .all(|condition| self.condition_satisfied(condition))
-                })
-            });
-        let destination = transition
-            .destination
-            .as_ref()
-            .or_else(|| entry_transition.and_then(|entry| entry.destination.as_ref()))
-            .or_else(|| {
+            {
+                return None;
+            }
+            let entry_transition =
                 transition
                     .destination_state_machine
                     .as_ref()
-                    .and_then(|machine| controller.state_machines.get(machine))
-                    .and_then(|machine| machine.default_state.as_ref())
-            })
-            .cloned();
+                    .and_then(|machine| {
+                        controller.transitions.iter().find(|candidate| {
+                            candidate.is_entry
+                                && candidate.source_state_machine.as_ref() == Some(machine)
+                                && candidate
+                                    .conditions
+                                    .iter()
+                                    .all(|condition| self.condition_satisfied(condition))
+                        })
+                    });
+            let destination = transition
+                .destination
+                .as_ref()
+                .or_else(|| entry_transition.and_then(|entry| entry.destination.as_ref()))
+                .or_else(|| {
+                    transition
+                        .destination_state_machine
+                        .as_ref()
+                        .and_then(|machine| controller.state_machines.get(machine))
+                        .and_then(|machine| machine.default_state.as_ref())
+                })
+                .cloned()
+                .or_else(|| {
+                    if !transition.is_exit {
+                        return None;
+                    }
+                    transition
+                        .source_state_machine
+                        .as_ref()
+                        .or_else(|| state_machine_for_state(controller, &self.current_state))
+                        .and_then(|machine| parent_state_machine(controller, machine))
+                        .and_then(|parent| controller.state_machines.get(parent))
+                        .and_then(|parent| parent.default_state.clone())
+                });
+            // Unity Any State transitions do not transition to their current
+            // state unless Can Transition To Self is explicitly enabled. The
+            // serialized Stream Town controllers leave that option disabled.
+            // A destination state-machine can resolve through its entry state,
+            // so comparing only the transition's direct destination misses the
+            // common Carry -> Carry case and restarts the clip every frame.
+            (destination.as_ref() != Some(&self.current_state)).then_some((
+                transition,
+                entry_transition,
+                destination,
+            ))
+        });
+        let Some((transition, entry_transition, destination)) = transition else {
+            return Ok(AnimationTransitionOutcome::None);
+        };
         self.consume_transition_triggers(&transition.conditions);
         if let Some(entry) = entry_transition {
             self.consume_transition_triggers(&entry.conditions);
@@ -255,31 +281,12 @@ impl AnimationControllerRuntime {
             });
             Ok(AnimationTransitionOutcome::Entered(destination))
         } else if transition.is_exit {
-            let source_machine = transition
-                .source_state_machine
-                .as_ref()
-                .or_else(|| state_machine_for_state(controller, &self.current_state));
-            let fallback = source_machine
-                .and_then(|machine| parent_state_machine(controller, machine))
-                .and_then(|parent| controller.state_machines.get(parent))
-                .and_then(|parent| parent.default_state.as_ref())
-                .cloned();
-            if let Some(fallback) = fallback {
-                self.current_state = fallback.clone();
-                self.last_transition = Some(AnimationTransitionPlayback {
-                    duration: transition.duration,
-                    fixed_duration: transition.fixed_duration,
-                    destination_offset: transition.offset,
-                });
-                Ok(AnimationTransitionOutcome::Entered(fallback))
-            } else {
-                self.last_transition = Some(AnimationTransitionPlayback {
-                    duration: transition.duration,
-                    fixed_duration: transition.fixed_duration,
-                    destination_offset: transition.offset,
-                });
-                Ok(AnimationTransitionOutcome::Exited)
-            }
+            self.last_transition = Some(AnimationTransitionPlayback {
+                duration: transition.duration,
+                fixed_duration: transition.fixed_duration,
+                destination_offset: transition.offset,
+            });
+            Ok(AnimationTransitionOutcome::Exited)
         } else {
             Ok(AnimationTransitionOutcome::None)
         }
@@ -497,7 +504,9 @@ fn single_motion(clip: StableId) -> AnimationBlendSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnimationMotionDef, AnimationParameterDef, AnimationTransitionDef};
+    use crate::{
+        AnimationMotionDef, AnimationParameterDef, AnimationStateMachineDef, AnimationTransitionDef,
+    };
 
     fn id(value: &str) -> StableId {
         StableId::new(value).unwrap()
@@ -642,6 +651,63 @@ mod tests {
             runtime.evaluate_transitions(&controller, 0.0).unwrap(),
             AnimationTransitionOutcome::None
         );
+    }
+
+    #[test]
+    fn nested_any_state_transition_does_not_restart_its_resolved_current_state() {
+        let mut controller = controller();
+        let parent = id("machine:parent");
+        let child = id("machine:child");
+        let action = id("state:action");
+        controller.state_machines = BTreeMap::from([
+            (
+                parent.clone(),
+                AnimationStateMachineDef {
+                    display_name: "Parent".into(),
+                    states: vec![id("state:idle")],
+                    child_state_machines: vec![child.clone()],
+                    default_state: Some(id("state:idle")),
+                },
+            ),
+            (
+                child.clone(),
+                AnimationStateMachineDef {
+                    display_name: "Child".into(),
+                    states: vec![action.clone()],
+                    child_state_machines: Vec::new(),
+                    default_state: Some(action.clone()),
+                },
+            ),
+        ]);
+        controller.transitions = vec![AnimationTransitionDef {
+            source: None,
+            destination: None,
+            source_state_machine: Some(parent),
+            destination_state_machine: Some(child),
+            is_entry: false,
+            is_any_state: true,
+            is_exit: false,
+            has_exit_time: false,
+            exit_time: 0.0,
+            duration: 0.1,
+            fixed_duration: true,
+            offset: 0.0,
+            conditions: vec![AnimationConditionDef {
+                parameter: "Action".into(),
+                mode: AnimationConditionMode::If,
+                threshold: 0.0,
+            }],
+        }];
+        let mut runtime =
+            AnimationControllerRuntime::in_state(&controller, action.clone()).unwrap();
+        runtime.set_trigger("Action").unwrap();
+
+        assert_eq!(
+            runtime.evaluate_transitions(&controller, 0.0).unwrap(),
+            AnimationTransitionOutcome::None
+        );
+        assert_eq!(runtime.current_state(), &action);
+        assert_eq!(runtime.take_transition_playback(), None);
     }
 
     #[test]

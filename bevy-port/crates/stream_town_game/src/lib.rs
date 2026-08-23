@@ -15,7 +15,7 @@ use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody, SpatialQuery, Spatia
 use bevy::render::settings::Backends;
 use bevy::{
     animation::{
-        AnimatedBy, AnimationClip, AnimationTargetId, animated_field,
+        AnimatedBy, AnimationClip, AnimationTargetId, RepeatAnimation, animated_field,
         graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex, AnimationNodeType},
         prelude::{AnimatableCurve, AnimatableKeyframeCurve},
         transition::AnimationTransitions,
@@ -144,6 +144,7 @@ const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
 const MAIN_MENU_RESOURCE_RENDER_BUDGET: usize = 900;
 const MAIN_MENU_FOLIAGE_RENDER_BUDGET: usize = 3_200;
+const IN_GAME_AMBIENT_LIGHT_MULTIPLIER: f32 = 1.15;
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
@@ -278,6 +279,8 @@ const PET_MAX_DISTANCE: f32 = 5.0;
 const PET_MAX_MOVE_SPEED: f32 = 10.0;
 const PET_ROTATION_SPEED: f32 = 5.0;
 const AGENT_ROTATION_SPEED: f32 = 5.0;
+const LOCOMOTION_REFERENCE_SPEED_CELLS_PER_SECOND: f32 = 5.0;
+const LOCOMOTION_STOP_GRACE_SECONDS: f32 = 0.12;
 const EYE_NODES: [&str; 10] = [
     "Eyes_Angry",
     "Eyes_Annoyed",
@@ -1357,6 +1360,14 @@ struct Agent {
     health_regen_accumulator: f64,
 }
 
+#[derive(Component, Default)]
+struct AgentLocomotion {
+    previous_position: Vec3,
+    normalized_speed: f32,
+    stop_grace_seconds: f32,
+    initialized: bool,
+}
+
 #[derive(Component)]
 struct PlayerRigAxisCorrected;
 
@@ -2034,6 +2045,14 @@ struct MainMenuHiddenModelNodes(BTreeSet<String>);
 #[derive(Component)]
 struct MainMenuModelNodeProcessed;
 
+/// Marks authored menu buildings whose imported mesh descendants must retain
+/// ordinary opaque shadow casting.
+#[derive(Component)]
+struct MainMenuBuildingShadowRoot;
+
+#[derive(Component)]
+struct MainMenuBuildingShadowVerified;
+
 #[derive(Component)]
 struct MainMenuRotatingNode {
     axis: Vec3,
@@ -2153,7 +2172,7 @@ struct ConvertedAnimationLayerDriver {
     runtime: AnimationControllerRuntime,
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
     active: Vec<(AnimationNodeIndex, f32)>,
-    applied: Vec<(AnimationNodeIndex, f32, f32)>,
+    applied: Vec<ConvertedAnimationPlayback>,
     crossfade: Option<ConvertedAnimationCrossfade>,
     state_offset: f32,
     event_elapsed: BTreeMap<StableId, f32>,
@@ -2221,9 +2240,17 @@ struct GateAnimationDriver {
 
 #[derive(Clone)]
 struct ConvertedAnimationCrossfade {
-    source: Vec<(AnimationNodeIndex, f32, f32)>,
+    source: Vec<ConvertedAnimationPlayback>,
     elapsed: f32,
     duration: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ConvertedAnimationPlayback {
+    node: AnimationNodeIndex,
+    weight: f32,
+    speed: f32,
+    looping: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2377,6 +2404,7 @@ impl Plugin for StreamTownGamePlugin {
                     sync_boot_loading_screen,
                     animate_fish_school,
                     hide_main_menu_inactive_model_nodes,
+                    enforce_main_menu_building_shadow_casters,
                     tag_main_menu_rotating_nodes,
                     rotate_main_menu_nodes
                         .after(tag_main_menu_rotating_nodes)
@@ -2474,6 +2502,7 @@ impl Plugin for StreamTownGamePlugin {
                         reset_crowd_separation,
                         move_agents.after(correct_player_rig_axis),
                         apply_crowd_separation,
+                        update_agent_locomotion,
                     )
                         .chain(),
                     sync_resource_nodes.after(move_agents),
@@ -2486,9 +2515,9 @@ impl Plugin for StreamTownGamePlugin {
                         .after(sync_active_pets)
                         .after(sync_fish_god_presentation)
                         .after(correct_player_rig_axis),
-                    drive_native_animations,
+                    drive_native_animations.after(update_agent_locomotion),
                     drive_converted_animations
-                        .after(move_agents)
+                        .after(update_agent_locomotion)
                         .after(attach_converted_animations),
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
@@ -2516,7 +2545,10 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                report_animation_binding_diagnostics
+                (
+                    report_animation_binding_diagnostics,
+                    report_animation_loop_diagnostics,
+                )
                     .after(drive_converted_animations)
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3046,7 +3078,7 @@ fn setup_rendering(
         initial_projection,
         AmbientLight {
             color: Color::srgb(0.70, 0.82, 0.92),
-            brightness: 90.0,
+            brightness: in_game_ambient_brightness(90.0),
             ..default()
         },
         DistanceFog {
@@ -3071,7 +3103,7 @@ fn setup_rendering(
             shadow_normal_bias: 2.5,
             ..default()
         },
-        Transform::from_xyz(250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
+        in_game_sun_transform(),
     ));
     let authored_building =
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
@@ -5390,6 +5422,7 @@ fn spawn_completed_main_menu_farm(
         );
         let mut entity = commands.spawn((
             StateEntity,
+            MainMenuBuildingShadowRoot,
             Name::new(format!("Direct menu farm: {node_name}")),
             Mesh3d(mesh),
             Transform::from_translation(Vec3::from_array(instance.position))
@@ -5542,7 +5575,7 @@ fn restore_town_camera_for_world(
         *projection = town_camera_projection(f32::from(settings.0.camera.field_of_view_degrees));
         *transform = default_town_camera_transform();
         ambient.color = Color::srgb(0.70, 0.82, 0.92);
-        ambient.brightness = 90.0;
+        ambient.brightness = in_game_ambient_brightness(90.0);
     }
     if let Ok(mut controller) = controllers.single_mut() {
         controller.set_home(default_town_camera_transform());
@@ -5551,7 +5584,7 @@ fn restore_town_camera_for_world(
         light.color = Color::WHITE;
         light.illuminance = 14_000.0;
         light.shadow_maps_enabled = true;
-        *transform = Transform::from_xyz(250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y);
+        *transform = in_game_sun_transform();
     }
 }
 
@@ -5689,6 +5722,9 @@ fn spawn_main_menu(
                     .with_rotation(authored_scene_rotation(instance.rotation))
                     .with_scale(Vec3::from_array(instance.scale)),
             ));
+            if archetype.kind == ArchetypeKind::Building {
+                entity.insert(MainMenuBuildingShadowRoot);
+            }
             if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render)
             {
                 entity.insert(material);
@@ -6640,6 +6676,37 @@ fn rotate_main_menu_nodes(
             node.radians_per_second,
             time.delta_secs(),
         );
+    }
+}
+
+fn enforce_main_menu_building_shadow_casters(
+    mut commands: Commands,
+    parents: Query<&ChildOf>,
+    roots: Query<(), With<MainMenuBuildingShadowRoot>>,
+    renderers: Query<Entity, (With<Mesh3d>, Without<MainMenuBuildingShadowVerified>)>,
+) {
+    for renderer in &renderers {
+        let mut ancestor = renderer;
+        let mut belongs_to_building = false;
+        for _ in 0..64 {
+            if roots.contains(ancestor) {
+                belongs_to_building = true;
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+        if belongs_to_building {
+            // Imported opaque building renderers should both cast and receive
+            // the primary menu sun's shadows. This explicit removal protects
+            // them from the VFX/card exclusions used elsewhere in the scene.
+            commands
+                .entity(renderer)
+                .remove::<bevy::light::NotShadowCaster>()
+                .insert(MainMenuBuildingShadowVerified);
+        }
     }
 }
 
@@ -10076,6 +10143,7 @@ fn generate_and_spawn_world(
                 action_cooldown_seconds: 0.0,
                 health_regen_accumulator: 0.0,
             },
+            AgentLocomotion::default(),
             AgentAnimation {
                 base_scale,
                 native: native_animation.is_some() || converted_animation.is_some(),
@@ -15102,6 +15170,72 @@ fn apply_crowd_separation(
     }
 }
 
+fn update_agent_locomotion(
+    time: Res<Time>,
+    config: Res<RuntimeConfig>,
+    mut agents: Query<(&Agent, &Transform, &mut AgentLocomotion)>,
+) {
+    let delta_seconds = time.delta_secs().max(f32::EPSILON);
+    let cell_size = config.0.world.cell_size.max(f32::EPSILON);
+    let authored_speed = (config.0.gameplay.agent_speed_cells_per_second
+        / LOCOMOTION_REFERENCE_SPEED_CELLS_PER_SECOND)
+        .clamp(0.0, 1.0);
+    for (agent, transform, mut locomotion) in &mut agents {
+        update_agent_locomotion_sample(
+            &mut locomotion,
+            transform.translation,
+            delta_seconds,
+            cell_size,
+            authored_speed,
+            agent_is_moving(agent),
+        );
+    }
+}
+
+fn update_agent_locomotion_sample(
+    locomotion: &mut AgentLocomotion,
+    position: Vec3,
+    delta_seconds: f32,
+    cell_size: f32,
+    authored_speed: f32,
+    initially_moving: bool,
+) {
+    if !locomotion.initialized {
+        locomotion.previous_position = position;
+        locomotion.initialized = true;
+        if initially_moving {
+            locomotion.normalized_speed = authored_speed;
+            locomotion.stop_grace_seconds = LOCOMOTION_STOP_GRACE_SECONDS;
+        }
+        return;
+    }
+
+    let displacement = Vec2::new(
+        position.x - locomotion.previous_position.x,
+        position.z - locomotion.previous_position.z,
+    )
+    .length();
+    locomotion.previous_position = position;
+    let measured_speed =
+        displacement / cell_size.max(f32::EPSILON) / delta_seconds.max(f32::EPSILON);
+    if measured_speed > 0.05 {
+        // The original AnimationHandler normalizes AIPath.velocity by a fixed
+        // run speed. Use measured displacement only as the moving/stopped
+        // signal; keeping the authored normalized speed stable prevents crowd
+        // separation from chattering the walk/run blend weights.
+        locomotion.normalized_speed = authored_speed;
+        locomotion.stop_grace_seconds = LOCOMOTION_STOP_GRACE_SECONDS;
+    } else if locomotion.stop_grace_seconds > 0.0 {
+        // Unity drives this blend from AIPath.velocity, which does not emit a
+        // one-frame zero while replacing a completed route. Retain the last
+        // measured value briefly so a path handoff cannot stop and restart the
+        // looping locomotion node.
+        locomotion.stop_grace_seconds = (locomotion.stop_grace_seconds - delta_seconds).max(0.0);
+    } else {
+        locomotion.normalized_speed = 0.0;
+    }
+}
+
 fn crowd_separation_offsets(
     agents: &[(StableId, Vec2)],
     radius: f32,
@@ -16077,7 +16211,7 @@ fn update_environment_presentation(
             palette.ambient_color[1],
             palette.ambient_color[2],
         );
-        ambient.brightness = palette.ambient_brightness * light_ratio;
+        ambient.brightness = in_game_ambient_brightness(palette.ambient_brightness) * light_ratio;
     }
     for mut light in &mut lights {
         light.color = Color::srgb(
@@ -16991,16 +17125,21 @@ fn build_converted_animation(
             continue;
         }
         let source = presentation.clips.get(&motion.clip)?;
-        let handle = if let Some((path, index)) =
+        let handle = if !source.transform_tracks.is_empty() {
+            // Unity's controller references these authored .anim clips. The
+            // visible character rig uses the same named skeleton, so replay
+            // the migrated curves directly on its finalized hierarchy. Native
+            // same-name FBX takes are useful fallbacks, but they are different
+            // motions with different durations and visible loop boundaries.
+            animation_clips.add(retargeted_animation_clip(source, targets)?)
+        } else if let Some((path, index)) =
             skin_compatible_animation_request(source, &spec.rig_scene, presentation)
         {
             asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
-        } else if source.transform_tracks.is_empty() {
+        } else {
             let path = source.converted_asset_path.as_ref()?;
             let index = usize::try_from(source.gltf_animation_index?).ok()?;
             asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
-        } else {
-            animation_clips.add(retargeted_animation_clip(source, targets)?)
         };
         converted.push((motion.clip.clone(), handle));
     }
@@ -17993,11 +18132,32 @@ fn retargeted_animation_clip(
         // rotation-driven; preserve only the root-bone translation. Mechanical
         // clips (gates, buildings, props) retain their full transform curves.
         if !skeletal_character || !track.target_path.contains('/') {
-            add_translation_curve(&mut clip, target, track, rest);
+            add_translation_curve(
+                &mut clip,
+                target,
+                track,
+                rest,
+                source.looping,
+                source.duration_seconds,
+            );
         }
-        add_rotation_curve(&mut clip, target, track, rest);
+        add_rotation_curve(
+            &mut clip,
+            target,
+            track,
+            rest,
+            source.looping,
+            source.duration_seconds,
+        );
         if !skeletal_character {
-            add_scale_curve(&mut clip, target, track, rest);
+            add_scale_curve(
+                &mut clip,
+                target,
+                track,
+                rest,
+                source.looping,
+                source.duration_seconds,
+            );
         }
     }
     if clip.curves().is_empty() {
@@ -18049,6 +18209,8 @@ fn add_translation_curve(
     target: AnimationTargetId,
     track: &AnimationTransformTrack,
     rest: &Transform,
+    looping: bool,
+    loop_duration: f32,
 ) {
     if track.translation.is_empty() {
         return;
@@ -18066,13 +18228,16 @@ fn add_translation_curve(
     } else {
         1.0
     };
-    let keys = ensure_two_keyframes(
+    let mut keys = ensure_two_keyframes(
         track.translation.iter().map(|key| {
             let delta = Vec3::from_array(key.value) - unity_reference;
             (key.time, rest.translation + basis * delta * unit_scale)
         }),
         clip.duration(),
     );
+    if looping {
+        close_translation_loop(&mut keys, loop_duration);
+    }
     if let Ok(curve) = AnimatableKeyframeCurve::new(keys) {
         clip.add_curve_to_target(
             target,
@@ -18086,8 +18251,10 @@ fn add_rotation_curve(
     target: AnimationTargetId,
     track: &AnimationTransformTrack,
     rest: &Transform,
+    looping: bool,
+    loop_duration: f32,
 ) {
-    let keys = if track.rotation.is_empty() {
+    let mut keys = if track.rotation.is_empty() {
         let Some(first) = track.euler_degrees.first() else {
             return;
         };
@@ -18111,6 +18278,9 @@ fn add_rotation_curve(
             clip.duration(),
         )
     };
+    if looping {
+        close_rotation_loop(&mut keys, loop_duration);
+    }
     if let Ok(curve) = AnimatableKeyframeCurve::new(keys) {
         clip.add_curve_to_target(
             target,
@@ -18124,6 +18294,8 @@ fn add_scale_curve(
     target: AnimationTargetId,
     track: &AnimationTransformTrack,
     rest: &Transform,
+    looping: bool,
+    loop_duration: f32,
 ) {
     if track.scale.is_empty() {
         return;
@@ -18131,7 +18303,7 @@ fn add_scale_curve(
     let unity_reference = track
         .reference_scale
         .map_or_else(|| Vec3::from_array(track.scale[0].value), Vec3::from_array);
-    let keys = ensure_two_keyframes(
+    let mut keys = ensure_two_keyframes(
         track.scale.iter().map(|key| {
             let value = Vec3::from_array(key.value);
             let ratio = Vec3::new(
@@ -18143,12 +18315,76 @@ fn add_scale_curve(
         }),
         clip.duration(),
     );
+    if looping {
+        close_scale_loop(&mut keys, loop_duration);
+    }
     if let Ok(curve) = AnimatableKeyframeCurve::new(keys) {
         clip.add_curve_to_target(
             target,
             AnimatableCurve::new(animated_field!(Transform::scale), curve),
         );
     }
+}
+
+fn close_translation_loop(keys: &mut Vec<(f32, Vec3)>, duration: f32) {
+    let Some(((start_time, start), (_, end), end_time)) = loop_endpoints(keys, duration) else {
+        return;
+    };
+    let correction = start - end;
+    for (time, value) in keys.iter_mut() {
+        *value += correction * loop_phase(*time, start_time, end_time);
+    }
+    finish_loop_at(keys, end_time, start);
+}
+
+fn close_rotation_loop(keys: &mut Vec<(f32, Quat)>, duration: f32) {
+    let Some(((start_time, start), (_, end), end_time)) = loop_endpoints(keys, duration) else {
+        return;
+    };
+    // Apply the minimum end-to-start correction progressively through the
+    // cycle. This preserves the authored motion while making the pose C0
+    // continuous at Bevy's wrap point instead of snapping the limbs.
+    let correction = end.inverse() * start;
+    for (time, value) in keys.iter_mut() {
+        let correction = Quat::IDENTITY.slerp(correction, loop_phase(*time, start_time, end_time));
+        *value = (*value * correction).normalize();
+    }
+    finish_loop_at(keys, end_time, start);
+}
+
+fn close_scale_loop(keys: &mut Vec<(f32, Vec3)>, duration: f32) {
+    let Some(((start_time, start), (_, end), end_time)) = loop_endpoints(keys, duration) else {
+        return;
+    };
+    let correction = start - end;
+    for (time, value) in keys.iter_mut() {
+        *value += correction * loop_phase(*time, start_time, end_time);
+    }
+    finish_loop_at(keys, end_time, start);
+}
+
+type LoopEndpoints<T> = ((f32, T), (f32, T), f32);
+
+fn loop_endpoints<T: Copy>(keys: &[(f32, T)], duration: f32) -> Option<LoopEndpoints<T>> {
+    let first = *keys.first()?;
+    let last = *keys.last()?;
+    let end_time = duration.max(last.0);
+    (end_time - first.0 > f32::EPSILON).then_some((first, last, end_time))
+}
+
+fn finish_loop_at<T: Copy>(keys: &mut Vec<(f32, T)>, end_time: f32, start: T) {
+    let Some(last) = keys.last_mut() else {
+        return;
+    };
+    if end_time - last.0 > f32::EPSILON {
+        keys.push((end_time, start));
+    } else {
+        last.1 = start;
+    }
+}
+
+fn loop_phase(time: f32, start_time: f32, end_time: f32) -> f32 {
+    ((time - start_time) / (end_time - start_time)).clamp(0.0, 1.0)
 }
 
 fn ensure_two_keyframes<T: Clone>(
@@ -18190,14 +18426,14 @@ fn safe_ratio(value: f32, reference: f32) -> f32 {
 }
 
 fn drive_native_animations(
-    agents: Query<&Agent>,
+    agents: Query<(&Agent, &AgentLocomotion)>,
     mut players: Query<(&mut AnimationPlayer, &mut ActorAnimationDriver)>,
 ) {
     for (mut player, mut driver) in &mut players {
-        let Ok(agent) = agents.get(driver.actor_root) else {
+        let Ok((_, locomotion)) = agents.get(driver.actor_root) else {
             continue;
         };
-        let next = if !agent.path.is_empty() && agent.path_index < agent.path.len() {
+        let next = if locomotion.normalized_speed > 0.01 {
             MovementAnimationState::Moving
         } else {
             MovementAnimationState::Idle
@@ -18222,12 +18458,11 @@ fn drive_native_animations(
 fn drive_converted_animations(
     mut commands: Commands,
     time: Res<Time>,
-    config: Res<RuntimeConfig>,
     player_settings: Res<RuntimePlayerSettings>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     simulation: Res<SimulationRuntime>,
-    agents: Query<&Agent>,
+    agents: Query<(&Agent, &AgentLocomotion)>,
     agent_transforms: Query<&GlobalTransform, With<Agent>>,
     camera: Query<&GlobalTransform, (With<TownCamera>, Without<Agent>)>,
     pets: Query<&ActivePetVisual>,
@@ -18249,19 +18484,15 @@ fn drive_converted_animations(
         };
         let move_speed = if let Some(pet) = pet {
             pet.movement_speed
-        } else if agent
-            .is_some_and(|agent| !agent.path.is_empty() && agent.path_index < agent.path.len())
-        {
-            (config.0.gameplay.agent_speed_cells_per_second / 5.0).clamp(0.0, 1.0)
         } else {
-            0.0
+            agent.map_or(0.0, |(_, locomotion)| locomotion.normalized_speed)
         };
         for layer in &mut driver.layers {
             let _ = layer.runtime.set_float("Move Speed", move_speed);
             let _ = layer.runtime.set_float("MoveSpeed", move_speed);
         }
 
-        if let Some(agent) = agent
+        if let Some((agent, _)) = agent
             && let Some(alive) = simulation.0.actors.get(&agent.id).map(|actor| actor.alive)
         {
             if let Some(previous) = driver.last_alive
@@ -18274,7 +18505,7 @@ fn drive_converted_animations(
             }
             driver.last_alive = Some(alive);
         }
-        if let Some(agent) = agent
+        if let Some((agent, _)) = agent
             && let Some(actor) = simulation.0.actors.get(&agent.id)
         {
             let enemy_contract = enemy_animation_contract(&content.0, actor, &agent.id);
@@ -18365,13 +18596,13 @@ fn drive_converted_animations(
                 .evaluate_transitions(controller, normalized_time)
                 .ok();
             let transition_playback = layer.runtime.take_transition_playback();
-            if matches!(
-                transition,
-                Some(stream_town_domain::AnimationTransitionOutcome::Exited)
-            ) {
-                let fallback_state = layer.fallback_state.clone();
-                let _ = layer.runtime.enter_state(controller, fallback_state);
-            }
+            let transition_playback = resolve_animation_exit_fallback(
+                &mut layer.runtime,
+                controller,
+                &layer.fallback_state,
+                transition.as_ref(),
+                transition_playback,
+            );
             if let Some(stream_town_domain::AnimationTransitionOutcome::Entered(state)) =
                 &transition
             {
@@ -18411,7 +18642,7 @@ fn drive_converted_animations(
                     restarts.push((*node, offset_seconds));
                 }
             }
-            if let Some(agent) = agent
+            if let Some((agent, _)) = agent
                 && let Ok(transform) = agent_transforms.get(actor_root)
             {
                 collect_animation_audio_events(
@@ -18438,10 +18669,12 @@ fn drive_converted_animations(
                     "applied translated animation blend"
                 );
             }
-            let destination: Vec<_> = desired
-                .iter()
-                .map(|(node, weight)| (*node, *weight, state_speed))
-                .collect();
+            let destination = animation_playback_for_selection(
+                &selection,
+                &layer.nodes,
+                &presentation.0,
+                state_speed,
+            );
             let applied =
                 advance_animation_crossfade(&mut layer.crossfade, &destination, time.delta_secs());
             combined.extend(applied.iter().copied());
@@ -18499,6 +18732,30 @@ fn drive_converted_animations(
             ));
         }
     }
+}
+
+fn resolve_animation_exit_fallback(
+    runtime: &mut AnimationControllerRuntime,
+    controller: &stream_town_domain::AnimationControllerDef,
+    fallback_state: &StableId,
+    transition: Option<&stream_town_domain::AnimationTransitionOutcome>,
+    playback: Option<AnimationTransitionPlayback>,
+) -> Option<AnimationTransitionPlayback> {
+    if !matches!(
+        transition,
+        Some(stream_town_domain::AnimationTransitionOutcome::Exited)
+    ) {
+        return playback;
+    }
+    // A root state-machine Exit has no serialized destination. Unity keeps
+    // the layer in its current fallback state in this case. Re-entering that
+    // same state made Bevy call AnimationPlayer::start at every run boundary,
+    // resetting elapsed/completion state before RepeatAnimation could wrap.
+    if runtime.current_state() == fallback_state {
+        return None;
+    }
+    let _ = runtime.enter_state(controller, fallback_state.clone());
+    playback
 }
 
 fn collect_animation_audio_events(
@@ -18794,6 +19051,27 @@ fn animation_nodes_for_selection(
     desired
 }
 
+fn animation_playback_for_selection(
+    selection: &AnimationBlendSelection,
+    nodes: &BTreeMap<StableId, AnimationNodeIndex>,
+    presentation: &PresentationCatalog,
+    state_speed: f32,
+) -> Vec<ConvertedAnimationPlayback> {
+    std::iter::once(&selection.first)
+        .chain(selection.second.as_ref())
+        .filter_map(|motion| {
+            let node = *nodes.get(&motion.clip)?;
+            let clip = presentation.clips.get(&motion.clip)?;
+            (motion.weight > f32::EPSILON).then_some(ConvertedAnimationPlayback {
+                node,
+                weight: motion.weight,
+                speed: state_speed,
+                looping: clip.looping,
+            })
+        })
+        .collect()
+}
+
 fn begin_animation_crossfade(
     layer: &mut ConvertedAnimationLayerDriver,
     playback: AnimationTransitionPlayback,
@@ -18838,20 +19116,32 @@ fn animation_selection_duration(
 
 fn advance_animation_crossfade(
     crossfade: &mut Option<ConvertedAnimationCrossfade>,
-    destination: &[(AnimationNodeIndex, f32, f32)],
+    destination: &[ConvertedAnimationPlayback],
     delta_seconds: f32,
-) -> Vec<(AnimationNodeIndex, f32, f32)> {
+) -> Vec<ConvertedAnimationPlayback> {
     let Some(active) = crossfade.as_mut() else {
         return destination.to_vec();
     };
     active.elapsed = (active.elapsed + delta_seconds.max(0.0)).min(active.duration);
     let progress = (active.elapsed / active.duration).clamp(0.0, 1.0);
     let mut output = Vec::with_capacity(active.source.len() + destination.len());
-    for &(node, weight, speed) in &active.source {
-        merge_animation_weight(&mut output, node, weight * (1.0 - progress), speed);
+    for playback in &active.source {
+        merge_animation_weight(
+            &mut output,
+            ConvertedAnimationPlayback {
+                weight: playback.weight * (1.0 - progress),
+                ..*playback
+            },
+        );
     }
-    for &(node, weight, speed) in destination {
-        merge_animation_weight(&mut output, node, weight * progress, speed);
+    for playback in destination {
+        merge_animation_weight(
+            &mut output,
+            ConvertedAnimationPlayback {
+                weight: playback.weight * progress,
+                ..*playback
+            },
+        );
     }
     if active.elapsed >= active.duration {
         *crossfade = None;
@@ -18860,51 +19150,122 @@ fn advance_animation_crossfade(
 }
 
 fn merge_animation_weight(
-    output: &mut Vec<(AnimationNodeIndex, f32, f32)>,
-    node: AnimationNodeIndex,
-    weight: f32,
-    speed: f32,
+    output: &mut Vec<ConvertedAnimationPlayback>,
+    playback: ConvertedAnimationPlayback,
 ) {
-    if weight <= f32::EPSILON {
+    if playback.weight <= f32::EPSILON {
         return;
     }
-    if let Some((_, existing_weight, existing_speed)) = output
+    if let Some(existing) = output
         .iter_mut()
-        .find(|(candidate, _, _)| *candidate == node)
+        .find(|candidate| candidate.node == playback.node)
     {
-        let total = *existing_weight + weight;
-        *existing_speed = (*existing_speed * *existing_weight + speed * weight) / total;
-        *existing_weight = total;
+        let total = existing.weight + playback.weight;
+        existing.speed =
+            (existing.speed * existing.weight + playback.speed * playback.weight) / total;
+        existing.weight = total;
+        existing.looping |= playback.looping;
     } else {
-        output.push((node, weight, speed));
+        output.push(playback);
     }
 }
 
 fn apply_animation_blend(
     player: &mut AnimationPlayer,
-    desired: &[(AnimationNodeIndex, f32, f32)],
+    desired: &[ConvertedAnimationPlayback],
     restarts: &[(AnimationNodeIndex, f32)],
 ) {
     let playing: Vec<_> = player.playing_animations().map(|(node, _)| *node).collect();
     for node in playing {
-        if !desired.iter().any(|(desired, _, _)| *desired == node) {
+        if !desired.iter().any(|desired| desired.node == node) {
             player.stop(node);
         }
     }
-    for (node, weight, speed) in desired {
-        let animation =
-            if let Some((_, offset)) = restarts.iter().find(|(restart, _)| restart == node) {
-                player.start(*node).set_seek_time(*offset)
+    for playback in desired {
+        let animation = if let Some((_, offset)) = restarts
+            .iter()
+            .find(|(restart, _)| *restart == playback.node)
+        {
+            player.start(playback.node).set_seek_time(*offset)
+        } else {
+            player.play(playback.node)
+        };
+        animation
+            .set_repeat(if playback.looping {
+                RepeatAnimation::Forever
             } else {
-                player.play(*node)
-            };
-        animation.repeat().set_weight(*weight).set_speed(*speed);
+                RepeatAnimation::Never
+            })
+            .set_weight(playback.weight)
+            .set_speed(playback.speed);
     }
 }
 
 fn animation_binding_diagnostics_enabled() -> bool {
     std::env::var_os("STREAM_TOWN_DEBUG_ANIMATION_BINDINGS").is_some()
         || std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
+}
+
+fn report_animation_loop_diagnostics(
+    time: Res<Time>,
+    agents: Query<&Agent>,
+    players: Query<(&AnimationPlayer, &ConvertedAnimationDriver)>,
+    mut observed: Local<HashMap<(Entity, AnimationNodeIndex), u32>>,
+    mut last_report_second: Local<u64>,
+) {
+    if !animation_binding_diagnostics_enabled() {
+        return;
+    }
+    let report_second = time.elapsed().as_secs();
+    let heartbeat = report_second > *last_report_second;
+    if heartbeat {
+        *last_report_second = report_second;
+    }
+    for (player, driver) in &players {
+        let Ok(agent) = agents.get(driver.actor_root) else {
+            continue;
+        };
+        for (node, animation) in player.playing_animations() {
+            if animation.repeat_mode() != RepeatAnimation::Forever {
+                continue;
+            }
+            let clip = driver.layers.iter().find_map(|layer| {
+                layer
+                    .nodes
+                    .iter()
+                    .find_map(|(clip, candidate)| (candidate == node).then_some(clip.as_str()))
+            });
+            if clip != Some("clip:d9990a3e12bab1c4787d70db804821e3") {
+                continue;
+            }
+            let completions = animation.completions();
+            let previous = observed
+                .insert((driver.actor_root, *node), completions)
+                .unwrap_or(completions);
+            if heartbeat {
+                info!(
+                    stable_id = %agent.id,
+                    ?node,
+                    clip,
+                    elapsed = animation.elapsed(),
+                    completions,
+                    seek_time = animation.seek_time(),
+                    "run-loop playback heartbeat"
+                );
+            }
+            if completions <= previous {
+                continue;
+            }
+            info!(
+                stable_id = %agent.id,
+                ?node,
+                clip,
+                completions,
+                seek_time = animation.seek_time(),
+                "looping animation completed without a playback restart"
+            );
+        }
+    }
 }
 
 fn report_animation_binding_diagnostics(
@@ -20083,6 +20444,18 @@ fn sync_active_pets(
 
 fn default_town_camera_transform() -> Transform {
     unity_town_camera_transform(Vec3::ZERO)
+}
+
+fn in_game_sun_transform() -> Transform {
+    // The shipping camera views the town from -X. The earlier +X sun direction
+    // lit the backs of camera-facing actors and buildings; moving it to the
+    // camera side preserves the elevated authored look while lighting the
+    // readable front faces.
+    Transform::from_xyz(-250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y)
+}
+
+const fn in_game_ambient_brightness(authored: f32) -> f32 {
+    authored * IN_GAME_AMBIENT_LIGHT_MULTIPLIER
 }
 
 fn unity_town_camera_transform(focus: Vec3) -> Transform {
@@ -23515,6 +23888,7 @@ fn load_input(
                 action_cooldown_seconds: 0.0,
                 health_regen_accumulator: 0.0,
             },
+            AgentLocomotion::default(),
             AgentAnimation {
                 base_scale,
                 ..default()
@@ -24436,6 +24810,7 @@ fn spawn_runtime_enemy(
             action_cooldown_seconds: 0.0,
             health_regen_accumulator: 0.0,
         },
+        AgentLocomotion::default(),
         AgentAnimation {
             base_scale,
             ..default()
@@ -25107,6 +25482,7 @@ fn recruit_npcs(
                 action_cooldown_seconds: 0.0,
                 health_regen_accumulator: 0.0,
             },
+            AgentLocomotion::default(),
             AgentAnimation {
                 base_scale,
                 ..default()
@@ -25345,6 +25721,7 @@ fn process_injected_commands(
                                 action_cooldown_seconds: 0.0,
                                 health_regen_accumulator: 0.0,
                             },
+                            AgentLocomotion::default(),
                             AgentAnimation {
                                 base_scale,
                                 ..default()
@@ -29293,6 +29670,31 @@ mod tests {
     }
 
     #[test]
+    fn menu_building_renderers_explicitly_keep_shadow_casting() {
+        let mut app = App::new();
+        app.add_systems(Update, enforce_main_menu_building_shadow_casters);
+        let root = app.world_mut().spawn(MainMenuBuildingShadowRoot).id();
+        let renderer = app
+            .world_mut()
+            .spawn((Mesh3d(Handle::default()), bevy::light::NotShadowCaster))
+            .id();
+        app.world_mut().entity_mut(root).add_child(renderer);
+
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<bevy::light::NotShadowCaster>(renderer)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<MainMenuBuildingShadowVerified>(renderer)
+                .is_some()
+        );
+    }
+
+    #[test]
     fn synchronized_tree_shadows_receive_light_while_older_card_materials_do_not() {
         assert!(!material_needs_self_shadow_suppression(
             &ResolvedMaterialHandle::Tree(Handle::default())
@@ -30325,6 +30727,64 @@ mod tests {
     }
 
     #[test]
+    fn locomotion_velocity_grace_prevents_one_frame_run_restart() {
+        let delta_seconds = 1.0 / 60.0;
+        let cell_size = 2.0;
+        let frame_step = 4.0 * cell_size * delta_seconds;
+        let mut locomotion = AgentLocomotion::default();
+        update_agent_locomotion_sample(
+            &mut locomotion,
+            Vec3::ZERO,
+            delta_seconds,
+            cell_size,
+            0.8,
+            true,
+        );
+        update_agent_locomotion_sample(
+            &mut locomotion,
+            Vec3::X * frame_step,
+            delta_seconds,
+            cell_size,
+            0.8,
+            false,
+        );
+        assert!((locomotion.normalized_speed - 0.8).abs() < 1.0e-5);
+
+        // A route handoff can produce one stationary simulation frame. It must
+        // not stop the active run node and restart it at time zero.
+        update_agent_locomotion_sample(
+            &mut locomotion,
+            Vec3::X * frame_step,
+            delta_seconds,
+            cell_size,
+            0.8,
+            false,
+        );
+        assert!((locomotion.normalized_speed - 0.8).abs() < 1.0e-5);
+        update_agent_locomotion_sample(
+            &mut locomotion,
+            Vec3::X * frame_step * 2.0,
+            delta_seconds,
+            cell_size,
+            0.8,
+            false,
+        );
+        assert!((locomotion.normalized_speed - 0.8).abs() < 1.0e-5);
+
+        for _ in 0..10 {
+            update_agent_locomotion_sample(
+                &mut locomotion,
+                Vec3::X * frame_step * 2.0,
+                delta_seconds,
+                cell_size,
+                0.8,
+                false,
+            );
+        }
+        assert!(locomotion.normalized_speed.abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn converted_role_audio_events_use_source_guided_spatial_procedural_cues() {
         let presentation = embedded_presentation();
         let clips: Vec<_> = presentation
@@ -30568,18 +31028,71 @@ mod tests {
         let source = AnimationNodeIndex::new(1);
         let destination = AnimationNodeIndex::new(2);
         let mut crossfade = Some(ConvertedAnimationCrossfade {
-            source: vec![(source, 1.0, 1.0)],
+            source: vec![ConvertedAnimationPlayback {
+                node: source,
+                weight: 1.0,
+                speed: 1.0,
+                looping: true,
+            }],
             elapsed: 0.0,
             duration: 0.25,
         });
-        let desired = vec![(destination, 1.0, 2.0)];
+        let desired = vec![ConvertedAnimationPlayback {
+            node: destination,
+            weight: 1.0,
+            speed: 2.0,
+            looping: false,
+        }];
         let half = advance_animation_crossfade(&mut crossfade, &desired, 0.125);
         assert_eq!(half.len(), 2);
-        assert!((half[0].1 - 0.5).abs() < f32::EPSILON);
-        assert!((half[1].1 - 0.5).abs() < f32::EPSILON);
+        assert!((half[0].weight - 0.5).abs() < f32::EPSILON);
+        assert!((half[1].weight - 0.5).abs() < f32::EPSILON);
         let finished = advance_animation_crossfade(&mut crossfade, &desired, 0.125);
         assert_eq!(finished, desired);
         assert!(crossfade.is_none());
+    }
+
+    #[test]
+    fn converted_playback_preserves_authored_loop_modes() {
+        let looping = AnimationNodeIndex::new(1);
+        let one_shot = AnimationNodeIndex::new(2);
+        let mut player = AnimationPlayer::default();
+        apply_animation_blend(
+            &mut player,
+            &[
+                ConvertedAnimationPlayback {
+                    node: looping,
+                    weight: 0.75,
+                    speed: 1.0,
+                    looping: true,
+                },
+                ConvertedAnimationPlayback {
+                    node: one_shot,
+                    weight: 0.25,
+                    speed: 1.0,
+                    looping: false,
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(
+            player.animation(looping).unwrap().repeat_mode(),
+            RepeatAnimation::Forever
+        );
+        assert_eq!(
+            player.animation(one_shot).unwrap().repeat_mode(),
+            RepeatAnimation::Never
+        );
+    }
+
+    #[test]
+    fn in_game_sun_lights_camera_facing_surfaces_with_a_small_ambient_lift() {
+        let sun = in_game_sun_transform();
+        let camera = default_town_camera_transform();
+        assert!(sun.translation.x < 0.0);
+        assert!(sun.forward().dot(*camera.forward()) > 0.7);
+        assert!((in_game_ambient_brightness(90.0) - 103.5).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -30597,7 +31110,12 @@ mod tests {
             .unwrap(),
             nodes: BTreeMap::new(),
             active: Vec::new(),
-            applied: vec![(source, 1.0, 1.0)],
+            applied: vec![ConvertedAnimationPlayback {
+                node: source,
+                weight: 1.0,
+                speed: 1.0,
+                looping: true,
+            }],
             crossfade: None,
             state_offset: 0.0,
             event_elapsed: BTreeMap::new(),
@@ -35358,7 +35876,36 @@ mod tests {
     }
 
     #[test]
-    fn player_controller_uses_skin_compatible_native_clips() {
+    fn root_exit_into_the_active_fallback_does_not_restart_its_loop() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let player =
+            archetype_by_source(&content, ArchetypeKind::Player, "Player_Character.prefab")
+                .unwrap();
+        let spec = converted_animation_spec(player, &presentation).unwrap();
+        let controller = presentation.controllers.get(&spec.controller).unwrap();
+        let mut runtime =
+            AnimationControllerRuntime::in_state(controller, spec.state.clone()).unwrap();
+        let playback = AnimationTransitionPlayback {
+            duration: 0.1,
+            fixed_duration: true,
+            destination_offset: 0.0,
+        };
+
+        let resolved = resolve_animation_exit_fallback(
+            &mut runtime,
+            controller,
+            &spec.state,
+            Some(&stream_town_domain::AnimationTransitionOutcome::Exited),
+            Some(playback),
+        );
+
+        assert_eq!(resolved, None);
+        assert_eq!(runtime.current_state(), &spec.state);
+    }
+
+    #[test]
+    fn player_controller_retains_skin_compatible_native_fallback_clips() {
         let content = embedded_content();
         let presentation = embedded_presentation();
         let player =
@@ -35413,6 +35960,106 @@ mod tests {
         .map(|(name, index)| (name.to_owned(), index))
         .collect();
         assert_eq!(requests, expected);
+    }
+
+    #[test]
+    fn authored_player_run_clip_loop_pose_correction_closes_the_seam() {
+        let presentation = embedded_presentation();
+        let run = presentation
+            .clips
+            .values()
+            .find(|clip| clip.display_name == "PlayerChar_Run_01")
+            .unwrap();
+        assert!(run.looping);
+        let mut raw_max_rotation = 0.0_f32;
+        let mut max_translation = 0.0_f32;
+        let mut max_rotation = 0.0_f32;
+        let mut max_scale = 0.0_f32;
+        for track in &run.transform_tracks {
+            let mut translation: Vec<_> = track
+                .translation
+                .iter()
+                .map(|key| (key.time, Vec3::from_array(key.value)))
+                .collect();
+            close_translation_loop(&mut translation, run.duration_seconds);
+            if let (Some((_, first)), Some((_, last))) = (translation.first(), translation.last()) {
+                max_translation = max_translation.max(first.distance(*last));
+                assert!(
+                    translation.last().unwrap().0 + 1.0e-6 >= run.duration_seconds,
+                    "{} translation ended before the clip boundary",
+                    track.target_path
+                );
+            }
+            if let (Some(first), Some(last)) = (track.rotation.first(), track.rotation.last()) {
+                raw_max_rotation = raw_max_rotation.max(
+                    Quat::from_array(first.value)
+                        .normalize()
+                        .angle_between(Quat::from_array(last.value).normalize()),
+                );
+            }
+            let mut rotation: Vec<_> = track
+                .rotation
+                .iter()
+                .map(|key| (key.time, normalized_quat(key.value)))
+                .collect();
+            close_rotation_loop(&mut rotation, run.duration_seconds);
+            if let (Some((_, first)), Some((_, last))) = (rotation.first(), rotation.last()) {
+                max_rotation = max_rotation.max(first.angle_between(*last));
+                assert!(
+                    rotation.last().unwrap().0 + 1.0e-6 >= run.duration_seconds,
+                    "{} rotation ended before the clip boundary",
+                    track.target_path
+                );
+            }
+            let mut scale: Vec<_> = track
+                .scale
+                .iter()
+                .map(|key| (key.time, Vec3::from_array(key.value)))
+                .collect();
+            close_scale_loop(&mut scale, run.duration_seconds);
+            if let (Some((_, first)), Some((_, last))) = (scale.first(), scale.last()) {
+                max_scale = max_scale.max(first.distance(*last));
+            }
+        }
+        assert!(
+            raw_max_rotation > 0.5,
+            "fixture no longer exercises its known run-pose seam: {raw_max_rotation}"
+        );
+        assert!(
+            max_translation <= 1.0e-5,
+            "corrected translation seam {max_translation}"
+        );
+        assert!(
+            max_rotation <= 1.0e-3,
+            "corrected rotation seam {max_rotation}"
+        );
+        assert!(max_scale <= 1.0e-5, "corrected scale seam {max_scale}");
+    }
+
+    #[test]
+    fn loop_pose_correction_preserves_the_first_pose_and_closes_the_last() {
+        let first_rotation = Quat::from_rotation_x(-0.25) * Quat::from_rotation_z(0.1);
+        let middle_rotation = Quat::from_rotation_x(0.4);
+        let last_rotation = Quat::from_rotation_x(0.7) * Quat::from_rotation_z(-0.2);
+        let mut rotations = vec![
+            (0.0, first_rotation),
+            (0.5, middle_rotation),
+            (1.0, last_rotation),
+        ];
+        let mut translations = vec![
+            (0.0, Vec3::new(1.0, 2.0, 3.0)),
+            (0.5, Vec3::new(2.0, 3.0, 4.0)),
+            (1.0, Vec3::new(3.0, 4.0, 5.0)),
+        ];
+        close_rotation_loop(&mut rotations, 1.0);
+        close_translation_loop(&mut translations, 1.0);
+
+        assert!(rotations[0].1.angle_between(first_rotation) <= 1.0e-6);
+        assert!(rotations[2].1.angle_between(first_rotation) <= 1.0e-6);
+        assert_eq!(translations[0].1, Vec3::new(1.0, 2.0, 3.0));
+        assert!(translations[2].1.distance(translations[0].1) <= 1.0e-6);
+        assert!(rotations[1].1.is_finite());
+        assert!(translations[1].1.is_finite());
     }
 
     #[test]
