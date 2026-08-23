@@ -1,6 +1,6 @@
 # Character Animation Regression Checklist
 
-Status: **OPEN — the overlapping visible-skin defect is corrected locally and motion is visible in separated captures; user confirmation is still required.**
+Status: **OPEN — the scene-lifecycle defect is corrected locally and visible motion is present in a short internal capture; user confirmation is still required.**
 
 Baseline audited: `3914e90` on 2026-08-23. This ledger records what the repository actually proves and what the user's visual checks disproved. Passing tests, successful controller attachment logs, or a still screenshot do not establish visible animation.
 
@@ -25,6 +25,8 @@ Do not mark this regression fixed until all of the following are true in the sam
 - [x] **A repeatable close-up path exists.** `STREAM_TOWN_SMOKE_STATIC_RIG=1` isolates the static rig and `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1` frames the controller path. These are diagnostic entry points only; a still smoke capture is not an animation acceptance test.
 - [x] **The runtime can construct and select controller nodes.** Current tests cover converted clip records, graph composition, layer masks, transition selection, state speed, crossfades, action contracts, and retargeted curve creation. Attachment logs have reported controllers, clips, and targets. This narrows the remaining fault to live playback/target/skin application rather than missing controller RON.
 - [x] **The visible skin now receives motion from clips authored for its own consolidated armature (current candidate).** The full translated controller remains authoritative, but each of its 20 motions resolves to the matching native take inside `Characters.glb` when available. This is materially different from the old single native-fallback preference: it preserves layers, transitions, actions, weights, and crossfades while replacing only the incompatible standalone-rig curve source. A live `STREAM_TOWN_DEBUG_ANIMATION_BINDINGS=1` run measured advancing playback and 0.53–0.92-radian rotation deltas on `Thigh_L`/`UpperArm_L`; the measured joints were referenced by the visible glTF skin. This is strong internal evidence, but the visual regression stays open until the acceptance gate and user check pass.
+- [x] **The exported defender skin and native run clip deform correctly without Bevy runtime assumptions.** Direct GLB evaluation moved all 476 `Body_Defender_Slim` vertices at a quarter-cycle (mean `1.071888`, maximum `2.59697` model units), changed the joint skin matrices by up to `4.2767`, and found normalized vertex weights. Do not revisit the Blender export, weights, or inverse bind poses unless this calculation regresses.
+- [x] **The first live animation player was being discarded by Bevy scene finalization, and the replacement now rebinds (current candidate).** The same frame previously contained one active converted player during `Update` and zero before Bevy animation evaluation in `PostUpdate`. Converted rigs now wait for `WorldInstanceReady`; a later instance-ready event clears the stale applied marker, and a fallback system detects any root whose player disappeared. After replacement, one player remained active while seek time advanced from `0.028` to `0.528` seconds and visible-body vertex deltas reached `1.1801` model units. Twenty internal GPU screenshots were assembled into `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4`, which visibly contains changing character poses.
 
 ## What did not fix visible animation
 
@@ -51,14 +53,14 @@ Do not mark this regression fixed until all of the following are true in the sam
 
 Run these in order and record the result before changing behavior:
 
-- [ ] Use one starting actor under `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`; record its stable ID, actor root entity, animation-root entity, `AnimationPlayer`, graph handle, active nodes, weights, elapsed time, target count, and detailed-animation budget decision.
-- [ ] Sample the local and global transforms of `CharacterArmature`, `pelvis`, one spine joint, and one arm/leg joint at two separated rendered frames. Store the numerical delta.
-- [ ] If player elapsed time does not advance, inspect scheduling/play/repeat/pause state only.
-- [ ] If elapsed time advances but joint transforms do not, inspect `AnimationTargetId`/`AnimatedBy` binding only.
-- [ ] If joint transforms change but the visible mesh does not, inspect which joint entities the glTF `SkinnedMesh` actually references; do not change retargeting until this is known.
-- [ ] If both joints and skin move in a one-clip direct diagnostic, reintroduce the controller one layer at a time to locate the first suppressing weight/mask.
-- [ ] Add an integration test that advances real Bevy time and asserts a named real joint transform changes. Keep the existing contract tests, but do not treat them as a substitute.
-- [ ] Capture a short idle-to-walk-to-idle video using the same actor and camera. Compare motion, not just pose or attachment logs.
+- [x] Use one starting actor under `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`; record its stable ID, actor root entity, animation-root entity, `AnimationPlayer`, graph handle, active nodes, weights, elapsed time, target count, and detailed-animation budget decision.
+- [x] Sample representative named-joint transforms at separated rendered frames and store the numerical delta.
+- [x] Determine whether player elapsed time advances. It advances after the replacement hierarchy is rebound; the original player was removed between schedules.
+- [x] Determine whether animated target transforms change. The visible skin's referenced `Body`, `Thigh_L`, and `UpperArm_L` joints change.
+- [x] Determine whether the real visible mesh references and deforms with those joints. `Body_Defender_Slim` references the changed joints, and direct live skinning of its 476 vertices changes every sampled pose.
+- [x] Prove the full controller can drive the same visible skin after the lifecycle repair. The controller retains 20 clips/two layers and produces visible internal screenshot sequences.
+- [x] Add a lifecycle regression test that verifies a replaced hierarchy becomes eligible for rebinding while a live driver keeps its marker.
+- [x] Capture a short same-actor sequence from GPU-rendered frames. `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4` covers 20 consecutive internal captures.
 - [ ] Identify the user-observed known-good revision by replaying the same capture while bisecting. No exact known-good commit is currently proven, so do not label a candidate solely from its commit message.
 
 ## Current attempt
@@ -78,8 +80,17 @@ Run these in order and record the result before changing behavior:
   - Player elapsed delta: `0.0143754` seconds in the sampled rendered frame.
   - Named joint transform delta: `Body = 0.2566451` radians; `Thigh_L = 0.5331674` radians on the other starting actors.
   - Visible skin result: settled defender renderers reduced from 123 to 7 primitives across exactly the selected logical slots. The animated poses in `.stream-town/diagnostics/animation-visible-after-slot-fix.png` and `animation-visible-after-slot-fix-frame-2.png` differ from each other and from `animation-static-after-slot-fix.png` while the camera follows the same actor.
-  - User result: `not checked`.
+  - User result: `failed` — the latest user check still reported no visible animation, which led to the scene-lifecycle diagnosis below.
   - Reuse rule: if the user still sees no motion, record a short ordinary-run video before changing controller or retargeting code; if shoulder flicker remains, inspect only the seven logged selected primitives and their material/shadow passes.
+
+- [ ] **`current lifecycle candidate` — bind only to a finalized imported hierarchy and recover after instance replacement**
+  - Changed: scene/player lifecycle only; converted rigs wait for `WorldInstanceReady`, rebind on later instance-ready events, and clear stale applied markers if a driver disappears. Clip selection, retargeting, controller logic, visibility, facing, materials, and shadows were not changed.
+  - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`; `STREAM_TOWN_DEBUG_INITIAL_AGENTS=1`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
+  - Player elapsed delta: replacement player advanced from `0.0281846` to `0.5281846` seconds and remained active in every later sampled stage.
+  - Named joint transform delta: `Body = 0.3868502` radians between sampled frames; playback remained at speed `1.0`.
+  - Visible skin result: `Body_Defender_Slim` has 476 vertices/25 joints; live mean vertex deltas reached `0.3845894` and maximum deltas reached `1.1801370`. Visible motion is recorded in `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4`.
+  - User result: `not checked`.
+  - Reuse rule: if this still fails for the user, first check whether their log contains a second `attached translated Unity animation controller` after scene finalization and capture ordinary-run frames after that point; do not alter clip or rig data without evidence that the replacement player survives but renders statically.
 
 ## Attempt record template
 

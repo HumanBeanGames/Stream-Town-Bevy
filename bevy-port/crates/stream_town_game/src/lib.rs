@@ -21,6 +21,7 @@ use bevy::{
         transition::AnimationTransitions,
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
+    app::AnimationSystems,
     asset::{AssetPlugin, LoadState, RenderAssetUsages, UntypedHandle},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
     camera::primitives::Aabb,
@@ -33,8 +34,8 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     light::DirectionalLightShadowMap,
     math::Affine2,
-    mesh::Indices,
-    mesh::skinning::SkinnedMesh,
+    mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    mesh::{Indices, VertexAttributeValues},
     pbr::ScreenSpaceAmbientOcclusion,
     pbr::{ExtendedMaterial, MaterialExtension},
     post_process::{
@@ -50,10 +51,12 @@ use bevy::{
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
+    transform::TransformSystems,
     window::{
         MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode, WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
+    world_serialization::WorldInstanceReady,
 };
 use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
@@ -2118,6 +2121,15 @@ struct ConvertedAnimationSpec {
 #[derive(Component)]
 struct ConvertedAnimationApplied;
 
+/// Marks a converted rig whose imported scene hierarchy has finished spawning.
+///
+/// Animation targets attached before `WorldInstanceReady` are descendants of
+/// an instance that Bevy may still replace while it finishes loading. Waiting
+/// for this marker prevents the animation player from being despawned between
+/// `Update` and `PostUpdate` by the scene spawner.
+#[derive(Component)]
+struct ConvertedAnimationInstanceReady;
+
 #[derive(Component)]
 struct ActorAnimationDriver {
     actor_root: Entity,
@@ -2295,6 +2307,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<ConvertedAnimationCache>()
             .init_resource::<GateAnimationCache>()
             .init_resource::<LevelUpPresentation>()
+            .add_observer(mark_converted_animation_instance_ready)
             .insert_resource(PlayerSettingsRuntime {
                 autosave_elapsed_seconds: 0.0,
             })
@@ -2497,8 +2510,25 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                repair_replaced_converted_animation_instances
+                    .before(attach_converted_animations)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 report_animation_binding_diagnostics
                     .after(drive_converted_animations)
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    report_pre_animation_stage.before(AnimationSystems),
+                    report_post_animation_stage
+                        .after(AnimationSystems)
+                        .before(TransformSystems::Propagate),
+                    report_live_skin_deformation.after(TransformSystems::Propagate),
+                )
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -16489,6 +16519,33 @@ fn attach_native_animations(
     }
 }
 
+#[allow(clippy::type_complexity)]
+fn repair_replaced_converted_animation_instances(
+    mut commands: Commands,
+    roots: Query<
+        Entity,
+        (
+            With<ConvertedAnimationSpec>,
+            With<ConvertedAnimationInstanceReady>,
+            With<ConvertedAnimationApplied>,
+        ),
+    >,
+    drivers: Query<&ConvertedAnimationDriver>,
+) {
+    for actor_root in &roots {
+        if drivers.iter().any(|driver| driver.actor_root == actor_root) {
+            continue;
+        }
+        // The scene spawner can replace an imported hierarchy after a GLB
+        // subasset finishes loading. Never let the marker on the stable actor
+        // root strand that replacement without its controller.
+        commands
+            .entity(actor_root)
+            .remove::<ConvertedAnimationApplied>();
+    }
+}
+
+#[allow(clippy::type_complexity)]
 fn attach_converted_animations(
     mut commands: Commands,
     asset_server: Option<Res<AssetServer>>,
@@ -16496,7 +16553,13 @@ fn attach_converted_animations(
     animation_clips: Option<ResMut<Assets<AnimationClip>>>,
     animation_graphs: Option<ResMut<Assets<AnimationGraph>>>,
     mut cache: ResMut<ConvertedAnimationCache>,
-    specs: Query<(Entity, &ConvertedAnimationSpec), Without<ConvertedAnimationApplied>>,
+    specs: Query<
+        (Entity, &ConvertedAnimationSpec),
+        (
+            With<ConvertedAnimationInstanceReady>,
+            Without<ConvertedAnimationApplied>,
+        ),
+    >,
     children: Query<&Children>,
     names: Query<&Name>,
     transforms: Query<&Transform>,
@@ -16625,6 +16688,25 @@ fn attach_converted_animations(
             targets = targets.len(),
             "attached translated Unity animation controller"
         );
+    }
+}
+
+fn mark_converted_animation_instance_ready(
+    ready: On<WorldInstanceReady>,
+    mut commands: Commands,
+    specs: Query<(), With<ConvertedAnimationSpec>>,
+    applied: Query<(), With<ConvertedAnimationApplied>>,
+) {
+    if specs.get(ready.entity).is_err() {
+        return;
+    }
+    let mut entity = commands.entity(ready.entity);
+    entity.insert(ConvertedAnimationInstanceReady);
+    // WorldInstanceReady is emitted again after a hot reload or any other
+    // scene-instance replacement. The old player belongs to the discarded
+    // hierarchy, so make the replacement hierarchy eligible for attachment.
+    if applied.get(ready.entity).is_ok() {
+        entity.remove::<ConvertedAnimationApplied>();
     }
 }
 
@@ -18863,6 +18945,14 @@ fn report_animation_binding_diagnostics(
             .playing_animations()
             .map(|(_, animation)| animation.elapsed())
             .fold(0.0, f32::max);
+        let player_seek_time = player
+            .playing_animations()
+            .map(|(_, animation)| animation.seek_time())
+            .fold(0.0, f32::max);
+        let playback_speeds = player
+            .playing_animations()
+            .map(|(_, animation)| animation.speed())
+            .collect::<Vec<_>>();
         let Some((joint, name, transform, _)) = targets.iter().find(|(_, name, _, animated_by)| {
             animated_by.0 == player_entity
                 && matches!(name.as_str(), "UpperArm_L" | "Thigh_L" | "Body")
@@ -18944,6 +19034,8 @@ fn report_animation_binding_diagnostics(
             player = ?player_entity,
             active_nodes = player.playing_animations().count(),
             player_elapsed,
+            player_seek_time,
+            playback_speeds = ?playback_speeds,
             elapsed_delta,
             joint = %name,
             joint_entity = ?joint,
@@ -18956,6 +19048,218 @@ fn report_animation_binding_diagnostics(
         );
         previous.insert(player_entity, (player_elapsed, transform.rotation));
     }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+fn report_live_skin_deformation(
+    meshes: Option<Res<Assets<Mesh>>>,
+    inverse_bindposes: Option<Res<Assets<SkinnedMeshInverseBindposes>>>,
+    agents: Query<(Entity, &Agent, &GlobalTransform)>,
+    players: Query<&ConvertedAnimationDriver>,
+    skins: Query<(
+        Entity,
+        &SkinnedMesh,
+        &Mesh3d,
+        Option<&Visibility>,
+        Option<&InheritedVisibility>,
+    )>,
+    globals: Query<&GlobalTransform>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    mut samples: Local<u8>,
+    mut previous_vertices: Local<HashMap<Entity, Vec<Vec3>>>,
+) {
+    if !animation_binding_diagnostics_enabled() || *samples >= 8 {
+        return;
+    }
+    let (Some(meshes), Some(inverse_bindposes)) = (meshes, inverse_bindposes) else {
+        return;
+    };
+    let Some(driver) = players.iter().find(|driver| {
+        agents
+            .get(driver.actor_root)
+            .is_ok_and(|(_, agent, _)| agent.id.as_str() == "npc:starting_defender")
+    }) else {
+        return;
+    };
+    let Ok((_, agent, actor_global)) = agents.get(driver.actor_root) else {
+        return;
+    };
+    let actor_from_world = actor_global.affine().inverse();
+    let visible_body_skins = skins
+        .iter()
+        .filter(|(skin_entity, _, _, visibility, inherited_visibility)| {
+            !matches!(visibility, Some(Visibility::Hidden))
+                && inherited_visibility.is_none_or(|visibility| visibility.get())
+                && is_descendant_of(*skin_entity, driver.actor_root, &parents)
+        })
+        .filter_map(|skin| {
+            let slot_name = named_character_slot_ancestor(skin.0, &parents, &names)?;
+            slot_name.starts_with("Body_").then_some((skin, slot_name))
+        })
+        .collect::<Vec<_>>();
+    // The imported scene begins with all source variants inherited-visible for
+    // one frame, before the role/cosmetic visibility pass settles. Sampling
+    // that frame is both misleading and needlessly expensive; the renderer we
+    // need to prove is the one selected body after propagation.
+    if visible_body_skins.len() != 1 {
+        return;
+    }
+    for ((skin_entity, skin, mesh_handle, _, _), slot_name) in visible_body_skins {
+        let Some(mesh) = meshes.get(&mesh_handle.0) else {
+            continue;
+        };
+        let Some(bindposes) = inverse_bindposes.get(&skin.inverse_bindposes) else {
+            continue;
+        };
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            continue;
+        };
+        let Some(VertexAttributeValues::Uint16x4(joint_indices)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX)
+        else {
+            continue;
+        };
+        let Some(VertexAttributeValues::Float32x4(joint_weights)) =
+            mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT)
+        else {
+            continue;
+        };
+        if positions.len() != joint_indices.len() || positions.len() != joint_weights.len() {
+            warn!(
+                stable_id = %agent.id,
+                slot = slot_name,
+                positions = positions.len(),
+                joint_indices = joint_indices.len(),
+                joint_weights = joint_weights.len(),
+                "live skin diagnostic found mismatched vertex attributes"
+            );
+            continue;
+        }
+        let vertices = positions
+            .iter()
+            .zip(joint_indices)
+            .zip(joint_weights)
+            .map(|((position, indices), weights)| {
+                let position = Vec3::from_array(*position);
+                let world_position = indices.iter().zip(weights).fold(
+                    Vec3::ZERO,
+                    |deformed, (&joint_index, &weight)| {
+                        if weight <= f32::EPSILON {
+                            return deformed;
+                        }
+                        let index = usize::from(joint_index);
+                        let Some(&joint) = skin.joints.get(index) else {
+                            return deformed;
+                        };
+                        let (Ok(joint_global), Some(inverse_bindpose)) =
+                            (globals.get(joint), bindposes.get(index))
+                        else {
+                            return deformed;
+                        };
+                        let joint_matrix = joint_global.affine() * *inverse_bindpose;
+                        deformed + joint_matrix.transform_point3(position) * weight
+                    },
+                );
+                actor_from_world.transform_point3(world_position)
+            })
+            .collect::<Vec<_>>();
+        let (mean_vertex_delta, max_vertex_delta) = previous_vertices
+            .get(&skin_entity)
+            .filter(|previous| previous.len() == vertices.len())
+            .map_or((0.0, 0.0), |previous| {
+                let mut sum = 0.0;
+                let mut maximum = 0.0_f32;
+                for (previous, current) in previous.iter().zip(&vertices) {
+                    let delta = previous.distance(*current);
+                    sum += delta;
+                    maximum = maximum.max(delta);
+                }
+                (sum / vertices.len().max(1) as f32, maximum)
+            });
+        let (bounds_min, bounds_max) = vertices.iter().fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(minimum, maximum), &vertex| (minimum.min(vertex), maximum.max(vertex)),
+        );
+        info!(
+            stable_id = %agent.id,
+            skin = ?skin_entity,
+            slot = slot_name,
+            vertices = vertices.len(),
+            joints = skin.joints.len(),
+            mean_vertex_delta,
+            max_vertex_delta,
+            bounds_size = ?(bounds_max - bounds_min),
+            "live post-propagation skin deformation"
+        );
+        previous_vertices.insert(skin_entity, vertices);
+    }
+    *samples += 1;
+}
+
+fn report_pre_animation_stage(
+    players: Query<&AnimationPlayer, With<ConvertedAnimationDriver>>,
+    mut samples: Local<u8>,
+) {
+    if animation_binding_diagnostics_enabled() && *samples < 8 {
+        info!(
+            sample = *samples,
+            converted_players = players.iter().count(),
+            active_nodes = players
+                .iter()
+                .map(|player| player.playing_animations().count())
+                .sum::<usize>(),
+            "animation stage: before Bevy animation evaluation"
+        );
+        *samples += 1;
+    }
+}
+
+fn report_post_animation_stage(mut samples: Local<u8>) {
+    if animation_binding_diagnostics_enabled() && *samples < 8 {
+        info!(
+            sample = *samples,
+            "animation stage: after Bevy animation evaluation"
+        );
+        *samples += 1;
+    }
+}
+
+fn is_descendant_of(entity: Entity, ancestor: Entity, parents: &Query<&ChildOf>) -> bool {
+    let mut entity = entity;
+    for _ in 0..64 {
+        if entity == ancestor {
+            return true;
+        }
+        let Ok(parent) = parents.get(entity) else {
+            break;
+        };
+        entity = parent.parent();
+    }
+    false
+}
+
+fn named_character_slot_ancestor<'a>(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    names: &'a Query<&Name>,
+) -> Option<&'a str> {
+    let mut entity = entity;
+    for _ in 0..8 {
+        if let Ok(name) = names.get(entity)
+            && player_equipment_slot_node(name.as_str())
+        {
+            return Some(name.as_str());
+        }
+        entity = parents.get(entity).ok()?.parent();
+    }
+    None
 }
 
 fn same_animation_blend(
@@ -28616,6 +28920,60 @@ mod tests {
         let scene = runtime_archetype_scene(player).unwrap();
         assert_eq!(scene.asset_path, PLAYER_ANIMATED_MODEL_PATH);
         assert_eq!(scene.source_model, PLAYER_ANIMATED_SOURCE_MODEL);
+    }
+
+    #[test]
+    fn replaced_converted_scene_becomes_eligible_for_animation_rebinding() {
+        let mut app = App::new();
+        app.add_systems(Update, repair_replaced_converted_animation_instances);
+        let controller = StableId::new("controller:test").unwrap();
+        let state = StableId::new("animation_state:test").unwrap();
+        let stale_root = app
+            .world_mut()
+            .spawn((
+                ConvertedAnimationSpec {
+                    controller: controller.clone(),
+                    state: state.clone(),
+                    rig_scene: "test.glb".to_owned(),
+                },
+                ConvertedAnimationInstanceReady,
+                ConvertedAnimationApplied,
+            ))
+            .id();
+        let live_root = app
+            .world_mut()
+            .spawn((
+                ConvertedAnimationSpec {
+                    controller: controller.clone(),
+                    state,
+                    rig_scene: "test.glb".to_owned(),
+                },
+                ConvertedAnimationInstanceReady,
+                ConvertedAnimationApplied,
+            ))
+            .id();
+        app.world_mut().spawn(ConvertedAnimationDriver {
+            actor_root: live_root,
+            controller,
+            layers: Vec::new(),
+            last_alive: None,
+            active_action: None,
+        });
+
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<ConvertedAnimationApplied>(stale_root)
+                .is_none(),
+            "a discarded scene hierarchy must not permanently suppress rebinding"
+        );
+        assert!(
+            app.world()
+                .get::<ConvertedAnimationApplied>(live_root)
+                .is_some(),
+            "a live animation driver must retain the applied marker"
+        );
     }
 
     #[test]
