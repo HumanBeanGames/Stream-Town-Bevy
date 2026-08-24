@@ -12,6 +12,8 @@ struct TerrainMaterialUniform {
     season_tint: vec4<f32>,
     texture_uv_blend_tint: vec4<f32>,
     grid_scale_offset: vec4<f32>,
+    selection_center_extent: vec4<f32>,
+    selection_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -63,9 +65,49 @@ fn fragment(
         vec4<f32>(vec3<f32>(smoothstep(0.27, 1.86, broad_noise)), 1.0),
         terrain_material.season_tint.w,
     );
-    pbr_input.material.base_color = vec4<f32>(
+    let terrain_color = vec4<f32>(
         authored.rgb * terrain_material.season_tint.rgb,
         1.0,
+    );
+    let selection_delta = abs(
+        in.world_position.xz - terrain_material.selection_center_extent.xy,
+    );
+    let selection_edge_distance = min(
+        terrain_material.selection_center_extent.z - selection_delta.x,
+        terrain_material.selection_center_extent.w - selection_delta.y,
+    );
+    let selection_thickness = max(
+        min(
+            terrain_material.selection_center_extent.z,
+            terrain_material.selection_center_extent.w,
+        ) * 0.10,
+        0.08,
+    );
+    let selection_aa = max(fwidth(selection_edge_distance), 0.01);
+    let selection_inside = smoothstep(
+        -selection_aa,
+        selection_aa,
+        selection_edge_distance,
+    );
+    let selection_interior = smoothstep(
+        selection_thickness - selection_aa,
+        selection_thickness + selection_aa,
+        selection_edge_distance,
+    );
+    let selection_active = select(
+        0.0,
+        1.0,
+        terrain_material.selection_center_extent.z > 0.0
+            && terrain_material.selection_center_extent.w > 0.0,
+    );
+    let selection_outline = selection_active
+        * selection_inside
+        * (1.0 - selection_interior)
+        * terrain_material.selection_color.a;
+    pbr_input.material.base_color = mix(
+        terrain_color,
+        vec4<f32>(terrain_material.selection_color.rgb, 1.0),
+        selection_outline,
     );
     pbr_input.material.base_color = alpha_discard(
         pbr_input.material,
@@ -81,6 +123,17 @@ fn fragment(
         max(
             out.color.rgb,
             pbr_input.material.base_color.rgb * vec3<f32>(0.36),
+        ),
+        out.color.a,
+    );
+    // The selection is part of the terrain pass itself. It cannot z-fight with
+    // the terrain, while ordinary world geometry still writes nearer depth and
+    // occludes it naturally.
+    out.color = vec4<f32>(
+        mix(
+            out.color.rgb,
+            terrain_material.selection_color.rgb,
+            selection_outline,
         ),
         out.color.a,
     );

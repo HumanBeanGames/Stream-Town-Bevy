@@ -137,10 +137,8 @@ const SELECTION_MASK_MATERIAL_ID: &str = "material:631afbf4de8b7ad4eabc5e30e0b2c
 const SELECTION_MASK_TEXTURE_PATH: &str = "Assets/Textures/SelectionMask.png";
 const PLAYER_SELECTION_OUTLINE_SCALE_CELLS: f32 = 1.5 * 1.25 / 2.0;
 const SELECTION_OUTLINE_SURFACE_OFFSET: f32 = 0.15;
-// Positive Bevy depth bias moves the outline toward the camera. The value is
-// deliberately small in world units: it wins against the terrain depth at a
-// cell surface while ordinary geometry still occludes it.
-const SELECTION_OUTLINE_DEPTH_BIAS: f32 = 8.0;
+const SELECTION_OUTLINE_COLOR: Vec4 = Vec4::new(1.0, 0.92, 0.02, 0.92);
+const GROUP_SELECTION_OUTLINE_DEPTH_BIAS: f32 = 8.0;
 const WORLD_REVEAL_GPU_STABLE_FRAMES: u64 = 6;
 // Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
 // building models are authored at Unity scale and then scaled by cell_size / 2.
@@ -689,7 +687,7 @@ struct BuildingMaterialInstance {
     applied_daylight_milli: u16,
 }
 
-#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, ShaderType)]
 struct TerrainMaterialUniform {
     sand_color_a: Vec4,
     sand_color_b: Vec4,
@@ -698,6 +696,8 @@ struct TerrainMaterialUniform {
     season_tint: Vec4,
     texture_uv_blend_tint: Vec4,
     grid_scale_offset: Vec4,
+    selection_center_extent: Vec4,
+    selection_color: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -1371,6 +1371,29 @@ struct WorldLoadingRuntime {
     prepared_world: Option<GeneratedWorld>,
     scene_ready_frames: u8,
     completion_remaining_seconds: f32,
+}
+
+#[derive(Resource)]
+struct WorldLoadingCoverRuntime {
+    started_at: Instant,
+    initialized: bool,
+    starting_render_frame: u64,
+    fallback_updates: u8,
+    ready_updates: u8,
+    transition_queued: bool,
+}
+
+impl Default for WorldLoadingCoverRuntime {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+            initialized: false,
+            starting_render_frame: 0,
+            fallback_updates: 0,
+            ready_updates: 0,
+            transition_queued: false,
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -2341,9 +2364,6 @@ struct BuildingPresentation {
 }
 
 #[derive(Component)]
-struct SelectionMarker;
-
-#[derive(Component)]
 struct GroupSelectionOutline(StableId);
 
 #[derive(Component)]
@@ -2844,9 +2864,13 @@ impl Plugin for StreamTownGamePlugin {
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
-                    spawn_loading_screen
-                        .after(process_runtime_console)
-                        .run_if(world_loading_pending),
+                    (
+                        spawn_loading_screen,
+                        begin_world_loading_cover,
+                        advance_world_loading_cover,
+                    )
+                        .chain()
+                        .run_if(world_loading_cover_requested),
                     animate_loading_icon,
                     finish_menu_reveal,
                     sync_boot_loading_screen,
@@ -3112,9 +3136,13 @@ impl Plugin for StreamTownGamePlugin {
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
-                    spawn_loading_screen
-                        .after(process_runtime_console)
-                        .run_if(world_loading_pending),
+                    (
+                        spawn_loading_screen,
+                        begin_world_loading_cover,
+                        advance_world_loading_cover,
+                    )
+                        .chain()
+                        .run_if(world_loading_cover_requested),
                 )
                     .chain()
                     .after(game_input)
@@ -3759,7 +3787,7 @@ fn setup_rendering(
                 base_color: Color::srgb(1.0, 0.983_102, 0.0),
                 emissive: LinearRgba::new(0.877_358_5, 0.836_833_4, 0.0, 1.0),
                 alpha_mode: AlphaMode::Mask(0.5),
-                depth_bias: SELECTION_OUTLINE_DEPTH_BIAS,
+                depth_bias: GROUP_SELECTION_OUTLINE_DEPTH_BIAS,
                 ..default()
             })
         });
@@ -4840,7 +4868,7 @@ fn standard_material(
 }
 
 fn selection_outline_material(mut material: StandardMaterial) -> StandardMaterial {
-    material.depth_bias = SELECTION_OUTLINE_DEPTH_BIAS;
+    material.depth_bias = GROUP_SELECTION_OUTLINE_DEPTH_BIAS;
     material
 }
 
@@ -4960,6 +4988,8 @@ fn terrain_material(
                     grid_transform.offset[0],
                     grid_transform.offset[1],
                 ),
+                selection_center_extent: Vec4::ZERO,
+                selection_color: Vec4::ZERO,
             },
             grid_texture,
         },
@@ -5912,6 +5942,7 @@ fn in_rendered_game_state(state: Res<State<GameState>>) -> bool {
     )
 }
 
+#[cfg(test)]
 fn next_state_targets_world_loading(next_state: &NextState<GameState>) -> bool {
     matches!(
         next_state,
@@ -5920,8 +5951,138 @@ fn next_state_targets_world_loading(next_state: &NextState<GameState>) -> bool {
     )
 }
 
-fn world_loading_pending(next_state: Res<NextState<GameState>>) -> bool {
-    next_state_targets_world_loading(&next_state)
+fn queue_world_loading(commands: &mut Commands) {
+    commands.insert_resource(WorldLoadingCoverRuntime::default());
+}
+
+fn world_loading_cover_requested(cover: Option<Res<WorldLoadingCoverRuntime>>) -> bool {
+    cover.is_some_and(|cover| !cover.transition_queued)
+}
+
+fn loading_screen_asset_handles(render: &RenderAssets) -> Vec<UntypedHandle> {
+    [
+        render.loading_screen.as_ref(),
+        render.loading_overlay.as_ref(),
+        render.loading_icon.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .cloned()
+    .map(Handle::untyped)
+    .collect()
+}
+
+fn begin_world_loading_cover(
+    mut cover: ResMut<WorldLoadingCoverRuntime>,
+    presented_frames: Res<PresentedRenderFrames>,
+    render: Res<RenderAssets>,
+    gpu_readiness: Res<GpuReadinessProbe>,
+) {
+    if cover.initialized {
+        return;
+    }
+    let expected_images = loading_screen_asset_handles(&render)
+        .into_iter()
+        .filter_map(|handle| handle.id().try_typed::<Image>().ok())
+        .collect();
+    gpu_readiness.begin_world(expected_images, BTreeSet::new(), BTreeSet::new());
+    cover.starting_render_frame = presented_frames.current();
+    cover.initialized = true;
+}
+
+fn loading_cover_ready(
+    overlay_present: bool,
+    loaded_assets: usize,
+    total_assets: usize,
+    failed_assets: usize,
+    gpu_ready: bool,
+    rendered_frames: u64,
+) -> bool {
+    overlay_present
+        && loaded_assets == total_assets
+        && failed_assets == 0
+        && gpu_ready
+        && rendered_frames >= 3
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advance_world_loading_cover(
+    presented_frames: Res<PresentedRenderFrames>,
+    render: Res<RenderAssets>,
+    gpu_readiness: Res<GpuReadinessProbe>,
+    asset_server: Option<Res<AssetServer>>,
+    mut cover: ResMut<WorldLoadingCoverRuntime>,
+    mut next_state: ResMut<NextState<GameState>>,
+    loading_entities: Query<(), With<LoadingScreenEntity>>,
+    mut status: Query<&mut Text, With<LoadingStatusText>>,
+    mut substatus: LoadingSubstatusQuery,
+    mut percent_text: LoadingPercentQuery,
+    mut fills: Query<&mut Node, With<LoadingProgressFill>>,
+) {
+    if !cover.initialized || cover.transition_queued {
+        return;
+    }
+    cover.fallback_updates = cover.fallback_updates.saturating_add(1);
+    let presented_render_frame = if presented_frames.render_schedule_available {
+        presented_frames.current()
+    } else {
+        u64::from(cover.fallback_updates)
+    };
+    let rendered_frames = presented_render_frame.saturating_sub(cover.starting_render_frame);
+    let handles = loading_screen_asset_handles(&render);
+    let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &handles);
+    let gpu = gpu_readiness.snapshot();
+    let gpu_ready = !presented_frames.render_schedule_available || gpu.is_ready();
+    let ready = loading_cover_ready(
+        !loading_entities.is_empty(),
+        loaded,
+        handles.len(),
+        failed,
+        gpu_ready,
+        rendered_frames,
+    );
+    cover.ready_updates = if ready {
+        cover.ready_updates.saturating_add(1)
+    } else {
+        0
+    };
+
+    let display_progress = if ready { 5.0 } else { 3.0 };
+    if let Ok(mut text) = status.single_mut() {
+        **text = if ready {
+            "Loading screen ready".to_owned()
+        } else {
+            "Preparing town loading".to_owned()
+        };
+    }
+    if let Ok(mut text) = substatus.single_mut() {
+        **text = format!(
+            "Loading artwork {loaded}/{}; GPU images {}/{}; {} pipelines",
+            handles.len(),
+            gpu.ready_images,
+            gpu.expected_images,
+            gpu.pending_pipelines,
+        );
+    }
+    if let Ok(mut text) = percent_text.single_mut() {
+        **text = format!("{display_progress:.0}%");
+    }
+    if let Ok(mut fill) = fills.single_mut() {
+        fill.width = percent(display_progress);
+    }
+
+    if cover.ready_updates < 3 {
+        return;
+    }
+    cover.transition_queued = true;
+    info!(
+        rendered_frames,
+        gpu_images = gpu.ready_images,
+        pending_pipelines = gpu.pending_pipelines,
+        elapsed_seconds = cover.started_at.elapsed().as_secs_f64(),
+        "Stream Town loading cover presented before world transition"
+    );
+    next_state.set(GameState::WorldLoading);
 }
 
 fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
@@ -6721,7 +6882,7 @@ fn spawn_loading_screen(
         },
         ImageNode::new(icon.clone()).with_color(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
         UiTransform::IDENTITY,
-        GlobalZIndex(102),
+        GlobalZIndex(1_004),
         Node {
             position_type: PositionType::Absolute,
             left: percent(45.0),
@@ -6950,12 +7111,11 @@ fn sync_gpu_world_expectations(
     gpu_readiness: Res<GpuReadinessProbe>,
     active_meshes: Query<&Mesh3d>,
     active_materials: ActiveMaterialHandles,
-    selection: Query<Entity, With<SelectionMarker>>,
 ) {
     gpu_readiness.merge_world_content(
         active_meshes.iter().map(|mesh| mesh.0.id()),
         active_materials.ids(),
-        selection.iter().next(),
+        None,
     );
 }
 
@@ -7033,11 +7193,15 @@ fn sync_loading_screen_status(
 
 fn sync_boot_loading_screen(
     loading: Option<Res<MenuLoadingRuntime>>,
+    world_cover: Option<Res<WorldLoadingCoverRuntime>>,
     mut status: Query<&mut Text, With<LoadingStatusText>>,
     mut substatus: LoadingSubstatusQuery,
     mut percent_text: LoadingPercentQuery,
     mut fills: Query<&mut Node, With<LoadingProgressFill>>,
 ) {
+    if world_cover.is_some() {
+        return;
+    }
     let Some(loading) = loading else {
         return;
     };
@@ -7107,11 +7271,15 @@ fn finish_menu_reveal(
     mut commands: Commands,
     presented_frames: Res<PresentedRenderFrames>,
     world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
+    world_cover: Option<Res<WorldLoadingCoverRuntime>>,
     mut reveal: Option<ResMut<MenuRevealRuntime>>,
     mut loading: Option<ResMut<MenuLoadingRuntime>>,
     mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
     scene_roots: MenuWorldAssetRootQuery,
 ) {
+    if world_cover.is_some() {
+        return;
+    }
     let Some(reveal) = reveal.as_deref_mut() else {
         return;
     };
@@ -7259,7 +7427,7 @@ fn finish_world_reveal(
         loading.progress = 1.0;
         "Preparing first rendered frame".clone_into(&mut loading.status);
         loading.substatus = format!(
-            "{ready_roots}/{root_count} scenes; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines; selection {}",
+            "{ready_roots}/{root_count} scenes; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines",
             gpu.ready_images,
             gpu.expected_images,
             gpu.ready_meshes,
@@ -7267,18 +7435,14 @@ fn finish_world_reveal(
             gpu.ready_materials,
             gpu.expected_materials,
             gpu.pending_pipelines,
-            if gpu.selection_draw_ready {
-                "ready"
-            } else {
-                "warming"
-            },
         );
     }
 
     // Require several frames after the render world has explicitly confirmed
-    // every active mesh/material, all preloaded images, an idle pipeline cache,
-    // and the selection marker's draw instance. This is a readiness proof, not
-    // a blind delay.
+    // every active mesh/material, all preloaded images, and an idle pipeline
+    // cache. The selection now shares the already-confirmed terrain material
+    // pipeline, so it requires no independent draw instance. This is a
+    // readiness proof, not a blind delay.
     if ready_rendered_frames < WORLD_REVEAL_GPU_STABLE_FRAMES
         || u64::from(reveal.ready_frames) < WORLD_REVEAL_GPU_STABLE_FRAMES
     {
@@ -9019,6 +9183,7 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
 }
 
 fn main_menu_input(
+    mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     menu: Res<MenuRuntime>,
     mut next_state: ResMut<NextState<GameState>>,
@@ -9028,7 +9193,7 @@ fn main_menu_input(
         return;
     }
     if keyboard.just_pressed(KeyCode::Enter) {
-        next_state.set(GameState::WorldLoading);
+        queue_world_loading(&mut commands);
     } else if keyboard.just_pressed(KeyCode::KeyC) {
         next_state.set(GameState::Credits);
     } else if keyboard.just_pressed(KeyCode::Escape)
@@ -9044,6 +9209,7 @@ fn main_menu_action_enabled(action: MainMenuAction, has_save: bool) -> bool {
 }
 
 fn main_menu_buttons(
+    mut commands: Commands,
     save: Res<SaveRuntime>,
     settings: Res<RuntimePlayerSettings>,
     mut menu: ResMut<MenuRuntime>,
@@ -9063,11 +9229,11 @@ fn main_menu_buttons(
         match action {
             MainMenuAction::NewGame => {
                 io.load = false;
-                next_state.set(GameState::WorldLoading);
+                queue_world_loading(&mut commands);
             }
             MainMenuAction::LoadGame => {
                 io.load = true;
-                next_state.set(GameState::WorldLoading);
+                queue_world_loading(&mut commands);
             }
             MainMenuAction::Settings => {
                 open_settings_menu(&mut menu, MenuPage::Closed, &settings.0);
@@ -9970,6 +10136,7 @@ fn spawn_menu_overlay(
                 SETTINGS_BACKGROUND_TEXTURE_PATH,
                 main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
             ),
+            BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.92)),
             Visibility::Hidden,
             GlobalZIndex(110),
             Node {
@@ -9978,6 +10145,7 @@ fn spawn_menu_overlay(
                 top: px(0),
                 width: percent(100.0),
                 height: percent(100.0),
+                border: UiRect::all(px(4)),
                 ..default()
             },
         ))
@@ -10106,12 +10274,14 @@ fn spawn_menu_overlay(
                         SETTINGS_BACKGROUND_TEXTURE_PATH,
                         main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
                     ),
+                    BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.92)),
                     Node {
                         position_type: PositionType::Absolute,
                         left: percent(25.0),
                         top: percent(27.0),
                         width: percent(50.0),
                         height: percent(38.0),
+                        border: UiRect::all(px(3)),
                         padding: UiRect::all(percent(5.0)),
                         flex_direction: FlexDirection::Column,
                         justify_content: JustifyContent::SpaceBetween,
@@ -10308,6 +10478,7 @@ fn volume_percent(value: f32) -> u8 {
 }
 
 fn menu_input(
+    mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     state: Res<State<GameState>>,
     save: Res<SaveRuntime>,
@@ -10466,12 +10637,12 @@ fn menu_input(
         match menu.selected {
             0 => {
                 menu.page = MenuPage::Closed;
-                next_state.set(GameState::WorldLoading);
+                queue_world_loading(&mut commands);
             }
             1 if save.store.path().is_file() => {
                 io.load = true;
                 menu.page = MenuPage::Closed;
-                next_state.set(GameState::WorldLoading);
+                queue_world_loading(&mut commands);
             }
             2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
             3 => {
@@ -11105,21 +11276,6 @@ fn generate_and_spawn_world(
             Transform::from_xyz(hall.x, hall.y + size.y * 0.5, hall.z).with_scale(size),
         ));
     }
-
-    commands.spawn((
-        WorldEntity,
-        SelectionMarker,
-        Mesh3d(render.cloud_plane.clone()),
-        MeshMaterial3d(render.selection.clone()),
-        // Render once behind the loading overlay so the selection mesh,
-        // material, and pipeline are resident before the first click. The
-        // InGame selection sync hides it immediately when nothing is selected.
-        Transform::from_translation(town_hall_focus + Vec3::Y * SELECTION_OUTLINE_SURFACE_OFFSET)
-            .with_scale(Vec3::splat(config.0.world.cell_size)),
-        Visibility::Visible,
-        bevy::light::NotShadowCaster,
-        bevy::light::NotShadowReceiver,
-    ));
 
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
@@ -23044,40 +23200,46 @@ fn sync_selection_outline(
     selected_actor: Res<SelectedActor>,
     content: Res<RuntimeContent>,
     config: Res<RuntimeConfig>,
-    world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
-    reveal: Option<Res<WorldRevealRuntime>>,
+    render: Res<RenderAssets>,
     agents: Query<(&Agent, &GlobalTransform)>,
-    mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
+    terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
 ) {
-    let Ok((mut transform, mut visibility)) = markers.single_mut() else {
+    let Some(mut terrain_materials) = terrain_materials else {
+        // Reduced/headless apps intentionally omit render asset storage.
         return;
     };
-    let Some(cell) = selected.0 else {
-        // Keep the marker visible behind the loading overlay until the render
-        // world has acknowledged its draw instance and pipeline. Once the
-        // reveal resource is removed, this same system hides it immediately.
-        if reveal.is_none() {
-            *visibility = Visibility::Hidden;
+    let selection_center_extent = selected.0.map_or(Vec4::ZERO, |cell| {
+        if let Some(actor_id) = selected_actor.0.as_ref()
+            && let Some((_, actor_transform)) =
+                agents.iter().find(|(agent, _)| &agent.id == actor_id)
+        {
+            let position = actor_transform.translation();
+            let half_extent = config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS * 0.5;
+            Vec4::new(position.x, position.z, half_extent, half_extent)
+        } else {
+            let footprint = selected_structural_footprint(cell, &content.0, &simulation.0);
+            selection_outline_rect(cell, footprint, false, &config.0)
         }
+    });
+    let selection_color = if selection_center_extent.z > 0.0 {
+        SELECTION_OUTLINE_COLOR
+    } else {
+        Vec4::ZERO
+    };
+    let Some(current) = terrain_materials.get(&render.ground) else {
         return;
     };
-    if let Some(actor_id) = selected_actor.0.as_ref()
-        && let Some((_, actor_transform)) = agents.iter().find(|(agent, _)| &agent.id == actor_id)
+    if current.extension.parameters.selection_center_extent == selection_center_extent
+        && current.extension.parameters.selection_color == selection_color
     {
-        let mut position = actor_transform.translation();
-        position.y += SELECTION_OUTLINE_SURFACE_OFFSET;
-        *transform = Transform::from_translation(position).with_scale(Vec3::new(
-            config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
-            1.0,
-            config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
-        ));
-        *visibility = Visibility::Visible;
         return;
     }
-    let footprint = selected_structural_footprint(cell, &content.0, &simulation.0);
-    *transform = selection_outline_transform(cell, footprint, false, &config.0, &world.generated);
-    *visibility = Visibility::Visible;
+    let Some(mut ground) = terrain_materials.get_mut(&render.ground) else {
+        return;
+    };
+    ground.extension.parameters.selection_center_extent = selection_center_extent;
+    ground.extension.parameters.selection_color = selection_color;
 }
 
 fn selected_building_footprint(
@@ -23138,13 +23300,12 @@ fn selected_structural_footprint(
     })
 }
 
-fn selection_outline_transform(
+fn selection_outline_rect(
     cell: GridPos,
     building: Option<(GridPos, [u16; 2])>,
     player_selected: bool,
     config: &GameConfig,
-    world: &GeneratedWorld,
-) -> Transform {
+) -> Vec4 {
     let (origin, footprint, scale_factor) = building.map_or_else(
         || {
             (
@@ -23165,13 +23326,13 @@ fn selection_outline_transform(
     };
     let first_world = grid_to_world(origin, config);
     let last_world = grid_to_world(last, config);
-    let mut centre = (first_world + last_world) * 0.5;
-    centre.y = terrain_height(world, cell) + SELECTION_OUTLINE_SURFACE_OFFSET;
-    Transform::from_translation(centre).with_scale(Vec3::new(
-        f32::from(footprint[0]) * config.world.cell_size * scale_factor,
-        1.0,
-        f32::from(footprint[1]) * config.world.cell_size * scale_factor,
-    ))
+    let centre = (first_world + last_world) * 0.5;
+    Vec4::new(
+        centre.x,
+        centre.z,
+        f32::from(footprint[0]) * config.world.cell_size * scale_factor * 0.5,
+        f32::from(footprint[1]) * config.world.cell_size * scale_factor * 0.5,
+    )
 }
 
 fn update_selection_panel(
@@ -29457,6 +29618,7 @@ fn cleanup_loading_runtime(mut commands: Commands) {
 fn clear_loading_runtime(commands: &mut Commands) {
     commands.remove_resource::<WorldLoadingRuntime>();
     commands.remove_resource::<WorldGenerationTask>();
+    commands.remove_resource::<WorldLoadingCoverRuntime>();
     commands.remove_resource::<MenuLoadingRuntime>();
     commands.remove_resource::<MenuRevealRuntime>();
     commands.remove_resource::<WorldRevealRuntime>();
@@ -34481,9 +34643,19 @@ mod tests {
     }
 
     #[test]
-    fn selection_outline_uses_positive_terrain_depth_bias() {
+    fn cold_world_transition_requires_a_presented_gpu_ready_loading_cover() {
+        assert!(!loading_cover_ready(false, 3, 3, 0, true, 3));
+        assert!(!loading_cover_ready(true, 2, 3, 0, true, 3));
+        assert!(!loading_cover_ready(true, 3, 3, 1, true, 3));
+        assert!(!loading_cover_ready(true, 3, 3, 0, false, 3));
+        assert!(!loading_cover_ready(true, 3, 3, 0, true, 2));
+        assert!(loading_cover_ready(true, 3, 3, 0, true, 3));
+    }
+
+    #[test]
+    fn group_selection_outline_keeps_its_positive_depth_bias() {
         let material = selection_outline_material(StandardMaterial::default());
-        assert!((material.depth_bias - SELECTION_OUTLINE_DEPTH_BIAS).abs() < f32::EPSILON);
+        assert!((material.depth_bias - GROUP_SELECTION_OUTLINE_DEPTH_BIAS).abs() < f32::EPSILON);
         assert!(material.depth_bias > 0.0);
     }
 
@@ -35653,38 +35825,27 @@ mod tests {
         let town_hall = &simulation.buildings[&town_hall_id];
         let footprint = selected_building_footprint(town_hall.position, &content, &simulation)
             .expect("Town Hall origin should resolve its complete footprint");
-        let outline = selection_outline_transform(
-            town_hall.position,
-            Some(footprint),
-            false,
-            &config,
-            &world,
-        );
+        let outline = selection_outline_rect(town_hall.position, Some(footprint), false, &config);
         assert_eq!(
-            outline.scale,
-            Vec3::new(
-                f32::from(footprint.1[0]) * config.world.cell_size,
-                1.0,
-                f32::from(footprint.1[1]) * config.world.cell_size,
+            outline.zw(),
+            Vec2::new(
+                f32::from(footprint.1[0]) * config.world.cell_size * 0.5,
+                f32::from(footprint.1[1]) * config.world.cell_size * 0.5,
             )
         );
 
-        let player = selection_outline_transform(town_hall.position, None, true, &config, &world);
+        let player = selection_outline_rect(town_hall.position, None, true, &config);
         assert_eq!(
-            player.scale,
-            Vec3::new(
-                config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
-                1.0,
-                config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
-            )
+            player.zw(),
+            Vec2::splat(config.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS * 0.5,)
         );
-        assert!(
-            (player.translation.y
-                - terrain_height(&world, town_hall.position)
-                - SELECTION_OUTLINE_SURFACE_OFFSET)
-                .abs()
-                <= f32::EPSILON
+
+        let terrain = terrain_material(&presentation, &config, None);
+        assert_eq!(
+            terrain.extension.parameters.selection_center_extent,
+            Vec4::ZERO
         );
+        assert_eq!(terrain.extension.parameters.selection_color, Vec4::ZERO);
     }
 
     #[test]
