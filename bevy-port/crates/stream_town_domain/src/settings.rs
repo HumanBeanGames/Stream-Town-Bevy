@@ -7,7 +7,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 2;
+pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 3;
 const LEGACY_BEVY_EXPOSURE_OFFSET_EV: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -94,6 +94,15 @@ pub struct CameraSettings {
 pub struct InterfaceSettings {
     pub display_names: NameDisplayMode,
     pub display_building_health: BuildingHealthDisplayMode,
+    /// Global logical-pixel scale for every shipping Bevy UI surface.
+    #[serde(default = "default_ui_scale_percent")]
+    pub ui_scale_percent: u16,
+    /// Adds persistent text separation and stronger interactive outlines.
+    #[serde(default)]
+    pub high_contrast: bool,
+    /// Suppresses non-essential looping presentation motion.
+    #[serde(default)]
+    pub reduced_motion: bool,
 }
 
 impl Default for PlayerSettings {
@@ -133,6 +142,9 @@ impl Default for PlayerSettings {
             interface: InterfaceSettings {
                 display_names: NameDisplayMode::None,
                 display_building_health: BuildingHealthDisplayMode::DamagedOnly,
+                ui_scale_percent: default_ui_scale_percent(),
+                high_contrast: false,
+                reduced_motion: false,
             },
             // Unity's default index 3 maps through [0, 5, 10, 30, 60].
             autosave_minutes: 30,
@@ -160,6 +172,8 @@ pub enum PlayerSettingsValidationError {
     CameraSensitivity,
     #[error("field of view must be between 30 and 120 degrees")]
     FieldOfView,
+    #[error("UI scale must be between 75% and 150%")]
+    UiScale,
     #[error("autosave interval must be 0, 5, 10, 30, or 60 minutes")]
     AutosaveInterval,
 }
@@ -173,6 +187,11 @@ impl PlayerSettings {
             // stored user-facing value back to zero.
             self.video.brightness_ev =
                 (self.video.brightness_ev - LEGACY_BEVY_EXPOSURE_OFFSET_EV).clamp(-5.0, 5.0);
+            self.schema_version = 2;
+        }
+        if self.schema_version == 2 {
+            // Schema 3 only adds serde-defaulted accessibility preferences, so
+            // existing players retain the exact presentation they had before.
             self.schema_version = CURRENT_PLAYER_SETTINGS_SCHEMA;
         }
         self.validate()?;
@@ -233,6 +252,9 @@ impl PlayerSettings {
         }
         if !(30..=120).contains(&self.camera.field_of_view_degrees) {
             return Err(PlayerSettingsValidationError::FieldOfView);
+        }
+        if !(75..=150).contains(&self.interface.ui_scale_percent) {
+            return Err(PlayerSettingsValidationError::UiScale);
         }
         if !matches!(self.autosave_minutes, 0 | 5 | 10 | 30 | 60) {
             return Err(PlayerSettingsValidationError::AutosaveInterval);
@@ -312,6 +334,9 @@ impl PlayerSettings {
                     2 => BuildingHealthDisplayMode::Always,
                     _ => BuildingHealthDisplayMode::DamagedOnly,
                 },
+                ui_scale_percent: default_ui_scale_percent(),
+                high_contrast: false,
+                reduced_motion: false,
             },
             autosave_minutes: match legacy.autosave_time.unwrap_or(3).clamp(0, 4) {
                 0 => 0,
@@ -329,6 +354,10 @@ impl PlayerSettings {
 
 fn valid_signed_setting(value: f32) -> bool {
     value.is_finite() && (-5.0..=5.0).contains(&value)
+}
+
+const fn default_ui_scale_percent() -> u16 {
+    100
 }
 
 fn clamp_unit(value: f32) -> f32 {
@@ -478,6 +507,63 @@ mod tests {
         let upgraded = settings.upgrade().unwrap();
         assert_eq!(upgraded.schema_version, CURRENT_PLAYER_SETTINGS_SCHEMA);
         assert!(upgraded.video.brightness_ev.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn schema_two_files_gain_non_disruptive_accessibility_defaults() {
+        #[derive(Serialize)]
+        struct SchemaTwoInterface {
+            display_names: NameDisplayMode,
+            display_building_health: BuildingHealthDisplayMode,
+        }
+
+        #[derive(Serialize)]
+        struct SchemaTwoSettings<'a> {
+            schema_version: u32,
+            video: &'a VideoSettings,
+            audio: &'a AudioMixSettings,
+            camera: &'a CameraSettings,
+            interface: SchemaTwoInterface,
+            autosave_minutes: u16,
+        }
+
+        let current = PlayerSettings::default();
+        let encoded = ron::to_string(&SchemaTwoSettings {
+            schema_version: 2,
+            video: &current.video,
+            audio: &current.audio,
+            camera: &current.camera,
+            interface: SchemaTwoInterface {
+                display_names: current.interface.display_names,
+                display_building_health: current.interface.display_building_health,
+            },
+            autosave_minutes: current.autosave_minutes,
+        })
+        .unwrap();
+
+        let decoded = ron::from_str::<PlayerSettings>(&encoded).unwrap();
+        assert_eq!(decoded.interface.ui_scale_percent, 100);
+        assert!(!decoded.interface.high_contrast);
+        assert!(!decoded.interface.reduced_motion);
+        assert_eq!(
+            decoded.upgrade().unwrap().schema_version,
+            CURRENT_PLAYER_SETTINGS_SCHEMA
+        );
+    }
+
+    #[test]
+    fn rejects_ui_scales_outside_the_supported_readable_range() {
+        let mut settings = PlayerSettings::default();
+        settings.interface.ui_scale_percent = 74;
+        assert_eq!(
+            settings.validate(),
+            Err(PlayerSettingsValidationError::UiScale)
+        );
+        settings.interface.ui_scale_percent = 151;
+        assert_eq!(
+            settings.validate(),
+            Err(PlayerSettingsValidationError::UiScale)
+        );
     }
 
     #[test]

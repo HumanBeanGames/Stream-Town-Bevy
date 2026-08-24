@@ -2303,6 +2303,32 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 }
             });
     });
+    ui.separator();
+    ui.heading("Accessibility");
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_label("UI scale")
+            .selected_text(format!(
+                "{}%",
+                state.player_settings.interface.ui_scale_percent
+            ))
+            .show_ui(ui, |ui| {
+                for percent in [75, 90, 100, 110, 125, 150] {
+                    ui.selectable_value(
+                        &mut state.player_settings.interface.ui_scale_percent,
+                        percent,
+                        format!("{percent}%"),
+                    );
+                }
+            });
+        ui.checkbox(
+            &mut state.player_settings.interface.high_contrast,
+            "High contrast",
+        );
+        ui.checkbox(
+            &mut state.player_settings.interface.reduced_motion,
+            "Reduced motion",
+        );
+    });
     ui.horizontal(|ui| {
         if ui.button("Save validated settings").clicked() {
             let store = PlayerSettingsStore::new(settings_path.clone());

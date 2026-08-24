@@ -1,5 +1,5 @@
 (
-    schema_version: 2,
+    schema_version: 3,
     video: (
         display_mode: Fullscreen,
         width: 1920,
@@ -33,6 +33,9 @@
     interface: (
         display_names: None,
         display_building_health: DamagedOnly,
+        ui_scale_percent: 100,
+        high_contrast: false,
+        reduced_motion: false,
     ),
     autosave_minutes: 30,
 )
