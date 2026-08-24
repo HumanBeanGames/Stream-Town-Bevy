@@ -564,8 +564,14 @@ are absent from the Unity role list, so `Body_Default_*` and the commander
 banner cannot overlap the selected role body. Follow
 [`docs/visual-regressions/character-animation.md`](docs/visual-regressions/character-animation.md)
 before changing clip priority or retargeting. Player skins cast ordinary world
-shadows but decline incoming self-shadow input because the imported
-shadow-skinning receiver path otherwise produces unstable body facets.
+shadows and receive self/world shadows through the typed character material.
+Standard player surfaces are promoted into that material through a shared
+cache, preserving imported textures, vertex colours, alpha state, and cosmetic
+recolouring. A character-only receiver normal offset removes the unstable body
+facets without changing the global light bias or the synchronized foliage
+path. The loading reveal verifies every initial animated-player mesh has the
+compatible receiver, has no `NotShadowReceiver`, and owns a GPU-ready material
+before exposing the world.
 `STREAM_TOWN_DEBUG_PLAYER_BOUNDS=1` logs settled actor world bounds for
 repeatable axis and retargeting checks.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while

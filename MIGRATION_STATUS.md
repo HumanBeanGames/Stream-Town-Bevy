@@ -795,24 +795,28 @@ mistaken for production-ready systems.
   valid-but-out-of-range world resources, while the Town Hall retains its
   authored 30-target fallback catalog. Combat, healing, and construction keep
   Unity's separate nearest-target sensor path.
+- Animated players now cast and receive shadows without the previous
+  hierarchy-wide `NotShadowReceiver` workaround. Every Standard surface below
+  the single shipping armature is promoted through a cached typed character
+  material, preserving imported textures, vertex colours, alpha state, and the
+  existing cosmetic recolour contract. Its fragment path applies a small
+  character-only world-normal receiver offset; terrain, foliage, and global
+  directional-light bias are unchanged. The first-frame reveal gate verifies
+  that every animated-player mesh uses the compatible receiver, that none is
+  suppressed, and that all resulting material pipelines are GPU-ready. The
+  reference close-up proved 615/615 initial player primitives ready with zero
+  failed pipelines while the run controller completed eight uninterrupted
+  wraps across sampled, cleanly shaded poses.
 
 ## Not yet at parity
 
-- User confirmation of visible character animation. The current candidate keeps
-  the full translated controller while binding all motions to the visible
-  armature's native takes; numeric runtime diagnostics prove joint and skin
-  motion, but the ordinary visual acceptance run is still outstanding. Evidence is in
-  `bevy-port/docs/visual-regressions/character-animation.md`.
-- User confirmation of stable, lit in-game tree rendering. Object-stable colour
-  variation removes palette flashes; one shared function now deforms visible
-  and shadow vertices; and trees cast and receive light/shadows. The prior flat
-  no-receiver partial was rejected and removed. The remaining acceptance matrix is in
+- A recorded moving-camera acceptance capture for stable, lit in-game tree
+  rendering. Object-stable colour variation removes palette flashes; one
+  shared function now deforms visible and shadow vertices; imported leaf cards
+  retain their two-sided lighting contract; the latest tree appearance was
+  reported acceptable, with no later foliage regression after the final card
+  correction. The remaining capture matrix is in
   `bevy-port/docs/visual-regressions/tree-foliage-flicker.md`.
-- Exact animated-player self-shadow parity. The visible single-armature rig and
-  full controller data path casts ordinary world-space shadows, but receiving
-  the imported skinned self-shadow still produces unstable body facets. Player
-  renderers therefore retain `NotShadowReceiver` pending a custom compatible
-  skinned self-shadow pass; their shadow casting remains enabled.
 - Any remaining animation-event behavior discovered outside the ten reachable
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable

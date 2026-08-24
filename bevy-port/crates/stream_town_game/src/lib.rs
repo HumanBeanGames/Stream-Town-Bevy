@@ -191,6 +191,10 @@ const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
 const CHARACTER_SHADER_ASSET_PATH: &str = "shaders/character_material.wgsl";
 const MENU_SKY_SHADER_ASSET_PATH: &str = "shaders/menu_sky_material.wgsl";
 const CHARACTER_UNITY_SHADER_PATH: &str = "Assets/Shaders/LowPolyST.shader";
+// Keep the offset local to skinned character receivers. The global directional
+// light bias also affects terrain and foliage, whose synchronized shadow paths
+// have already been visually validated.
+const CHARACTER_SHADOW_RECEIVER_NORMAL_OFFSET: f32 = 0.02;
 const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_DropShadow.png";
 const LOADING_SCREEN_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingScreen.png";
 const LOADING_OVERLAY_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_loadingOverlay.png";
@@ -1093,6 +1097,7 @@ type FlagMaterial = ExtendedMaterial<StandardMaterial, FlagMaterialExtension>;
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
 struct CharacterMaterialUniform {
     albedo_color: Vec4,
+    shadow_controls: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
@@ -1859,6 +1864,11 @@ struct PlayerRigAxisCorrectionRequired;
 #[derive(Component)]
 struct PlayerAnimatedRig;
 
+/// Marks an animated-player renderer using the character-specific receiver
+/// path while retaining ordinary shadow casting.
+#[derive(Component)]
+struct AnimatedCharacterShadowReceiver;
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 enum AgentGoal {
     #[default]
@@ -2581,13 +2591,13 @@ struct CosmeticMaterialVariant {
 #[derive(Resource, Default)]
 struct CosmeticMaterialCache(Vec<CosmeticMaterialVariant>);
 
-struct CosmeticBaseMaterialVariant {
+struct CharacterBaseMaterialVariant {
     source: Handle<StandardMaterial>,
     material: Handle<CharacterMaterial>,
 }
 
 #[derive(Resource, Default)]
-struct CosmeticBaseMaterialCache(Vec<CosmeticBaseMaterialVariant>);
+struct CharacterBaseMaterialCache(Vec<CharacterBaseMaterialVariant>);
 
 #[derive(Resource, Default)]
 struct RoleActionAudioCache(BTreeMap<String, Handle<AudioSource>>);
@@ -2833,7 +2843,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<PostProcessPresentation>()
             .init_resource::<BuildingMaterialInstances>()
             .init_resource::<CosmeticMaterialCache>()
-            .init_resource::<CosmeticBaseMaterialCache>()
+            .init_resource::<CharacterBaseMaterialCache>()
             .init_resource::<RoleActionAudioCache>()
             .init_resource::<WorldAudioRuntime>()
             .init_resource::<tidal_music::TidalMusicRuntime>()
@@ -2985,7 +2995,9 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     animate_loading_icon,
-                    finish_world_reveal.after(apply_material_overrides),
+                    finish_world_reveal
+                        .after(apply_material_overrides)
+                        .after(tag_cosmetic_renderers),
                     enforce_loading_overlay_retired.after(finish_world_reveal),
                 )
                     .run_if(in_state(GameState::InGame)),
@@ -4974,6 +4986,7 @@ fn character_material(
                 .to_linear()
                 .to_f32_array()
                 .into(),
+                shadow_controls: Vec4::new(CHARACTER_SHADOW_RECEIVER_NORMAL_OFFSET, 0.0, 0.0, 0.0),
             },
         },
     }
@@ -4987,7 +5000,10 @@ fn character_material_from_standard(material: StandardMaterial) -> CharacterMate
             ..material
         },
         extension: CharacterMaterialExtension {
-            parameters: CharacterMaterialUniform { albedo_color },
+            parameters: CharacterMaterialUniform {
+                albedo_color,
+                shadow_controls: Vec4::new(CHARACTER_SHADOW_RECEIVER_NORMAL_OFFSET, 0.0, 0.0, 0.0),
+            },
         },
     }
 }
@@ -7452,6 +7468,9 @@ fn finish_world_reveal(
     scene_roots: WorldAssetRootQuery,
     material_specs: Query<(), With<MaterialOverrideSpec>>,
     mesh_overrides: Query<(Entity, Option<&MaterialOverrideApplied>), With<Mesh3d>>,
+    animated_player_rigs: Query<(), With<PlayerAnimatedRig>>,
+    character_receivers: Query<(), With<AnimatedCharacterShadowReceiver>>,
+    suppressed_receivers: Query<(), With<bevy::light::NotShadowReceiver>>,
     active_meshes: Query<&Mesh3d>,
     active_materials: ActiveMaterialHandles,
     parents: Query<&ChildOf>,
@@ -7478,10 +7497,14 @@ fn finish_world_reveal(
 
     let mut authored_meshes = 0;
     let mut applied_meshes = 0;
+    let mut animated_player_meshes = 0;
+    let mut ready_character_receivers = 0;
     for (entity, applied) in &mesh_overrides {
         let mut ancestor = entity;
         let mut has_authored_spec = false;
+        let mut has_animated_player_rig = false;
         for _ in 0..64 {
+            has_animated_player_rig |= animated_player_rigs.contains(ancestor);
             if material_specs.contains(ancestor) {
                 has_authored_spec = true;
                 break;
@@ -7497,6 +7520,12 @@ fn finish_world_reveal(
                 applied_meshes += 1;
             }
         }
+        if has_animated_player_rig {
+            animated_player_meshes += 1;
+            if character_receivers.contains(entity) && !suppressed_receivers.contains(entity) {
+                ready_character_receivers += 1;
+            }
+        }
     }
 
     gpu_readiness.merge_world_content(
@@ -7509,7 +7538,8 @@ fn finish_world_reveal(
     let roots_ready =
         asset_root_collection_ready(root_count, ready_roots, world_instance_spawner.is_some());
     let materials_ready = authored_meshes == applied_meshes;
-    let world_ready = roots_ready && materials_ready && gpu_ready;
+    let character_receivers_ready = animated_player_meshes == ready_character_receivers;
+    let world_ready = roots_ready && materials_ready && character_receivers_ready && gpu_ready;
     if world_ready {
         reveal.ready_frames = reveal.ready_frames.saturating_add(1);
     } else {
@@ -7524,7 +7554,7 @@ fn finish_world_reveal(
         loading.progress = 1.0;
         "Preparing first rendered frame".clone_into(&mut loading.status);
         loading.substatus = format!(
-            "{ready_roots}/{root_count} scenes; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines",
+            "{ready_roots}/{root_count} scenes; characters {ready_character_receivers}/{animated_player_meshes}; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines",
             gpu.ready_images,
             gpu.expected_images,
             gpu.ready_meshes,
@@ -7552,6 +7582,8 @@ fn finish_world_reveal(
     info!(
         scene_roots = root_count,
         authored_meshes,
+        animated_player_meshes,
+        ready_character_receivers,
         gpu_images = gpu.ready_images,
         gpu_meshes = gpu.ready_meshes,
         gpu_materials = gpu.ready_materials,
@@ -12365,8 +12397,8 @@ fn generate_and_spawn_world(
             {
                 entity.insert(PlayerRigAxisCorrectionRequired);
             } else if scene.asset_path == PLAYER_ANIMATED_MODEL_PATH {
-                // Tag the converted shipping armature so its descendants keep
-                // casting silhouettes while declining only self-shadow input.
+                // Tag the converted shipping armature so every visible surface
+                // receives the character-compatible shadow path.
                 entity.insert(PlayerAnimatedRig);
             }
         } else {
@@ -20212,6 +20244,7 @@ fn tag_cosmetic_renderers(
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     agents: Query<Entity, With<Agent>>,
+    animated_player_rigs: Query<Entity, With<PlayerAnimatedRig>>,
     standard_renderers: Query<
         (Entity, &MeshMaterial3d<StandardMaterial>),
         Added<MeshMaterial3d<StandardMaterial>>,
@@ -20222,19 +20255,23 @@ fn tag_cosmetic_renderers(
     >,
     standard_materials: Option<Res<Assets<StandardMaterial>>>,
     character_materials: Option<ResMut<Assets<CharacterMaterial>>>,
-    mut base_cache: ResMut<CosmeticBaseMaterialCache>,
+    mut base_cache: ResMut<CharacterBaseMaterialCache>,
 ) {
     for (entity, material) in &character_renderers {
-        let Some((actor_root, kind)) = cosmetic_renderer_context(entity, &parents, &names, &agents)
-        else {
-            continue;
-        };
-        commands.entity(entity).insert(CosmeticRenderer {
-            actor_root,
-            kind,
-            base_material: material.0.clone(),
-            applied_color: None,
-        });
+        let mut entity_commands = commands.entity(entity);
+        if animated_player_renderer(entity, &parents, &animated_player_rigs) {
+            entity_commands.insert(AnimatedCharacterShadowReceiver);
+        }
+        if let Some((actor_root, kind)) =
+            cosmetic_renderer_context(entity, &parents, &names, &agents)
+        {
+            entity_commands.insert(CosmeticRenderer {
+                actor_root,
+                kind,
+                base_material: material.0.clone(),
+                applied_color: None,
+            });
+        }
     }
 
     let (Some(standard_materials), Some(mut character_materials)) =
@@ -20243,10 +20280,11 @@ fn tag_cosmetic_renderers(
         return;
     };
     for (entity, material) in &standard_renderers {
-        let Some((actor_root, kind)) = cosmetic_renderer_context(entity, &parents, &names, &agents)
-        else {
+        let cosmetic_context = cosmetic_renderer_context(entity, &parents, &names, &agents);
+        let animated_player = animated_player_renderer(entity, &parents, &animated_player_rigs);
+        if !animated_player && cosmetic_context.is_none() {
             continue;
-        };
+        }
         let character_material = if let Some(variant) = base_cache
             .0
             .iter()
@@ -20258,25 +20296,46 @@ fn tag_cosmetic_renderers(
                 continue;
             };
             let character = character_materials.add(character_material_from_standard(source));
-            base_cache.0.push(CosmeticBaseMaterialVariant {
+            base_cache.0.push(CharacterBaseMaterialVariant {
                 source: material.0.clone(),
                 material: character.clone(),
             });
             character
         };
-        commands
-            .entity(entity)
+        let mut entity_commands = commands.entity(entity);
+        entity_commands
             .remove::<MeshMaterial3d<StandardMaterial>>()
-            .insert((
-                MeshMaterial3d(character_material.clone()),
-                CosmeticRenderer {
-                    actor_root,
-                    kind,
-                    base_material: character_material,
-                    applied_color: None,
-                },
-            ));
+            .insert(MeshMaterial3d(character_material.clone()));
+        if animated_player {
+            entity_commands.insert(AnimatedCharacterShadowReceiver);
+        }
+        if let Some((actor_root, kind)) = cosmetic_context {
+            entity_commands.insert(CosmeticRenderer {
+                actor_root,
+                kind,
+                base_material: character_material,
+                applied_color: None,
+            });
+        }
     }
+}
+
+fn animated_player_renderer(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    animated_player_rigs: &Query<Entity, With<PlayerAnimatedRig>>,
+) -> bool {
+    let mut ancestor = entity;
+    for _ in 0..64 {
+        if animated_player_rigs.contains(ancestor) {
+            return true;
+        }
+        let Ok(parent) = parents.get(ancestor) else {
+            break;
+        };
+        ancestor = parent.parent();
+    }
+    false
 }
 
 fn cosmetic_renderer_context(
@@ -21943,7 +22002,6 @@ fn same_animation_blend(
 fn apply_material_overrides(
     mut commands: Commands,
     specs: Query<&MaterialOverrideSpec>,
-    animated_player_rigs: Query<(), With<PlayerAnimatedRig>>,
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     mut renderers: Query<
@@ -22039,15 +22097,6 @@ fn apply_material_overrides(
                             .entity(entity)
                             .insert(bevy::light::NotShadowReceiver);
                     }
-                }
-                if animated_player_rigs.contains(ancestor) {
-                    // Imported skinned meshes now cast normally. Suppressing
-                    // receiving only on the mesh itself avoids the malformed
-                    // self-shadow that previously flickered across characters
-                    // without removing their world-space shadows.
-                    commands
-                        .entity(entity)
-                        .insert(bevy::light::NotShadowReceiver);
                 }
                 commands.entity(entity).insert(MaterialOverrideApplied);
                 break;
@@ -36624,11 +36673,17 @@ mod tests {
             );
             assert_eq!(material.base.base_color, Color::WHITE);
             assert_eq!(material.base.alpha_mode, AlphaMode::Opaque);
+            assert_eq!(
+                material.extension.parameters.shadow_controls,
+                Vec4::new(CHARACTER_SHADOW_RECEIVER_NORMAL_OFFSET, 0.0, 0.0, 0.0)
+            );
         }
 
         let shader = include_str!("../../../assets/shaders/character_material.wgsl");
         assert!(shader.contains("pbr_input.material.base_color"));
         assert!(shader.contains("character_material.albedo_color"));
+        assert!(shader.contains("character_material.shadow_controls.x"));
+        assert!(shader.contains("var lighting_input = pbr_input"));
         assert!(shader.contains("apply_pbr_lighting"));
 
         let source = StandardMaterial {
@@ -36642,6 +36697,35 @@ mod tests {
             Vec4::from_array(expected)
         );
         assert_eq!(converted.base.base_color, Color::WHITE);
+        assert_eq!(
+            converted.extension.parameters.shadow_controls,
+            Vec4::new(CHARACTER_SHADOW_RECEIVER_NORMAL_OFFSET, 0.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn animated_character_receiver_scope_follows_only_the_player_rig_hierarchy() {
+        let mut world = World::new();
+        let player_root = world.spawn(PlayerAnimatedRig).id();
+        let player_mesh = world.spawn(ChildOf(player_root)).id();
+        let unrelated_root = world.spawn_empty().id();
+        let unrelated_mesh = world.spawn(ChildOf(unrelated_root)).id();
+        let mut state = bevy::ecs::system::SystemState::<(
+            Query<&ChildOf>,
+            Query<Entity, With<PlayerAnimatedRig>>,
+        )>::new(&mut world);
+        let (parents, animated_player_rigs) = state.get(&world).unwrap();
+
+        assert!(animated_player_renderer(
+            player_mesh,
+            &parents,
+            &animated_player_rigs
+        ));
+        assert!(!animated_player_renderer(
+            unrelated_mesh,
+            &parents,
+            &animated_player_rigs
+        ));
     }
 
     #[test]
