@@ -105,6 +105,8 @@ crashlytics-build.properties
 /bevy-port/assets/migrated/models/*
 !/bevy-port/assets/migrated/models/**/
 !/bevy-port/assets/migrated/models/**/*.glb
+!/bevy-port/assets/migrated/fonts/
+!/bevy-port/assets/migrated/fonts/*.ttf
 !/bevy-port/assets/migrated/textures/
 /bevy-port/assets/migrated/textures/*
 !/bevy-port/assets/migrated/textures/**/

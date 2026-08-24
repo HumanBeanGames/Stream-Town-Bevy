@@ -7,7 +7,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 1;
+pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 2;
+const LEGACY_BEVY_EXPOSURE_OFFSET_EV: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DisplayMode {
@@ -164,6 +165,20 @@ pub enum PlayerSettingsValidationError {
 }
 
 impl PlayerSettings {
+    pub fn upgrade(mut self) -> Result<Self, PlayerSettingsValidationError> {
+        if self.schema_version == 1 {
+            // The old calibration required users to select +0.5 EV to reach
+            // the intended in-game luminance. That appearance is the new
+            // neutral baseline, so retain the image while renormalizing the
+            // stored user-facing value back to zero.
+            self.video.brightness_ev =
+                (self.video.brightness_ev - LEGACY_BEVY_EXPOSURE_OFFSET_EV).clamp(-5.0, 5.0);
+            self.schema_version = CURRENT_PLAYER_SETTINGS_SCHEMA;
+        }
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn validate(&self) -> Result<(), PlayerSettingsValidationError> {
         if self.schema_version != CURRENT_PLAYER_SETTINGS_SCHEMA {
             return Err(PlayerSettingsValidationError::Schema(self.schema_version));
@@ -401,8 +416,7 @@ impl PlayerSettingsStore {
     fn load_path(path: &Path) -> Result<PlayerSettings, PlayerSettingsStoreError> {
         let encoded = fs::read_to_string(path)?;
         let settings: PlayerSettings = ron::from_str(&encoded)?;
-        settings.validate()?;
-        Ok(settings)
+        Ok(settings.upgrade()?)
     }
 }
 
@@ -448,6 +462,22 @@ mod tests {
         settings.validate().unwrap();
         let encoded = ron::to_string(&settings).unwrap();
         assert_eq!(ron::from_str::<PlayerSettings>(&encoded).unwrap(), settings);
+    }
+
+    #[test]
+    fn upgrades_old_bevy_brightness_to_the_new_neutral_baseline() {
+        let defaults = PlayerSettings::default();
+        let settings = PlayerSettings {
+            schema_version: 1,
+            video: VideoSettings {
+                brightness_ev: 0.5,
+                ..defaults.video
+            },
+            ..defaults
+        };
+        let upgraded = settings.upgrade().unwrap();
+        assert_eq!(upgraded.schema_version, CURRENT_PLAYER_SETTINGS_SCHEMA);
+        assert!(upgraded.video.brightness_ev.abs() < f32::EPSILON);
     }
 
     #[test]

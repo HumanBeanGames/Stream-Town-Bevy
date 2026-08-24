@@ -408,6 +408,11 @@ pub struct TextureDef {
     pub source_path: String,
     /// Asset-server-relative path below `bevy-port/assets`.
     pub asset_path: String,
+    /// Unity sprite border in texture pixels, ordered left, right, top, bottom.
+    /// A non-zero border is rendered as a nine-slice instead of stretching the
+    /// corners and frame artwork across the whole UI node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprite_border: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -863,6 +868,8 @@ pub struct PrefabPresentationBinding {
 pub enum PresentationError {
     #[error("texture {texture} has invalid asset path {path}")]
     InvalidTexturePath { texture: StableId, path: String },
+    #[error("texture {texture} has an invalid sprite border")]
+    InvalidTextureBorder { texture: StableId },
     #[error("material {material} references missing texture {texture}")]
     MissingTexture {
         material: StableId,
@@ -1550,6 +1557,15 @@ impl PresentationCatalog {
                 return Err(PresentationError::InvalidTexturePath {
                     texture: id.clone(),
                     path: texture.asset_path.clone(),
+                });
+            }
+            if texture.sprite_border.is_some_and(|border| {
+                border
+                    .into_iter()
+                    .any(|value| !value.is_finite() || value < 0.0)
+            }) {
+                return Err(PresentationError::InvalidTextureBorder {
+                    texture: id.clone(),
                 });
             }
         }

@@ -561,6 +561,9 @@ repeatable axis and retargeting checks.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while
 temporarily forcing all player-name and building-health overlays visible; it
 does not modify the saved player settings.
+The developer status block is hidden in shipping presentation by default;
+set `STREAM_TOWN_RUNTIME_DIAGNOSTICS=1` when its route, simulation, and input
+telemetry is needed during local debugging.
 `STREAM_TOWN_SMOKE_FLAG=1` spawns and frames the converted Age 2 Castle so every
 authored `Flag` renderer binding and the custom wind/color material can be
 validated together.

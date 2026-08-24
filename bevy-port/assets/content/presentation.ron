@@ -1,5 +1,5 @@
 (
-    schema_version: 20,
+    schema_version: 21,
     textures: {
         "texture:0069766f7e2f942dca2062f14c2c7f4d": (
             display_name: "Team_Icon",
@@ -18,6 +18,7 @@
             source_guid: "05d09be545784476580e64773e79dd87",
             source_path: "Assets/Sprites/Buttons/UI_Button_Unpressed.png",
             asset_path: "migrated/textures/Sprites/Buttons/UI_Button_Unpressed.png",
+            sprite_border: Some((15.0, 15.0, 15.0, 15.0)),
         ),
         "texture:0b5ed58d8d34347be99ca36c0562a5a6": (
             display_name: "UI_Role_Icon_Necromancer",
@@ -72,6 +73,7 @@
             source_guid: "19b1f492e5c8b4a889b406c7b67edd02",
             source_path: "Assets/Sprites/VotingMenu/UI_VotingMenu_VotePrompt.png",
             asset_path: "migrated/textures/Sprites/VotingMenu/UI_VotingMenu_VotePrompt.png",
+            sprite_border: Some((39.0, 39.0, 39.0, 39.0)),
         ),
         "texture:1b30082104b5358478b36284b51ced67": (
             display_name: "MainGameTexture_01",
@@ -162,6 +164,7 @@
             source_guid: "35f4d1f7bf1c84558aac0d1bffad688d",
             source_path: "Assets/Sprites/Objectives/UI_Objectives_Slider_Unfilled.png",
             asset_path: "migrated/textures/Sprites/Objectives/UI_Objectives_Slider_Unfilled.png",
+            sprite_border: Some((31.0, 31.0, 31.0, 31.0)),
         ),
         "texture:3d5052082cfeb4e7d8c26c3822ddb8f6": (
             display_name: "UI_SelectionWindow_GreenSlider_Filled",
@@ -258,6 +261,7 @@
             source_guid: "58bcefa03963c42e48e806e3d6ba3170",
             source_path: "Assets/Sprites/BuildRecruitMenus/UI_BuildRecruit_Tooltip_Background.png",
             asset_path: "migrated/textures/Sprites/BuildRecruitMenus/UI_BuildRecruit_Tooltip_Background.png",
+            sprite_border: Some((23.0, 23.0, 23.0, 23.0)),
         ),
         "texture:5f889ab9bf09d4ef38268dfb24c8f02a": (
             display_name: "UI_Icon_TechTree_Background",
@@ -270,6 +274,7 @@
             source_guid: "68ddd91a9b8338843a69e00babc90caf",
             source_path: "Assets/Sprites/Settings/UI_Settings_Background.png",
             asset_path: "migrated/textures/Sprites/Settings/UI_Settings_Background.png",
+            sprite_border: Some((82.0, 82.0, 82.0, 82.0)),
         ),
         "texture:69fab6c472f41409f8cc0ebdd02a2e02": (
             display_name: "UI_VotingMenu_Timer_Icon",
@@ -306,6 +311,7 @@
             source_guid: "71d84615c504043b0a06c9136dad2e3f",
             source_path: "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Background.png",
             asset_path: "migrated/textures/Sprites/CurrentEvent/UI_CurrentEvent_Background.png",
+            sprite_border: Some((64.0, 64.0, 64.0, 64.0)),
         ),
         "texture:74c4f6f5c5977424faab4c52240c748b": (
             display_name: "UI_Checkmark",
@@ -366,6 +372,7 @@
             source_guid: "81b91784468bad64789119daa16e5aae",
             source_path: "Assets/Sprites/Buttons/UI_Button_Disabled.png",
             asset_path: "migrated/textures/Sprites/Buttons/UI_Button_Disabled.png",
+            sprite_border: Some((15.0, 15.0, 15.0, 15.0)),
         ),
         "texture:854c813354f78c447a56eed49c7fc29c": (
             display_name: "Misc_Noises_Texture_01",
@@ -474,6 +481,7 @@
             source_guid: "a05462e6a483941248f7677b72a213f0",
             source_path: "Assets/Sprites/VotingMenu/UI_VotingMenu_Background.png",
             asset_path: "migrated/textures/Sprites/VotingMenu/UI_VotingMenu_Background.png",
+            sprite_border: Some((158.0, 158.0, 158.0, 158.0)),
         ),
         "texture:a0b641f69e97c684daf506ecabd6bee7": (
             display_name: "UI_Icon_Building_Age02_Statue01",
@@ -510,6 +518,7 @@
             source_guid: "b02604bfd29454f4f8a61dfb2688c404",
             source_path: "Assets/Sprites/Buttons/UI_Button_DropShadow.png",
             asset_path: "migrated/textures/Sprites/Buttons/UI_Button_DropShadow.png",
+            sprite_border: Some((38.0, 38.0, 38.0, 38.0)),
         ),
         "texture:b6fb15c0e5dbf474f9ba50186ba9b81e": (
             display_name: "UI_Icon_Building_Age02_Statue02",
@@ -606,6 +615,7 @@
             source_guid: "c5a87d3bb3bfd4507ae2db11a1648551",
             source_path: "Assets/Sprites/Objectives/UI_Objectives_Slider_Filled.png",
             asset_path: "migrated/textures/Sprites/Objectives/UI_Objectives_Slider_Filled.png",
+            sprite_border: Some((31.0, 31.0, 31.0, 31.0)),
         ),
         "texture:c86125993320e4c5e81c8db87518000a": (
             display_name: "UI_SelectionWindow_RedSlider_Filled",
@@ -618,6 +628,7 @@
             source_guid: "c8bc280b1989f4672b3e31b7fb49381f",
             source_path: "Assets/Sprites/BuildRecruitMenus/UI_BuildRecruit_Background.png",
             asset_path: "migrated/textures/Sprites/BuildRecruitMenus/UI_BuildRecruit_Background.png",
+            sprite_border: Some((72.0, 72.0, 72.0, 72.0)),
         ),
         "texture:cc07cf89a1c03214fbb21609ca56f218": (
             display_name: "UI_Icon_Character_Fisher",
@@ -780,6 +791,7 @@
             source_guid: "f95dbfff9bc134b7987f2048a9857a59",
             source_path: "Assets/Sprites/Buttons/UI_Button.png",
             asset_path: "migrated/textures/Sprites/Buttons/UI_Button.png",
+            sprite_border: Some((15.0, 15.0, 15.0, 15.0)),
         ),
         "texture:faa862a7b8bbe9042aea3a7192baed7c": (
             display_name: "UI_Icon_Character_Blacksmith",
@@ -798,6 +810,7 @@
             source_guid: "fec6888cf51ee544582e1dc6fc779a29",
             source_path: "Assets/Sprites/LoadingScreen/UI_loadingOverlay.png",
             asset_path: "migrated/textures/Sprites/LoadingScreen/UI_loadingOverlay.png",
+            sprite_border: Some((300.0, 300.0, 206.0, 311.0)),
         ),
     },
     materials: {

@@ -140,6 +140,7 @@ const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.ma
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
+const IN_GAME_BASELINE_EXPOSURE_EV: f32 = 0.5;
 const MAIN_MENU_RESOURCE_RENDER_BUDGET: usize = 900;
 const MAIN_MENU_FOLIAGE_RENDER_BUDGET: usize = 3_200;
 const IN_GAME_AMBIENT_LIGHT_MULTIPLIER: f32 = 1.30;
@@ -176,6 +177,8 @@ const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_Dro
 const LOADING_SCREEN_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingScreen.png";
 const LOADING_OVERLAY_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_loadingOverlay.png";
 const LOADING_ICON_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingIcon.png";
+const UI_FONT_ASSET_PATH: &str = "migrated/fonts/Rubik-Bold.ttf";
+const UI_DISPLAY_FONT_ASSET_PATH: &str = "migrated/fonts/Luckiest Guy.ttf";
 const LOADING_SCREEN_PREFAB_SUFFIX: &str = "UserInterface/UI_LoadingScreen.prefab";
 const LOADING_ICON_HIERARCHY_PATH: &str = "LoadingScreen/LoadingIcon/Anchor/Image";
 const GAME_LOGO_ASPECT_RATIO: f32 = 2_048.0 / 1_227.0;
@@ -1071,6 +1074,8 @@ struct RenderAssets {
     loading_screen: Option<Handle<Image>>,
     loading_overlay: Option<Handle<Image>>,
     loading_icon: Option<Handle<Image>>,
+    ui_font: Option<Handle<Font>>,
+    ui_display_font: Option<Handle<Font>>,
     main_menu_textures: BTreeMap<String, Handle<Image>>,
     top_bar_textures: BTreeMap<String, Handle<Image>>,
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
@@ -1078,11 +1083,15 @@ struct RenderAssets {
     vote_textures: BTreeMap<String, Handle<Image>>,
     objective_textures: BTreeMap<String, Handle<Image>>,
     current_event_textures: BTreeMap<String, Handle<Image>>,
+    ui_slicers: BTreeMap<String, TextureSlicer>,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
 #[derive(Component)]
 struct StateEntity;
+
+#[derive(Component)]
+struct UiDisplayFont;
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 enum MainMenuAction {
@@ -2402,6 +2411,7 @@ impl Plugin for StreamTownGamePlugin {
                     publish_runtime_console_status.after(process_runtime_console),
                     capture_screenshot,
                     report_frame_time_gate,
+                    apply_authored_ui_fonts,
                 ),
             )
             .add_systems(
@@ -3193,6 +3203,12 @@ fn setup_rendering(
         asset_server.as_deref(),
         LOADING_ICON_TEXTURE_PATH,
     );
+    let ui_font = asset_server
+        .as_deref()
+        .map(|asset_server| asset_server.load(UI_FONT_ASSET_PATH));
+    let ui_display_font = asset_server
+        .as_deref()
+        .map(|asset_server| asset_server.load(UI_DISPLAY_FONT_ASSET_PATH));
     let main_menu_textures = MAIN_MENU_TEXTURE_PATHS
         .iter()
         .chain(GAME_MENU_TEXTURE_PATHS.iter())
@@ -3244,6 +3260,24 @@ fn setup_rendering(
         .filter_map(|source_path| {
             presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
                 .map(|handle| ((*source_path).to_owned(), handle))
+        })
+        .collect();
+    let ui_slicers = presentation
+        .0
+        .textures
+        .values()
+        .filter_map(|texture| {
+            texture.sprite_border.map(|border| {
+                (
+                    texture.source_path.clone(),
+                    TextureSlicer {
+                        border: BorderRect::from(border),
+                        center_scale_mode: default(),
+                        sides_scale_mode: default(),
+                        max_corner_scale: 1.0,
+                    },
+                )
+            })
         })
         .collect();
     let presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle> = presentation
@@ -3526,6 +3560,8 @@ fn setup_rendering(
         loading_screen,
         loading_overlay,
         loading_icon,
+        ui_font,
+        ui_display_font,
         main_menu_textures,
         top_bar_textures,
         selection_panel_textures,
@@ -3533,6 +3569,7 @@ fn setup_rendering(
         vote_textures,
         objective_textures,
         current_event_textures,
+        ui_slicers,
         presentation_materials,
     });
 }
@@ -3613,6 +3650,22 @@ fn apply_player_settings(
             // desktop host. Keep only this explicit diagnostic path updating
             // continuously so elapsed/joint samples represent real frames.
             winit.unfocused_mode = UpdateMode::Continuous;
+        }
+    }
+}
+
+fn apply_authored_ui_fonts(
+    render: Res<RenderAssets>,
+    mut texts: Query<(&mut TextFont, Option<&UiDisplayFont>), Added<TextFont>>,
+) {
+    for (mut text_font, display) in &mut texts {
+        let authored = if display.is_some() {
+            render.ui_display_font.as_ref()
+        } else {
+            render.ui_font.as_ref()
+        };
+        if let Some(authored) = authored {
+            text_font.font = FontSource::Handle(authored.clone());
         }
     }
 }
@@ -3807,6 +3860,10 @@ fn color_grading_for_state(
         // neutral baseline so setting 0 is now the correct exposure.
         grading.global.exposure += MAIN_MENU_BASELINE_EXPOSURE_EV;
     } else if state == GameState::InGame {
+        // User testing established that the intended world luminance was the
+        // old +0.5 setting. Treat it as the authored scene baseline so neutral
+        // brightness now produces the approved image.
+        grading.global.exposure += IN_GAME_BASELINE_EXPOSURE_EV;
         // Unity URP's ACES output retains slightly more chroma than Bevy's
         // fitted implementation for this low-poly palette. This narrow output
         // compensation restores the authored grass/building separation without
@@ -5216,6 +5273,13 @@ fn begin_menu_loading(
             .cloned()
             .map(Handle::untyped),
         );
+        asset_handles.extend(
+            [render.ui_font.as_ref(), render.ui_display_font.as_ref()]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .map(Handle::untyped),
+        );
     }
     let asset_count = asset_handles.len();
     let (status, substatus) = match destination {
@@ -5920,13 +5984,11 @@ fn spawn_main_menu(
                     .spawn((
                         action,
                         Button,
-                        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
-                            .with_mode(NodeImageMode::Sliced(TextureSlicer {
-                                border: BorderRect::all(15.0),
-                                center_scale_mode: default(),
-                                sides_scale_mode: default(),
-                                max_corner_scale: 1.0,
-                            })),
+                        authored_ui_image(
+                            &render,
+                            MAIN_MENU_TEXTURE_PATHS[0],
+                            main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]),
+                        ),
                         Node {
                             width: percent(100.0),
                             flex_grow: 1.0,
@@ -6226,6 +6288,12 @@ fn world_render_preload_handles(
     ]
     .into_iter()
     .flatten()
+    {
+        handles.push(handle.clone().untyped());
+    }
+    for handle in [render.ui_font.as_ref(), render.ui_display_font.as_ref()]
+        .into_iter()
+        .flatten()
     {
         handles.push(handle.clone().untyped());
     }
@@ -7266,6 +7334,40 @@ fn current_event_texture(render: &RenderAssets, source_path: &str) -> Handle<Ima
         .unwrap_or_default()
 }
 
+fn authored_ui_image(render: &RenderAssets, source_path: &str, image: Handle<Image>) -> ImageNode {
+    let mode = render
+        .ui_slicers
+        .get(source_path)
+        .map_or(NodeImageMode::Stretch, |slicer| {
+            NodeImageMode::Sliced(slicer.clone())
+        });
+    ImageNode::new(image).with_mode(mode)
+}
+
+fn presentation_ui_image(
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    source_path: &str,
+) -> ImageNode {
+    let Some(handle) = presentation_texture_handle(presentation, asset_server, source_path) else {
+        return ImageNode::default();
+    };
+    let Some(border) = presentation
+        .textures
+        .values()
+        .find(|texture| texture.source_path == source_path)
+        .and_then(|texture| texture.sprite_border)
+    else {
+        return ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
+    };
+    ImageNode::new(handle).with_mode(NodeImageMode::Sliced(TextureSlicer {
+        border: BorderRect::from(border),
+        center_scale_mode: default(),
+        sides_scale_mode: default(),
+        max_corner_scale: 1.0,
+    }))
+}
+
 fn spawn_vote_track(
     parent: &mut ChildSpawnerCommands,
     render: &RenderAssets,
@@ -7276,13 +7378,13 @@ fn spawn_vote_track(
 ) {
     parent
         .spawn((
-            ImageNode::new(vote_texture(render, unfilled_path)).with_mode(NodeImageMode::Stretch),
+            authored_ui_image(render, unfilled_path, vote_texture(render, unfilled_path)),
             node,
         ))
         .with_children(|track| {
             track.spawn((
                 fill_kind,
-                ImageNode::new(vote_texture(render, filled_path)).with_mode(NodeImageMode::Stretch),
+                authored_ui_image(render, filled_path, vote_texture(render, filled_path)),
                 Node {
                     width: percent(100.0),
                     height: percent(100.0),
@@ -7299,13 +7401,10 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
             WorldEntity,
             VotePanelKind::Technology,
             Name::new("Technology voting menu"),
-            ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[0])).with_mode(
-                NodeImageMode::Sliced(TextureSlicer {
-                    border: BorderRect::all(44.0),
-                    center_scale_mode: default(),
-                    sides_scale_mode: default(),
-                    max_corner_scale: 1.0,
-                }),
+            authored_ui_image(
+                render,
+                VOTE_TEXTURE_PATHS[0],
+                vote_texture(render, VOTE_TEXTURE_PATHS[0]),
             ),
             GlobalZIndex(24),
             Visibility::Hidden,
@@ -7322,6 +7421,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
         .with_children(|panel| {
             panel.spawn((
                 VoteTextKind::TechnologyTitle,
+                UiDisplayFont,
                 Text::new("Town technology vote"),
                 TextFont {
                     font_size: FontSize::Px(25.0),
@@ -7426,8 +7526,11 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     TechnologyVoteCastButton,
                     TechnologyVoteCastEnabled(true),
                     Button,
-                    ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]))
-                        .with_mode(NodeImageMode::Stretch),
+                    authored_ui_image(
+                        render,
+                        BOTTOM_BAR_TEXTURE_PATHS[0],
+                        bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]),
+                    ),
                     Node {
                         position_type: PositionType::Absolute,
                         left: px(82),
@@ -7467,14 +7570,12 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
             WorldEntity,
             VotePanelKind::Ruler,
             Name::new("Ruler voting menu"),
-            ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[0])).with_mode(
-                NodeImageMode::Sliced(TextureSlicer {
-                    border: BorderRect::all(44.0),
-                    center_scale_mode: default(),
-                    sides_scale_mode: default(),
-                    max_corner_scale: 1.0,
-                }),
-            ),
+            authored_ui_image(
+                render,
+                VOTE_TEXTURE_PATHS[0],
+                vote_texture(render, VOTE_TEXTURE_PATHS[0]),
+            )
+            .with_color(Color::srgba(1.0, 1.0, 1.0, 0.8)),
             GlobalZIndex(24),
             Visibility::Hidden,
             Node {
@@ -7501,13 +7602,14 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 },
             ));
             panel.spawn((
+                UiDisplayFont,
                 Text::new("VOTE FOR RULER"),
                 TextFont {
                     font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
-                TextColor(Color::srgb(0.12, 0.10, 0.07)),
+                TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
                 Node {
                     position_type: PositionType::Absolute,
                     left: percent(31.2),
@@ -7524,7 +7626,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
-                TextColor(Color::srgb(0.12, 0.10, 0.07)),
+                TextColor(Color::WHITE),
                 Node {
                     position_type: PositionType::Absolute,
                     top: percent(18.9),
@@ -7570,7 +7672,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(Color::srgb(0.12, 0.10, 0.07)),
+                TextColor(Color::WHITE),
                 Node {
                     position_type: PositionType::Absolute,
                     left: percent(17.9),
@@ -7619,16 +7721,11 @@ fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
             WorldEntity,
             CurrentEventPanel,
             Name::new("Current town event"),
-            ImageNode::new(current_event_texture(
+            authored_ui_image(
                 render,
                 CURRENT_EVENT_TEXTURE_PATHS[0],
-            ))
-            .with_mode(NodeImageMode::Sliced(TextureSlicer {
-                border: BorderRect::all(24.0),
-                center_scale_mode: default(),
-                sides_scale_mode: default(),
-                max_corner_scale: 1.0,
-            })),
+                current_event_texture(render, CURRENT_EVENT_TEXTURE_PATHS[0]),
+            ),
             GlobalZIndex(23),
             Visibility::Hidden,
             Node {
@@ -7645,6 +7742,7 @@ fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
         .with_children(|panel| {
             panel.spawn((
                 CurrentEventText::Title,
+                UiDisplayFont,
                 Text::new("Current Event"),
                 TextFont {
                     font_size: FontSize::Px(25.0),
@@ -7679,11 +7777,11 @@ fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
             ));
             panel
                 .spawn((
-                    ImageNode::new(current_event_texture(
+                    authored_ui_image(
                         render,
                         CURRENT_EVENT_TEXTURE_PATHS[1],
-                    ))
-                    .with_mode(NodeImageMode::Stretch),
+                        current_event_texture(render, CURRENT_EVENT_TEXTURE_PATHS[1]),
+                    ),
                     Node {
                         position_type: PositionType::Absolute,
                         left: px(18),
@@ -7697,11 +7795,11 @@ fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
                 .with_children(|track| {
                     track.spawn((
                         CurrentEventFill,
-                        ImageNode::new(current_event_texture(
+                        authored_ui_image(
                             render,
                             CURRENT_EVENT_TEXTURE_PATHS[2],
-                        ))
-                        .with_mode(NodeImageMode::Stretch),
+                            current_event_texture(render, CURRENT_EVENT_TEXTURE_PATHS[2]),
+                        ),
                         Node {
                             width: percent(0.0),
                             height: percent(100.0),
@@ -7741,8 +7839,11 @@ fn spawn_bottom_bar_button(
         .spawn((
             BottomBarMainButton(context),
             Button,
-            ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]))
-                .with_mode(NodeImageMode::Stretch),
+            authored_ui_image(
+                render,
+                BOTTOM_BAR_TEXTURE_PATHS[0],
+                bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]),
+            ),
             Node {
                 width: px(88),
                 height: px(88),
@@ -7914,6 +8015,11 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         },
         TextColor(Color::srgb(0.9, 0.96, 0.9)),
         GlobalZIndex(20),
+        if std::env::var_os("STREAM_TOWN_RUNTIME_DIAGNOSTICS").is_some() {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        },
         Node {
             position_type: PositionType::Absolute,
             bottom: px(8),
@@ -8085,13 +8191,10 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         WorldEntity,
         BottomBarContextPanel,
         Name::new("Bottom bar context"),
-        ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[8])).with_mode(
-            NodeImageMode::Sliced(TextureSlicer {
-                border: BorderRect::all(72.0),
-                center_scale_mode: default(),
-                sides_scale_mode: default(),
-                max_corner_scale: 1.0,
-            }),
+        authored_ui_image(
+            render,
+            BOTTOM_BAR_TEXTURE_PATHS[8],
+            bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[8]),
         ),
         GlobalZIndex(21),
         Visibility::Hidden,
@@ -8468,13 +8571,10 @@ fn spawn_settings_button(
         .spawn((
             action,
             Button,
-            ImageNode::new(main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0])).with_mode(
-                NodeImageMode::Sliced(TextureSlicer {
-                    border: BorderRect::all(15.0),
-                    center_scale_mode: default(),
-                    sides_scale_mode: default(),
-                    max_corner_scale: 1.0,
-                }),
+            authored_ui_image(
+                render,
+                MAIN_MENU_TEXTURE_PATHS[0],
+                main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
             ),
             Node {
                 flex_grow: 1.0,
@@ -8692,13 +8792,11 @@ fn rebuild_settings_rows(
                             direction: -1,
                         },
                         Button,
-                        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
-                            .with_mode(NodeImageMode::Sliced(TextureSlicer {
-                                border: BorderRect::all(15.0),
-                                center_scale_mode: default(),
-                                sides_scale_mode: default(),
-                                max_corner_scale: 1.0,
-                            })),
+                        authored_ui_image(
+                            &render,
+                            MAIN_MENU_TEXTURE_PATHS[0],
+                            main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]),
+                        ),
                         Node {
                             width: px(30),
                             height: px(30),
@@ -8730,13 +8828,11 @@ fn rebuild_settings_rows(
                             direction: 1,
                         },
                         Button,
-                        ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
-                            .with_mode(NodeImageMode::Sliced(TextureSlicer {
-                                border: BorderRect::all(15.0),
-                                center_scale_mode: default(),
-                                sides_scale_mode: default(),
-                                max_corner_scale: 1.0,
-                            })),
+                        authored_ui_image(
+                            &render,
+                            MAIN_MENU_TEXTURE_PATHS[0],
+                            main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]),
+                        ),
                         Node {
                             width: px(30),
                             height: px(30),
@@ -8899,13 +8995,10 @@ fn spawn_menu_overlay(
         .with_children(|root| {
             root.spawn((
                 Name::new("Game menu background"),
-                ImageNode::new(main_menu_texture(&render, GAME_MENU_TEXTURE_PATHS[0])).with_mode(
-                    NodeImageMode::Sliced(TextureSlicer {
-                        border: BorderRect::all(34.0),
-                        center_scale_mode: default(),
-                        sides_scale_mode: default(),
-                        max_corner_scale: 1.0,
-                    }),
+                authored_ui_image(
+                    &render,
+                    GAME_MENU_TEXTURE_PATHS[0],
+                    main_menu_texture(&render, GAME_MENU_TEXTURE_PATHS[0]),
                 ),
                 Node {
                     position_type: PositionType::Absolute,
@@ -8940,13 +9033,11 @@ fn spawn_menu_overlay(
                         .spawn((
                             action,
                             Button,
-                            ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]))
-                                .with_mode(NodeImageMode::Sliced(TextureSlicer {
-                                    border: BorderRect::all(15.0),
-                                    center_scale_mode: default(),
-                                    sides_scale_mode: default(),
-                                    max_corner_scale: 1.0,
-                                })),
+                            authored_ui_image(
+                                &render,
+                                MAIN_MENU_TEXTURE_PATHS[0],
+                                main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]),
+                            ),
                             Node {
                                 width: percent(100.0),
                                 flex_grow: 1.0,
@@ -9057,8 +9148,11 @@ fn spawn_menu_overlay(
             StateEntity,
             SettingsRoot,
             Name::new("Shipping settings menu"),
-            ImageNode::new(main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH))
-                .with_mode(NodeImageMode::Stretch),
+            authored_ui_image(
+                &render,
+                SETTINGS_BACKGROUND_TEXTURE_PATH,
+                main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+            ),
             Visibility::Hidden,
             GlobalZIndex(110),
             Node {
@@ -9075,6 +9169,7 @@ fn spawn_menu_overlay(
         ))
         .with_children(|settings_root| {
             settings_root.spawn((
+                UiDisplayFont,
                 Text::new("SETTINGS"),
                 TextFont {
                     font_size: FontSize::Px(34.0),
@@ -9177,8 +9272,11 @@ fn spawn_menu_overlay(
                     Name::new("Confirm settings changes"),
                     Visibility::Hidden,
                     GlobalZIndex(120),
-                    ImageNode::new(main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH))
-                        .with_mode(NodeImageMode::Stretch),
+                    authored_ui_image(
+                        &render,
+                        SETTINGS_BACKGROUND_TEXTURE_PATH,
+                        main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                    ),
                     Node {
                         position_type: PositionType::Absolute,
                         left: percent(25.0),
@@ -22490,7 +22588,7 @@ fn update_vote_panels(
                             ..default()
                         },
                         TextLayout::justify(Justify::Center),
-                        TextColor(Color::srgb(0.13, 0.11, 0.08)),
+                        TextColor(Color::WHITE),
                         Node {
                             width: percent(100.0),
                             margin: UiRect::top(px(12)),
@@ -22501,13 +22599,10 @@ fn update_vote_panels(
                 for line in lines {
                     options
                         .spawn((
-                            ImageNode::new(vote_texture(&render, VOTE_TEXTURE_PATHS[4])).with_mode(
-                                NodeImageMode::Sliced(TextureSlicer {
-                                    border: BorderRect::all(12.0),
-                                    center_scale_mode: default(),
-                                    sides_scale_mode: default(),
-                                    max_corner_scale: 1.0,
-                                }),
+                            authored_ui_image(
+                                &render,
+                                VOTE_TEXTURE_PATHS[4],
+                                vote_texture(&render, VOTE_TEXTURE_PATHS[4]),
                             ),
                             Node {
                                 width: percent(100.0),
@@ -22751,8 +22846,11 @@ fn update_town_goal_panel(
                         TextColor(Color::WHITE),
                     ));
                     row.spawn((
-                        ImageNode::new(objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[1]))
-                            .with_mode(NodeImageMode::Stretch),
+                        authored_ui_image(
+                            &render,
+                            OBJECTIVE_TEXTURE_PATHS[1],
+                            objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[1]),
+                        ),
                         Node {
                             width: percent(100.0),
                             height: px(26),
@@ -22762,8 +22860,11 @@ fn update_town_goal_panel(
                     ))
                     .with_children(|track| {
                         track.spawn((
-                            ImageNode::new(objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[2]))
-                                .with_mode(NodeImageMode::Stretch),
+                            authored_ui_image(
+                                &render,
+                                OBJECTIVE_TEXTURE_PATHS[2],
+                                objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[2]),
+                            ),
                             Node {
                                 width: percent((progress * 100.0).clamp(0.0, 100.0)),
                                 height: percent(100.0),
@@ -23473,9 +23574,7 @@ fn spawn_bottom_bar_action(
     } else {
         BOTTOM_BAR_TEXTURE_PATHS[2]
     };
-    let background = presentation_texture_handle(presentation, asset_server, background_path)
-        .map_or_else(ImageNode::default, ImageNode::new)
-        .with_mode(NodeImageMode::Stretch);
+    let background = presentation_ui_image(presentation, asset_server, background_path);
     parent
         .spawn((
             action,
@@ -27924,13 +28023,10 @@ fn spawn_credits(
             CreditsSkipButton,
             Name::new("Shipping Credits skip button"),
             Button,
-            ImageNode::new(main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[1])).with_mode(
-                NodeImageMode::Sliced(TextureSlicer {
-                    border: BorderRect::all(15.0),
-                    center_scale_mode: default(),
-                    sides_scale_mode: default(),
-                    max_corner_scale: 1.0,
-                }),
+            authored_ui_image(
+                &render,
+                MAIN_MENU_TEXTURE_PATHS[1],
+                main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[1]),
             ),
             GlobalZIndex(30),
             Node {
@@ -30165,12 +30261,12 @@ mod tests {
     }
 
     #[test]
-    fn main_menu_uses_neutral_minus_one_point_five_exposure_and_prism_clouds() {
+    fn scene_exposure_uses_approved_neutral_baselines_and_prism_clouds() {
         let settings = PlayerSettings::default();
         let menu = color_grading_for_state(&settings, &[], GameState::MainMenu);
         let world = color_grading_for_state(&settings, &[], GameState::InGame);
         assert!((menu.global.exposure - MAIN_MENU_BASELINE_EXPOSURE_EV).abs() < f32::EPSILON);
-        assert!(world.global.exposure.abs() < f32::EPSILON);
+        assert!((world.global.exposure - IN_GAME_BASELINE_EXPOSURE_EV).abs() < f32::EPSILON);
         let prisms = (0..21)
             .map(main_menu_cloud_prism_transform)
             .collect::<Vec<_>>();
@@ -30417,6 +30513,28 @@ mod tests {
             cycle_settings_tab(SettingsTab::Video, false),
             SettingsTab::Connection
         );
+    }
+
+    #[test]
+    fn shipping_ui_preserves_unity_nine_slice_borders() {
+        let presentation = embedded_presentation();
+        let border = |source_path: &str| {
+            presentation
+                .textures
+                .values()
+                .find(|texture| texture.source_path == source_path)
+                .and_then(|texture| texture.sprite_border)
+        };
+        assert_eq!(border(MAIN_MENU_TEXTURE_PATHS[0]), Some([15.0; 4]));
+        assert_eq!(border(SETTINGS_BACKGROUND_TEXTURE_PATH), Some([82.0; 4]));
+        assert_eq!(border(VOTE_TEXTURE_PATHS[0]), Some([158.0; 4]));
+        assert_eq!(border(VOTE_TEXTURE_PATHS[4]), Some([39.0; 4]));
+        assert_eq!(border(BOTTOM_BAR_TEXTURE_PATHS[8]), Some([72.0; 4]));
+        assert_eq!(border(CURRENT_EVENT_TEXTURE_PATHS[0]), Some([64.0; 4]));
+        assert_eq!(border(OBJECTIVE_TEXTURE_PATHS[1]), Some([31.0; 4]));
+        let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        assert!(asset_root.join(UI_FONT_ASSET_PATH).is_file());
+        assert!(asset_root.join(UI_DISPLAY_FONT_ASSET_PATH).is_file());
     }
 
     #[test]
@@ -36078,7 +36196,7 @@ mod tests {
     fn embedded_presentation_binds_native_and_converted_animation_paths() {
         let content = embedded_content();
         let presentation = embedded_presentation();
-        assert_eq!(presentation.schema_version, 20);
+        assert_eq!(presentation.schema_version, 21);
         assert_eq!(presentation.textures.len(), 133);
         assert_eq!(presentation.materials.len(), 33);
         assert_eq!(presentation.post_process_profiles.len(), 2);

@@ -32,6 +32,8 @@ const SHIPPING_SCENES: [&str; 4] = [
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationConversionReport {
     pub schema_version: u32,
+    pub fonts: usize,
+    pub font_bytes: u64,
     pub textures: usize,
     pub texture_bytes: u64,
     pub materials: usize,
@@ -234,6 +236,7 @@ pub fn convert(
         .map(|asset| (asset.path.as_str(), asset))
         .collect();
 
+    let (fonts, font_bytes) = convert_shipping_fonts(&root, out_dir)?;
     let (textures, texture_bytes) = convert_textures(&export, &root, out_dir)?;
     let materials = convert_materials(&export, &assets_by_path)?;
     let prefab_materials = convert_prefab_materials(&export, &assets_by_path, &materials);
@@ -261,7 +264,7 @@ pub fn convert(
         &mut clips,
     );
     let catalog = PresentationCatalog {
-        schema_version: 20,
+        schema_version: 21,
         textures,
         materials,
         clips,
@@ -293,7 +296,9 @@ pub fn convert(
     let catalog_path = out_dir.join("presentation.ron");
     let report_path = out_dir.join("presentation-report.ron");
     let report = PresentationConversionReport {
-        schema_version: 20,
+        schema_version: 21,
+        fonts,
+        font_bytes,
         textures: catalog.textures.len(),
         texture_bytes,
         materials: catalog.materials.len(),
@@ -1892,10 +1897,99 @@ fn convert_textures(
                 source_guid: asset.guid.clone(),
                 source_path: asset.path.clone(),
                 asset_path,
+                sprite_border: unity_sprite_border(&source)?,
             },
         );
     }
     Ok((textures, total_bytes))
+}
+
+fn convert_shipping_fonts(unity_root: &Path, out_dir: &Path) -> Result<(usize, u64)> {
+    const SHIPPING_FONTS: [&str; 2] = [
+        "Assets/Fonts/Rubik-Bold.ttf",
+        "Assets/Fonts/Luckiest Guy.ttf",
+    ];
+    let assets_root = out_dir
+        .parent()
+        .context("presentation output must be inside an assets directory")?;
+    let destination_root = assets_root.join("migrated/fonts");
+    fs::create_dir_all(&destination_root)?;
+    let mut total_bytes = 0_u64;
+    for source_path in SHIPPING_FONTS {
+        let source = unity_root.join(source_path);
+        let file_name = source
+            .file_name()
+            .context("shipping font has no file name")?;
+        let destination = destination_root.join(file_name);
+        let source_bytes = fs::read(&source)
+            .with_context(|| format!("failed to read shipping font {}", source.display()))?;
+        if fs::read(&destination).map_or(true, |current| current != source_bytes) {
+            fs::write(&destination, &source_bytes).with_context(|| {
+                format!("failed to write shipping font {}", destination.display())
+            })?;
+        }
+        total_bytes = total_bytes.saturating_add(u64::try_from(source_bytes.len())?);
+    }
+    Ok((SHIPPING_FONTS.len(), total_bytes))
+}
+
+fn unity_sprite_border(texture_path: &Path) -> Result<Option<[f32; 4]>> {
+    let file_name = texture_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("Unity texture path has no portable file name")?;
+    let meta_path = texture_path.with_file_name(format!("{file_name}.meta"));
+    let encoded = match fs::read_to_string(&meta_path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("failed to read texture metadata {}", meta_path.display())
+            });
+        }
+    };
+    let Some(mapping) = encoded
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("spriteBorder:").map(str::trim))
+    else {
+        return Ok(None);
+    };
+    let mapping = mapping
+        .strip_prefix('{')
+        .and_then(|mapping| mapping.strip_suffix('}'))
+        .context("Unity spriteBorder must be an inline mapping")?;
+    let mut components = BTreeMap::new();
+    for component in mapping.split(',') {
+        let (name, value) = component
+            .split_once(':')
+            .context("Unity spriteBorder component is missing a value")?;
+        components.insert(
+            name.trim(),
+            value
+                .trim()
+                .parse::<f32>()
+                .context("Unity spriteBorder component is not numeric")?,
+        );
+    }
+    let component = |name| {
+        components
+            .get(name)
+            .copied()
+            .with_context(|| format!("Unity spriteBorder is missing {name}"))
+    };
+    // Unity serializes x=left, y=bottom, z=right, w=top. The neutral
+    // presentation schema follows Bevy's left, right, top, bottom order.
+    let border = [
+        component("x")?,
+        component("z")?,
+        component("w")?,
+        component("y")?,
+    ];
+    if border.iter().all(|value| value.abs() <= f32::EPSILON) {
+        Ok(None)
+    } else {
+        Ok(Some(border))
+    }
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -4040,6 +4134,57 @@ fn write_ron_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn converts_unity_sprite_border_to_bevy_edge_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let texture = directory.path().join("panel.png");
+        fs::write(&texture, []).unwrap();
+        fs::write(
+            directory.path().join("panel.png.meta"),
+            "TextureImporter:\n  spriteBorder: {x: 11, y: 44, z: 22, w: 33}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            unity_sprite_border(&texture).unwrap(),
+            Some([11.0, 22.0, 33.0, 44.0])
+        );
+    }
+
+    #[test]
+    fn omits_zero_unity_sprite_borders() {
+        let directory = tempfile::tempdir().unwrap();
+        let texture = directory.path().join("plain.png");
+        fs::write(&texture, []).unwrap();
+        fs::write(
+            directory.path().join("plain.png.meta"),
+            "TextureImporter:\n  spriteBorder: {x: 0, y: 0, z: 0, w: 0}\n",
+        )
+        .unwrap();
+        assert_eq!(unity_sprite_border(&texture).unwrap(), None);
+    }
+
+    #[test]
+    fn copies_shipping_ui_fonts_into_the_bevy_asset_tree() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let directory = tempfile::tempdir().unwrap();
+        let content = directory.path().join("assets/content");
+        let (count, bytes) = convert_shipping_fonts(&root, &content).unwrap();
+        assert_eq!(count, 2);
+        assert!(bytes > 200_000);
+        assert!(
+            directory
+                .path()
+                .join("assets/migrated/fonts/Rubik-Bold.ttf")
+                .is_file()
+        );
+        assert!(
+            directory
+                .path()
+                .join("assets/migrated/fonts/Luckiest Guy.ttf")
+                .is_file()
+        );
+    }
 
     fn fixture_asset(guid: &str, path: &str, kind: &str, name: &str) -> UnityAsset {
         UnityAsset {

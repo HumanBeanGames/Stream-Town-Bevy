@@ -1,5 +1,7 @@
 (
-    schema_version: 20,
+    schema_version: 21,
+    fonts: 2,
+    font_bytes: 217084,
     textures: 133,
     texture_bytes: 19291847,
     materials: 33,
