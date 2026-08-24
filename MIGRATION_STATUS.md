@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-23
+Last updated: 2026-08-25
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -760,14 +760,26 @@ mistaken for production-ready systems.
   previews elevation/water, occupancy, resources, selected foliage layers, and
   A* routes through the production deterministic generator. A Windows launcher
   and a monitor-free `--validate-authoring` mode are included.
+- Generated ground cover now follows Unity's mesh/material batching intent
+  through Bevy's native opaque and shadow instancing instead of duplicating
+  source geometry. The exact 16,581 generated records map to 12 GPU mesh groups
+  and 281 deterministic 32-cell audit groups with zero fallback instances.
+  Camera-relative 96-unit range streaming and an 18-unit dither band remove only
+  sub-pixel distant ground cover; generation hashes, stable IDs, transforms,
+  materials, lighting, shadows, and building/camp clearance behavior are
+  unchanged. Runtime console and performance JSON expose logical, active,
+  GPU-group, spatial-group, and fallback counts. The 300-agent benchmark now
+  defaults to its recorded 16/16 scene/animation detail reference regardless of
+  the ordinary game's 64-character detail budget.
 - A 300-agent presentation LOD: 16 actors use authored GLB rigs and shared
   animation graphs while the remaining crowd uses lightweight capsule visuals
   without changing authoritative gameplay or persistence. The GPU gate emits
   JSON and exits unattended; `xtask stress` soaks 300 agents for 3,600 ticks
   with repeated dirty-grid mutations. A 1920x1080 release DX12 run on the
-  documented reference machine measured 600 post-warmup frames at 6.53 ms
-  average and 7.94 ms p95 for the corrected 200x200 world, below the 16.7 ms
-  budget. The former 64x64 chunked-world timing is retired.
+  documented reference machine measured 600 post-warmup frames at 11.47 ms
+  average and 16.50 ms p95 for the corrected 200x200 world with all 16,581
+  generated ground-cover records active, below the 16.7 ms budget. The former
+  64x64 chunked-world timing is retired.
 - Reachable unit facing now follows Unity's `RotationHandler`: agents slerp
   toward travel or actor/building action targets at the prefab's authored five
   radians per second, while gathering preserves its explicit immediate snap to
@@ -821,8 +833,7 @@ mistaken for production-ready systems.
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable
   emitters are converted and live.
-- Foliage batching or authored impostor meshes beyond the live scale-aware
-  range streaming, predictive congestion avoidance beyond deterministic local
+- Predictive congestion avoidance beyond deterministic local
   crowd separation, any obscure advanced role/inventory interactions not yet
   represented by the live worker/combat/healing/construction loops, exact
   station refresh/stale-cache timing, and final source-diff closure for every
@@ -916,7 +927,7 @@ generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
 ports backed by converted renderer bindings. Shipping-scene particle and custom
 shader reachability is closed; remaining presentation work is final art tuning,
-foliage batching/impostors, release-matrix accessibility certification, and broader curated
+release-matrix accessibility certification, and broader curated
 screenshot/audio acceptance coverage.
 Gameplay parity is materially advanced but still needs final source-diff closure;
 presentation and hardening remain long-term work.

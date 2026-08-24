@@ -2417,10 +2417,21 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                     status.terrain_medium_chunks,
                     status.terrain_low_chunks
                 ));
-                ui.label("Foliage / separated");
+                ui.label("Foliage active / total");
                 ui.monospace(format!(
                     "{} / {}",
-                    status.foliage_instances, status.crowd_adjusted_agents
+                    status.foliage_visible_instances, status.foliage_instances
+                ));
+                ui.end_row();
+                ui.label("Foliage GPU / spatial batches");
+                ui.monospace(format!(
+                    "{} / {}",
+                    status.foliage_batches, status.foliage_spatial_groups
+                ));
+                ui.label("Fallback / separated");
+                ui.monospace(format!(
+                    "{} / {}",
+                    status.foliage_unbatched_instances, status.crowd_adjusted_agents
                 ));
                 ui.end_row();
                 ui.label("Twitch");

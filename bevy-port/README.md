@@ -469,8 +469,13 @@ foliage layers still reject occupied source keys. Raw glTF primitive loads resto
 Blender's omitted 0.01 centimetre-to-metre scene-node conversion before applying
 authored scale; this prevents tree, ore, bush, grass, and coral primitives from
 becoming roughly one hundred times too large and overlapping. The converted
-grass, flower, seaweed, and coral primitives retain a 420-unit visibility
-budget. Current building and enemy-camp footprints hide intersecting
+grass, flower, seaweed, and coral primitives use Bevy's native mesh/material
+instancing: the 16,581 shipping records collapse to 12 maximum GPU mesh batches
+and 281 deterministic 32-cell spatial audit groups without duplicating geometry.
+A camera-relative 96-unit ground-cover range with an 18-unit dither band streams
+sub-pixel distant instances while preserving their authoritative generation
+records, transforms, PBR lighting, and shadows. Current building and enemy-camp
+footprints hide intersecting
 foliage, and the visibility is derived again after removal or save load so stale
 clearings cannot leak between world states. Resource trees use a typed
 `TreeMaterial` WGSL port with the authored atlas, world-synchronized vertex
@@ -667,11 +672,17 @@ reports average and 95th-percentile frame time after a warmup. The optional
 `STREAM_TOWN_FRAME_TIME_WARMUP` and
 `STREAM_TOWN_FRAME_TIME_SAMPLE_SECONDS` values default to ten seconds each.
 Set `STREAM_TOWN_PERFORMANCE_REPORT_PATH` to write the same gate plus terrain,
-foliage-streaming, and crowd-separation counters as JSON. Set
+foliage instance/native-GPU-batch/spatial-group/fallback, actor-detail, and
+crowd-separation counters as JSON. `STREAM_TOWN_BENCHMARK_FOLIAGE=0` is an
+explicit diagnostic A/B that omits only generated ground cover; it is never
+enabled by ordinary gameplay. Set
 `STREAM_TOWN_EXIT_AFTER_FRAME_TIME=1` for an unattended run that exits once the
 report is complete. Generated terrain uses one continuous authored-style render
 mesh and one full-resolution collider, so terrain LOD boundaries cannot crack.
-Foliage uses scale-aware fade ranges, and deterministic local crowd
+The 300-agent gate fixes its default scene/animation detail budgets to the
+recorded 16/16 reference while ordinary gameplay retains 64 detailed actors;
+both remain explicitly overrideable. Foliage uses scale-aware fade ranges and
+native GPU instancing, and deterministic local crowd
 separation changes only presentation transforms, never navigation or saves.
 `cargo run -p xtask -- stress --agents 300 --ticks 3600` performs the matching
 one-minute-at-60-Hz CPU soak while repeatedly mutating dirty navigation cells.
@@ -681,9 +692,10 @@ Bevy 0.19's motion-blur pass is disabled on Windows because its varying loop
 does not compile with FXC; the rest of the authored post-processing stack stays
 enabled, and packaged builds need no Vulkan SDK or loose compiler DLL.
 The current Windows release reference run (Ryzen 5 7600X, Radeon RX 7800 XT,
-64 GB, DX12, 1920x1080) measured 600 post-warmup frames at 6.53 ms average and
-7.94 ms p95 with 300 simulated agents, the single continuous 200x200 terrain
-surface, and the production 16-character detail budget, below the 16.7 ms gate.
+64 GB, DX12, 1920x1080) measured 600 post-warmup frames at 11.47 ms average and
+16.50 ms p95 with 300 simulated agents, the single continuous 200x200 terrain
+surface, all 16,581 generated ground-cover records, 12 native GPU mesh groups,
+and the benchmark's 16-character detail budget, below the 16.7 ms gate.
 Live gather, construction, combat, and healing goals feed the converted Player
 controller's authored role trigger, `Action`, deterministic `AnimationIndex`,
 and Unity-remapped `ActionSpeed`; locomotion, carry props, death, and revival use

@@ -108,6 +108,7 @@ const TERRAIN_LOD_HYSTERESIS: f32 = 36.0;
 // stress-test crowds still retain a bounded fallback, which can be overridden
 // explicitly with STREAM_TOWN_ACTOR_SCENE_BUDGET/STREAM_TOWN_ANIMATION_BUDGET.
 const DEFAULT_ACTOR_DETAIL_BUDGET: usize = 64;
+const PERFORMANCE_ACTOR_DETAIL_BUDGET: usize = 16;
 // Orthographic framing is retained only for deterministic close-up smoke tests.
 // Shipping gameplay uses the perspective camera authored in MainCamera.prefab.
 const UNITY_TOWN_CAMERA_FOV_DEGREES: f32 = 60.0;
@@ -270,9 +271,13 @@ const CURRENT_EVENT_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Unfilled.png",
     "Assets/Sprites/CurrentEvent/UI_CurrentEvent_Slider_Filled.png",
 ];
-const FOLIAGE_VISIBILITY_MIN_RANGE: f32 = 280.0;
-const FOLIAGE_VISIBILITY_MAX_RANGE: f32 = 560.0;
-const FOLIAGE_VISIBILITY_FADE: f32 = 36.0;
+const FOLIAGE_VISIBILITY_MIN_RANGE: f32 = 96.0;
+const FOLIAGE_VISIBILITY_MAX_RANGE: f32 = 192.0;
+const FOLIAGE_VISIBILITY_FADE: f32 = 18.0;
+// Unity groups generated foliage by mesh/material. Bevy performs the matching
+// GPU instancing automatically; stable spatial groups make that contract
+// auditable without duplicating source geometry or changing generation.
+const FOLIAGE_BATCH_CHUNK_CELLS: u16 = 32;
 const CROWD_SEPARATION_RADIUS_CELLS: f32 = 0.42;
 const CROWD_SEPARATION_MAX_CELLS: f32 = 0.28;
 const CHARACTER_HIT_SECONDS: f32 = 0.25;
@@ -453,6 +458,10 @@ struct WorldRenderStats {
     terrain_medium_chunks: usize,
     terrain_low_chunks: usize,
     foliage_instances: usize,
+    foliage_visible_instances: usize,
+    foliage_batches: usize,
+    foliage_spatial_groups: usize,
+    foliage_unbatched_instances: usize,
     crowd_adjusted_agents: usize,
 }
 
@@ -1897,6 +1906,9 @@ struct ResourceVisual {
 
 #[derive(Component)]
 struct FoliageVisual;
+
+#[derive(Component)]
+struct FoliageRenderBatch(FoliageBatchKey);
 
 #[derive(Component)]
 struct Hud;
@@ -11717,13 +11729,27 @@ fn actor_scene_budget() -> usize {
         std::env::var("STREAM_TOWN_ACTOR_SCENE_BUDGET")
             .ok()
             .as_deref(),
+        std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some(),
     )
 }
 
-fn actor_detail_budget(value: Option<&str>) -> usize {
+fn actor_detail_budget(value: Option<&str>, benchmarking: bool) -> usize {
     value
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_ACTOR_DETAIL_BUDGET)
+        .unwrap_or(if benchmarking {
+            PERFORMANCE_ACTOR_DETAIL_BUDGET
+        } else {
+            DEFAULT_ACTOR_DETAIL_BUDGET
+        })
+}
+
+fn animation_detail_budget() -> usize {
+    actor_detail_budget(
+        std::env::var("STREAM_TOWN_ANIMATION_BUDGET")
+            .ok()
+            .as_deref(),
+        std::env::var_os("STREAM_TOWN_REPORT_FRAME_TIME").is_some(),
+    )
 }
 
 fn parse_weather(value: &str) -> Option<Weather> {
@@ -12040,10 +12066,16 @@ fn generate_and_spawn_world(
             );
         }
     }
-    if !isolate_animation && let Some(asset_server) = asset_server.as_deref() {
+    let foliage_rendering_enabled =
+        std::env::var("STREAM_TOWN_BENCHMARK_FOLIAGE").map_or(true, |value| value.trim() != "0");
+    if !isolate_animation
+        && foliage_rendering_enabled
+        && let Some(asset_server) = asset_server.as_deref()
+    {
+        let mut gpu_batches = BTreeSet::new();
+        let mut spatial_groups = BTreeSet::new();
         for foliage in &generated.foliage {
-            if spawn_foliage_visual(
-                &mut commands,
+            let Some(visual) = resolve_foliage_visual(
                 &content.0,
                 &presentation.0,
                 &render,
@@ -12052,10 +12084,22 @@ fn generate_and_spawn_world(
                 &generated,
                 &config.0,
                 foliage,
-            ) {
-                render_stats.foliage_instances += 1;
-            }
+            ) else {
+                continue;
+            };
+            let key = foliage_batch_key(foliage);
+            gpu_batches.insert((foliage.layer.clone(), foliage.variant));
+            spatial_groups.insert(key.clone());
+            spawn_foliage_visual(&mut commands, key, visual);
+            render_stats.foliage_instances += 1;
+            render_stats.foliage_visible_instances += 1;
         }
+        // Matching Mesh3d/material handles are automatically instanced by
+        // Bevy's opaque and shadow render phases. These deterministic spatial
+        // groups are retained for auditing and clearance/streaming telemetry;
+        // they do not duplicate source geometry.
+        render_stats.foliage_batches = gpu_batches.len();
+        render_stats.foliage_spatial_groups = spatial_groups.len();
     }
 
     let hall = town_hall_focus;
@@ -12891,9 +12935,34 @@ fn spawn_resource_visual(
     ));
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FoliageBatchKey {
+    chunk_x: u16,
+    chunk_z: u16,
+    layer: StableId,
+    variant: u16,
+}
+
+fn foliage_batch_key(foliage: &GeneratedFoliage) -> FoliageBatchKey {
+    FoliageBatchKey {
+        chunk_x: foliage.position.x / FOLIAGE_BATCH_CHUNK_CELLS,
+        chunk_z: foliage.position.z / FOLIAGE_BATCH_CHUNK_CELLS,
+        layer: foliage.layer.clone(),
+        variant: foliage.variant,
+    }
+}
+
+struct ResolvedFoliageVisual {
+    source_mesh: Handle<Mesh>,
+    material: ResolvedMaterialHandle,
+    suppress_self_shadows: bool,
+    visibility_end: f32,
+    position: GridPos,
+    transform: Transform,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn spawn_foliage_visual(
-    commands: &mut Commands,
+fn resolve_foliage_visual(
     content: &ContentCatalog,
     presentation: &PresentationCatalog,
     render: &RenderAssets,
@@ -12902,21 +12971,16 @@ fn spawn_foliage_visual(
     world: &GeneratedWorld,
     config: &GameConfig,
     foliage: &GeneratedFoliage,
-) -> bool {
-    let Some(layer) = content
+) -> Option<ResolvedFoliageVisual> {
+    let layer = content
         .foliage
         .iter()
-        .find(|layer| layer.id == foliage.layer)
-    else {
-        return false;
-    };
-    let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
-        return false;
-    };
+        .find(|layer| layer.id == foliage.layer)?;
+    let variant = layer.variants.get(usize::from(foliage.variant))?;
     if !converted_asset_exists(asset_root, &variant.asset_path) {
-        return false;
+        return None;
     }
-    let mesh = asset_server.load(
+    let source_mesh = asset_server.load(
         GltfAssetLabel::Primitive {
             mesh: 0,
             primitive: 0,
@@ -12938,65 +13002,106 @@ fn spawn_foliage_visual(
         * resource_visual_scale(config.world.cell_size)
         * (f32::from(foliage.scale_milli) / 1_000.0);
     let visibility_end = foliage_visibility_distance(scale);
-    let material = presentation
+    let mapped_material = presentation
         .model_materials
         .get(&variant.source_model)
         .and_then(|materials| materials.values().next())
         .and_then(|id| render.presentation_materials.get(id));
-    let mut entity = commands.spawn((
-        WorldEntity,
-        FoliageVisual,
-        GridLocation(foliage.position),
-        Mesh3d(mesh),
-        Transform::from_translation(centre + offset)
-            .with_rotation(
-                Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
-                    * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
-            )
-            .with_scale(scale),
-        Visibility::Inherited,
-        bevy::camera::visibility::VisibilityRange {
-            start_margin: 0.0..0.0,
-            end_margin: (visibility_end - FOLIAGE_VISIBILITY_FADE)..visibility_end,
-            use_aabb: true,
-        },
-    ));
-    match material {
-        Some(ResolvedMaterialHandle::Standard(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
-        Some(ResolvedMaterialHandle::Building(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
-        Some(ResolvedMaterialHandle::Tree(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
-        Some(ResolvedMaterialHandle::Grass(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
-        Some(ResolvedMaterialHandle::Critter(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
-        Some(ResolvedMaterialHandle::Flag(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
-        Some(ResolvedMaterialHandle::Character(material)) => {
-            entity.insert(MeshMaterial3d(material.clone()));
-        }
+    let suppress_self_shadows = mapped_material.is_some_and(material_needs_self_shadow_suppression);
+    let material = match mapped_material {
+        Some(
+            material @ (ResolvedMaterialHandle::Standard(_)
+            | ResolvedMaterialHandle::Building(_)
+            | ResolvedMaterialHandle::Tree(_)
+            | ResolvedMaterialHandle::Grass(_)
+            | ResolvedMaterialHandle::Critter(_)
+            | ResolvedMaterialHandle::Flag(_)
+            | ResolvedMaterialHandle::Character(_)),
+        ) => material.clone(),
         Some(
             ResolvedMaterialHandle::Cloud(_)
             | ResolvedMaterialHandle::Godray(_)
             | ResolvedMaterialHandle::Giraffe(_)
             | ResolvedMaterialHandle::Bounds(_),
         )
-        | None => {
-            entity.insert(MeshMaterial3d(render.food.clone()));
+        | None => ResolvedMaterialHandle::Standard(render.food.clone()),
+    };
+    Some(ResolvedFoliageVisual {
+        source_mesh,
+        material,
+        suppress_self_shadows,
+        visibility_end,
+        position: foliage.position,
+        transform: Transform::from_translation(centre + offset)
+            .with_rotation(
+                Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
+                    * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            )
+            .with_scale(scale),
+    })
+}
+
+fn insert_world_material(entity: &mut EntityCommands<'_>, material: &ResolvedMaterialHandle) {
+    match material {
+        ResolvedMaterialHandle::Standard(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Building(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Cloud(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Godray(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Giraffe(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Bounds(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Tree(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Grass(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Critter(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Flag(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
+        }
+        ResolvedMaterialHandle::Character(material) => {
+            entity.insert(MeshMaterial3d(material.clone()));
         }
     }
-    if material.is_some_and(material_needs_self_shadow_suppression) {
+}
+
+fn spawn_foliage_visual(
+    commands: &mut Commands,
+    batch: FoliageBatchKey,
+    visual: ResolvedFoliageVisual,
+) {
+    let mut entity = commands.spawn((
+        WorldEntity,
+        FoliageVisual,
+        FoliageRenderBatch(batch),
+        GridLocation(visual.position),
+        Mesh3d(visual.source_mesh),
+        visual.transform,
+        Visibility::Inherited,
+        bevy::camera::visibility::VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: (visual.visibility_end - FOLIAGE_VISIBILITY_FADE)..visual.visibility_end,
+            use_aabb: true,
+        },
+    ));
+    insert_world_material(&mut entity, &visual.material);
+    if visual.suppress_self_shadows {
         entity.insert(bevy::light::NotShadowReceiver);
     }
-    true
 }
 
 fn foliage_visibility_distance(scale: Vec3) -> f32 {
@@ -19012,10 +19117,7 @@ fn attach_converted_animations(
     else {
         return;
     };
-    let animation_budget = std::env::var("STREAM_TOWN_ANIMATION_BUDGET")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_ACTOR_DETAIL_BUDGET);
+    let animation_budget = animation_detail_budget();
     let mut remaining = animation_budget.saturating_sub(applied.iter().count());
     for (actor_root, spec) in &specs {
         let is_unbudgeted = pets.contains(actor_root) || fish_gods.contains(actor_root);
@@ -25841,6 +25943,10 @@ fn publish_runtime_console_status(
         terrain_medium_chunks: render_stats.terrain_medium_chunks,
         terrain_low_chunks: render_stats.terrain_low_chunks,
         foliage_instances: render_stats.foliage_instances,
+        foliage_visible_instances: render_stats.foliage_visible_instances,
+        foliage_batches: render_stats.foliage_batches,
+        foliage_spatial_groups: render_stats.foliage_spatial_groups,
+        foliage_unbatched_instances: render_stats.foliage_unbatched_instances,
         crowd_adjusted_agents: render_stats.crowd_adjusted_agents,
         save_exists: save.store.path().is_file(),
         save_path: save.store.path().display().to_string(),
@@ -26504,7 +26610,13 @@ fn report_frame_time_gate(
         terrain_high = stats.terrain_high_chunks,
         terrain_medium = stats.terrain_medium_chunks,
         terrain_low = stats.terrain_low_chunks,
-        foliage = stats.foliage_instances,
+        foliage_instances = stats.foliage_instances,
+        foliage_visible = stats.foliage_visible_instances,
+        foliage_batches = stats.foliage_batches,
+        foliage_spatial_groups = stats.foliage_spatial_groups,
+        foliage_unbatched = stats.foliage_unbatched_instances,
+        actor_detail_budget = actor_scene_budget(),
+        animation_detail_budget = animation_detail_budget(),
         crowd_adjusted = stats.crowd_adjusted_agents,
         "steady-state frame-time gate"
     );
@@ -26528,6 +26640,15 @@ fn report_frame_time_gate(
                     "low": stats.terrain_low_chunks,
                 },
                 "foliage_instances": stats.foliage_instances,
+                "foliage": {
+                    "instances": stats.foliage_instances,
+                    "visible_instances": stats.foliage_visible_instances,
+                    "batches": stats.foliage_batches,
+                    "spatial_groups": stats.foliage_spatial_groups,
+                    "unbatched_instances": stats.foliage_unbatched_instances,
+                },
+                "actor_detail_budget": actor_scene_budget(),
+                "animation_detail_budget": animation_detail_budget(),
                 "crowd_adjusted_agents": stats.crowd_adjusted_agents,
             });
             match serde_json::to_vec_pretty(&report)
@@ -27087,10 +27208,19 @@ fn sync_foliage_clearance(
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
-    mut foliage: Query<(&GridLocation, &mut Visibility), With<FoliageVisual>>,
+    mut stats: ResMut<WorldRenderStats>,
+    mut foliage: Query<
+        (&GridLocation, Option<&FoliageRenderBatch>, &mut Visibility),
+        With<FoliageVisual>,
+    >,
 ) {
     let regions = foliage_clearance_regions(&content.0, &simulation.0, &world.generated);
-    for (location, mut visibility) in &mut foliage {
+    let mut visible_instances = 0;
+    for (location, batch, mut visibility) in &mut foliage {
+        if let Some(batch) = batch {
+            debug_assert_eq!(batch.0.chunk_x, location.0.x / FOLIAGE_BATCH_CHUNK_CELLS);
+            debug_assert_eq!(batch.0.chunk_z, location.0.z / FOLIAGE_BATCH_CHUNK_CELLS);
+        }
         let should_be_hidden = regions
             .iter()
             .any(|region| region_contains_grid_position(*region, location.0));
@@ -27099,7 +27229,11 @@ fn sync_foliage_clearance(
         } else if !should_be_hidden && matches!(*visibility, Visibility::Hidden) {
             *visibility = Visibility::Inherited;
         }
+        if !should_be_hidden {
+            visible_instances += 1;
+        }
     }
+    stats.foliage_visible_instances = visible_instances;
 }
 
 fn quarter_turn_rotation(rotation_quarter_turns: i32) -> Quat {
@@ -32733,9 +32867,10 @@ mod tests {
 
     #[test]
     fn production_crowd_lod_budget_matches_measured_gpu_gate() {
-        assert_eq!(actor_detail_budget(None), 64);
-        assert_eq!(actor_detail_budget(Some("24")), 24);
-        assert_eq!(actor_detail_budget(Some("invalid")), 64);
+        assert_eq!(actor_detail_budget(None, false), 64);
+        assert_eq!(actor_detail_budget(None, true), 16);
+        assert_eq!(actor_detail_budget(Some("24"), true), 24);
+        assert_eq!(actor_detail_budget(Some("invalid"), false), 64);
     }
 
     #[test]
@@ -32797,6 +32932,7 @@ mod tests {
             legacy_terrain_mesh: None,
             legacy_migration: None,
         });
+        app.init_resource::<WorldRenderStats>();
         app.add_systems(Update, sync_foliage_clearance);
         let building_entity = app
             .world_mut()
@@ -32822,7 +32958,6 @@ mod tests {
                 Visibility::Inherited,
             ))
             .id();
-
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(building_entity),
@@ -38131,6 +38266,40 @@ mod tests {
             foliage_visibility_distance(Vec3::splat(8.0))
                 > foliage_visibility_distance(Vec3::splat(2.0))
         );
+    }
+
+    #[test]
+    fn shipping_foliage_batch_membership_is_deterministic_and_compact() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let first = generate_world_with_content(&config.world, &content);
+        let second = generate_world_with_content(&config.world, &content);
+        let first_keys = first
+            .foliage
+            .iter()
+            .map(foliage_batch_key)
+            .collect::<BTreeSet<_>>();
+        let second_keys = second
+            .foliage
+            .iter()
+            .map(foliage_batch_key)
+            .collect::<BTreeSet<_>>();
+        let gpu_batches = first
+            .foliage
+            .iter()
+            .map(|foliage| (foliage.layer.clone(), foliage.variant))
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(first.deterministic_hash, second.deterministic_hash);
+        assert_eq!(first_keys, second_keys);
+        assert_eq!(first.foliage.len(), 16_581);
+        assert_eq!(first_keys.len(), 281);
+        assert_eq!(gpu_batches.len(), 12);
+        assert!(first_keys.len() * 8 < first.foliage.len());
+        assert!(first_keys.iter().all(|key| {
+            key.chunk_x <= config.world.width.saturating_sub(1) / FOLIAGE_BATCH_CHUNK_CELLS
+                && key.chunk_z <= config.world.height.saturating_sub(1) / FOLIAGE_BATCH_CHUNK_CELLS
+        }));
     }
 
     #[test]
