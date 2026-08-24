@@ -17105,6 +17105,30 @@ fn drive_gate_animations(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConvertedClipRequest {
+    Asset { path: String, index: usize },
+    Retargeted,
+}
+
+fn converted_clip_request(
+    source: &AnimationClipDef,
+    rig_scene: &str,
+    presentation: &PresentationCatalog,
+) -> Option<ConvertedClipRequest> {
+    if let Some((path, index)) = skin_compatible_animation_request(source, rig_scene, presentation)
+    {
+        return Some(ConvertedClipRequest::Asset { path, index });
+    }
+    if !source.transform_tracks.is_empty() {
+        return Some(ConvertedClipRequest::Retargeted);
+    }
+    Some(ConvertedClipRequest::Asset {
+        path: source.converted_asset_path.clone()?,
+        index: usize::try_from(source.gltf_animation_index?).ok()?,
+    })
+}
+
 fn build_converted_animation(
     controller: &stream_town_domain::AnimationControllerDef,
     spec: &ConvertedAnimationSpec,
@@ -17125,21 +17149,17 @@ fn build_converted_animation(
             continue;
         }
         let source = presentation.clips.get(&motion.clip)?;
-        let handle = if !source.transform_tracks.is_empty() {
-            // Unity's controller references these authored .anim clips. The
-            // visible character rig uses the same named skeleton, so replay
-            // the migrated curves directly on its finalized hierarchy. Native
-            // same-name FBX takes are useful fallbacks, but they are different
-            // motions with different durations and visible loop boundaries.
-            animation_clips.add(retargeted_animation_clip(source, targets)?)
-        } else if let Some((path, index)) =
-            skin_compatible_animation_request(source, &spec.rig_scene, presentation)
-        {
-            asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
-        } else {
-            let path = source.converted_asset_path.as_ref()?;
-            let index = usize::try_from(source.gltf_animation_index?).ok()?;
-            asset_server.load(GltfAssetLabel::Animation(index).from_asset(path.clone()))
+        let handle = match converted_clip_request(source, &spec.rig_scene, presentation)? {
+            // A clip authored on the visible rig must win over similarly named
+            // standalone Unity curves. Retargeting those curves onto the
+            // assembled player hierarchy can rotate the whole model instead
+            // of deforming its skin, even when the bone names appear to match.
+            ConvertedClipRequest::Asset { path, index } => {
+                asset_server.load(GltfAssetLabel::Animation(index).from_asset(path))
+            }
+            ConvertedClipRequest::Retargeted => {
+                animation_clips.add(retargeted_animation_clip(source, targets)?)
+            }
         };
         converted.push((motion.clip.clone(), handle));
     }
@@ -35905,7 +35925,7 @@ mod tests {
     }
 
     #[test]
-    fn player_controller_retains_skin_compatible_native_fallback_clips() {
+    fn player_controller_prefers_skin_compatible_native_clips() {
         let content = embedded_content();
         let presentation = embedded_presentation();
         let player =
@@ -35919,19 +35939,22 @@ mod tests {
             .flat_map(|state| &state.motions)
             .map(|motion| {
                 let source = presentation.clips.get(&motion.clip).unwrap();
-                let request = skin_compatible_animation_request(
-                    source,
-                    PLAYER_ANIMATED_MODEL_PATH,
-                    &presentation,
-                )
-                .unwrap_or_else(|| {
+                let request =
+                    converted_clip_request(source, PLAYER_ANIMATED_MODEL_PATH, &presentation)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{} has no native clip compatible with the visible player skin",
+                                source.display_name
+                            )
+                        });
+                let ConvertedClipRequest::Asset { path, index } = request else {
                     panic!(
-                        "{} has no native clip compatible with the visible player skin",
+                        "{} selected standalone retargeting instead of the visible rig",
                         source.display_name
-                    )
-                });
-                assert_eq!(request.0, PLAYER_ANIMATED_MODEL_PATH);
-                (source.display_name.clone(), request.1)
+                    );
+                };
+                assert_eq!(path, PLAYER_ANIMATED_MODEL_PATH);
+                (source.display_name.clone(), index)
             })
             .collect();
         let expected: BTreeMap<_, _> = [
@@ -35960,6 +35983,23 @@ mod tests {
         .map(|(name, index)| (name.to_owned(), index))
         .collect();
         assert_eq!(requests, expected);
+
+        let run = presentation
+            .clips
+            .values()
+            .find(|clip| clip.display_name == "PlayerChar_Run_01")
+            .unwrap();
+        assert!(
+            !run.transform_tracks.is_empty(),
+            "the source-selection regression requires competing standalone curves"
+        );
+        assert_eq!(
+            converted_clip_request(run, PLAYER_ANIMATED_MODEL_PATH, &presentation),
+            Some(ConvertedClipRequest::Asset {
+                path: PLAYER_ANIMATED_MODEL_PATH.to_owned(),
+                index: 18,
+            })
+        );
     }
 
     #[test]
