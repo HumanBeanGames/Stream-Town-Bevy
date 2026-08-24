@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use stream_town_domain::{
     ContentCatalog, DirtyRegion, GameConfig, GridPos, PlayerSettings, PresentationCatalog,
-    SHIPPING_SECONDS_PER_DAY, generate_world_with_content,
+    SHIPPING_SECONDS_PER_DAY, TechnologyGraphLayout, generate_world_with_content,
 };
 use walkdir::WalkDir;
 
@@ -121,6 +121,16 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", content_path.display()))?;
     content.validate()?;
+    let technology_layout_path = Path::new("assets/content/technology_layout.ron");
+    let technology_layout: TechnologyGraphLayout = ron::from_str(
+        &fs::read_to_string(technology_layout_path)
+            .with_context(|| format!("failed to read {}", technology_layout_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", technology_layout_path.display()))?;
+    technology_layout.validate(&content.technology)?;
+    if technology_layout.nodes.len() != 363 || technology_layout.groups.len() != 20 {
+        bail!("technology graph layout no longer covers the verified Unity graph");
+    }
     let presentation_path = Path::new("assets/content/presentation.ron");
     let presentation: PresentationCatalog = ron::from_str(
         &fs::read_to_string(presentation_path)
@@ -586,7 +596,7 @@ fn validate() -> Result<()> {
             .values()
             .map(Vec::len)
             .sum::<usize>(),
-    ) != (20, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
+    ) != (21, 133, 33, 184, 31, 94, 166, 22, 18, 141, 181)
         || (converted_transform_clips, transform_tracks) != (57, 1196)
         || embedded_animation_clips != 122
         || (blend_states, inferred_parameters) != (11, 2)

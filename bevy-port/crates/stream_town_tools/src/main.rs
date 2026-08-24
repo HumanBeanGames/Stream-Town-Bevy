@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod technology_graph;
+
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
@@ -17,12 +19,13 @@ use stream_town_domain::{
     FoliageLayerDef, GameConfig, GeneratedWorld, GridPos, NameDisplayMode, PlayerSettings,
     PlayerSettingsStore, PostProcessAntiAliasing, PresentationCatalog, RoleDef, RoleEquipmentDef,
     RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus, RuntimeConsoleStore,
-    StableId, TechGroup, TechNode,
+    StableId, TechGroup, TechNode, TechnologyGraphLayout,
 };
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
     TwitchStatus, TwitchTransport, TwitchUserIdentity,
 };
+use technology_graph::{TechnologyGraphViewState, show as show_technology_graph};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ToolTab {
@@ -91,6 +94,9 @@ struct ToolState {
     selected_group: Option<StableId>,
     technology_draft: Option<TechnologyDraft>,
     catalog_path: String,
+    technology_layout: TechnologyGraphLayout,
+    technology_layout_path: String,
+    technology_graph_view: TechnologyGraphViewState,
     role_search: String,
     selected_role: Option<StableId>,
     role_draft: Option<RoleDraft>,
@@ -103,8 +109,8 @@ struct ToolState {
     new_technology_name: String,
     new_group_id: String,
     new_group_name: String,
-    undo_catalogs: Vec<ContentCatalog>,
-    redo_catalogs: Vec<ContentCatalog>,
+    undo_authoring: Vec<AuthoringSnapshot>,
+    redo_authoring: Vec<AuthoringSnapshot>,
     twitch_auth_events: Option<Arc<Mutex<mpsc::Receiver<TwitchToolEvent>>>>,
     twitch_device: Option<DeviceAuthorization>,
     twitch_validation: Option<TokenValidation>,
@@ -121,6 +127,12 @@ struct ToolState {
     runtime_sequence: u64,
     runtime_actor_id: String,
     runtime_login: String,
+}
+
+#[derive(Clone)]
+struct AuthoringSnapshot {
+    catalog: ContentCatalog,
+    technology_layout: TechnologyGraphLayout,
 }
 
 #[derive(Debug)]
@@ -212,6 +224,13 @@ impl Default for ToolState {
         catalog
             .validate()
             .expect("checked-in content catalog must validate");
+        let technology_layout: TechnologyGraphLayout = ron::from_str(include_str!(
+            "../../../assets/content/technology_layout.ron"
+        ))
+        .expect("checked-in technology layout must parse");
+        technology_layout
+            .validate(&catalog.technology)
+            .expect("checked-in technology layout must validate");
         let selected_group = catalog.technology.groups.keys().next().cloned();
         let selected_role = catalog.roles.keys().next().cloned();
         let role_draft = selected_role
@@ -264,6 +283,9 @@ impl Default for ToolState {
             selected_group,
             technology_draft: None,
             catalog_path: default_catalog_path().display().to_string(),
+            technology_layout,
+            technology_layout_path: default_technology_layout_path().display().to_string(),
+            technology_graph_view: TechnologyGraphViewState::default(),
             role_search: String::new(),
             selected_role,
             role_draft,
@@ -276,8 +298,8 @@ impl Default for ToolState {
             new_technology_name: "New Technology".to_owned(),
             new_group_id: "technology_group:new".to_owned(),
             new_group_name: "New Group".to_owned(),
-            undo_catalogs: Vec::new(),
-            redo_catalogs: Vec::new(),
+            undo_authoring: Vec::new(),
+            redo_authoring: Vec::new(),
             twitch_auth_events: None,
             twitch_device: None,
             twitch_validation: None,
@@ -1098,16 +1120,16 @@ fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     );
     ui.horizontal_wrapped(|ui| {
         if ui
-            .add_enabled(!state.undo_catalogs.is_empty(), egui::Button::new("Undo"))
+            .add_enabled(!state.undo_authoring.is_empty(), egui::Button::new("Undo"))
             .clicked()
         {
-            undo_catalog_edit(state);
+            undo_authoring_edit(state);
         }
         if ui
-            .add_enabled(!state.redo_catalogs.is_empty(), egui::Button::new("Redo"))
+            .add_enabled(!state.redo_authoring.is_empty(), egui::Button::new("Redo"))
             .clicked()
         {
-            redo_catalog_edit(state);
+            redo_authoring_edit(state);
         }
         if ui.button("Validate catalog").clicked() {
             state.status = match state.catalog.validate() {
@@ -1402,21 +1424,34 @@ fn role_i32(ui: &mut egui::Ui, label: &str, value: &mut i32) {
 
 fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Technology graph editor");
-    ui.horizontal(|ui| {
+    ui.label(
+        "Edit the complete shipping graph directly. Node/group positions are versioned separately from runtime technology data and every mutation participates in the same undo history.",
+    );
+    ui.horizontal_wrapped(|ui| {
         if ui
-            .add_enabled(!state.undo_catalogs.is_empty(), egui::Button::new("Undo"))
+            .add_enabled(!state.undo_authoring.is_empty(), egui::Button::new("Undo"))
             .clicked()
         {
-            undo_catalog_edit(state);
+            undo_authoring_edit(state);
         }
         if ui
-            .add_enabled(!state.redo_catalogs.is_empty(), egui::Button::new("Redo"))
+            .add_enabled(!state.redo_authoring.is_empty(), egui::Button::new("Redo"))
             .clicked()
         {
-            redo_catalog_edit(state);
+            redo_authoring_edit(state);
         }
         if ui.button("Validate graph").clicked() {
-            state.status = match state.catalog.validate() {
+            let validation = state
+                .catalog
+                .validate()
+                .map_err(|error| error.to_string())
+                .and_then(|()| {
+                    state
+                        .technology_layout
+                        .validate(&state.catalog.technology)
+                        .map_err(|error| error.to_string())
+                });
+            state.status = match validation {
                 Ok(()) => format!(
                     "Technology graph valid: {} nodes in {} groups",
                     state.catalog.technology.nodes.len(),
@@ -1425,22 +1460,64 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 Err(error) => format!("Technology graph error: {error}"),
             };
         }
-        if ui.button("Save validated catalog").clicked() {
-            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
-                Ok(path) => format!("Saved validated content catalog to {}", path.display()),
-                Err(error) => format!("Could not save content catalog: {error:#}"),
+        if ui.button("Save catalog + layout").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path).and_then(
+                |catalog_path| {
+                    save_technology_layout(
+                        &state.technology_layout,
+                        &state.catalog,
+                        &state.technology_layout_path,
+                    )
+                    .map(|layout_path| (catalog_path, layout_path))
+                },
+            ) {
+                Ok((catalog_path, layout_path)) => format!(
+                    "Saved validated catalog to {} and graph layout to {}",
+                    catalog_path.display(),
+                    layout_path.display()
+                ),
+                Err(error) => format!("Could not save technology authoring assets: {error:#}"),
             };
         }
+        if ui.button("Auto layout").clicked() {
+            let previous = authoring_snapshot(state);
+            state.technology_layout = TechnologyGraphLayout::automatic(&state.catalog.technology);
+            push_authoring_undo(state, previous);
+            state.technology_graph_view.request_fit();
+            "Applied deterministic graph layout; use Undo to restore authored positions"
+                .clone_into(&mut state.status);
+        }
+        if ui.button("Fit all").clicked() {
+            state.technology_graph_view.request_fit();
+        }
+        if ui
+            .add_enabled(
+                state.technology_draft.is_some(),
+                egui::Button::new("Focus selection"),
+            )
+            .clicked()
+            && let Some(id) = state
+                .technology_draft
+                .as_ref()
+                .map(|draft| draft.id.clone())
+        {
+            state.technology_graph_view.request_focus(id);
+        }
+        ui.checkbox(&mut state.technology_graph_view.show_minimap, "Minimap");
         ui.label("Search");
         ui.text_edit_singleline(&mut state.technology_search);
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Catalog path");
         ui.text_edit_singleline(&mut state.catalog_path);
-        if ui.button("Reload catalog").clicked() {
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Graph layout path");
+        ui.text_edit_singleline(&mut state.technology_layout_path);
+        if ui.button("Reload both").clicked() {
             state.status = match reload_content_catalog(state) {
-                Ok(()) => "Reloaded and validated content catalog".to_owned(),
-                Err(error) => format!("Could not reload content catalog: {error:#}"),
+                Ok(()) => "Reloaded and validated content catalog and graph layout".to_owned(),
+                Err(error) => format!("Could not reload technology authoring assets: {error:#}"),
             };
         }
     });
@@ -1493,32 +1570,47 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             };
         }
     });
-    technology_minimap(
+    let selected_node = state
+        .technology_draft
+        .as_ref()
+        .map(|draft| draft.id.clone());
+    let layout_before = state.technology_layout.clone();
+    let graph_output = show_technology_graph(
         ui,
         &state.catalog,
+        &mut state.technology_layout,
+        &mut state.technology_graph_view,
+        selected_node.as_ref(),
         state.selected_group.as_ref(),
-        state.technology_draft.as_ref().map(|draft| &draft.id),
+        &state.technology_search,
     );
+    if graph_output.layout_edit_started {
+        let previous = AuthoringSnapshot {
+            catalog: state.catalog.clone(),
+            technology_layout: layout_before,
+        };
+        push_authoring_undo(state, previous);
+    }
+    if let Some(group) = graph_output.selected_group {
+        state.selected_group = Some(group);
+    }
+    if let Some(node) = graph_output.selected_node {
+        state.technology_draft = technology_draft(&state.catalog, &node);
+    }
 
     let search = state.technology_search.to_ascii_lowercase();
     let node_choices: Vec<_> = state
-        .selected_group
-        .as_ref()
-        .and_then(|group| state.catalog.technology.groups.get(group))
-        .map(|group| {
-            group
-                .nodes
-                .iter()
-                .filter_map(|id| {
-                    let node = state.catalog.technology.nodes.get(id)?;
-                    let matches = search.is_empty()
-                        || node.display_name.to_ascii_lowercase().contains(&search)
-                        || id.as_str().contains(&search);
-                    matches.then(|| (id.clone(), node.display_name.clone()))
-                })
-                .collect()
+        .catalog
+        .technology
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| {
+            let matches = search.is_empty()
+                || node.display_name.to_ascii_lowercase().contains(&search)
+                || id.as_str().contains(&search);
+            matches.then(|| (id.clone(), node.display_name.clone()))
         })
-        .unwrap_or_default();
+        .collect();
     let mut selected = None;
     egui::ScrollArea::vertical()
         .max_height(170.0)
@@ -1538,6 +1630,13 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         });
     if let Some(selected) = selected {
         state.technology_draft = technology_draft(&state.catalog, &selected);
+        state.selected_group = state
+            .catalog
+            .technology
+            .nodes
+            .get(&selected)
+            .and_then(|node| node.group.clone());
+        state.technology_graph_view.request_focus(selected);
     }
 
     ui.horizontal_wrapped(|ui| {
@@ -1695,21 +1794,21 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         }
         if ui
             .add_enabled(
-                !state.undo_catalogs.is_empty(),
+                !state.undo_authoring.is_empty(),
                 egui::Button::new("Undo content edit"),
             )
             .clicked()
         {
-            undo_catalog_edit(state);
+            undo_authoring_edit(state);
         }
         if ui
             .add_enabled(
-                !state.redo_catalogs.is_empty(),
+                !state.redo_authoring.is_empty(),
                 egui::Button::new("Redo content edit"),
             )
             .clicked()
         {
-            redo_catalog_edit(state);
+            redo_authoring_edit(state);
         }
     });
 
@@ -3106,6 +3205,10 @@ fn default_catalog_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/catalog.ron")
 }
 
+fn default_technology_layout_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/technology_layout.ron")
+}
+
 fn default_config_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/game.ron")
 }
@@ -3113,15 +3216,20 @@ fn default_config_path() -> PathBuf {
 fn validate_authoring_assets() -> anyhow::Result<String> {
     let config = load_game_config(default_config_path().to_string_lossy().as_ref())?;
     let catalog = load_content_catalog(default_catalog_path().to_string_lossy().as_ref())?;
+    let technology_layout = load_technology_layout(
+        default_technology_layout_path().to_string_lossy().as_ref(),
+        &catalog,
+    )?;
     let presentation: PresentationCatalog =
         ron::from_str(include_str!("../../../assets/content/presentation.ron"))?;
     presentation.validate()?;
     Ok(format!(
-        "Authoring assets valid: schema {}, {} roles, {} foliage layers, {} technologies, {} presentation records",
+        "Authoring assets valid: schema {}, {} roles, {} foliage layers, {} technologies, {} graph positions, {} presentation records",
         config.schema_version,
         catalog.roles.len(),
         catalog.foliage.len(),
         catalog.technology.nodes.len(),
+        technology_layout.nodes.len(),
         presentation.textures.len()
             + presentation.materials.len()
             + presentation.clips.len()
@@ -3140,11 +3248,28 @@ fn load_content_catalog(path: &str) -> anyhow::Result<ContentCatalog> {
 }
 
 fn reload_content_catalog(state: &mut ToolState) -> anyhow::Result<()> {
-    state.catalog = load_content_catalog(&state.catalog_path)?;
-    state.undo_catalogs.clear();
-    state.redo_catalogs.clear();
+    let catalog = load_content_catalog(&state.catalog_path)?;
+    let technology_layout = load_technology_layout(&state.technology_layout_path, &catalog)?;
+    state.catalog = catalog;
+    state.technology_layout = technology_layout;
+    state.undo_authoring.clear();
+    state.redo_authoring.clear();
+    state.technology_graph_view.request_fit();
     refresh_catalog_drafts(state);
     Ok(())
+}
+
+fn load_technology_layout(
+    path: &str,
+    catalog: &ContentCatalog,
+) -> anyhow::Result<TechnologyGraphLayout> {
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("technology-layout path cannot be empty");
+    }
+    let layout: TechnologyGraphLayout = ron::from_str(&fs::read_to_string(&path)?)?;
+    layout.validate(&catalog.technology)?;
+    Ok(layout)
 }
 
 fn load_game_config(path: &str) -> anyhow::Result<GameConfig> {
@@ -3226,6 +3351,47 @@ fn save_content_catalog(catalog: &ContentCatalog, path: &str) -> anyhow::Result<
     reloaded.validate()?;
     if reloaded != *catalog {
         anyhow::bail!("reloaded catalog does not match the authored catalog");
+    }
+    Ok(path)
+}
+
+fn save_technology_layout(
+    layout: &TechnologyGraphLayout,
+    catalog: &ContentCatalog,
+    path: &str,
+) -> anyhow::Result<PathBuf> {
+    catalog.validate()?;
+    layout.validate(&catalog.technology)?;
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("technology-layout path cannot be empty");
+    }
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    fs::create_dir_all(parent)?;
+    let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+    let encoded = ron::ser::to_string_pretty(layout, ron::ser::PrettyConfig::default())?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(encoded.as_bytes())?;
+    file.sync_all()?;
+    if path.is_file() {
+        fs::copy(&path, &backup)?;
+        fs::remove_file(&path)?;
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        if backup.is_file() && !path.exists() {
+            let _ = fs::copy(&backup, &path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    let reloaded = load_technology_layout(path.to_string_lossy().as_ref(), catalog)?;
+    if reloaded != *layout {
+        anyhow::bail!("reloaded technology layout does not match the authored layout");
     }
     Ok(path)
 }
@@ -3396,21 +3562,37 @@ fn apply_foliage_draft(state: &mut ToolState) -> Result<(), String> {
     commit_catalog_candidate(state, candidate)
 }
 
-fn undo_catalog_edit(state: &mut ToolState) {
-    if let Some(previous) = state.undo_catalogs.pop() {
-        state.redo_catalogs.push(state.catalog.clone());
-        state.catalog = previous;
-        refresh_catalog_drafts(state);
-        "Content edit undone".clone_into(&mut state.status);
+fn authoring_snapshot(state: &ToolState) -> AuthoringSnapshot {
+    AuthoringSnapshot {
+        catalog: state.catalog.clone(),
+        technology_layout: state.technology_layout.clone(),
     }
 }
 
-fn redo_catalog_edit(state: &mut ToolState) {
-    if let Some(next) = state.redo_catalogs.pop() {
-        state.undo_catalogs.push(state.catalog.clone());
-        state.catalog = next;
+fn push_authoring_undo(state: &mut ToolState, previous: AuthoringSnapshot) {
+    state.undo_authoring.push(previous);
+    state.redo_authoring.clear();
+}
+
+fn undo_authoring_edit(state: &mut ToolState) {
+    if let Some(previous) = state.undo_authoring.pop() {
+        let current = authoring_snapshot(state);
+        state.redo_authoring.push(current);
+        state.catalog = previous.catalog;
+        state.technology_layout = previous.technology_layout;
         refresh_catalog_drafts(state);
-        "Content edit redone".clone_into(&mut state.status);
+        "Authoring edit undone".clone_into(&mut state.status);
+    }
+}
+
+fn redo_authoring_edit(state: &mut ToolState) {
+    if let Some(next) = state.redo_authoring.pop() {
+        let current = authoring_snapshot(state);
+        state.undo_authoring.push(current);
+        state.catalog = next.catalog;
+        state.technology_layout = next.technology_layout;
+        refresh_catalog_drafts(state);
+        "Authoring edit redone".clone_into(&mut state.status);
     }
 }
 
@@ -3419,9 +3601,15 @@ fn commit_catalog_candidate(
     candidate: ContentCatalog,
 ) -> Result<(), String> {
     candidate.validate().map_err(|error| error.to_string())?;
-    state.undo_catalogs.push(state.catalog.clone());
-    state.redo_catalogs.clear();
+    let previous = authoring_snapshot(state);
+    let mut technology_layout = state.technology_layout.clone();
+    technology_layout.reconcile(&candidate.technology);
+    technology_layout
+        .validate(&candidate.technology)
+        .map_err(|error| error.to_string())?;
+    push_authoring_undo(state, previous);
     state.catalog = candidate;
+    state.technology_layout = technology_layout;
     refresh_catalog_drafts(state);
     Ok(())
 }
@@ -3446,6 +3634,7 @@ fn create_technology_group(state: &mut ToolState) -> Result<(), String> {
     );
     commit_catalog_candidate(state, candidate)?;
     state.selected_group = Some(id);
+    state.technology_graph_view.request_fit();
     Ok(())
 }
 
@@ -3474,6 +3663,7 @@ fn delete_selected_technology_group(state: &mut ToolState) -> Result<(), String>
     candidate.technology.groups.remove(&id);
     commit_catalog_candidate(state, candidate)?;
     state.selected_group = state.catalog.technology.groups.keys().next().cloned();
+    state.technology_graph_view.request_fit();
     Ok(())
 }
 
@@ -3509,6 +3699,7 @@ fn create_technology_node(state: &mut ToolState) -> Result<(), String> {
         .push(id.clone());
     commit_catalog_candidate(state, candidate)?;
     state.technology_draft = technology_draft(&state.catalog, &id);
+    state.technology_graph_view.request_focus(id);
     Ok(())
 }
 
@@ -3671,68 +3862,6 @@ fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
             .push(draft.id.clone());
     }
     commit_catalog_candidate(state, candidate)
-}
-
-fn technology_minimap(
-    ui: &mut egui::Ui,
-    catalog: &ContentCatalog,
-    group_id: Option<&StableId>,
-    selected: Option<&StableId>,
-) {
-    let Some(group) = group_id.and_then(|id| catalog.technology.groups.get(id)) else {
-        return;
-    };
-    let desired = egui::vec2(ui.available_width(), 180.0);
-    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
-    ui.painter()
-        .rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 28, 34));
-    let mut tiers = BTreeMap::<i32, Vec<StableId>>::new();
-    for id in &group.nodes {
-        if let Some(node) = catalog.technology.nodes.get(id) {
-            tiers.entry(node.tier).or_default().push(id.clone());
-        }
-    }
-    let tier_count = bounded_ui_index(tiers.len().max(1));
-    let mut positions = BTreeMap::new();
-    for (tier_index, nodes) in tiers.values_mut().enumerate() {
-        nodes.sort();
-        let node_count = bounded_ui_index(nodes.len().max(1));
-        for (row, id) in nodes.iter().enumerate() {
-            let position = egui::pos2(
-                rect.left() + (bounded_ui_index(tier_index) + 0.5) * rect.width() / tier_count,
-                rect.top() + (bounded_ui_index(row) + 0.5) * rect.height() / node_count,
-            );
-            positions.insert(id.clone(), position);
-        }
-    }
-    for id in &group.nodes {
-        let Some(node) = catalog.technology.nodes.get(id) else {
-            continue;
-        };
-        let Some(target) = positions.get(id) else {
-            continue;
-        };
-        for prerequisite in &node.prerequisites {
-            if let Some(source) = positions.get(prerequisite) {
-                ui.painter().line_segment(
-                    [*source, *target],
-                    egui::Stroke::new(1.0, egui::Color32::DARK_GRAY),
-                );
-            }
-        }
-    }
-    for (id, position) in positions {
-        let color = if selected == Some(&id) {
-            egui::Color32::YELLOW
-        } else {
-            egui::Color32::from_rgb(92, 180, 130)
-        };
-        ui.painter().circle_filled(position, 3.5, color);
-    }
-}
-
-fn bounded_ui_index(value: usize) -> f32 {
-    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
 fn draw_world_preview(
@@ -3964,10 +4093,15 @@ mod tests {
         assert!(!state.catalog.technology.groups.contains_key(&group_id));
         state.catalog.validate().unwrap();
 
-        let previous = state.undo_catalogs.pop().unwrap();
-        state.catalog = previous;
+        let previous = state.undo_authoring.pop().unwrap();
+        state.catalog = previous.catalog;
+        state.technology_layout = previous.technology_layout;
         assert!(state.catalog.technology.groups.contains_key(&group_id));
         state.catalog.validate().unwrap();
+        state
+            .technology_layout
+            .validate(&state.catalog.technology)
+            .unwrap();
     }
 
     #[test]
@@ -3981,6 +4115,31 @@ mod tests {
 
         let reloaded: ContentCatalog = ron::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(reloaded, catalog);
+        assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
+        assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
+    }
+
+    #[test]
+    fn technology_layout_save_is_atomic_validated_and_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("technology_layout.ron");
+        let state = ToolState::default();
+
+        save_technology_layout(
+            &state.technology_layout,
+            &state.catalog,
+            path.to_str().unwrap(),
+        )
+        .unwrap();
+        save_technology_layout(
+            &state.technology_layout,
+            &state.catalog,
+            path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let reloaded = load_technology_layout(path.to_str().unwrap(), &state.catalog).unwrap();
+        assert_eq!(reloaded, state.technology_layout);
         assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
         assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
     }

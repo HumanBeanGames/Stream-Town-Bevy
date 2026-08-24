@@ -20,12 +20,14 @@ here.
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
 
-The Technology tab supports searchable group/node authoring rather than only
-inspection: create or delete groups and nodes, move nodes between groups, edit
-prerequisites, unlocks, objectives, icons, and metadata, validate cycles/dangling
-references, undo/redo, and save the complete content catalog atomically. Catalog
-saves preserve a `.bak` copy and are reloaded and revalidated before success is
-reported.
+The Technology tab is an interactive editor rather than only a record inspector.
+It renders all 363 nodes, 20 groups, and cross-group edges on a pannable/zoomable
+canvas; supports node and group dragging, group resizing, search highlighting and
+focus, fit-all, a clickable minimap, and deterministic auto-layout; and retains
+the existing node/group CRUD plus prerequisite, unlock, objective, icon, and
+metadata editing. Catalog and stable-ID layout edits share undo/redo. Both
+`catalog.ron` and `technology_layout.ron` are validated, backed up, atomically
+written, reloaded, and compared before success is reported.
 
 The Game Authority tab edits the source-controlled simulation configuration and
 can also write a machine-local runtime override. The Roles tab covers every
@@ -47,6 +49,7 @@ cargo run -p stream_town_tools -- --validate-authoring
 cargo run -p stream_town_migrate -- inventory .. --out generated/content-manifest.json
 cargo run -p stream_town_migrate -- validate-unity-export generated/unity-export.json
 cargo run -p stream_town_migrate -- convert-content generated/unity-export.json --unity-root .. --out-dir assets/content
+cargo run -p stream_town_migrate -- convert-technology-layout ../Assets/Scripts/TechTree/Editor/Graphs/TechTreeV2Graph.asset assets/content/catalog.ron --out assets/content/technology_layout.ron
 cargo run -p stream_town_migrate -- validate-models assets/migrated/models/model-conversion.json --repository-root .. --expected-count 253
 cargo run -p stream_town_migrate -- convert-main-menu-reference ../generated/main-menu-reference.json --out generated/main-menu-scene.ron
 cargo run -p stream_town_migrate -- bake-main-menu-scene generated/main-menu-scene.ron --config assets/config/game.ron --content assets/content/catalog.ron --out assets/content/main_menu_scene.ron

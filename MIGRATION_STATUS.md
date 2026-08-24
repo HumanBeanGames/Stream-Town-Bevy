@@ -730,12 +730,15 @@ mistaken for production-ready systems.
   identity, actor/building/resource counts, Twitch status, acknowledgements,
   and rolling average/p95 frame time. Atomic JSON requests/status never contain
   OAuth credentials or Bevy entity IDs.
-- The technology graph tool is now a persistent authoring workflow: validated
-  catalog writes use an atomic temporary file, preserve a backup, and reload the
-  result before reporting success. Node/group creation, node moves, reference-
-  cleaning node deletion, empty-group deletion, and metadata/prerequisite edits
-  all share cycle/dangling-reference validation plus undo/redo. The searchable
-  tier minimap remains live after each mutation.
+- The technology graph tool is now a complete persistent graph-authoring
+  workflow. The YAML fallback imports Unity's authored positions for all 363
+  nodes and 20 groups into a versioned stable-ID sidecar. The canvas renders
+  cross-group edges and supports pan/zoom, node and group dragging, group
+  resizing, search highlighting/focus, fit-all, deterministic auto-layout, and
+  a clickable minimap with a live viewport. Catalog and layout edits share one
+  undo/redo history. Both files use validated atomic writes, backups, reloads,
+  and round-trip comparison; cycle and dangling-reference checks still gate
+  every catalog mutation.
 - The external authoring suite now separates authoritative game configuration
   from per-player settings. It edits every shipping role stat/reference and
   equipment binding, all terrain scale/resource-density inputs, all converted
@@ -835,11 +838,6 @@ mistaken for production-ready systems.
 - Legacy target, active/unlocked pet, and customization data now map into native
   actor state and live presentation. Pet locomotion and per-model animation are
   live; remaining pet work is presentation polish rather than static follow.
-- Interactive technology graph layout. Persistent validated catalog writes,
-  node/group creation/deletion/moves, live runtime bridging, integrated frame
-  capture, stable command injection, and rolling profiling controls are
-  implemented; deeper ECS mutation remains intentionally outside the tool
-  protocol.
 - Curated screenshot baselines, signed/notarized distribution, and a hosted
   Windows release. The headless launch-through-credits acceptance suite,
   unsigned CI/local Windows archive, and measured reference-machine 60 FPS gate

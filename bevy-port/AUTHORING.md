@@ -33,7 +33,8 @@ cargo run -p stream_town_tools -- --validate-authoring
 | Workflow | Project data | Local/runtime data |
 |---|---|---|
 | Game Authority and World + Nav | `assets/config/game.ron` | `.stream-town/config.ron` |
-| Roles, foliage, and technology | `assets/content/catalog.ron` | None |
+| Roles and foliage | `assets/content/catalog.ron` | None |
+| Technology content and graph layout | `assets/content/catalog.ron`, `assets/content/technology_layout.ron` | None |
 | Player Settings | None | the platform player-settings path shown in the tool |
 | Twitch credentials | public connection fields only | OS credential vault |
 
@@ -51,8 +52,13 @@ tool never writes Twitch access or refresh tokens to RON.
   body nodes, hand items, helmets, and carry behavior. Roles can be duplicated;
   deletion is allowed only when the full catalog has no remaining reference.
 - Technology edits groups and nodes, descriptions, age/tier placement,
-  prerequisites, explicit unlocks, objectives, icons, and availability. The
-  minimap, search, cycle detection, and dangling-reference validation are live.
+  prerequisites, explicit unlocks, objectives, icons, and availability. Its
+  canvas shows the complete graph: use the wheel to zoom, middle-drag or
+  Space+primary-drag to pan, drag nodes or group headers to move them, and drag
+  a group's lower-right handle to resize it. Search highlights every matching
+  node and selecting a search result focuses it. Fit-all, deterministic
+  auto-layout, cycle/dangling-reference checks, and a clickable/drag-recentered
+  minimap are included.
 - World + Nav edits the terrain seed, dimensions, spatial scale, height/water
   levels and resource density plus every foliage layer's Unity-compatible noise,
   habitat, spacing, material, GLB variants, and base scales. Preview modes show
@@ -73,10 +79,12 @@ The account-bound Twitch setup sequence is documented in
 
 Role, foliage, and technology changes are drafts until `Apply validated ...` is
 pressed. Applying clones and validates the complete catalog before replacing the
-in-memory version. Undo/redo is shared across those tabs. Saving first validates,
-writes and synchronizes a `.tmp` file, preserves the previous file as `.bak`,
-moves the new file into place, reloads it, validates it again, and compares the
-round trip with the in-memory value. Game configuration uses the same sequence.
+in-memory version. Graph-layout moves validate against the same stable-ID
+catalog. Undo/redo is shared across the catalog and layout, so one operation
+restores both halves of authoring state. Saving first validates, writes and
+synchronizes a `.tmp` file, preserves the previous file as `.bak`, moves the new
+file into place, reloads it, validates it again, and compares the round trip with
+the in-memory value. Game configuration uses the same sequence.
 
 After saving project data, run the Validation tab or:
 
