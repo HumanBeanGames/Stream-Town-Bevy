@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -25,7 +25,7 @@ use bevy::{
     },
     anti_alias::{fxaa::Fxaa, smaa::Smaa},
     app::AnimationSystems,
-    asset::{AssetPlugin, LoadState, RenderAssetUsages, UntypedHandle},
+    asset::{AssetId, AssetPlugin, LoadState, RenderAssetUsages, UntypedAssetId, UntypedHandle},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
     camera::primitives::Aabb,
     camera::{Hdr, ScalingMode},
@@ -40,14 +40,21 @@ use bevy::{
     mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
     mesh::{Indices, VertexAttributeValues},
     pbr::ScreenSpaceAmbientOcclusion,
-    pbr::{ExtendedMaterial, MaterialExtension},
+    pbr::{ExtendedMaterial, MaterialExtension, PreparedMaterial, RenderMeshInstances},
     post_process::{
         bloom::{Bloom, BloomCompositeMode, BloomPrefilter},
         effect_stack::Vignette,
         motion_blur::MotionBlur,
     },
     prelude::*,
-    render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
+    render::erased_render_asset::ErasedRenderAssets,
+    render::mesh::RenderMesh,
+    render::render_asset::RenderAssets as GpuRenderAssets,
+    render::render_resource::{
+        AsBindGroup, CachedPipelineState, PipelineCache, PrimitiveTopology, ShaderType,
+    },
+    render::sync_world::MainEntity,
+    render::texture::GpuImage,
     render::view::screenshot::{Screenshot, save_to_disk},
     render::view::{ColorGrading, Msaa},
     render::{Render, RenderApp, RenderPlugin, RenderSystems, settings::WgpuSettings},
@@ -130,6 +137,11 @@ const SELECTION_MASK_MATERIAL_ID: &str = "material:631afbf4de8b7ad4eabc5e30e0b2c
 const SELECTION_MASK_TEXTURE_PATH: &str = "Assets/Textures/SelectionMask.png";
 const PLAYER_SELECTION_OUTLINE_SCALE_CELLS: f32 = 1.5 * 1.25 / 2.0;
 const SELECTION_OUTLINE_SURFACE_OFFSET: f32 = 0.15;
+// Positive Bevy depth bias moves the outline toward the camera. The value is
+// deliberately small in world units: it wins against the terrain depth at a
+// cell surface while ordinary geometry still occludes it.
+const SELECTION_OUTLINE_DEPTH_BIAS: f32 = 8.0;
+const WORLD_REVEAL_GPU_STABLE_FRAMES: u64 = 6;
 // Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
 // building models are authored at Unity scale and then scaled by cell_size / 2.
 const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
@@ -1072,6 +1084,24 @@ enum ResolvedMaterialHandle {
     Character(Handle<CharacterMaterial>),
 }
 
+impl ResolvedMaterialHandle {
+    fn untyped_id(&self) -> UntypedAssetId {
+        match self {
+            Self::Standard(handle) => handle.id().untyped(),
+            Self::Building(handle) => handle.id().untyped(),
+            Self::Cloud(handle) => handle.id().untyped(),
+            Self::Godray(handle) => handle.id().untyped(),
+            Self::Giraffe(handle) => handle.id().untyped(),
+            Self::Bounds(handle) => handle.id().untyped(),
+            Self::Tree(handle) => handle.id().untyped(),
+            Self::Grass(handle) => handle.id().untyped(),
+            Self::Critter(handle) => handle.id().untyped(),
+            Self::Flag(handle) => handle.id().untyped(),
+            Self::Character(handle) => handle.id().untyped(),
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 struct RenderAssets {
     cube: Handle<Mesh>,
@@ -1139,6 +1169,102 @@ struct RenderAssets {
     main_ui_scale: f32,
     settings_ui_scale: f32,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
+}
+
+impl RenderAssets {
+    fn world_gpu_mesh_ids(&self) -> BTreeSet<AssetId<Mesh>> {
+        [self.cube.id(), self.actor_lod.id(), self.cloud_plane.id()]
+            .into_iter()
+            .collect()
+    }
+
+    fn world_gpu_material_ids(&self) -> BTreeSet<UntypedAssetId> {
+        let mut ids = self
+            .presentation_materials
+            .values()
+            .map(ResolvedMaterialHandle::untyped_id)
+            .collect::<BTreeSet<_>>();
+        ids.extend([
+            self.ground.id().untyped(),
+            self.water.id().untyped(),
+            self.wood.id().untyped(),
+            self.ore.id().untyped(),
+            self.food.id().untyped(),
+            self.building.id().untyped(),
+            self.construction.id().untyped(),
+            self.enemy_idle.id().untyped(),
+            self.enemy_moving.id().untyped(),
+            self.player_idle.id().untyped(),
+            self.player_moving.id().untyped(),
+            self.selection.id().untyped(),
+            self.authored_building.id().untyped(),
+            self.tree.id().untyped(),
+            self.grass.id().untyped(),
+            self.fish_school_material.id().untyped(),
+        ]);
+        ids
+    }
+}
+
+#[derive(SystemParam)]
+struct ActiveMaterialHandles<'w, 's> {
+    standard: Query<'w, 's, &'static MeshMaterial3d<StandardMaterial>>,
+    terrain: Query<'w, 's, &'static MeshMaterial3d<TerrainMaterial>>,
+    water: Query<'w, 's, &'static MeshMaterial3d<WaterMaterial>>,
+    building: Query<'w, 's, &'static MeshMaterial3d<BuildingMaterial>>,
+    cloud: Query<'w, 's, &'static MeshMaterial3d<CloudMaterial>>,
+    godray: Query<'w, 's, &'static MeshMaterial3d<GodrayMaterial>>,
+    giraffe: Query<'w, 's, &'static MeshMaterial3d<GiraffeMaterial>>,
+    bounds: Query<'w, 's, &'static MeshMaterial3d<BoundsMaterial>>,
+    tree: Query<'w, 's, &'static MeshMaterial3d<TreeMaterial>>,
+    grass: Query<'w, 's, &'static MeshMaterial3d<GrassMaterial>>,
+    critter: Query<'w, 's, &'static MeshMaterial3d<CritterMaterial>>,
+    flag: Query<'w, 's, &'static MeshMaterial3d<FlagMaterial>>,
+    character: Query<'w, 's, &'static MeshMaterial3d<CharacterMaterial>>,
+}
+
+impl ActiveMaterialHandles<'_, '_> {
+    fn ids(&self) -> BTreeSet<UntypedAssetId> {
+        let mut ids = BTreeSet::new();
+        ids.extend(
+            self.standard
+                .iter()
+                .map(|material| material.0.id().untyped()),
+        );
+        ids.extend(
+            self.terrain
+                .iter()
+                .map(|material| material.0.id().untyped()),
+        );
+        ids.extend(self.water.iter().map(|material| material.0.id().untyped()));
+        ids.extend(
+            self.building
+                .iter()
+                .map(|material| material.0.id().untyped()),
+        );
+        ids.extend(self.cloud.iter().map(|material| material.0.id().untyped()));
+        ids.extend(self.godray.iter().map(|material| material.0.id().untyped()));
+        ids.extend(
+            self.giraffe
+                .iter()
+                .map(|material| material.0.id().untyped()),
+        );
+        ids.extend(self.bounds.iter().map(|material| material.0.id().untyped()));
+        ids.extend(self.tree.iter().map(|material| material.0.id().untyped()));
+        ids.extend(self.grass.iter().map(|material| material.0.id().untyped()));
+        ids.extend(
+            self.critter
+                .iter()
+                .map(|material| material.0.id().untyped()),
+        );
+        ids.extend(self.flag.iter().map(|material| material.0.id().untyped()));
+        ids.extend(
+            self.character
+                .iter()
+                .map(|material| material.0.id().untyped()),
+        );
+        ids
+    }
 }
 
 #[derive(Component)]
@@ -1333,6 +1459,179 @@ impl PresentedRenderFrames {
 
 fn record_presented_render_frame(frames: Res<PresentedRenderFrames>) {
     frames.count.fetch_add(1, AtomicOrdering::Release);
+}
+
+#[derive(Clone, Default)]
+struct GpuReadinessExpected {
+    active: bool,
+    epoch: u64,
+    images: BTreeSet<AssetId<Image>>,
+    meshes: BTreeSet<AssetId<Mesh>>,
+    materials: BTreeSet<UntypedAssetId>,
+    selection_entity: Option<Entity>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct GpuReadinessSnapshot {
+    epoch: u64,
+    expected_images: usize,
+    ready_images: usize,
+    expected_meshes: usize,
+    ready_meshes: usize,
+    expected_materials: usize,
+    ready_materials: usize,
+    pending_pipelines: usize,
+    failed_pipelines: usize,
+    selection_expected: bool,
+    selection_draw_ready: bool,
+}
+
+impl GpuReadinessSnapshot {
+    fn is_ready(self) -> bool {
+        self.epoch != 0
+            && self.ready_images == self.expected_images
+            && self.ready_meshes == self.expected_meshes
+            && self.ready_materials == self.expected_materials
+            && self.pending_pipelines == 0
+            && self.failed_pipelines == 0
+            && (!self.selection_expected || self.selection_draw_ready)
+    }
+}
+
+#[derive(Default)]
+struct GpuReadinessShared {
+    expected: GpuReadinessExpected,
+    snapshot: GpuReadinessSnapshot,
+}
+
+#[derive(Clone, Resource, Default)]
+struct GpuReadinessProbe(Arc<Mutex<GpuReadinessShared>>);
+
+impl GpuReadinessProbe {
+    fn begin_world(
+        &self,
+        images: BTreeSet<AssetId<Image>>,
+        meshes: BTreeSet<AssetId<Mesh>>,
+        materials: BTreeSet<UntypedAssetId>,
+    ) {
+        let mut shared = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let epoch = shared.expected.epoch.wrapping_add(1).max(1);
+        shared.expected = GpuReadinessExpected {
+            active: true,
+            epoch,
+            images,
+            meshes,
+            materials,
+            selection_entity: None,
+        };
+        shared.snapshot = GpuReadinessSnapshot::default();
+    }
+
+    fn merge_world_content(
+        &self,
+        meshes: impl IntoIterator<Item = AssetId<Mesh>>,
+        materials: impl IntoIterator<Item = UntypedAssetId>,
+        selection_entity: Option<Entity>,
+    ) {
+        let mut shared = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if !shared.expected.active {
+            return;
+        }
+        let mut changed = false;
+        for mesh in meshes {
+            changed |= shared.expected.meshes.insert(mesh);
+        }
+        for material in materials {
+            changed |= shared.expected.materials.insert(material);
+        }
+        if selection_entity.is_some() && shared.expected.selection_entity != selection_entity {
+            shared.expected.selection_entity = selection_entity;
+            changed = true;
+        }
+        if changed {
+            shared.expected.epoch = shared.expected.epoch.wrapping_add(1).max(1);
+            shared.snapshot = GpuReadinessSnapshot::default();
+        }
+    }
+
+    fn snapshot(&self) -> GpuReadinessSnapshot {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .snapshot
+    }
+
+    fn clear(&self) {
+        let mut shared = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        shared.expected.active = false;
+    }
+}
+
+fn record_gpu_readiness(
+    probe: Res<GpuReadinessProbe>,
+    gpu_images: Res<GpuRenderAssets<GpuImage>>,
+    gpu_meshes: Res<GpuRenderAssets<RenderMesh>>,
+    gpu_materials: Res<ErasedRenderAssets<PreparedMaterial>>,
+    pipeline_cache: Res<PipelineCache>,
+    render_mesh_instances: Res<RenderMeshInstances>,
+) {
+    let (expected, selection_previously_ready) = {
+        let shared = probe.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if !shared.expected.active {
+            return;
+        }
+        (
+            shared.expected.clone(),
+            shared.snapshot.epoch == shared.expected.epoch && shared.snapshot.selection_draw_ready,
+        )
+    };
+    let waiting_pipelines = pipeline_cache.waiting_pipelines().count();
+    let queued_or_creating = pipeline_cache
+        .pipelines()
+        .filter(|pipeline| {
+            matches!(
+                pipeline.state,
+                CachedPipelineState::Queued | CachedPipelineState::Creating(_)
+            )
+        })
+        .count();
+    let snapshot = GpuReadinessSnapshot {
+        epoch: expected.epoch,
+        expected_images: expected.images.len(),
+        ready_images: expected
+            .images
+            .iter()
+            .filter(|id| gpu_images.get(**id).is_some())
+            .count(),
+        expected_meshes: expected.meshes.len(),
+        ready_meshes: expected
+            .meshes
+            .iter()
+            .filter(|id| gpu_meshes.get(**id).is_some())
+            .count(),
+        expected_materials: expected.materials.len(),
+        ready_materials: expected
+            .materials
+            .iter()
+            .filter(|id| gpu_materials.get(**id).is_some())
+            .count(),
+        pending_pipelines: waiting_pipelines.max(queued_or_creating),
+        failed_pipelines: pipeline_cache
+            .pipelines()
+            .filter(|pipeline| matches!(pipeline.state, CachedPipelineState::Err(_)))
+            .count(),
+        selection_expected: expected.selection_entity.is_some(),
+        selection_draw_ready: selection_previously_ready
+            || expected.selection_entity.is_none_or(|entity| {
+                render_mesh_instances
+                    .render_mesh_queue_data(MainEntity::from(entity))
+                    .is_some()
+            }),
+    };
+    let mut shared = probe.0.lock().unwrap_or_else(PoisonError::into_inner);
+    if shared.expected.active && shared.expected.epoch == snapshot.epoch {
+        shared.snapshot = snapshot;
+    }
 }
 
 #[derive(Component)]
@@ -2412,12 +2711,19 @@ impl Plugin for StreamTownGamePlugin {
         app.add_plugins(UnityColorFilterPlugin);
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
         let presented_frames = PresentedRenderFrames::new(render_schedule_available);
+        let gpu_readiness = GpuReadinessProbe::default();
         app.insert_resource(presented_frames.clone());
+        app.insert_resource(gpu_readiness.clone());
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.insert_resource(presented_frames).add_systems(
-                Render,
-                record_presented_render_frame.in_set(RenderSystems::Cleanup),
-            );
+            render_app
+                .insert_resource(presented_frames)
+                .insert_resource(gpu_readiness)
+                .add_systems(
+                    Render,
+                    (record_gpu_readiness, record_presented_render_frame)
+                        .chain()
+                        .in_set(RenderSystems::Cleanup),
+                );
         }
         if !app.world().contains_resource::<RuntimeConfig>() {
             app.insert_resource(RuntimeConfig(GameConfig::default()));
@@ -2507,7 +2813,11 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                upgrade_actor_placeholders.run_if(in_state(GameState::InGame)),
+                upgrade_actor_placeholders
+                    .after(generate_and_spawn_world)
+                    .before(sync_gpu_world_expectations)
+                    .run_if(in_state(GameState::WorldLoading).or_else(in_state(GameState::InGame)))
+                    .run_if(resource_exists::<WorldRuntime>),
             )
             .add_systems(
                 Update,
@@ -2573,6 +2883,7 @@ impl Plugin for StreamTownGamePlugin {
                     animate_loading_icon,
                     poll_world_loading,
                     generate_and_spawn_world.after(poll_world_loading),
+                    sync_gpu_world_expectations.after(apply_material_overrides),
                     advance_loading_phase,
                     sync_loading_screen_status,
                 )
@@ -2588,6 +2899,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     animate_loading_icon,
                     finish_world_reveal.after(apply_material_overrides),
+                    enforce_loading_overlay_retired.after(finish_world_reveal),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3229,6 +3541,7 @@ fn setup_rendering(
         TownCamera,
         TownCameraControllerRuntime::new(initial_camera_transform),
         Camera3d::default(),
+        IsDefaultUiCamera,
         SpatialListener::new(0.2),
         initial_projection,
         AmbientLight {
@@ -3422,11 +3735,14 @@ fn setup_rendering(
                     asset_server.as_deref(),
                 )))
             } else {
-                ResolvedMaterialHandle::Standard(materials.add(standard_material(
-                    material,
-                    &presentation.0,
-                    asset_server.as_deref(),
-                )))
+                let standard =
+                    standard_material(material, &presentation.0, asset_server.as_deref());
+                let standard = if id.as_str() == SELECTION_MASK_MATERIAL_ID {
+                    selection_outline_material(standard)
+                } else {
+                    standard
+                };
+                ResolvedMaterialHandle::Standard(materials.add(standard))
             };
             (id.clone(), resolved)
         })
@@ -3443,6 +3759,7 @@ fn setup_rendering(
                 base_color: Color::srgb(1.0, 0.983_102, 0.0),
                 emissive: LinearRgba::new(0.877_358_5, 0.836_833_4, 0.0, 1.0),
                 alpha_mode: AlphaMode::Mask(0.5),
+                depth_bias: SELECTION_OUTLINE_DEPTH_BIAS,
                 ..default()
             })
         });
@@ -4522,6 +4839,11 @@ fn standard_material(
     }
 }
 
+fn selection_outline_material(mut material: StandardMaterial) -> StandardMaterial {
+    material.depth_bias = SELECTION_OUTLINE_DEPTH_BIAS;
+    material
+}
+
 fn unity_shader_color(value: [f32; 4]) -> Vec4 {
     Color::srgba(value[0], value[1], value[2], value[3])
         .to_linear()
@@ -5531,12 +5853,17 @@ fn poll_menu_loading(
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &loading.asset_handles);
+    if failed > loading.failed_assets {
+        error!(
+            failed_assets = failed,
+            "Boot preload contains failed assets"
+        );
+    }
     loading.loaded_assets = loaded;
     loading.failed_assets = failed;
-    let completed = loaded + failed;
     let total = loading.asset_handles.len();
-    loading.progress = loading_fraction(completed, total);
-    let ready = loading.progress >= 1.0;
+    loading.progress = loading_fraction(loaded, total);
+    let ready = loaded == total && failed == 0;
     match (loading.destination, ready) {
         (BootDestination::MainMenu, false) => "Loading main menu",
         (BootDestination::MainMenu, true) => "Main menu ready",
@@ -5557,13 +5884,13 @@ fn poll_menu_loading(
     } else {
         format!("{loaded} loaded, {failed} unavailable, {total} total")
     };
-    if loading.progress >= 1.0 {
+    if ready {
         loading.ready_presented_frames = loading.ready_presented_frames.saturating_add(1);
     } else {
         loading.ready_presented_frames = 0;
     }
     let required_presented_frames = if asset_server.is_some() { 3 } else { 1 };
-    if loading.progress >= 1.0 && loading.ready_presented_frames >= required_presented_frames {
+    if ready && loading.ready_presented_frames >= required_presented_frames {
         info!(
             loaded_assets = loaded,
             failed_assets = failed,
@@ -6348,6 +6675,7 @@ fn spawn_loading_screen(
         ))
         .with_children(|parent| {
             parent.spawn((
+                LoadingScreenEntity,
                 LoadingProgressFill,
                 Node {
                     width: percent(0.0),
@@ -6495,6 +6823,7 @@ fn begin_world_loading(
     render: Res<RenderAssets>,
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
+    gpu_readiness: Res<GpuReadinessProbe>,
 ) {
     let asset_handles = asset_server.as_deref().map_or_else(Vec::new, |server| {
         let mut handles = world_preload_paths(&content.0, &asset_root.0)
@@ -6515,6 +6844,15 @@ fn begin_world_loading(
         ));
         handles
     });
+    let expected_images = asset_handles
+        .iter()
+        .filter_map(|handle| handle.id().try_typed::<Image>().ok())
+        .collect();
+    gpu_readiness.begin_world(
+        expected_images,
+        render.world_gpu_mesh_ids(),
+        render.world_gpu_material_ids(),
+    );
     let asset_count = asset_handles.len();
     let world_config = config.0.world.clone();
     let content = content.0.clone();
@@ -6572,11 +6910,16 @@ fn poll_world_loading(
     }
 
     let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &loading.asset_handles);
+    if failed > loading.failed_assets {
+        error!(
+            failed_assets = failed,
+            "World preload contains failed assets"
+        );
+    }
     loading.loaded_assets = loaded;
     loading.failed_assets = failed;
-    let completed_assets = loaded + failed;
     let total_assets = loading.asset_handles.len();
-    let asset_progress = loading_fraction(completed_assets, total_assets);
+    let asset_progress = loading_fraction(loaded, total_assets);
     let terrain_ready = loading.prepared_world.is_some();
     loading.progress = 0.05 + asset_progress * 0.55 + if terrain_ready { 0.30 } else { 0.0 };
     loading.status = if terrain_ready {
@@ -6595,12 +6938,25 @@ fn poll_world_loading(
             if terrain_ready { "ready" } else { "generating" }
         )
     };
-    if completed_assets == total_assets && terrain_ready {
+    if loaded == total_assets && failed == 0 && terrain_ready {
         loading.phase = WorldLoadingPhase::Spawning;
         loading.progress = 0.92;
         "Building the town scene".clone_into(&mut loading.status);
         "Terrain and presentation assets are ready".clone_into(&mut loading.substatus);
     }
+}
+
+fn sync_gpu_world_expectations(
+    gpu_readiness: Res<GpuReadinessProbe>,
+    active_meshes: Query<&Mesh3d>,
+    active_materials: ActiveMaterialHandles,
+    selection: Query<Entity, With<SelectionMarker>>,
+) {
+    gpu_readiness.merge_world_content(
+        active_meshes.iter().map(|mesh| mesh.0.id()),
+        active_materials.ids(),
+        selection.iter().next(),
+    );
 }
 
 fn advance_loading_phase(
@@ -6753,7 +7109,7 @@ fn finish_menu_reveal(
     world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
     mut reveal: Option<ResMut<MenuRevealRuntime>>,
     mut loading: Option<ResMut<MenuLoadingRuntime>>,
-    loading_entities: Query<Entity, With<LoadingScreenEntity>>,
+    mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
     scene_roots: MenuWorldAssetRootQuery,
 ) {
     let Some(reveal) = reveal.as_deref_mut() else {
@@ -6794,8 +7150,9 @@ fn finish_menu_reveal(
     if ready_rendered_frames < 12 || reveal.scene_ready_frames < 8 {
         return;
     }
-    for entity in &loading_entities {
-        commands.entity(entity).despawn();
+    for (entity, mut visibility) in &mut loading_entities {
+        *visibility = Visibility::Hidden;
+        commands.entity(entity).try_despawn();
     }
     info!(
         scene_roots = root_count,
@@ -6822,13 +7179,16 @@ fn begin_world_reveal(mut commands: Commands, presented_frames: Res<PresentedRen
 fn finish_world_reveal(
     mut commands: Commands,
     presented_frames: Res<PresentedRenderFrames>,
+    gpu_readiness: Res<GpuReadinessProbe>,
     world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
     mut reveal: Option<ResMut<WorldRevealRuntime>>,
     mut loading: Option<ResMut<WorldLoadingRuntime>>,
-    loading_entities: Query<Entity, With<LoadingScreenEntity>>,
+    mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
     scene_roots: WorldAssetRootQuery,
     material_specs: Query<(), With<MaterialOverrideSpec>>,
     mesh_overrides: Query<(Entity, Option<&MaterialOverrideApplied>), With<Mesh3d>>,
+    active_meshes: Query<&Mesh3d>,
+    active_materials: ActiveMaterialHandles,
     parents: Query<&ChildOf>,
 ) {
     let Some(reveal) = reveal.as_deref_mut() else {
@@ -6874,10 +7234,17 @@ fn finish_world_reveal(
         }
     }
 
+    gpu_readiness.merge_world_content(
+        active_meshes.iter().map(|mesh| mesh.0.id()),
+        active_materials.ids(),
+        None,
+    );
+    let gpu = gpu_readiness.snapshot();
+    let gpu_ready = !presented_frames.render_schedule_available || gpu.is_ready();
     let roots_ready =
         asset_root_collection_ready(root_count, ready_roots, world_instance_spawner.is_some());
     let materials_ready = authored_meshes == applied_meshes;
-    let world_ready = roots_ready && materials_ready;
+    let world_ready = roots_ready && materials_ready && gpu_ready;
     if world_ready {
         reveal.ready_frames = reveal.ready_frames.saturating_add(1);
     } else {
@@ -6892,29 +7259,78 @@ fn finish_world_reveal(
         loading.progress = 1.0;
         "Preparing first rendered frame".clone_into(&mut loading.status);
         loading.substatus = format!(
-            "{ready_roots} / {root_count} scenes; {applied_meshes} / {authored_meshes} authored meshes"
+            "{ready_roots}/{root_count} scenes; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines; selection {}",
+            gpu.ready_images,
+            gpu.expected_images,
+            gpu.ready_meshes,
+            gpu.expected_meshes,
+            gpu.ready_materials,
+            gpu.expected_materials,
+            gpu.pending_pipelines,
+            if gpu.selection_draw_ready {
+                "ready"
+            } else {
+                "warming"
+            },
         );
     }
 
-    // A few fully-ready rendered frames deliberately remain covered. This is
-    // where wgpu compiles the world/selection pipelines and uploads textures;
-    // revealing earlier is what exposed black and fallback-blue frames.
-    if ready_rendered_frames < 16 || reveal.ready_frames < 10 {
+    // Require several frames after the render world has explicitly confirmed
+    // every active mesh/material, all preloaded images, an idle pipeline cache,
+    // and the selection marker's draw instance. This is a readiness proof, not
+    // a blind delay.
+    if ready_rendered_frames < WORLD_REVEAL_GPU_STABLE_FRAMES
+        || u64::from(reveal.ready_frames) < WORLD_REVEAL_GPU_STABLE_FRAMES
+    {
         return;
     }
-    for entity in &loading_entities {
-        commands.entity(entity).despawn();
+    for (entity, mut visibility) in &mut loading_entities {
+        *visibility = Visibility::Hidden;
+        commands.entity(entity).try_despawn();
     }
     info!(
         scene_roots = root_count,
         authored_meshes,
+        gpu_images = gpu.ready_images,
+        gpu_meshes = gpu.ready_meshes,
+        gpu_materials = gpu.ready_materials,
+        pending_pipelines = gpu.pending_pipelines,
+        failed_pipelines = gpu.failed_pipelines,
+        selection_draw_ready = gpu.selection_draw_ready,
         rendered_frames,
         ready_rendered_frames,
         elapsed_seconds = reveal.started_at.elapsed().as_secs_f64(),
         "Stream Town world reveal complete"
     );
+    gpu_readiness.clear();
     commands.remove_resource::<WorldLoadingRuntime>();
     commands.remove_resource::<WorldRevealRuntime>();
+}
+
+fn enforce_loading_overlay_retired(
+    mut commands: Commands,
+    reveal: Option<Res<WorldRevealRuntime>>,
+    mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
+    mut retirement_verified: Local<bool>,
+) {
+    if reveal.is_some() {
+        return;
+    }
+    let mut survivors = 0;
+    for (entity, mut visibility) in &mut loading_entities {
+        survivors += 1;
+        *visibility = Visibility::Hidden;
+        commands.entity(entity).try_despawn();
+    }
+    if survivors > 0 {
+        error!(
+            survivors,
+            "Loading overlay survived its reveal frame; forcing retirement"
+        );
+    } else if !*retirement_verified {
+        *retirement_verified = true;
+        info!("Stream Town loading overlay retirement verified");
+    }
 }
 
 fn animate_loading_icon(
@@ -22630,21 +23046,20 @@ fn sync_selection_outline(
     config: Res<RuntimeConfig>,
     world: Res<WorldRuntime>,
     simulation: Res<SimulationRuntime>,
+    reveal: Option<Res<WorldRevealRuntime>>,
     agents: Query<(&Agent, &GlobalTransform)>,
     mut markers: Query<(&mut Transform, &mut Visibility), With<SelectionMarker>>,
 ) {
-    if !selected.is_changed()
-        && !selected_actor.is_changed()
-        && !simulation.is_changed()
-        && !world.is_changed()
-    {
-        return;
-    }
     let Ok((mut transform, mut visibility)) = markers.single_mut() else {
         return;
     };
     let Some(cell) = selected.0 else {
-        *visibility = Visibility::Hidden;
+        // Keep the marker visible behind the loading overlay until the render
+        // world has acknowledged its draw instance and pipeline. Once the
+        // reveal resource is removed, this same system hides it immediately.
+        if reveal.is_none() {
+            *visibility = Visibility::Hidden;
+        }
         return;
     };
     if let Some(actor_id) = selected_actor.0.as_ref()
@@ -34037,6 +34452,39 @@ mod tests {
             0
         );
         assert_eq!(starting_frame, Some(130));
+    }
+
+    #[test]
+    fn gpu_reveal_requires_every_asset_pipeline_and_selection_draw() {
+        let mut snapshot = GpuReadinessSnapshot {
+            epoch: 4,
+            expected_images: 12,
+            ready_images: 12,
+            expected_meshes: 7,
+            ready_meshes: 7,
+            expected_materials: 9,
+            ready_materials: 9,
+            selection_expected: true,
+            ..default()
+        };
+        assert!(!snapshot.is_ready());
+        snapshot.selection_draw_ready = true;
+        assert!(snapshot.is_ready());
+        snapshot.pending_pipelines = 1;
+        assert!(!snapshot.is_ready());
+        snapshot.pending_pipelines = 0;
+        snapshot.failed_pipelines = 1;
+        assert!(!snapshot.is_ready());
+        snapshot.failed_pipelines = 0;
+        snapshot.ready_images -= 1;
+        assert!(!snapshot.is_ready());
+    }
+
+    #[test]
+    fn selection_outline_uses_positive_terrain_depth_bias() {
+        let material = selection_outline_material(StandardMaterial::default());
+        assert!((material.depth_bias - SELECTION_OUTLINE_DEPTH_BIAS).abs() < f32::EPSILON);
+        assert!(material.depth_bias > 0.0);
     }
 
     #[test]
