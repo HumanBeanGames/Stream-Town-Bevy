@@ -12,11 +12,13 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use accesskit::{Action as AccessAction, Live, Node as AccessibleNode, Role, Toggled};
 use anyhow::{Context, Result as AnyResult};
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody, SpatialQuery, SpatialQueryFilter};
 #[cfg(target_os = "windows")]
 use bevy::render::settings::Backends;
 use bevy::{
+    a11y::{AccessibilityNode, ActionRequest as AccessibilityActionRequest},
     animation::{
         AnimatedBy, AnimationClip, AnimationTargetId, RepeatAnimation, animated_field,
         graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex, AnimationNodeType},
@@ -32,9 +34,10 @@ use bevy::{
     color::LinearRgba,
     core_pipeline::tonemapping::Tonemapping,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    ecs::system::SystemParam,
+    ecs::{query::QueryData, system::SystemParam},
     gltf::{GltfMaterialName, GltfMeshName},
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    input_focus::{FocusCause, InputFocus, InputFocusVisible},
     light::DirectionalLightShadowMap,
     math::Affine2,
     mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
@@ -276,7 +279,10 @@ const FIREBALL_TRAIL_SIZE: f32 = 0.3;
 const BUILDING_HIT_SECONDS: f32 = 0.5;
 const BUILDING_HIT_SMOKE_SPEED: f32 = 3.0;
 const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
-const SETTINGS_MENU_ITEM_COUNT: usize = 29;
+const SETTINGS_APPLY_INDEX: usize = 29;
+const SETTINGS_DEFAULTS_INDEX: usize = 30;
+const SETTINGS_BACK_INDEX: usize = 31;
+const SETTINGS_MENU_ITEM_COUNT: usize = 32;
 const AMBIENCE_GAIN: f32 = 0.16;
 const SEAGULL_GAIN: f32 = 0.28;
 const SEAGULL_FLIGHT_SECONDS: f32 = 32.0;
@@ -492,6 +498,7 @@ enum SettingsTab {
     Video,
     Audio,
     Gameplay,
+    Accessibility,
     Connection,
 }
 
@@ -524,6 +531,38 @@ impl Default for MenuRuntime {
 struct SettingsUiCache {
     signature: String,
 }
+
+#[derive(Resource, Default)]
+struct AccessibilityRuntime {
+    synthetic_pressed: Option<Entity>,
+    last_announcement: String,
+}
+
+#[derive(Component)]
+struct AccessibilityAnnouncement;
+
+#[derive(Component)]
+struct AccessibilityHighContrastText;
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum AccessibleButtonScope {
+    MainMenu,
+    GameMenu,
+    Settings,
+    SettingsConfirm,
+    InGame,
+    Credits,
+}
+
+#[derive(Resource, Clone, Copy)]
+struct AccessibilityMotionDefaults {
+    tree: Vec4,
+    grass: Vec4,
+    water: Vec4,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, SystemSet)]
+struct AccessibilityActionDispatch;
 
 #[derive(Resource, Default)]
 struct MenuIoRequest {
@@ -2764,6 +2803,7 @@ impl Plugin for StreamTownGamePlugin {
         if !app.world().contains_resource::<RuntimePlayerSettings>() {
             app.insert_resource(RuntimePlayerSettings(PlayerSettings::default()));
         }
+        app.add_message::<AccessibilityActionRequest>();
         app.init_state::<GameState>()
             .init_resource::<SessionStats>()
             .init_resource::<WorldRenderStats>()
@@ -2772,6 +2812,9 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
             .init_resource::<SettingsUiCache>()
+            .init_resource::<AccessibilityRuntime>()
+            .init_resource::<InputFocus>()
+            .init_resource::<InputFocusVisible>()
             .init_resource::<MenuIoRequest>()
             .init_resource::<CameraIdleMode>()
             .init_resource::<BottomBarRuntime>()
@@ -2812,6 +2855,7 @@ impl Plugin for StreamTownGamePlugin {
                 Startup,
                 (
                     setup_rendering,
+                    setup_accessibility,
                     (spawn_loading_screen, begin_menu_loading)
                         .chain()
                         .after(setup_rendering),
@@ -2858,13 +2902,28 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
-                    main_menu_input,
-                    main_menu_buttons,
+                    (tag_accessible_buttons, tag_accessible_text).chain(),
+                    enhance_accessible_buttons.after(tag_accessible_buttons),
+                    prune_decorative_accessibility_nodes,
+                    accessibility_input
+                        .after(tag_accessible_buttons)
+                        .before(AccessibilityActionDispatch),
+                    sync_accessibility_focus_visuals.after(accessibility_input),
+                    sync_accessibility_contrast,
+                    sync_accessibility_preferences,
+                    announce_accessibility_state,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    main_menu_input.in_set(AccessibilityActionDispatch),
+                    main_menu_buttons.in_set(AccessibilityActionDispatch),
                     update_main_menu_buttons,
                     menu_input,
-                    settings_tab_buttons,
-                    settings_value_buttons,
-                    settings_action_buttons,
+                    settings_tab_buttons.in_set(AccessibilityActionDispatch),
+                    settings_value_buttons.in_set(AccessibilityActionDispatch),
+                    settings_action_buttons.in_set(AccessibilityActionDispatch),
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
@@ -3083,7 +3142,9 @@ impl Plugin for StreamTownGamePlugin {
                         .after(recruit_group_selection_input)
                         .after(move_agents),
                     update_group_selection_panel.after(recruit_group_selection_input),
-                    group_selection_action_buttons.after(update_group_selection_panel),
+                    group_selection_action_buttons
+                        .after(update_group_selection_panel)
+                        .in_set(AccessibilityActionDispatch),
                     update_selection_panel.after(select_grid_cell),
                     update_vote_panels.after(move_agents),
                     update_town_goal_panel.after(move_agents),
@@ -3095,10 +3156,10 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     bottom_bar_input,
-                    bottom_bar_main_buttons,
-                    bottom_bar_scroll_buttons,
-                    bottom_bar_action_buttons,
-                    technology_vote_cast_button,
+                    bottom_bar_main_buttons.in_set(AccessibilityActionDispatch),
+                    bottom_bar_scroll_buttons.in_set(AccessibilityActionDispatch),
+                    bottom_bar_action_buttons.in_set(AccessibilityActionDispatch),
+                    technology_vote_cast_button.in_set(AccessibilityActionDispatch),
                     rebuild_bottom_bar_context,
                     update_bottom_bar_main_visuals,
                 )
@@ -3131,12 +3192,12 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     menu_input,
-                    game_menu_buttons,
-                    game_menu_idle_toggle,
+                    game_menu_buttons.in_set(AccessibilityActionDispatch),
+                    game_menu_idle_toggle.in_set(AccessibilityActionDispatch),
                     update_game_menu_controls,
-                    settings_tab_buttons,
-                    settings_value_buttons,
-                    settings_action_buttons,
+                    settings_tab_buttons.in_set(AccessibilityActionDispatch),
+                    settings_value_buttons.in_set(AccessibilityActionDispatch),
+                    settings_action_buttons.in_set(AccessibilityActionDispatch),
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
@@ -3218,7 +3279,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     drive_credits_animation,
                     update_credits_fireworks,
-                    credits_skip_button,
+                    credits_skip_button.in_set(AccessibilityActionDispatch),
                     credits_input,
                 )
                     .chain()
@@ -3632,12 +3693,16 @@ fn setup_rendering(
         &presentation.0,
         Some(BUILDING_PLACEMENT_FAIL_COLOR),
     ));
-    let tree = tree_materials.add(tree_material(&presentation.0, asset_server.as_deref()));
+    let tree_material = tree_material(&presentation.0, asset_server.as_deref());
+    let tree_wind = tree_material.extension.parameters.wind_controls;
+    let tree = tree_materials.add(tree_material);
     // Menu foliage keeps a dedicated solid-colour material so the shared atlas
     // cannot leak blue, but remains lit so it responds to the authored sun and
     // receives the same ordinary world shadows as gameplay foliage.
     let menu_tree = materials.add(menu_tree_material());
-    let grass = grass_materials.add(grass_material(&presentation.0, asset_server.as_deref()));
+    let grass_material = grass_material(&presentation.0, asset_server.as_deref());
+    let grass_wind = grass_material.extension.parameters.wind_controls;
+    let grass = grass_materials.add(grass_material);
     let critter = critter_materials.add(critter_material(&presentation.0, asset_server.as_deref()));
     let flag = flag_materials.add(flag_material(&presentation.0, asset_server.as_deref()));
     let game_logo = presentation_texture_handle(
@@ -3896,7 +3961,13 @@ fn setup_rendering(
             })
         });
     let water = water_material(&presentation.0, asset_server.as_deref());
+    let water_wind = water.extension.parameters.wind_speed_noise_alpha;
     let menu_water = main_menu_water_material(water.clone());
+    commands.insert_resource(AccessibilityMotionDefaults {
+        tree: tree_wind,
+        grass: grass_wind,
+        water: water_wind,
+    });
     let window_height =
         f32::from(u16::try_from(settings.0.video.height.max(1)).unwrap_or(u16::MAX));
     commands.insert_resource(RenderAssets {
@@ -6021,7 +6092,7 @@ fn advance_world_loading_cover(
     mut status: Query<&mut Text, With<LoadingStatusText>>,
     mut substatus: LoadingSubstatusQuery,
     mut percent_text: LoadingPercentQuery,
-    mut fills: Query<&mut Node, With<LoadingProgressFill>>,
+    mut fills: Query<(&mut Node, &mut AccessibilityNode), With<LoadingProgressFill>>,
 ) {
     if !cover.initialized || cover.transition_queued {
         return;
@@ -6071,8 +6142,8 @@ fn advance_world_loading_cover(
     if let Ok(mut text) = percent_text.single_mut() {
         **text = format!("{display_progress:.0}%");
     }
-    if let Ok(mut fill) = fills.single_mut() {
-        fill.width = percent(display_progress);
+    if let Ok((mut fill, mut accessible)) = fills.single_mut() {
+        set_loading_progress(&mut fill, &mut accessible, display_progress);
     }
 
     if cover.ready_updates < 3 {
@@ -6842,6 +6913,7 @@ fn spawn_loading_screen(
             parent.spawn((
                 LoadingScreenEntity,
                 LoadingProgressFill,
+                loading_progress_accessibility_node(),
                 Node {
                     width: percent(0.0),
                     height: percent(100.0),
@@ -7178,7 +7250,7 @@ fn sync_loading_screen_status(
     mut status: Query<&mut Text, With<LoadingStatusText>>,
     mut substatus: LoadingSubstatusQuery,
     mut percent_text: LoadingPercentQuery,
-    mut fills: Query<&mut Node, With<LoadingProgressFill>>,
+    mut fills: Query<(&mut Node, &mut AccessibilityNode), With<LoadingProgressFill>>,
 ) {
     let progress_percent = (loading.progress * 100.0).round();
     if let Ok(mut text) = status.single_mut() {
@@ -7190,8 +7262,8 @@ fn sync_loading_screen_status(
     if let Ok(mut text) = percent_text.single_mut() {
         **text = format!("{progress_percent:.0}%");
     }
-    if let Ok(mut fill) = fills.single_mut() {
-        fill.width = percent(progress_percent);
+    if let Ok((mut fill, mut accessible)) = fills.single_mut() {
+        set_loading_progress(&mut fill, &mut accessible, progress_percent);
     }
 }
 
@@ -7201,7 +7273,7 @@ fn sync_boot_loading_screen(
     mut status: Query<&mut Text, With<LoadingStatusText>>,
     mut substatus: LoadingSubstatusQuery,
     mut percent_text: LoadingPercentQuery,
-    mut fills: Query<&mut Node, With<LoadingProgressFill>>,
+    mut fills: Query<(&mut Node, &mut AccessibilityNode), With<LoadingProgressFill>>,
 ) {
     if world_cover.is_some() {
         return;
@@ -7219,9 +7291,30 @@ fn sync_boot_loading_screen(
     if let Ok(mut text) = percent_text.single_mut() {
         **text = format!("{progress_percent:.0}%");
     }
-    if let Ok(mut fill) = fills.single_mut() {
-        fill.width = percent(progress_percent);
+    if let Ok((mut fill, mut accessible)) = fills.single_mut() {
+        set_loading_progress(&mut fill, &mut accessible, progress_percent);
     }
+}
+
+fn loading_progress_accessibility_node() -> AccessibilityNode {
+    let mut node = AccessibleNode::new(Role::ProgressIndicator);
+    node.set_label("Loading progress");
+    node.set_min_numeric_value(0.0);
+    node.set_max_numeric_value(100.0);
+    node.set_numeric_value(0.0);
+    node.set_value("0%");
+    AccessibilityNode(node)
+}
+
+fn set_loading_progress(
+    fill: &mut Node,
+    accessible: &mut AccessibilityNode,
+    progress_percent: f32,
+) {
+    let progress_percent = progress_percent.clamp(0.0, 100.0);
+    fill.width = percent(progress_percent);
+    accessible.set_numeric_value(f64::from(progress_percent));
+    accessible.set_value(format!("{progress_percent:.0}%").into_boxed_str());
 }
 
 fn boot_loading_display_progress(loading: &MenuLoadingRuntime) -> f32 {
@@ -7503,9 +7596,15 @@ fn enforce_loading_overlay_retired(
 
 fn animate_loading_icon(
     time: Res<Time>,
+    settings: Option<Res<RuntimePlayerSettings>>,
     mut spinners: Query<(&LoadingIconSpinner, &mut UiTransform)>,
 ) {
+    let reduced_motion = settings.is_some_and(|settings| settings.0.interface.reduced_motion);
     for (spinner, mut transform) in &mut spinners {
+        if reduced_motion {
+            transform.rotation = Rot2::IDENTITY;
+            continue;
+        }
         apply_loading_icon_rotation(
             &mut transform,
             spinner.radians_per_second,
@@ -7813,8 +7912,12 @@ fn hide_main_menu_inactive_model_nodes(
 
 fn rotate_main_menu_nodes(
     time: Res<Time>,
+    settings: Option<Res<RuntimePlayerSettings>>,
     mut nodes: Query<(&MainMenuRotatingNode, &mut Transform)>,
 ) {
+    if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
+        return;
+    }
     for (node, mut transform) in &mut nodes {
         apply_authored_local_rotation(
             &mut transform,
@@ -7901,8 +8004,12 @@ fn small_pattern(value: usize, modulo: usize) -> f32 {
 
 fn animate_main_menu_clouds(
     time: Res<Time>,
+    settings: Option<Res<RuntimePlayerSettings>>,
     mut clouds: Query<(&MainMenuCloudPrism, &mut Transform)>,
 ) {
+    if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
+        return;
+    }
     for (cloud, mut transform) in &mut clouds {
         transform.translation += cloud.drift_per_second * time.delta_secs();
         if transform.translation.x > cloud.wrap_max_x {
@@ -8047,7 +8154,14 @@ fn fish_school_intersects_generated_land(
         .is_some_and(|cell| terrain_height(world, cell) > water_height + 0.05)
 }
 
-fn animate_fish_school(time: Res<Time>, mut fish: Query<(&FishSchoolParticle, &mut Transform)>) {
+fn animate_fish_school(
+    time: Res<Time>,
+    settings: Option<Res<RuntimePlayerSettings>>,
+    mut fish: Query<(&FishSchoolParticle, &mut Transform)>,
+) {
+    if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
+        return;
+    }
     let elapsed = time.elapsed_secs();
     for (fish, mut transform) in &mut fish {
         let scale = transform.scale;
@@ -9203,13 +9317,14 @@ fn main_menu_input(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     menu: Res<MenuRuntime>,
+    focus: Res<InputFocus>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if menu.page != MenuPage::Closed {
         return;
     }
-    if keyboard.just_pressed(KeyCode::Enter) {
+    if keyboard.just_pressed(KeyCode::Enter) && focus.get().is_none() {
         queue_world_loading(&mut commands);
     } else if keyboard.just_pressed(KeyCode::KeyC) {
         next_state.set(GameState::Credits);
@@ -9367,6 +9482,618 @@ fn game_menu_idle_toggle(
     }
 }
 
+fn setup_accessibility(mut commands: Commands) {
+    let mut announcement = AccessibleNode::new(Role::Status);
+    announcement.set_label("Stream Town status");
+    announcement.set_value("Starting Stream Town");
+    announcement.set_live(Live::Polite);
+    commands.spawn((
+        Name::new("Accessibility announcements"),
+        AccessibilityAnnouncement,
+        AccessibilityNode(announcement),
+    ));
+}
+
+#[allow(clippy::type_complexity)]
+fn tag_accessible_buttons(
+    mut commands: Commands,
+    buttons: Query<
+        (
+            Entity,
+            Option<&MainMenuAction>,
+            Option<&GameMenuAction>,
+            Option<&GameMenuIdleToggle>,
+            Option<&SettingsTabButton>,
+            Option<&SettingsValueButton>,
+            Option<&SettingsAction>,
+            Option<&CreditsSkipButton>,
+        ),
+        (With<Button>, Without<AccessibleButtonScope>),
+    >,
+) {
+    for (entity, main, game, idle, tab, value, settings, credits) in &buttons {
+        let scope = if main.is_some() {
+            AccessibleButtonScope::MainMenu
+        } else if game.is_some() || idle.is_some() {
+            AccessibleButtonScope::GameMenu
+        } else if settings.is_some_and(|action| {
+            matches!(
+                action,
+                SettingsAction::ConfirmApply | SettingsAction::ConfirmDiscard
+            )
+        }) {
+            AccessibleButtonScope::SettingsConfirm
+        } else if tab.is_some() || value.is_some() || settings.is_some() {
+            AccessibleButtonScope::Settings
+        } else if credits.is_some() {
+            AccessibleButtonScope::Credits
+        } else {
+            AccessibleButtonScope::InGame
+        };
+        commands
+            .entity(entity)
+            .insert((scope, Outline::new(px(0), px(0), Color::NONE)));
+    }
+}
+
+fn tag_accessible_text(
+    mut commands: Commands,
+    text: Query<Entity, (Added<Text>, Without<Label>)>,
+    parents: Query<&ChildOf>,
+    buttons: Query<(), With<Button>>,
+) {
+    for entity in &text {
+        let mut ancestor = entity;
+        let mut inside_button = false;
+        for _ in 0..16 {
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            if buttons.contains(ancestor) {
+                inside_button = true;
+                break;
+            }
+        }
+        if !inside_button {
+            commands.entity(entity).insert(Label);
+        }
+    }
+}
+
+type DecorativeAccessibilityImageQuery<'w, 's> =
+    Query<'w, 's, Entity, (With<ImageNode>, With<AccessibilityNode>, Without<Button>)>;
+
+fn prune_decorative_accessibility_nodes(
+    mut commands: Commands,
+    images: DecorativeAccessibilityImageQuery,
+) {
+    for entity in &images {
+        commands.entity(entity).remove::<AccessibilityNode>();
+    }
+}
+
+fn accessibility_scope_active(
+    scope: AccessibleButtonScope,
+    state: GameState,
+    menu: &MenuRuntime,
+) -> bool {
+    match scope {
+        AccessibleButtonScope::MainMenu => {
+            state == GameState::MainMenu && menu.page == MenuPage::Closed
+        }
+        AccessibleButtonScope::GameMenu => {
+            state == GameState::InGame && menu.page == MenuPage::Game
+        }
+        AccessibleButtonScope::Settings => {
+            menu.page == MenuPage::Settings && !menu.confirm_settings_close
+        }
+        AccessibleButtonScope::SettingsConfirm => {
+            menu.page == MenuPage::Settings && menu.confirm_settings_close
+        }
+        AccessibleButtonScope::InGame => {
+            state == GameState::InGame && menu.page == MenuPage::Closed
+        }
+        AccessibleButtonScope::Credits => state == GameState::Credits,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accessibility_button_enabled(
+    main: Option<&MainMenuAction>,
+    game: Option<&GameMenuAction>,
+    scroll: Option<&BottomBarScrollButton>,
+    bottom_action: Option<&BottomBarActionEnabled>,
+    technology_vote: Option<&TechnologyVoteCastEnabled>,
+    building_level: Option<&BuildingLevelEnabled>,
+    has_save: bool,
+) -> bool {
+    main.is_none_or(|action| main_menu_action_enabled(*action, has_save))
+        && game.is_none_or(|action| game_menu_action_enabled(*action, has_save))
+        && scroll.is_none_or(|button| button.enabled)
+        && bottom_action.is_none_or(|button| button.0)
+        && technology_vote.is_none_or(|button| button.0)
+        && building_level.is_none_or(|button| button.0)
+}
+
+fn set_accessibility_label(node: &mut AccessibleNode, label: impl Into<String>) {
+    node.set_label(label.into().into_boxed_str());
+}
+
+#[derive(QueryData)]
+#[query_data(mutable)]
+struct AccessibleButtonNodeQuery {
+    scope: &'static AccessibleButtonScope,
+    node: &'static mut AccessibilityNode,
+    visibility: Option<&'static Visibility>,
+    inherited_visibility: Option<&'static InheritedVisibility>,
+    main: Option<&'static MainMenuAction>,
+    game: Option<&'static GameMenuAction>,
+    idle_toggle: Option<&'static GameMenuIdleToggle>,
+    settings_tab: Option<&'static SettingsTabButton>,
+    settings_value: Option<&'static SettingsValueButton>,
+    settings_action: Option<&'static SettingsAction>,
+    bottom_main: Option<&'static BottomBarMainButton>,
+    bottom_scroll: Option<&'static BottomBarScrollButton>,
+    bottom_enabled: Option<&'static BottomBarActionEnabled>,
+    vote_enabled: Option<&'static TechnologyVoteCastEnabled>,
+    level_enabled: Option<&'static BuildingLevelEnabled>,
+    credits: Option<&'static CreditsSkipButton>,
+}
+
+#[allow(clippy::type_complexity)]
+fn enhance_accessible_buttons(
+    state: Res<State<GameState>>,
+    menu: Res<MenuRuntime>,
+    save: Res<SaveRuntime>,
+    idle: Res<CameraIdleMode>,
+    mut buttons: Query<AccessibleButtonNodeQuery>,
+) {
+    let has_save = save.store.path().is_file();
+    for mut button in &mut buttons {
+        let node = &mut button.node;
+        node.add_action(AccessAction::Click);
+        node.add_action(AccessAction::Focus);
+        node.add_action(AccessAction::Blur);
+        let visible = !matches!(button.visibility, Some(Visibility::Hidden))
+            && button
+                .inherited_visibility
+                .is_none_or(|visibility| visibility.get())
+            && accessibility_scope_active(*button.scope, *state.get(), &menu);
+        if visible {
+            node.clear_hidden();
+        } else {
+            node.set_hidden();
+        }
+        let enabled = accessibility_button_enabled(
+            button.main,
+            button.game,
+            button.bottom_scroll,
+            button.bottom_enabled,
+            button.vote_enabled,
+            button.level_enabled,
+            has_save,
+        );
+        if enabled {
+            node.clear_disabled();
+        } else {
+            node.set_disabled();
+        }
+        if let Some(action) = button.main {
+            set_accessibility_label(node, main_menu_action_label(*action));
+        } else if let Some(action) = button.game {
+            set_accessibility_label(node, game_menu_action_label(*action));
+        } else if button.idle_toggle.is_some() {
+            node.set_role(Role::CheckBox);
+            set_accessibility_label(node, "Idle Mode");
+            node.set_toggled(if idle.0 {
+                Toggled::True
+            } else {
+                Toggled::False
+            });
+        } else if let Some(tab) = button.settings_tab {
+            node.set_role(Role::Tab);
+            set_accessibility_label(node, settings_tab_label(tab.0));
+            node.set_selected(tab.0 == menu.settings_tab);
+        } else if let Some(value_button) = button.settings_value {
+            let (label, value) = settings_value_label(&menu.draft, value_button.index);
+            let direction = if value_button.direction < 0 {
+                "Previous"
+            } else {
+                "Next"
+            };
+            set_accessibility_label(node, format!("{direction} {label}"));
+            node.set_value(value.into_boxed_str());
+        } else if let Some(action) = button.settings_action {
+            set_accessibility_label(
+                node,
+                match action {
+                    SettingsAction::Apply => "Apply and save settings",
+                    SettingsAction::Defaults => "Restore default settings",
+                    SettingsAction::Back => "Back from settings",
+                    SettingsAction::ConfirmApply => "Apply unsaved changes",
+                    SettingsAction::ConfirmDiscard => "Discard unsaved changes",
+                },
+            );
+        } else if let Some(main_button) = button.bottom_main {
+            let (label, shortcut) = match main_button.0 {
+                BottomBarContext::Build => ("Open building menu", "B"),
+                BottomBarContext::Recruit => ("Open recruitment menu", "R"),
+                BottomBarContext::Technology => ("Open technology menu", "T"),
+            };
+            set_accessibility_label(node, label);
+            node.set_keyboard_shortcut(shortcut);
+        } else if let Some(scroll_button) = button.bottom_scroll {
+            set_accessibility_label(
+                node,
+                if scroll_button.direction < 0 {
+                    "Previous action page"
+                } else {
+                    "Next action page"
+                },
+            );
+        } else if button.credits.is_some() {
+            set_accessibility_label(node, "Skip credits");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AccessibilityCandidate {
+    entity: Entity,
+    position: Vec2,
+}
+
+#[allow(clippy::type_complexity)]
+fn accessibility_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    state: Res<State<GameState>>,
+    menu: Res<MenuRuntime>,
+    save: Res<SaveRuntime>,
+    mut focus: ResMut<InputFocus>,
+    mut focus_visible: ResMut<InputFocusVisible>,
+    mut runtime: ResMut<AccessibilityRuntime>,
+    mut action_requests: MessageReader<AccessibilityActionRequest>,
+    mut buttons: Query<(
+        Entity,
+        &mut Interaction,
+        &AccessibleButtonScope,
+        Option<&Visibility>,
+        Option<&InheritedVisibility>,
+        Option<&UiGlobalTransform>,
+        Option<&MainMenuAction>,
+        Option<&GameMenuAction>,
+        Option<&BottomBarScrollButton>,
+        Option<&BottomBarActionEnabled>,
+        Option<&TechnologyVoteCastEnabled>,
+        Option<&BuildingLevelEnabled>,
+    )>,
+) {
+    if let Some(previous) = runtime.synthetic_pressed.take()
+        && let Ok((_, mut interaction, ..)) = buttons.get_mut(previous)
+    {
+        *interaction = Interaction::None;
+    }
+
+    let has_save = save.store.path().is_file();
+    let mut candidates = buttons
+        .iter_mut()
+        .filter_map(
+            |(
+                entity,
+                interaction,
+                scope,
+                visibility,
+                inherited_visibility,
+                transform,
+                main,
+                game,
+                scroll,
+                bottom_enabled,
+                vote_enabled,
+                level_enabled,
+            )| {
+                let visible = !matches!(visibility, Some(Visibility::Hidden))
+                    && inherited_visibility.is_none_or(|visibility| visibility.get())
+                    && accessibility_scope_active(*scope, *state.get(), &menu);
+                let enabled = accessibility_button_enabled(
+                    main,
+                    game,
+                    scroll,
+                    bottom_enabled,
+                    vote_enabled,
+                    level_enabled,
+                    has_save,
+                );
+                (visible && enabled).then(|| {
+                    let position = transform.map_or(Vec2::ZERO, |transform| {
+                        transform.to_scale_angle_translation().2
+                    });
+                    if *interaction == Interaction::Pressed {
+                        focus.set(entity, FocusCause::Pressed);
+                        focus_visible.0 = false;
+                    }
+                    AccessibilityCandidate { entity, position }
+                })
+            },
+        )
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        left.position
+            .y
+            .total_cmp(&right.position.y)
+            .then_with(|| left.position.x.total_cmp(&right.position.x))
+            .then_with(|| left.entity.to_bits().cmp(&right.entity.to_bits()))
+    });
+    let candidate_entities = candidates
+        .iter()
+        .map(|candidate| candidate.entity)
+        .collect::<HashSet<_>>();
+    if focus
+        .get()
+        .is_some_and(|entity| !candidate_entities.contains(&entity))
+    {
+        focus.clear();
+    }
+
+    let mut requested_click = None;
+    for request in action_requests.read() {
+        let entity = Entity::from_bits(request.target_node.0);
+        if !candidate_entities.contains(&entity) {
+            continue;
+        }
+        match request.action {
+            AccessAction::Click => requested_click = Some(entity),
+            AccessAction::Focus => {
+                focus.set(entity, FocusCause::Navigated);
+                focus_visible.0 = true;
+            }
+            AccessAction::Blur if focus.get() == Some(entity) => focus.clear(),
+            _ => {}
+        }
+    }
+
+    // The shipping Game and Settings menus already have complete arrow-key
+    // navigation tied to their highlighted row. Keep that deterministic path;
+    // this generic traversal covers the main menu, HUD, votes, and credits.
+    if menu.page == MenuPage::Closed && !candidates.is_empty() {
+        let backwards = keyboard.pressed(KeyCode::ShiftLeft)
+            || keyboard.pressed(KeyCode::ShiftRight)
+            || keyboard.just_pressed(KeyCode::ArrowUp)
+            || keyboard.just_pressed(KeyCode::ArrowLeft);
+        let navigation = keyboard.just_pressed(KeyCode::Tab)
+            || (focus_visible.0
+                && (keyboard.just_pressed(KeyCode::ArrowUp)
+                    || keyboard.just_pressed(KeyCode::ArrowDown)
+                    || keyboard.just_pressed(KeyCode::ArrowLeft)
+                    || keyboard.just_pressed(KeyCode::ArrowRight)));
+        if navigation {
+            let current = focus.get().and_then(|entity| {
+                candidates
+                    .iter()
+                    .position(|candidate| candidate.entity == entity)
+            });
+            let next = match (current, backwards) {
+                (Some(index), false) => (index + 1) % candidates.len(),
+                (Some(index), true) => index.checked_sub(1).unwrap_or(candidates.len() - 1),
+                (None, false) => 0,
+                (None, true) => candidates.len() - 1,
+            };
+            focus.set(candidates[next].entity, FocusCause::Navigated);
+            focus_visible.0 = true;
+        }
+        if (keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space))
+            && let Some(entity) = focus.get()
+            && candidate_entities.contains(&entity)
+        {
+            requested_click = Some(entity);
+        }
+    }
+    if keyboard.just_pressed(KeyCode::Escape) {
+        focus.clear();
+        focus_visible.0 = false;
+    }
+    if let Some(entity) = requested_click
+        && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
+    {
+        *interaction = Interaction::Pressed;
+        runtime.synthetic_pressed = Some(entity);
+    }
+}
+
+type AccessibilityFocusVisualQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static AccessibleButtonScope,
+        Option<&'static Visibility>,
+        Option<&'static InheritedVisibility>,
+        &'static mut Outline,
+    ),
+>;
+
+fn sync_accessibility_focus_visuals(
+    state: Res<State<GameState>>,
+    menu: Res<MenuRuntime>,
+    settings: Res<RuntimePlayerSettings>,
+    focus: Res<InputFocus>,
+    focus_visible: Res<InputFocusVisible>,
+    mut buttons: AccessibilityFocusVisualQuery,
+) {
+    for (entity, scope, visibility, inherited_visibility, mut outline) in &mut buttons {
+        let visible = !matches!(visibility, Some(Visibility::Hidden))
+            && inherited_visibility.is_none_or(|visibility| visibility.get())
+            && accessibility_scope_active(*scope, *state.get(), &menu);
+        let focused = visible && focus.get() == Some(entity) && focus_visible.0;
+        if focused {
+            outline.width = px(4);
+            outline.offset = px(2);
+            outline.color = Color::srgb(1.0, 0.86, 0.16);
+        } else if visible && settings.0.interface.high_contrast {
+            outline.width = px(1);
+            outline.offset = px(1);
+            outline.color = Color::srgba(1.0, 1.0, 1.0, 0.82);
+        } else {
+            outline.width = px(0);
+            outline.offset = px(0);
+            outline.color = Color::NONE;
+        }
+    }
+}
+
+fn sync_accessibility_contrast(
+    mut commands: Commands,
+    settings: Res<RuntimePlayerSettings>,
+    text: Query<(Entity, Option<&AccessibilityHighContrastText>), With<Text>>,
+) {
+    for (entity, applied) in &text {
+        if settings.0.interface.high_contrast && applied.is_none() {
+            commands.entity(entity).insert((
+                AccessibilityHighContrastText,
+                TextShadow {
+                    offset: Vec2::splat(2.0),
+                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.94),
+                },
+            ));
+        } else if !settings.0.interface.high_contrast && applied.is_some() {
+            commands
+                .entity(entity)
+                .remove::<AccessibilityHighContrastText>()
+                .remove::<TextShadow>();
+        }
+    }
+}
+
+fn reduced_tree_wind(defaults: Vec4, reduced: bool) -> Vec4 {
+    if reduced {
+        Vec4::new(defaults.x, 0.0, 0.0, defaults.w)
+    } else {
+        defaults
+    }
+}
+
+fn reduced_grass_wind(defaults: Vec4, reduced: bool) -> Vec4 {
+    if reduced {
+        Vec4::new(0.0, defaults.y, 0.0, defaults.w)
+    } else {
+        defaults
+    }
+}
+
+fn reduced_water_wind(defaults: Vec4, reduced: bool) -> Vec4 {
+    if reduced {
+        Vec4::new(0.0, 0.0, -defaults.z.abs(), defaults.w)
+    } else {
+        defaults
+    }
+}
+
+fn sync_accessibility_preferences(
+    settings: Res<RuntimePlayerSettings>,
+    mut applied: Local<Option<(u16, bool)>>,
+    mut ui_scale: Option<ResMut<UiScale>>,
+    defaults: Option<Res<AccessibilityMotionDefaults>>,
+    render: Option<Res<RenderAssets>>,
+    mut tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
+    mut grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
+    mut water_materials: Option<ResMut<Assets<WaterMaterial>>>,
+) {
+    let signature = (
+        settings.0.interface.ui_scale_percent,
+        settings.0.interface.reduced_motion,
+    );
+    if *applied == Some(signature) {
+        return;
+    }
+    if let Some(ui_scale) = ui_scale.as_deref_mut() {
+        ui_scale.0 = f32::from(settings.0.interface.ui_scale_percent) / 100.0;
+    }
+    let (Some(defaults), Some(render)) = (defaults, render) else {
+        return;
+    };
+    let reduced = settings.0.interface.reduced_motion;
+    if let Some(materials) = tree_materials.as_deref_mut()
+        && let Some(mut tree) = materials.get_mut(&render.tree)
+    {
+        tree.extension.parameters.wind_controls = reduced_tree_wind(defaults.tree, reduced);
+    }
+    if let Some(materials) = grass_materials.as_deref_mut()
+        && let Some(mut grass) = materials.get_mut(&render.grass)
+    {
+        grass.extension.parameters.wind_controls = reduced_grass_wind(defaults.grass, reduced);
+    }
+    if let Some(materials) = water_materials.as_deref_mut() {
+        let wind = reduced_water_wind(defaults.water, reduced);
+        if let Some(mut water) = materials.get_mut(&render.water) {
+            water.extension.parameters.wind_speed_noise_alpha = wind;
+        }
+        if let Some(mut menu_water) = materials.get_mut(&render.menu_water) {
+            menu_water.extension.parameters.wind_speed_noise_alpha = wind;
+        }
+    }
+    *applied = Some(signature);
+}
+
+fn accessibility_settings_selection(menu: &MenuRuntime) -> String {
+    if menu.confirm_settings_close {
+        return if menu.selected == 0 {
+            "Apply unsaved changes".to_owned()
+        } else {
+            "Discard unsaved changes".to_owned()
+        };
+    }
+    if menu.selected < SETTINGS_APPLY_INDEX {
+        let (label, value) = settings_value_label(&menu.draft, menu.selected);
+        format!("{label}: {value}")
+    } else {
+        match menu.selected {
+            SETTINGS_APPLY_INDEX => "Apply and save settings".to_owned(),
+            SETTINGS_DEFAULTS_INDEX => "Restore default settings".to_owned(),
+            SETTINGS_BACK_INDEX => "Back from settings".to_owned(),
+            _ => "Settings".to_owned(),
+        }
+    }
+}
+
+fn announce_accessibility_state(
+    state: Res<State<GameState>>,
+    menu: Res<MenuRuntime>,
+    loading: Option<Res<WorldLoadingRuntime>>,
+    command_feedback: Res<CommandFeedback>,
+    mut runtime: ResMut<AccessibilityRuntime>,
+    mut announcements: Query<&mut AccessibilityNode, With<AccessibilityAnnouncement>>,
+) {
+    let message = match *state.get() {
+        GameState::Boot => "Loading Stream Town".to_owned(),
+        GameState::MainMenu | GameState::InGame if menu.page == MenuPage::Settings => format!(
+            "Settings, {} tab. {}",
+            settings_tab_label(menu.settings_tab),
+            accessibility_settings_selection(&menu)
+        ),
+        GameState::MainMenu => "Main menu. Press Tab to move between actions.".to_owned(),
+        GameState::WorldLoading => loading.as_ref().map_or_else(
+            || "Loading town".to_owned(),
+            |loading| format!("{}. {}", loading.status, loading.substatus),
+        ),
+        GameState::InGame if menu.page == MenuPage::Game => {
+            "Game menu. Use arrow keys and Enter.".to_owned()
+        }
+        GameState::InGame if !command_feedback.0.is_empty() => command_feedback.0.clone(),
+        GameState::InGame => "Town ready. Press Tab to move between interface actions.".to_owned(),
+        GameState::Credits => {
+            "Credits. Press Escape or activate Skip credits to return.".to_owned()
+        }
+    };
+    if runtime.last_announcement == message {
+        return;
+    }
+    runtime.last_announcement.clone_from(&message);
+    if let Ok(mut node) = announcements.single_mut() {
+        node.set_value(message.into_boxed_str());
+    }
+}
+
 fn update_game_menu_controls(
     save: Res<SaveRuntime>,
     menu: Res<MenuRuntime>,
@@ -9418,10 +10145,11 @@ fn update_game_menu_controls(
     }
 }
 
-const SETTINGS_TABS: [SettingsTab; 4] = [
+const SETTINGS_TABS: [SettingsTab; 5] = [
     SettingsTab::Video,
     SettingsTab::Audio,
     SettingsTab::Gameplay,
+    SettingsTab::Accessibility,
     SettingsTab::Connection,
 ];
 
@@ -9430,6 +10158,7 @@ const fn settings_tab_label(tab: SettingsTab) -> &'static str {
         SettingsTab::Video => "Video",
         SettingsTab::Audio => "Audio",
         SettingsTab::Gameplay => "Gameplay",
+        SettingsTab::Accessibility => "Accessibility",
         SettingsTab::Connection => "Connection",
     }
 }
@@ -9439,6 +10168,7 @@ fn settings_tab_indices(tab: SettingsTab) -> &'static [usize] {
         SettingsTab::Video => &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         SettingsTab::Audio => &[11, 12, 13, 14],
         SettingsTab::Gameplay => &[15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
+        SettingsTab::Accessibility => &[26, 27, 28],
         SettingsTab::Connection => &[],
     }
 }
@@ -9448,6 +10178,7 @@ const fn settings_tab_for_index(index: usize) -> Option<SettingsTab> {
         0..=10 => Some(SettingsTab::Video),
         11..=14 => Some(SettingsTab::Audio),
         15..=25 => Some(SettingsTab::Gameplay),
+        26..=28 => Some(SettingsTab::Accessibility),
         _ => None,
     }
 }
@@ -9537,6 +10268,12 @@ fn settings_value_label(settings: &PlayerSettings, index: usize) -> (&'static st
             } else {
                 format!("{} Minutes", settings.autosave_minutes)
             },
+        ),
+        26 => ("UI Scale", format!("{}%", interface.ui_scale_percent)),
+        27 => ("High Contrast", on_off(interface.high_contrast).to_owned()),
+        28 => (
+            "Reduced Motion",
+            on_off(interface.reduced_motion).to_owned(),
         ),
         _ => ("Unknown", String::new()),
     }
@@ -9675,7 +10412,10 @@ fn settings_tab_buttons(
     for (interaction, tab) in &buttons {
         if *interaction == Interaction::Pressed {
             menu.settings_tab = tab.0;
-            menu.selected = settings_tab_indices(tab.0).first().copied().unwrap_or(26);
+            menu.selected = settings_tab_indices(tab.0)
+                .first()
+                .copied()
+                .unwrap_or(SETTINGS_APPLY_INDEX);
             menu.feedback.clear();
         }
     }
@@ -9898,9 +10638,9 @@ fn update_settings_controls(
         let enabled =
             menu.page == MenuPage::Settings && (modal_action == menu.confirm_settings_close);
         let keyboard_selected = match action {
-            SettingsAction::Apply => menu.selected == 26,
-            SettingsAction::Defaults => menu.selected == 27,
-            SettingsAction::Back => menu.selected == 28,
+            SettingsAction::Apply => menu.selected == SETTINGS_APPLY_INDEX,
+            SettingsAction::Defaults => menu.selected == SETTINGS_DEFAULTS_INDEX,
+            SettingsAction::Back => menu.selected == SETTINGS_BACK_INDEX,
             SettingsAction::ConfirmApply => menu.confirm_settings_close && menu.selected == 0,
             SettingsAction::ConfirmDiscard => menu.confirm_settings_close && menu.selected == 1,
         };
@@ -10456,7 +11196,7 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
 
 fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str) -> String {
     use std::fmt::Write as _;
-    const COLUMN_BREAK: usize = 15;
+    const COLUMN_BREAK: usize = 16;
 
     let video = &settings.video;
     let camera = &settings.camera;
@@ -10512,6 +11252,9 @@ fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str
                 format!("{} min", settings.autosave_minutes)
             }
         ),
+        format!("UI scale: {}%", interface.ui_scale_percent),
+        format!("High contrast: {}", on_off(interface.high_contrast)),
+        format!("Reduced motion: {}", on_off(interface.reduced_motion)),
         "Apply and save".to_owned(),
         "Restore Unity defaults".to_owned(),
         "Cancel changes".to_owned(),
@@ -10577,7 +11320,7 @@ fn menu_input(
         if menu.page == MenuPage::Settings {
             if menu.confirm_settings_close {
                 menu.confirm_settings_close = false;
-                menu.selected = 28;
+                menu.selected = SETTINGS_BACK_INDEX;
             } else {
                 request_settings_close(&mut menu, &player_settings.0);
                 if menu.confirm_settings_close {
@@ -10633,7 +11376,7 @@ fn menu_input(
             menu.selected = settings_tab_indices(menu.settings_tab)
                 .first()
                 .copied()
-                .unwrap_or(26);
+                .unwrap_or(SETTINGS_APPLY_INDEX);
             menu.feedback.clear();
             return;
         }
@@ -10642,7 +11385,7 @@ fn menu_input(
         }
         let adjustment = i8::from(keyboard.just_pressed(KeyCode::ArrowRight))
             - i8::from(keyboard.just_pressed(KeyCode::ArrowLeft));
-        if adjustment != 0 && menu.selected < 26 {
+        if adjustment != 0 && menu.selected < SETTINGS_APPLY_INDEX {
             let selected = menu.selected;
             adjust_settings_menu(&mut menu.draft, selected, adjustment);
             menu.feedback.clear();
@@ -10651,14 +11394,14 @@ fn menu_input(
             return;
         }
         match menu.selected {
-            26 => {
+            SETTINGS_APPLY_INDEX => {
                 apply_settings_draft(&mut menu, &mut player_settings);
             }
-            27 => {
+            SETTINGS_DEFAULTS_INDEX => {
                 menu.draft = PlayerSettings::default();
                 "Restored Unity defaults in this draft".clone_into(&mut menu.feedback);
             }
-            28 => {
+            SETTINGS_BACK_INDEX => {
                 request_settings_close(&mut menu, &player_settings.0);
                 if menu.confirm_settings_close {
                     menu.selected = 0;
@@ -10863,6 +11606,13 @@ fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, directio
             const MINUTES: [u16; 5] = [0, 5, 10, 30, 60];
             settings.autosave_minutes = cycle_choice(&MINUTES, settings.autosave_minutes, increase);
         }
+        26 => {
+            const SCALES: [u16; 6] = [75, 90, 100, 110, 125, 150];
+            settings.interface.ui_scale_percent =
+                cycle_choice(&SCALES, settings.interface.ui_scale_percent, increase);
+        }
+        27 => settings.interface.high_contrast = !settings.interface.high_contrast,
+        28 => settings.interface.reduced_motion = !settings.interface.reduced_motion,
         _ => {}
     }
 }
@@ -17799,9 +18549,16 @@ fn spawn_weather_particles(
 fn animate_weather_particles(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
+    settings: Option<Res<RuntimePlayerSettings>>,
     cameras: Query<&GlobalTransform, With<TownCamera>>,
     mut particles: Query<(&WeatherParticle, &mut Transform, &mut Visibility)>,
 ) {
+    if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
+        for (_, _, mut visibility) in &mut particles {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    }
     let half_x = f32::from(config.0.world.width) * config.0.world.cell_size * 0.5;
     let half_z = f32::from(config.0.world.height) * config.0.world.cell_size * 0.5;
     let camera_position = cameras.single().ok().map(GlobalTransform::translation);
@@ -29199,6 +29956,7 @@ fn spawn_credits_fireworks_emitters(commands: &mut Commands, presentation: &Pres
 fn update_credits_fireworks(
     mut commands: Commands,
     time: Res<Time>,
+    settings: Option<Res<RuntimePlayerSettings>>,
     presentation: Res<RuntimePresentation>,
     timeline: Res<CreditsTimeline>,
     mut emitters: Query<(Entity, &mut CreditsFireworksEmitter)>,
@@ -29210,6 +29968,15 @@ fn update_credits_fireworks(
     )>,
     mut bursts: Query<(Entity, &mut CreditsFireworkBurst)>,
 ) {
+    if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
+        for (entity, ..) in &mut particles {
+            commands.entity(entity).despawn();
+        }
+        for (entity, _) in &mut bursts {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
     let delta_seconds = time.delta_secs().max(0.0);
     for (entity, mut emitter) in &mut emitters {
         let active = credits_fireworks_active(
@@ -31547,6 +32314,58 @@ mod tests {
     }
 
     #[test]
+    fn screen_reader_click_uses_the_same_shipping_menu_action() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(GameConfig::default()))
+        .add_plugins(StreamTownGamePlugin);
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::MainMenu
+        );
+
+        let settings_button = app
+            .world_mut()
+            .query::<(Entity, &MainMenuAction)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| (*action == MainMenuAction::Settings).then_some(entity))
+            .expect("shipping settings button");
+        app.world_mut().entity_mut(settings_button).insert((
+            AccessibilityNode(AccessibleNode::new(Role::Button)),
+            Visibility::Visible,
+            InheritedVisibility::VISIBLE,
+        ));
+        app.update();
+        let accessible = app
+            .world()
+            .get::<AccessibilityNode>(settings_button)
+            .expect("settings button semantics");
+        assert_eq!(accessible.label(), Some("Settings"));
+        assert!(accessible.supports_action(AccessAction::Click));
+
+        app.world_mut()
+            .resource_mut::<Messages<AccessibilityActionRequest>>()
+            .write(AccessibilityActionRequest(accesskit::ActionRequest {
+                action: AccessAction::Click,
+                target_tree: accesskit::TreeId::ROOT,
+                target_node: accesskit::NodeId(settings_button.to_bits()),
+                data: None,
+            }));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MenuRuntime>().page,
+            MenuPage::Settings
+        );
+    }
+
+    #[test]
     fn settings_menu_edits_a_complete_valid_draft() {
         let original = PlayerSettings::default();
         let mut draft = original.clone();
@@ -31560,6 +32379,9 @@ mod tests {
         adjust_settings_menu(&mut draft, 22, 1);
         adjust_settings_menu(&mut draft, 23, 1);
         adjust_settings_menu(&mut draft, 25, 1);
+        adjust_settings_menu(&mut draft, 26, 1);
+        adjust_settings_menu(&mut draft, 27, 1);
+        adjust_settings_menu(&mut draft, 28, 1);
 
         assert_ne!(draft, original);
         assert_eq!(draft.video.display_mode, DisplayMode::Windowed);
@@ -31574,6 +32396,9 @@ mod tests {
             NameDisplayMode::StaffAndSubscribers
         );
         assert_eq!(draft.autosave_minutes, 60);
+        assert_eq!(draft.interface.ui_scale_percent, 110);
+        assert!(draft.interface.high_contrast);
+        assert!(draft.interface.reduced_motion);
         draft.validate().unwrap();
 
         let text = settings_menu_text(&draft, SETTINGS_MENU_ITEM_COUNT - 1, "draft feedback");
@@ -31594,14 +32419,14 @@ mod tests {
         );
         assert_eq!(
             SETTINGS_TABS.map(settings_tab_label),
-            ["Video", "Audio", "Gameplay", "Connection"]
+            ["Video", "Audio", "Gameplay", "Accessibility", "Connection"]
         );
         let editable = SETTINGS_TABS
             .into_iter()
             .flat_map(settings_tab_indices)
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(editable, (0..26).collect::<Vec<_>>());
+        assert_eq!(editable, (0..29).collect::<Vec<_>>());
         for index in editable {
             let (label, value) = settings_value_label(&PlayerSettings::default(), index);
             assert!(!label.is_empty());
@@ -31611,7 +32436,8 @@ mod tests {
                 match index {
                     0..=10 => SettingsTab::Video,
                     11..=14 => SettingsTab::Audio,
-                    _ => SettingsTab::Gameplay,
+                    15..=25 => SettingsTab::Gameplay,
+                    _ => SettingsTab::Accessibility,
                 }
             );
         }
@@ -31623,6 +32449,85 @@ mod tests {
             cycle_settings_tab(SettingsTab::Video, false),
             SettingsTab::Connection
         );
+    }
+
+    #[test]
+    fn accessibility_motion_preferences_preserve_authored_parameters() {
+        let tree = Vec4::new(0.16, 0.7, 1.4, 0.25);
+        let grass = Vec4::new(0.3, 0.9, 1.8, 0.2);
+        let water = Vec4::new(0.14, 0.08, 0.065, 0.72);
+
+        assert_eq!(reduced_tree_wind(tree, false), tree);
+        assert_eq!(reduced_grass_wind(grass, false), grass);
+        assert_eq!(reduced_water_wind(water, false), water);
+        assert_eq!(
+            reduced_tree_wind(tree, true),
+            Vec4::new(0.16, 0.0, 0.0, 0.25)
+        );
+        assert_eq!(
+            reduced_grass_wind(grass, true),
+            Vec4::new(0.0, 0.9, 0.0, 0.2)
+        );
+        assert_eq!(
+            reduced_water_wind(water, true),
+            Vec4::new(0.0, 0.0, -0.065, 0.72)
+        );
+    }
+
+    #[test]
+    fn loading_progress_exposes_accesskit_range_and_live_value() {
+        let mut node = Node {
+            width: percent(0),
+            ..default()
+        };
+        let mut accessible = loading_progress_accessibility_node();
+        assert_eq!(accessible.role(), Role::ProgressIndicator);
+        assert_eq!(accessible.min_numeric_value(), Some(0.0));
+        assert_eq!(accessible.max_numeric_value(), Some(100.0));
+
+        set_loading_progress(&mut node, &mut accessible, 47.6);
+
+        assert_eq!(node.width, percent(47.6));
+        assert!((accessible.numeric_value().expect("progress value") - 47.6).abs() < 1e-5);
+        assert_eq!(accessible.value(), Some("48%"));
+    }
+
+    #[test]
+    fn accessibility_scope_keeps_modal_navigation_inside_the_open_surface() {
+        let mut menu = MenuRuntime::default();
+        assert!(accessibility_scope_active(
+            AccessibleButtonScope::MainMenu,
+            GameState::MainMenu,
+            &menu
+        ));
+        assert!(!accessibility_scope_active(
+            AccessibleButtonScope::InGame,
+            GameState::MainMenu,
+            &menu
+        ));
+
+        menu.page = MenuPage::Settings;
+        assert!(accessibility_scope_active(
+            AccessibleButtonScope::Settings,
+            GameState::MainMenu,
+            &menu
+        ));
+        assert!(!accessibility_scope_active(
+            AccessibleButtonScope::MainMenu,
+            GameState::MainMenu,
+            &menu
+        ));
+        menu.confirm_settings_close = true;
+        assert!(accessibility_scope_active(
+            AccessibleButtonScope::SettingsConfirm,
+            GameState::MainMenu,
+            &menu
+        ));
+        assert!(!accessibility_scope_active(
+            AccessibleButtonScope::Settings,
+            GameState::MainMenu,
+            &menu
+        ));
     }
 
     #[test]

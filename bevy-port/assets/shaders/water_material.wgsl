@@ -38,16 +38,20 @@ fn fragment(
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     let wind = water_material.wind_speed_noise_alpha.xy;
     let time = view_bindings::globals.time;
+    // A negative authored speed is the persisted reduced-motion sentinel. It
+    // freezes every decorative water phase without changing the sampled shape.
+    let animation_time = select(time, 0.0, water_material.wind_speed_noise_alpha.z < 0.0);
+    let foam_speed = abs(water_material.wind_speed_noise_alpha.z);
     let scale = water_material.scale_foam_ice.x;
     let world_uv = in.world_position.xz / scale;
     let primary_uv = fract(
-        (world_uv + wind * time) * water_material.main_scale_offset.xy
+        (world_uv + wind * animation_time) * water_material.main_scale_offset.xy
             + water_material.main_scale_offset.zw,
     );
     let secondary_uv = fract(
         (
             in.world_position.xz / 94.0
-                + (vec2<f32>(1.0, 1.0) - wind) * 0.01 * time
+                + (vec2<f32>(1.0, 1.0) - wind) * 0.01 * animation_time
         ) * water_material.main_scale_offset.xy
             + water_material.main_scale_offset.zw,
     );
@@ -60,7 +64,7 @@ fn fragment(
         noise_texture,
         noise_sampler,
         fract(
-            (in.world_position.xz * 0.002 + wind * time * 0.005)
+            (in.world_position.xz * 0.002 + wind * animation_time * 0.005)
                 * water_material.noise_scale_offset.xy
                 + water_material.noise_scale_offset.zw,
         ),
@@ -76,10 +80,10 @@ fn fragment(
         let menu_wave = 0.5 + 0.25 * (
             sin(
                 in.world_position.x * 0.105
-                    + time * 0.46
-                    + sin(in.world_position.z * 0.052 - time * 0.21) * 1.7,
+                    + animation_time * 0.46
+                    + sin(in.world_position.z * 0.052 - animation_time * 0.21) * 1.7,
             )
-                + sin(in.world_position.z * 0.143 - time * 0.37)
+                + sin(in.world_position.z * 0.143 - animation_time * 0.37)
         );
         depth = clamp(
             water_material.opacity_controls.w
@@ -94,14 +98,14 @@ fn fragment(
     color = mix(color, vec4<f32>(1.0, 1.0, 1.0, 0.0), clamp(wind_noise, 0.0, 1.0));
     if water_material.opacity_controls.z > 0.5 {
         let ripple = 0.5 + 0.25 * (
-            sin(in.world_position.x * 0.18 + time * 0.72)
-                + sin(in.world_position.z * 0.23 - time * 0.54)
+            sin(in.world_position.x * 0.18 + animation_time * 0.72)
+                + sin(in.world_position.z * 0.23 - animation_time * 0.54)
         );
         color = mix(color, water_material.surface_color, ripple * 0.28);
         let broad_ripple = 0.5 + 0.5 * sin(
             in.world_position.x * 0.027
-                + time * 0.20
-                + sin(in.world_position.z * 0.019 - time * 0.16) * 2.4,
+                + animation_time * 0.20
+                + sin(in.world_position.z * 0.019 - animation_time * 0.16) * 2.4,
         );
         color = vec4<f32>(
             color.rgb * (0.82 + broad_ripple * 0.32)
@@ -119,7 +123,7 @@ fn fragment(
         fract(
             (
                 in.world_position.xz * foam_scale
-                    + wind * time * water_material.wind_speed_noise_alpha.z
+                    + wind * animation_time * foam_speed
             ) * water_material.noise_scale_offset.xy
                 + water_material.noise_scale_offset.zw,
         ),
@@ -130,7 +134,7 @@ fn fragment(
         fract(
             (
                 in.world_position.zx * foam_scale
-                    - wind * time * water_material.wind_speed_noise_alpha.z
+                    - wind * animation_time * foam_speed
             ) * water_material.noise_scale_offset.xy
                 + water_material.noise_scale_offset.zw,
         ),

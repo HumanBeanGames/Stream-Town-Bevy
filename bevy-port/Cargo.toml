@@ -17,6 +17,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
+accesskit = "0.24.1"
 avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f32", "parry-f32", "parallel", "collider-from-mesh", "bevy_scene", "bevy_picking"] }
 bevy = { version = "0.19.1", features = ["tga", "wav"] }
 bevy_tidal = {
