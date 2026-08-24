@@ -2417,6 +2417,9 @@ impl Plugin for StreamTownGamePlugin {
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
+                    spawn_loading_screen
+                        .after(process_runtime_console)
+                        .run_if(world_loading_pending),
                     animate_loading_icon,
                     finish_menu_reveal,
                     sync_boot_loading_screen,
@@ -2439,7 +2442,7 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 OnEnter(GameState::WorldLoading),
                 (
-                    cleanup_loading_screen,
+                    cleanup_loading_runtime,
                     restore_town_camera_for_world,
                     spawn_loading_screen,
                     begin_world_loading,
@@ -2679,6 +2682,9 @@ impl Plugin for StreamTownGamePlugin {
                     rebuild_settings_rows,
                     update_settings_controls,
                     update_menu_overlay,
+                    spawn_loading_screen
+                        .after(process_runtime_console)
+                        .run_if(world_loading_pending),
                 )
                     .chain()
                     .after(game_input)
@@ -5212,12 +5218,26 @@ fn begin_menu_loading(
         );
     }
     let asset_count = asset_handles.len();
+    let (status, substatus) = match destination {
+        BootDestination::MainMenu => (
+            "Loading main menu".to_owned(),
+            format!("0 / {asset_count} assets"),
+        ),
+        BootDestination::WorldLoading => (
+            "Starting town loading".to_owned(),
+            "Preparing the renderer".to_owned(),
+        ),
+        BootDestination::Credits => (
+            "Loading credits".to_owned(),
+            format!("0 / {asset_count} assets"),
+        ),
+    };
     commands.insert_resource(MenuLoadingRuntime {
         started_at,
         destination,
         progress: 0.0,
-        status: "Loading main menu".to_owned(),
-        substatus: format!("0 / {asset_count} assets"),
+        status,
+        substatus,
         asset_handles,
         loaded_assets: 0,
         failed_assets: 0,
@@ -5310,12 +5330,23 @@ fn poll_menu_loading(
     let completed = loaded + failed;
     let total = loading.asset_handles.len();
     loading.progress = loading_fraction(completed, total);
-    loading.status = if loading.progress >= 1.0 {
-        "Main menu ready".to_owned()
-    } else {
-        "Loading main menu".to_owned()
-    };
-    loading.substatus = if failed == 0 {
+    let ready = loading.progress >= 1.0;
+    match (loading.destination, ready) {
+        (BootDestination::MainMenu, false) => "Loading main menu",
+        (BootDestination::MainMenu, true) => "Main menu ready",
+        (BootDestination::WorldLoading, false) => "Starting town loading",
+        (BootDestination::WorldLoading, true) => "Renderer ready",
+        (BootDestination::Credits, false) => "Loading credits",
+        (BootDestination::Credits, true) => "Credits ready",
+    }
+    .clone_into(&mut loading.status);
+    loading.substatus = if loading.destination == BootDestination::WorldLoading {
+        if ready {
+            "Continuing directly into town preparation".to_owned()
+        } else {
+            "Preparing the renderer".to_owned()
+        }
+    } else if failed == 0 {
         format!("{loaded} / {total} assets")
     } else {
         format!("{loaded} loaded, {failed} unavailable, {total} total")
@@ -5346,6 +5377,18 @@ fn in_rendered_game_state(state: Res<State<GameState>>) -> bool {
         state.get(),
         GameState::MainMenu | GameState::WorldLoading | GameState::InGame
     )
+}
+
+fn next_state_targets_world_loading(next_state: &NextState<GameState>) -> bool {
+    matches!(
+        next_state,
+        NextState::Pending(GameState::WorldLoading)
+            | NextState::PendingIfNeq(GameState::WorldLoading)
+    )
+}
+
+fn world_loading_pending(next_state: Res<NextState<GameState>>) -> bool {
+    next_state_targets_world_loading(&next_state)
 }
 
 fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
@@ -5955,7 +5998,15 @@ fn spawn_loading_screen(
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     render: Option<Res<RenderAssets>>,
+    existing: Query<(), With<LoadingScreenEntity>>,
 ) {
+    // The overlay is deliberately persistent across Boot/MainMenu ->
+    // WorldLoading. Recreating already-decoded ImageNodes still costs one render
+    // extraction frame; despawning the old scene in that frame exposed the
+    // camera clear colour as a black flash.
+    if !existing.is_empty() {
+        return;
+    }
     // This solid layer is immediately renderable even before the authored PNG
     // finishes its own first asset-server round trip. It prevents the partially
     // instantiated destination scene from showing through during boot.
@@ -6406,7 +6457,7 @@ fn sync_boot_loading_screen(
     let Some(loading) = loading else {
         return;
     };
-    let progress_percent = (loading.progress * 100.0).round();
+    let progress_percent = (boot_loading_display_progress(&loading) * 100.0).round();
     if let Ok(mut text) = status.single_mut() {
         (**text).clone_from(&loading.status);
     }
@@ -6418,6 +6469,18 @@ fn sync_boot_loading_screen(
     }
     if let Ok(mut fill) = fills.single_mut() {
         fill.width = percent(progress_percent);
+    }
+}
+
+fn boot_loading_display_progress(loading: &MenuLoadingRuntime) -> f32 {
+    // Autostart's Boot phase only prepares the renderer and the loading-screen
+    // artwork. It hands the same live overlay to WorldLoading, whose authored
+    // progress range begins at five percent. Showing Boot as 100% made this
+    // continuous operation look like two unrelated loading screens.
+    if loading.destination == BootDestination::WorldLoading {
+        loading.progress * 0.05
+    } else {
+        loading.progress
     }
 }
 
@@ -28433,6 +28496,14 @@ fn cleanup_loading_screen(
     for entity in &entities {
         commands.entity(entity).despawn();
     }
+    clear_loading_runtime(&mut commands);
+}
+
+fn cleanup_loading_runtime(mut commands: Commands) {
+    clear_loading_runtime(&mut commands);
+}
+
+fn clear_loading_runtime(commands: &mut Commands) {
     commands.remove_resource::<WorldLoadingRuntime>();
     commands.remove_resource::<WorldGenerationTask>();
     commands.remove_resource::<MenuLoadingRuntime>();
@@ -33298,6 +33369,32 @@ mod tests {
     }
 
     #[test]
+    fn autostart_loading_handoff_stays_covered_and_uses_one_progress_range() {
+        let loading = MenuLoadingRuntime {
+            started_at: Instant::now(),
+            destination: BootDestination::WorldLoading,
+            progress: 1.0,
+            status: String::new(),
+            substatus: String::new(),
+            asset_handles: Vec::new(),
+            loaded_assets: 0,
+            failed_assets: 0,
+            ready_presented_frames: 3,
+        };
+        assert!((boot_loading_display_progress(&loading) - 0.05).abs() < f32::EPSILON);
+        assert!(next_state_targets_world_loading(&NextState::Pending(
+            GameState::WorldLoading
+        )));
+        assert!(next_state_targets_world_loading(&NextState::PendingIfNeq(
+            GameState::WorldLoading
+        )));
+        assert!(!next_state_targets_world_loading(&NextState::Pending(
+            GameState::MainMenu
+        )));
+        assert!(!next_state_targets_world_loading(&NextState::Unchanged));
+    }
+
+    #[test]
     fn wall_and_gate_tiling_match_unity_tile_value_tables() {
         assert_eq!(wall_tiling(0), (0, 1));
         assert_eq!(wall_tiling(20), (0, 0));
@@ -36983,6 +37080,42 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::InGame
+        );
+    }
+
+    #[test]
+    fn world_loading_transition_reuses_the_already_rendered_cover_entities() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(GameConfig::default()))
+        .add_plugins(StreamTownGamePlugin);
+        app.update();
+
+        let before = app
+            .world_mut()
+            .query_filtered::<Entity, With<LoadingScreenEntity>>()
+            .iter(app.world())
+            .collect::<BTreeSet<_>>();
+        assert!(!before.is_empty());
+
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::WorldLoading);
+        app.update();
+
+        let after = app
+            .world_mut()
+            .query_filtered::<Entity, With<LoadingScreenEntity>>()
+            .iter(app.world())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(before, after);
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::WorldLoading
         );
     }
 
