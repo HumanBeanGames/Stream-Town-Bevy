@@ -12,6 +12,7 @@ pub mod runtime_console;
 pub mod save;
 pub mod settings;
 pub mod simulation;
+pub mod technology_layout;
 pub mod world;
 
 pub use animation::{
@@ -79,6 +80,10 @@ pub use simulation::{
     RULER_VOTE_DURATION_SECONDS, RULER_VOTE_INTERVAL_SECONDS, RaidState, RoleProgress,
     RulerVoteKind, RulerVoteState, Season, SimulationError, StreamUserType, TechVote, TownEvent,
     TownGoalState, Weather, WorldSimulation, required_role_experience,
+};
+pub use technology_layout::{
+    CURRENT_TECHNOLOGY_LAYOUT_SCHEMA, GraphPoint, GraphSize, TechnologyGraphLayout,
+    TechnologyGroupLayout, TechnologyLayoutError, TechnologyNodeLayout,
 };
 pub use world::{
     GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,

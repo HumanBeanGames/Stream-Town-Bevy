@@ -16,6 +16,7 @@ mod legacy;
 mod menu_scene;
 mod models;
 mod presentation;
+mod technology_layout;
 
 #[derive(Debug, Parser)]
 #[command(about = "Migration and deterministic content-baking tools for Stream Town")]
@@ -43,6 +44,13 @@ enum Command {
         unity_root: PathBuf,
         #[arg(long)]
         out_dir: PathBuf,
+    },
+    /// Convert Unity's authored technology graph positions into a stable-ID RON sidecar.
+    ConvertTechnologyLayout {
+        graph: PathBuf,
+        catalog: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Validate hashes and glTF metadata emitted by the Blender model converter.
     ValidateModels {
@@ -173,13 +181,34 @@ fn main() -> Result<()> {
         } => {
             let report = content::convert(&export, &out_dir)?;
             let presentation = presentation::convert(&export, &unity_root, &out_dir)?;
+            let graph_path =
+                unity_root.join("Assets/Scripts/TechTree/Editor/Graphs/TechTreeV2Graph.asset");
+            let technology_layout = graph_path
+                .exists()
+                .then(|| {
+                    technology_layout::convert(
+                        &graph_path,
+                        &out_dir.join("catalog.ron"),
+                        &out_dir.join("technology_layout.ron"),
+                    )
+                })
+                .transpose()?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "content": report,
                     "presentation": presentation,
+                    "technology_layout": technology_layout,
                 }))?
             );
+        }
+        Command::ConvertTechnologyLayout {
+            graph,
+            catalog,
+            out,
+        } => {
+            let report = technology_layout::convert(&graph, &catalog, &out)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::ValidateModels {
             report,
