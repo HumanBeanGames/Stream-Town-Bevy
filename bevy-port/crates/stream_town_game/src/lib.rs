@@ -5,7 +5,10 @@ mod unity_color_filter;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -47,7 +50,7 @@ use bevy::{
     render::render_resource::{AsBindGroup, PrimitiveTopology, ShaderType},
     render::view::screenshot::{Screenshot, save_to_disk},
     render::view::{ColorGrading, Msaa},
-    render::{RenderPlugin, settings::WgpuSettings},
+    render::{Render, RenderApp, RenderPlugin, RenderSystems, settings::WgpuSettings},
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
@@ -56,7 +59,7 @@ use bevy::{
         MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode, WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
-    world_serialization::WorldInstanceReady,
+    world_serialization::{WorldInstance, WorldInstanceReady},
 };
 use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
@@ -167,11 +170,13 @@ const GRASS_SHADER_ASSET_PATH: &str = "shaders/grass_material.wgsl";
 const GRASS_PREPASS_SHADER_ASSET_PATH: &str = "shaders/grass_material_prepass.wgsl";
 const GRASS_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Grass.mat";
 const CRITTER_SHADER_ASSET_PATH: &str = "shaders/critter_material.wgsl";
+const CRITTER_PREPASS_SHADER_ASSET_PATH: &str = "shaders/critter_material_prepass.wgsl";
 const CRITTER_MATERIAL_PATH: &str = "Assets/Materials/Critters/Critters.mat";
 const CRITTER_MATERIAL_ID: &str = "material:56cfb478fa4b9e8469bcbbf9cf077701";
 const FLAG_SHADER_ASSET_PATH: &str = "shaders/flag_material.wgsl";
 const FLAG_MATERIAL_PATH: &str = "Assets/Materials/Prototype/Flags.mat";
 const CHARACTER_SHADER_ASSET_PATH: &str = "shaders/character_material.wgsl";
+const MENU_SKY_SHADER_ASSET_PATH: &str = "shaders/menu_sky_material.wgsl";
 const CHARACTER_UNITY_SHADER_PATH: &str = "Assets/Shaders/LowPolyST.shader";
 const GAME_LOGO_TEXTURE_PATH: &str = "Assets/Sprites/Miscellaneous/Game_Logo_DropShadow.png";
 const LOADING_SCREEN_TEXTURE_PATH: &str = "Assets/Sprites/LoadingScreen/UI_LoadingScreen.png";
@@ -267,6 +272,14 @@ const SEAGULL_FLIGHT_SECONDS: f32 = 32.0;
 const SEAGULL_HEIGHT: f32 = 15.0;
 const SEAGULL_MAX_AUDIO_DISTANCE: f32 = 50.0;
 const SEAGULL_MODEL_PATH: &str = "migrated/models/Models/Critters/Critter_Seagull_01.glb";
+const RAIN_CAMERA_CULL_DISTANCE: f32 = 7.5;
+const WORLD_UI_SAFE_TOP: f32 = 78.0;
+const WORLD_UI_SAFE_BOTTOM: f32 = 112.0;
+const WORLD_UI_OVERLAY_MARGIN: f32 = 36.0;
+const UNITY_MAIN_UI_REFERENCE_HEIGHT: f32 = 2_160.0;
+const UNITY_SETTINGS_UI_REFERENCE_HEIGHT: f32 = 1_080.0;
+const MAIN_MENU_CLOUD_COLUMNS: usize = 11;
+const MAIN_MENU_CLOUD_ROWS: usize = 5;
 const PROCEDURAL_AUDIO_SAMPLE_RATE: u32 = 16_000;
 const BUILDING_HIT_SMOKE_SIZE: f32 = 0.5;
 const BUILDING_HIT_SPARK_SIZE: f32 = 0.25;
@@ -779,6 +792,28 @@ impl MaterialExtension for CloudMaterialExtension {
 type CloudMaterial = ExtendedMaterial<StandardMaterial, CloudMaterialExtension>;
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
+struct MenuSkyMaterialUniform {
+    horizon_color: Vec4,
+    zenith_color: Vec4,
+    haze_color: Vec4,
+    sun_direction_strength: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, Clone, Debug, Reflect)]
+struct MenuSkyMaterialExtension {
+    #[uniform(100)]
+    parameters: MenuSkyMaterialUniform,
+}
+
+impl MaterialExtension for MenuSkyMaterialExtension {
+    fn fragment_shader() -> ShaderRef {
+        MENU_SKY_SHADER_ASSET_PATH.into()
+    }
+}
+
+type MenuSkyMaterial = ExtendedMaterial<StandardMaterial, MenuSkyMaterialExtension>;
+
+#[derive(Clone, Copy, Debug, Reflect, ShaderType)]
 struct GodrayMaterialUniform {
     emission_alpha: Vec4,
 }
@@ -850,6 +885,13 @@ struct SpecialtyMaterialAssets<'w> {
     giraffe: Option<ResMut<'w, Assets<GiraffeMaterial>>>,
     bounds: Option<ResMut<'w, Assets<BoundsMaterial>>>,
     character: Option<ResMut<'w, Assets<CharacterMaterial>>>,
+}
+
+#[derive(SystemParam)]
+struct SceneMaterialAssets<'w> {
+    cloud: Option<ResMut<'w, Assets<CloudMaterial>>>,
+    menu_sky: Option<ResMut<'w, Assets<MenuSkyMaterial>>>,
+    godray: Option<ResMut<'w, Assets<GodrayMaterial>>>,
 }
 
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
@@ -952,8 +994,16 @@ struct CritterMaterialExtension {
 }
 
 impl MaterialExtension for CritterMaterialExtension {
+    fn enable_shadows() -> bool {
+        true
+    }
+
     fn vertex_shader() -> ShaderRef {
         CRITTER_SHADER_ASSET_PATH.into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        CRITTER_PREPASS_SHADER_ASSET_PATH.into()
     }
 }
 
@@ -1027,6 +1077,7 @@ struct RenderAssets {
     cube: Handle<Mesh>,
     chimney_particle: Handle<Mesh>,
     actor_lod: Handle<Mesh>,
+    menu_sky_mesh: Handle<Mesh>,
     cloud_plane: Handle<Mesh>,
     healing_ring: Handle<Mesh>,
     healing_plus: Option<Handle<Mesh>>,
@@ -1036,6 +1087,7 @@ struct RenderAssets {
     ground: Handle<TerrainMaterial>,
     water: Handle<WaterMaterial>,
     menu_water: Handle<WaterMaterial>,
+    menu_sky: Handle<MenuSkyMaterial>,
     wood: Handle<StandardMaterial>,
     ore: Handle<StandardMaterial>,
     food: Handle<StandardMaterial>,
@@ -1084,6 +1136,8 @@ struct RenderAssets {
     objective_textures: BTreeMap<String, Handle<Image>>,
     current_event_textures: BTreeMap<String, Handle<Image>>,
     ui_slicers: BTreeMap<String, TextureSlicer>,
+    main_ui_scale: f32,
+    settings_ui_scale: f32,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
 }
 
@@ -1219,14 +1273,18 @@ struct MenuLoadingRuntime {
 #[derive(Resource)]
 struct MenuRevealRuntime {
     started_at: Instant,
-    rendered_frames: u16,
+    starting_render_frame: u64,
+    ready_starting_render_frame: Option<u64>,
+    fallback_updates: u16,
     scene_ready_frames: u8,
 }
 
 #[derive(Resource)]
 struct WorldRevealRuntime {
     started_at: Instant,
-    rendered_frames: u16,
+    starting_render_frame: u64,
+    ready_starting_render_frame: Option<u64>,
+    fallback_updates: u16,
     ready_frames: u8,
 }
 
@@ -1234,7 +1292,9 @@ impl Default for WorldRevealRuntime {
     fn default() -> Self {
         Self {
             started_at: Instant::now(),
-            rendered_frames: 0,
+            starting_render_frame: 0,
+            ready_starting_render_frame: None,
+            fallback_updates: 0,
             ready_frames: 0,
         }
     }
@@ -1244,10 +1304,35 @@ impl Default for MenuRevealRuntime {
     fn default() -> Self {
         Self {
             started_at: Instant::now(),
-            rendered_frames: 0,
+            starting_render_frame: 0,
+            ready_starting_render_frame: None,
+            fallback_updates: 0,
             scene_ready_frames: 0,
         }
     }
+}
+
+#[derive(Resource, Clone)]
+struct PresentedRenderFrames {
+    count: Arc<AtomicU64>,
+    render_schedule_available: bool,
+}
+
+impl PresentedRenderFrames {
+    fn new(render_schedule_available: bool) -> Self {
+        Self {
+            count: Arc::new(AtomicU64::new(0)),
+            render_schedule_available,
+        }
+    }
+
+    fn current(&self) -> u64 {
+        self.count.load(AtomicOrdering::Acquire)
+    }
+}
+
+fn record_presented_render_frame(frames: Res<PresentedRenderFrames>) {
+    frames.count.fetch_add(1, AtomicOrdering::Release);
 }
 
 #[derive(Component)]
@@ -1348,6 +1433,13 @@ struct SeagullFlight {
     call_wait_seconds: f32,
     call_serial: u64,
     world_seed: u64,
+}
+
+#[derive(Component)]
+struct MainMenuCloudPrism {
+    drift_per_second: Vec3,
+    wrap_min_x: f32,
+    wrap_max_x: f32,
 }
 
 #[derive(Component)]
@@ -1659,12 +1751,18 @@ type LoadingPercentQuery<'w, 's> = Query<
 type MenuWorldAssetRootQuery<'w, 's> = Query<
     'w,
     's,
-    Option<&'static Children>,
+    (Option<&'static Children>, Option<&'static WorldInstance>),
     (
         With<StateEntity>,
         With<WorldAssetRoot>,
         Without<WorldEntity>,
     ),
+>;
+type WorldAssetRootQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Option<&'static Children>, Option<&'static WorldInstance>),
+    (With<WorldEntity>, With<WorldAssetRoot>),
 >;
 
 #[derive(Component)]
@@ -2312,6 +2410,15 @@ pub struct StreamTownGamePlugin;
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(UnityColorFilterPlugin);
+        let render_schedule_available = app.get_sub_app(RenderApp).is_some();
+        let presented_frames = PresentedRenderFrames::new(render_schedule_available);
+        app.insert_resource(presented_frames.clone());
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(presented_frames).add_systems(
+                Render,
+                record_presented_render_frame.in_set(RenderSystems::Cleanup),
+            );
+        }
         if !app.world().contains_resource::<RuntimeConfig>() {
             app.insert_resource(RuntimeConfig(GameConfig::default()));
         }
@@ -2434,6 +2541,7 @@ impl Plugin for StreamTownGamePlugin {
                     finish_menu_reveal,
                     sync_boot_loading_screen,
                     animate_fish_school,
+                    animate_main_menu_clouds,
                     hide_main_menu_inactive_model_nodes,
                     enforce_main_menu_building_shadow_casters,
                     tag_main_menu_rotating_nodes,
@@ -2840,6 +2948,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
         .add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_plugins(MaterialPlugin::<BuildingMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())
+        .add_plugins(MaterialPlugin::<MenuSkyMaterial>::default())
         .add_plugins(MaterialPlugin::<GodrayMaterial>::default())
         .add_plugins(MaterialPlugin::<GiraffeMaterial>::default())
         .add_plugins(MaterialPlugin::<BoundsMaterial>::default())
@@ -2997,6 +3106,7 @@ fn embedded_presentation() -> PresentationCatalog {
 fn setup_rendering(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
+    settings: Res<RuntimePlayerSettings>,
     presentation: Res<RuntimePresentation>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
@@ -3004,8 +3114,7 @@ fn setup_rendering(
     terrain_materials: Option<ResMut<Assets<TerrainMaterial>>>,
     water_materials: Option<ResMut<Assets<WaterMaterial>>>,
     building_materials: Option<ResMut<Assets<BuildingMaterial>>>,
-    cloud_materials: Option<ResMut<Assets<CloudMaterial>>>,
-    godray_materials: Option<ResMut<Assets<GodrayMaterial>>>,
+    scene_materials: SceneMaterialAssets,
     specialty_materials: SpecialtyMaterialAssets,
     tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
@@ -3018,8 +3127,11 @@ fn setup_rendering(
         Some(mut terrain_materials),
         Some(mut water_materials),
         Some(mut building_materials),
-        Some(mut cloud_materials),
-        Some(mut godray_materials),
+        SceneMaterialAssets {
+            cloud: Some(mut cloud_materials),
+            menu_sky: Some(mut menu_sky_materials),
+            godray: Some(mut godray_materials),
+        },
         SpecialtyMaterialAssets {
             giraffe: Some(mut giraffe_materials),
             bounds: Some(mut bounds_materials),
@@ -3035,8 +3147,7 @@ fn setup_rendering(
         terrain_materials,
         water_materials,
         building_materials,
-        cloud_materials,
-        godray_materials,
+        scene_materials,
         specialty_materials,
         tree_materials,
         grass_materials,
@@ -3152,6 +3263,7 @@ fn setup_rendering(
     let authored_building =
         building_materials.add(building_material(&presentation.0, asset_server.as_deref()));
     let clouds = cloud_materials.add(cloud_material(&presentation.0, asset_server.as_deref()));
+    let menu_sky = menu_sky_materials.add(menu_sky_material());
     let menu_cloud = materials.add(StandardMaterial {
         base_color: Color::srgb(0.96, 0.98, 1.0),
         perceptual_roughness: 1.0,
@@ -3436,10 +3548,18 @@ fn setup_rendering(
         });
     let water = water_material(&presentation.0, asset_server.as_deref());
     let menu_water = main_menu_water_material(water.clone());
+    let window_height =
+        f32::from(u16::try_from(settings.0.video.height.max(1)).unwrap_or(u16::MAX));
     commands.insert_resource(RenderAssets {
         cube: meshes.add(Cuboid::default()),
         chimney_particle: meshes.add(Sphere::new(0.5).mesh().ico(1).expect("valid icosphere")),
         actor_lod: meshes.add(Capsule3d::new(0.42, 1.45)),
+        menu_sky_mesh: meshes.add(
+            Sphere::new(1.0)
+                .mesh()
+                .ico(4)
+                .expect("valid main-menu sky sphere"),
+        ),
         cloud_plane: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
         healing_ring: meshes.add(healing_ring_mesh(48)),
         healing_plus,
@@ -3457,6 +3577,7 @@ fn setup_rendering(
         )),
         water: water_materials.add(water),
         menu_water: water_materials.add(menu_water),
+        menu_sky,
         wood: materials.add(Color::srgb(0.16, 0.46, 0.18)),
         ore: materials.add(Color::srgb(0.46, 0.50, 0.55)),
         food: materials.add(Color::srgb(0.74, 0.64, 0.18)),
@@ -3570,6 +3691,8 @@ fn setup_rendering(
         objective_textures,
         current_event_textures,
         ui_slicers,
+        main_ui_scale: window_height / UNITY_MAIN_UI_REFERENCE_HEIGHT,
+        settings_ui_scale: window_height / UNITY_SETTINGS_UI_REFERENCE_HEIGHT,
         presentation_materials,
     });
 }
@@ -4627,6 +4750,25 @@ fn main_menu_water_material(mut material: WaterMaterial) -> WaterMaterial {
     material.extension.parameters.opacity_controls = Vec4::new(0.68, 0.78, 1.0, 0.46);
     material.base.alpha_mode = AlphaMode::Blend;
     material
+}
+
+fn menu_sky_material() -> MenuSkyMaterial {
+    MenuSkyMaterial {
+        base: StandardMaterial {
+            base_color: Color::WHITE,
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        },
+        extension: MenuSkyMaterialExtension {
+            parameters: MenuSkyMaterialUniform {
+                horizon_color: Vec4::new(0.16, 0.48, 0.82, 1.0),
+                zenith_color: Vec4::new(0.015, 0.08, 0.30, 1.0),
+                haze_color: Vec4::new(1.0, 0.48, 0.18, 1.0),
+                sun_direction_strength: Vec4::new(-0.48, 0.32, -0.81, 0.46),
+            },
+        },
+    }
 }
 
 fn building_material(
@@ -5734,6 +5876,7 @@ fn restore_town_camera_for_world(
 
 fn spawn_main_menu(
     mut commands: Commands,
+    presented_frames: Res<PresentedRenderFrames>,
     render: Res<RenderAssets>,
     presentation: Res<RuntimePresentation>,
     content: Res<RuntimeContent>,
@@ -5743,13 +5886,29 @@ fn spawn_main_menu(
     mut cameras: TownCameraMutQuery,
     mut sun: TownSunMutQuery,
 ) {
-    commands.insert_resource(MenuRevealRuntime::default());
+    commands.insert_resource(MenuRevealRuntime {
+        started_at: Instant::now(),
+        starting_render_frame: presented_frames.current(),
+        ready_starting_render_frame: None,
+        fallback_updates: 0,
+        scene_ready_frames: 0,
+    });
     let reference = embedded_main_menu_scene();
     let bake = reference
         .corrective_bake
         .as_ref()
         .expect("validated main-menu corrective bake");
     apply_authored_main_menu_camera(reference, &mut cameras);
+    commands.spawn((
+        StateEntity,
+        Name::new("Main-menu gradient sky"),
+        Mesh3d(render.menu_sky_mesh.clone()),
+        MeshMaterial3d(render.menu_sky.clone()),
+        Transform::from_translation(Vec3::from_array(reference.camera.position))
+            .with_scale(Vec3::splat(reference.camera.far * 0.82)),
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
+    ));
     if let Ok((mut light, mut transform)) = sun.single_mut() {
         light.color = Color::srgb(1.0, 0.956_862_75, 0.839_215_7);
         light.illuminance = 14_000.0;
@@ -6075,7 +6234,7 @@ fn spawn_loading_screen(
     commands.spawn((
         LoadingScreenEntity,
         BackgroundColor(Color::srgb(0.025, 0.04, 0.055)),
-        GlobalZIndex(99),
+        GlobalZIndex(1_000),
         Node {
             position_type: PositionType::Absolute,
             width: percent(100.0),
@@ -6090,7 +6249,7 @@ fn spawn_loading_screen(
         commands.spawn((
             LoadingScreenEntity,
             ImageNode::new(background.clone()).with_mode(NodeImageMode::Stretch),
-            GlobalZIndex(100),
+            GlobalZIndex(1_001),
             Node {
                 position_type: PositionType::Absolute,
                 width: percent(100.0),
@@ -6106,7 +6265,7 @@ fn spawn_loading_screen(
         commands.spawn((
             LoadingScreenEntity,
             ImageNode::new(overlay.clone()).with_mode(NodeImageMode::Stretch),
-            GlobalZIndex(101),
+            GlobalZIndex(1_002),
             Node {
                 position_type: PositionType::Absolute,
                 width: percent(100.0),
@@ -6125,7 +6284,7 @@ fn spawn_loading_screen(
         },
         TextLayout::justify(Justify::Center),
         TextColor(Color::srgb(0.93, 0.91, 0.78)),
-        GlobalZIndex(103),
+        GlobalZIndex(1_004),
         Node {
             position_type: PositionType::Absolute,
             left: percent(34.0),
@@ -6144,7 +6303,7 @@ fn spawn_loading_screen(
         },
         TextLayout::justify(Justify::Center),
         TextColor(Color::srgb(0.75, 0.76, 0.78)),
-        GlobalZIndex(103),
+        GlobalZIndex(1_004),
         Node {
             position_type: PositionType::Absolute,
             left: percent(30.0),
@@ -6163,7 +6322,7 @@ fn spawn_loading_screen(
         },
         TextLayout::justify(Justify::Center),
         TextColor(Color::WHITE),
-        GlobalZIndex(103),
+        GlobalZIndex(1_004),
         Node {
             position_type: PositionType::Absolute,
             left: percent(47.0),
@@ -6175,7 +6334,7 @@ fn spawn_loading_screen(
     commands
         .spawn((
             LoadingScreenEntity,
-            GlobalZIndex(103),
+            GlobalZIndex(1_004),
             Node {
                 position_type: PositionType::Absolute,
                 left: percent(30.0),
@@ -6210,7 +6369,7 @@ fn spawn_loading_screen(
         },
         TextLayout::justify(Justify::Center),
         TextColor(Color::srgb(0.82, 0.82, 0.82)),
-        GlobalZIndex(103),
+        GlobalZIndex(1_004),
         Node {
             position_type: PositionType::Absolute,
             left: percent(25.0),
@@ -6448,18 +6607,19 @@ fn advance_loading_phase(
     time: Res<Time>,
     mut loading: ResMut<WorldLoadingRuntime>,
     mut next_state: ResMut<NextState<GameState>>,
-    scene_roots: Query<Option<&Children>, (With<WorldEntity>, With<WorldAssetRoot>)>,
+    world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
+    scene_roots: WorldAssetRootQuery,
 ) {
     if loading.phase == WorldLoadingPhase::Complete {
         let mut root_count = 0;
         let mut ready_count = 0;
-        for children in &scene_roots {
+        for (children, instance) in &scene_roots {
             root_count += 1;
-            if children.is_some_and(|children| !children.is_empty()) {
+            if world_asset_root_ready(children, instance, world_instance_spawner.as_deref()) {
                 ready_count += 1;
             }
         }
-        if root_count == ready_count {
+        if asset_root_collection_ready(root_count, ready_count, world_instance_spawner.is_some()) {
             loading.scene_ready_frames = loading.scene_ready_frames.saturating_add(1);
         } else {
             loading.scene_ready_frames = 0;
@@ -6552,8 +6712,45 @@ fn boot_loading_display_progress(loading: &MenuLoadingRuntime) -> f32 {
     }
 }
 
+fn world_asset_root_ready(
+    children: Option<&Children>,
+    instance: Option<&WorldInstance>,
+    spawner: Option<&WorldInstanceSpawner>,
+) -> bool {
+    if let Some(spawner) = spawner {
+        return instance.is_some_and(|instance| spawner.instance_is_ready(**instance));
+    }
+    // Reduced/headless apps do not install the world-instance spawner. Keep
+    // their deterministic fallback while the shipping renderer uses the
+    // authoritative readiness signal above.
+    children.is_some_and(|children| !children.is_empty())
+}
+
+fn asset_root_collection_ready(
+    root_count: usize,
+    ready_count: usize,
+    world_instance_spawner_available: bool,
+) -> bool {
+    root_count == ready_count && (root_count > 0 || !world_instance_spawner_available)
+}
+
+fn rendered_frames_since_ready(
+    starting_frame: &mut Option<u64>,
+    ready: bool,
+    presented_render_frame: u64,
+) -> u64 {
+    if !ready {
+        *starting_frame = None;
+        return 0;
+    }
+    let starting_frame = *starting_frame.get_or_insert(presented_render_frame);
+    presented_render_frame.saturating_sub(starting_frame)
+}
+
 fn finish_menu_reveal(
     mut commands: Commands,
+    presented_frames: Res<PresentedRenderFrames>,
+    world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
     mut reveal: Option<ResMut<MenuRevealRuntime>>,
     mut loading: Option<ResMut<MenuLoadingRuntime>>,
     loading_entities: Query<Entity, With<LoadingScreenEntity>>,
@@ -6562,26 +6759,39 @@ fn finish_menu_reveal(
     let Some(reveal) = reveal.as_deref_mut() else {
         return;
     };
-    reveal.rendered_frames = reveal.rendered_frames.saturating_add(1);
+    reveal.fallback_updates = reveal.fallback_updates.saturating_add(1);
+    let presented_render_frame = if presented_frames.render_schedule_available {
+        presented_frames.current()
+    } else {
+        u64::from(reveal.fallback_updates)
+    };
+    let rendered_frames = presented_render_frame.saturating_sub(reveal.starting_render_frame);
     let mut root_count = 0;
     let mut ready_count = 0;
-    for children in &scene_roots {
+    for (children, instance) in &scene_roots {
         root_count += 1;
-        if children.is_some_and(|children| !children.is_empty()) {
+        if world_asset_root_ready(children, instance, world_instance_spawner.as_deref()) {
             ready_count += 1;
         }
     }
-    if root_count > 0 && ready_count == root_count {
+    let roots_ready =
+        asset_root_collection_ready(root_count, ready_count, world_instance_spawner.is_some());
+    if roots_ready {
         reveal.scene_ready_frames = reveal.scene_ready_frames.saturating_add(1);
     } else {
         reveal.scene_ready_frames = 0;
     }
+    let ready_rendered_frames = rendered_frames_since_ready(
+        &mut reveal.ready_starting_render_frame,
+        roots_ready,
+        presented_render_frame,
+    );
     if let Some(loading) = loading.as_deref_mut() {
         loading.progress = 0.98;
         "Building main menu scene".clone_into(&mut loading.status);
         loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
     }
-    if reveal.rendered_frames < 3 || reveal.scene_ready_frames < 5 {
+    if ready_rendered_frames < 12 || reveal.scene_ready_frames < 8 {
         return;
     }
     for entity in &loading_entities {
@@ -6589,6 +6799,8 @@ fn finish_menu_reveal(
     }
     info!(
         scene_roots = root_count,
+        rendered_frames,
+        ready_rendered_frames,
         elapsed_seconds = reveal.started_at.elapsed().as_secs_f64(),
         "Stream Town main-menu scene reveal complete"
     );
@@ -6596,17 +6808,25 @@ fn finish_menu_reveal(
     commands.remove_resource::<MenuRevealRuntime>();
 }
 
-fn begin_world_reveal(mut commands: Commands) {
-    commands.insert_resource(WorldRevealRuntime::default());
+fn begin_world_reveal(mut commands: Commands, presented_frames: Res<PresentedRenderFrames>) {
+    commands.insert_resource(WorldRevealRuntime {
+        started_at: Instant::now(),
+        starting_render_frame: presented_frames.current(),
+        ready_starting_render_frame: None,
+        fallback_updates: 0,
+        ready_frames: 0,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
 fn finish_world_reveal(
     mut commands: Commands,
+    presented_frames: Res<PresentedRenderFrames>,
+    world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
     mut reveal: Option<ResMut<WorldRevealRuntime>>,
     mut loading: Option<ResMut<WorldLoadingRuntime>>,
     loading_entities: Query<Entity, With<LoadingScreenEntity>>,
-    scene_roots: Query<Option<&Children>, (With<WorldEntity>, With<WorldAssetRoot>)>,
+    scene_roots: WorldAssetRootQuery,
     material_specs: Query<(), With<MaterialOverrideSpec>>,
     mesh_overrides: Query<(Entity, Option<&MaterialOverrideApplied>), With<Mesh3d>>,
     parents: Query<&ChildOf>,
@@ -6614,13 +6834,19 @@ fn finish_world_reveal(
     let Some(reveal) = reveal.as_deref_mut() else {
         return;
     };
-    reveal.rendered_frames = reveal.rendered_frames.saturating_add(1);
+    reveal.fallback_updates = reveal.fallback_updates.saturating_add(1);
+    let presented_render_frame = if presented_frames.render_schedule_available {
+        presented_frames.current()
+    } else {
+        u64::from(reveal.fallback_updates)
+    };
+    let rendered_frames = presented_render_frame.saturating_sub(reveal.starting_render_frame);
 
     let mut root_count = 0;
     let mut ready_roots = 0;
-    for children in &scene_roots {
+    for (children, instance) in &scene_roots {
         root_count += 1;
-        if children.is_some_and(|children| !children.is_empty()) {
+        if world_asset_root_ready(children, instance, world_instance_spawner.as_deref()) {
             ready_roots += 1;
         }
     }
@@ -6648,13 +6874,20 @@ fn finish_world_reveal(
         }
     }
 
-    let roots_ready = root_count == ready_roots;
+    let roots_ready =
+        asset_root_collection_ready(root_count, ready_roots, world_instance_spawner.is_some());
     let materials_ready = authored_meshes == applied_meshes;
-    if roots_ready && materials_ready {
+    let world_ready = roots_ready && materials_ready;
+    if world_ready {
         reveal.ready_frames = reveal.ready_frames.saturating_add(1);
     } else {
         reveal.ready_frames = 0;
     }
+    let ready_rendered_frames = rendered_frames_since_ready(
+        &mut reveal.ready_starting_render_frame,
+        world_ready,
+        presented_render_frame,
+    );
     if let Some(loading) = loading.as_deref_mut() {
         loading.progress = 1.0;
         "Preparing first rendered frame".clone_into(&mut loading.status);
@@ -6666,7 +6899,7 @@ fn finish_world_reveal(
     // A few fully-ready rendered frames deliberately remain covered. This is
     // where wgpu compiles the world/selection pipelines and uploads textures;
     // revealing earlier is what exposed black and fallback-blue frames.
-    if reveal.rendered_frames < 8 || reveal.ready_frames < 5 {
+    if ready_rendered_frames < 16 || reveal.ready_frames < 10 {
         return;
     }
     for entity in &loading_entities {
@@ -6675,6 +6908,8 @@ fn finish_world_reveal(
     info!(
         scene_roots = root_count,
         authored_meshes,
+        rendered_frames,
+        ready_rendered_frames,
         elapsed_seconds = reveal.started_at.elapsed().as_secs_f64(),
         "Stream Town world reveal complete"
     );
@@ -7038,10 +7273,15 @@ fn enforce_main_menu_building_shadow_casters(
 }
 
 fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAssets) {
-    for layer in 0..21 {
+    for layer in 0..MAIN_MENU_CLOUD_COLUMNS * MAIN_MENU_CLOUD_ROWS {
         commands.spawn((
             StateEntity,
             Name::new(format!("Menu cloud prism {layer:02}")),
+            MainMenuCloudPrism {
+                drift_per_second: Vec3::new(1.15 + small_pattern(layer, 5) * 0.12, 0.0, 0.16),
+                wrap_min_x: -95.0,
+                wrap_max_x: 330.0,
+            },
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(render.menu_cloud.clone()),
             main_menu_cloud_prism_transform(layer),
@@ -7052,23 +7292,39 @@ fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAsset
 }
 
 fn main_menu_cloud_prism_transform(layer: usize) -> Transform {
-    let column = layer % 7;
-    let row = layer / 7;
+    let column = layer % MAIN_MENU_CLOUD_COLUMNS;
+    let row = layer / MAIN_MENU_CLOUD_COLUMNS;
     #[allow(clippy::cast_precision_loss)]
     let (column_f, row_f) = (column as f32, row as f32);
     let small =
         |value: usize| f32::from(u8::try_from(value).expect("menu cloud pattern value fits in u8"));
     let position = Vec3::new(
-        55.0 - column_f * 24.0 - row_f * 8.0,
-        28.0 + row_f * 6.0 + small((column * 2 + row) % 3) * 2.1,
-        95.0 + row_f * 42.0 + small(column % 2) * 5.0,
+        -55.0 + column_f * 34.0 - row_f * 7.0,
+        25.0 + row_f * 5.5 + small((column * 2 + row) % 3) * 2.1,
+        42.0 + row_f * 48.0 + small(column % 2) * 7.0,
     );
     let scale = Vec3::new(
-        22.0 + small((column + row) % 3) * 9.0,
-        2.6 + small((column + row * 2) % 3) * 0.6,
-        10.0 + small((column * 2 + row) % 4) * 4.0,
+        18.0 + small((column + row) % 3) * 7.0,
+        3.0 + small((column + row * 2) % 3) * 0.75,
+        12.0 + small((column * 2 + row) % 4) * 4.5,
     );
     Transform::from_translation(position).with_scale(scale)
+}
+
+fn small_pattern(value: usize, modulo: usize) -> f32 {
+    f32::from(u8::try_from(value % modulo).expect("menu cloud pattern value fits u8"))
+}
+
+fn animate_main_menu_clouds(
+    time: Res<Time>,
+    mut clouds: Query<(&MainMenuCloudPrism, &mut Transform)>,
+) {
+    for (cloud, mut transform) in &mut clouds {
+        transform.translation += cloud.drift_per_second * time.delta_secs();
+        if transform.translation.x > cloud.wrap_max_x {
+            transform.translation.x = cloud.wrap_min_x;
+        }
+    }
 }
 
 fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
@@ -7335,11 +7591,43 @@ fn current_event_texture(render: &RenderAssets, source_path: &str) -> Handle<Ima
 }
 
 fn authored_ui_image(render: &RenderAssets, source_path: &str, image: Handle<Image>) -> ImageNode {
+    authored_ui_image_with_corner_scale(render, source_path, image, render.main_ui_scale)
+}
+
+fn settings_ui_image(render: &RenderAssets, source_path: &str, image: Handle<Image>) -> ImageNode {
+    authored_ui_image_with_corner_scale(render, source_path, image, render.settings_ui_scale)
+}
+
+fn authored_main_ui_image_with_ppu(
+    render: &RenderAssets,
+    source_path: &str,
+    image: Handle<Image>,
+    pixels_per_unit_multiplier: f32,
+) -> ImageNode {
+    authored_ui_image_with_corner_scale(
+        render,
+        source_path,
+        image,
+        render.main_ui_scale / pixels_per_unit_multiplier.max(0.001),
+    )
+}
+
+fn authored_ui_image_with_corner_scale(
+    render: &RenderAssets,
+    source_path: &str,
+    image: Handle<Image>,
+    corner_scale: f32,
+) -> ImageNode {
     let mode = render
         .ui_slicers
         .get(source_path)
         .map_or(NodeImageMode::Stretch, |slicer| {
-            NodeImageMode::Sliced(slicer.clone())
+            let mut slicer = slicer.clone();
+            // Unity keeps the slice lines in source pixels, then scales only
+            // their drawn corners by CanvasScaler / PixelsPerUnitMultiplier.
+            // Altering the border itself samples the wrong part of the sprite.
+            slicer.max_corner_scale = corner_scale.max(0.001);
+            NodeImageMode::Sliced(slicer)
         });
     ImageNode::new(image).with_mode(mode)
 }
@@ -7570,12 +7858,6 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
             WorldEntity,
             VotePanelKind::Ruler,
             Name::new("Ruler voting menu"),
-            authored_ui_image(
-                render,
-                VOTE_TEXTURE_PATHS[0],
-                vote_texture(render, VOTE_TEXTURE_PATHS[0]),
-            )
-            .with_color(Color::srgba(1.0, 1.0, 1.0, 0.8)),
             GlobalZIndex(24),
             Visibility::Hidden,
             Node {
@@ -7583,13 +7865,31 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 right: percent(1.2),
                 bottom: percent(0.0),
                 width: percent(14.6),
-                min_width: px(280),
                 height: percent(31.4),
-                min_height: px(330),
                 ..default()
             },
         ))
         .with_children(|panel| {
+            // Unity extends the sliced panel 156 authored pixels beneath its
+            // anchored content rect. Keeping that offset separate prevents the
+            // title and options from being scaled along with the decorative frame.
+            panel.spawn((
+                authored_ui_image(
+                    render,
+                    VOTE_TEXTURE_PATHS[0],
+                    vote_texture(render, VOTE_TEXTURE_PATHS[0]),
+                )
+                .with_color(Color::srgba(1.0, 1.0, 1.0, 0.95)),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(0),
+                    left: px(0),
+                    right: px(0),
+                    bottom: px(-156.0 * render.main_ui_scale),
+                    ..default()
+                },
+            ));
             panel.spawn((
                 ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[7])),
                 Node {
@@ -7605,7 +7905,10 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 UiDisplayFont,
                 Text::new("VOTE FOR RULER"),
                 TextFont {
-                    font_size: FontSize::Px(16.0),
+                    // Bevy's converted display font is wider than Unity's
+                    // TextMeshPro atlas. Fit the complete authored label rather
+                    // than clipping "RULER" at the right edge.
+                    font_size: FontSize::Px(17.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
@@ -7615,6 +7918,8 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     left: percent(31.2),
                     right: percent(18.8),
                     top: percent(11.4),
+                    height: percent(7.5),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
             ));
@@ -7622,16 +7927,18 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VoteTextKind::RulerDescription,
                 Text::new("Who should be Ruler?"),
                 TextFont {
-                    font_size: FontSize::Px(15.0),
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
-                TextColor(Color::WHITE),
+                TextColor(Color::srgb(0.91, 0.89, 0.81)),
                 Node {
                     position_type: PositionType::Absolute,
                     top: percent(18.9),
                     left: percent(10.9),
                     right: percent(11.1),
+                    height: percent(10.5),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
             ));
@@ -7669,10 +7976,11 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VoteTextKind::RulerTimer,
                 Text::new("02:00"),
                 TextFont {
-                    font_size: FontSize::Px(18.0),
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.91, 0.89, 0.81)),
                 Node {
                     position_type: PositionType::Absolute,
                     left: percent(17.9),
@@ -7814,7 +8122,7 @@ fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
                             ..default()
                         },
                         TextLayout::justify(Justify::Center),
-                        TextColor(Color::WHITE),
+                        TextColor(Color::srgb(0.91, 0.89, 0.81)),
                         Pickable::IGNORE,
                         Node {
                             position_type: PositionType::Absolute,
@@ -7894,6 +8202,52 @@ fn spawn_bottom_bar_button(
         });
 }
 
+fn spawn_hud_metric(
+    parent: &mut ChildSpawnerCommands,
+    render: &RenderAssets,
+    metric: HudMetric,
+    source_path: &str,
+    width: Val,
+) {
+    parent
+        .spawn(Node {
+            width,
+            height: percent(100.0),
+            flex_shrink: 0.0,
+            align_items: AlignItems::Center,
+            overflow: Overflow::clip(),
+            ..default()
+        })
+        .with_children(|metric_parent| {
+            if let Some(icon) = top_bar_texture(render, source_path) {
+                metric_parent.spawn((
+                    ImageNode::new(icon),
+                    Node {
+                        width: px(36),
+                        height: px(36),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                ));
+            }
+            metric_parent.spawn((
+                metric,
+                Text::new("0"),
+                TextFont {
+                    font_size: FontSize::Px(20.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.91, 0.89, 0.81)),
+                Node {
+                    flex_grow: 1.0,
+                    padding: UiRect::left(px(5)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ));
+        });
+}
+
 fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_hash: &str) {
     let background = top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[0]);
     let complete_art = TOP_BAR_TEXTURE_PATHS
@@ -7908,13 +8262,9 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
             top: px(0),
             left: px(0),
             width: percent(100.0),
-            height: px(106),
-            display: Display::Flex,
-            flex_direction: FlexDirection::Row,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            column_gap: px(24),
-            padding: UiRect::axes(px(24), px(12)),
+            height: percent(6.2),
+            min_height: px(62),
+            max_height: px(76),
             ..default()
         },
         BackgroundColor(Color::srgba(0.025, 0.05, 0.035, 0.88)),
@@ -7927,46 +8277,75 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         }));
     }
     root.with_children(|parent| {
-        for (metric, source_path) in [
-            (HudMetric::Food, TOP_BAR_TEXTURE_PATHS[1]),
-            (HudMetric::Gold, TOP_BAR_TEXTURE_PATHS[2]),
-            (HudMetric::Ore, TOP_BAR_TEXTURE_PATHS[3]),
-            (HudMetric::Wood, TOP_BAR_TEXTURE_PATHS[4]),
-            (HudMetric::Players, TOP_BAR_TEXTURE_PATHS[5]),
-            (HudMetric::Buildings, TOP_BAR_TEXTURE_PATHS[6]),
-            (HudMetric::PlayTime, TOP_BAR_TEXTURE_PATHS[7]),
-        ] {
-            let icon = top_bar_texture(render, source_path);
-            parent
-                .spawn(Node {
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: px(5),
-                    ..default()
-                })
-                .with_children(|metric_parent| {
-                    if let Some(icon) = icon {
-                        metric_parent.spawn((
-                            ImageNode::new(icon),
-                            Node {
-                                width: px(48),
-                                height: px(48),
-                                ..default()
-                            },
-                        ));
-                    }
-                    metric_parent.spawn((
-                        metric,
-                        Text::new("0"),
-                        TextFont {
-                            font_size: FontSize::Px(22.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                });
-        }
+        parent
+            .spawn(Node {
+                position_type: PositionType::Absolute,
+                left: percent(0.0),
+                top: percent(18.0),
+                width: percent(40.6),
+                height: percent(82.0),
+                overflow: Overflow::clip(),
+                ..default()
+            })
+            .with_children(|resources| {
+                for (metric, path) in [
+                    (HudMetric::Food, TOP_BAR_TEXTURE_PATHS[1]),
+                    (HudMetric::Gold, TOP_BAR_TEXTURE_PATHS[2]),
+                    (HudMetric::Ore, TOP_BAR_TEXTURE_PATHS[3]),
+                    (HudMetric::Wood, TOP_BAR_TEXTURE_PATHS[4]),
+                ] {
+                    spawn_hud_metric(resources, render, metric, path, percent(25.0));
+                }
+            });
+        parent
+            .spawn(Node {
+                position_type: PositionType::Absolute,
+                right: percent(0.0),
+                top: percent(18.0),
+                width: percent(38.4),
+                height: percent(82.0),
+                overflow: Overflow::clip(),
+                ..default()
+            })
+            .with_children(|stats| {
+                spawn_hud_metric(
+                    stats,
+                    render,
+                    HudMetric::Players,
+                    TOP_BAR_TEXTURE_PATHS[5],
+                    percent(19.0),
+                );
+                spawn_hud_metric(
+                    stats,
+                    render,
+                    HudMetric::Buildings,
+                    TOP_BAR_TEXTURE_PATHS[6],
+                    percent(19.0),
+                );
+                spawn_hud_metric(
+                    stats,
+                    render,
+                    HudMetric::PlayTime,
+                    TOP_BAR_TEXTURE_PATHS[7],
+                    percent(36.6),
+                );
+                stats.spawn((
+                    Text::new("TECH TREE"),
+                    TextFont {
+                        font_size: FontSize::Px(17.0),
+                        ..default()
+                    },
+                    TextLayout::justify(Justify::Center),
+                    TextColor(Color::srgb(0.91, 0.89, 0.81)),
+                    Node {
+                        width: percent(25.4),
+                        height: percent(100.0),
+                        padding: UiRect::top(px(9)),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ));
+            });
         if let (Some(gauge), Some(meter)) = (
             top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[8]),
             top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[9]),
@@ -7975,8 +8354,11 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                 .spawn((
                     ImageNode::new(gauge),
                     Node {
+                        position_type: PositionType::Absolute,
+                        left: percent(42.15),
+                        top: percent(12.6),
                         width: px(300),
-                        height: px(32),
+                        height: percent(58.9),
                         ..default()
                     },
                 ))
@@ -8571,7 +8953,7 @@ fn spawn_settings_button(
         .spawn((
             action,
             Button,
-            authored_ui_image(
+            settings_ui_image(
                 render,
                 MAIN_MENU_TEXTURE_PATHS[0],
                 main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
@@ -8594,6 +8976,91 @@ fn spawn_settings_button(
                 TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
                 Pickable::IGNORE,
             ));
+        });
+}
+
+fn spawn_settings_value_row(
+    parent: &mut ChildSpawnerCommands,
+    settings: &PlayerSettings,
+    selected: usize,
+    index: usize,
+    render: &RenderAssets,
+) {
+    let (label, value) = settings_value_label(settings, index);
+    parent
+        .spawn((
+            BackgroundColor(if selected == index {
+                Color::srgba(0.211, 0.240, 0.358, 0.82)
+            } else {
+                Color::srgba(0.055, 0.071, 0.141, 0.72)
+            }),
+            Node {
+                width: percent(100.0),
+                height: px(48),
+                flex_shrink: 0.0,
+                padding: UiRect::horizontal(px(10)),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                overflow: Overflow::clip(),
+                ..default()
+            },
+        ))
+        .with_children(|row| {
+            row.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.827, 0.745, 0.498)),
+                Node {
+                    width: percent(43.0),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ));
+            for direction in [-1, 1] {
+                if direction == 1 {
+                    row.spawn((
+                        Text::new(value.clone()),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(0.90, 0.88, 0.80)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(30.0),
+                            overflow: Overflow::clip(),
+                            ..default()
+                        },
+                    ));
+                }
+                row.spawn((
+                    SettingsValueButton { index, direction },
+                    Button,
+                    settings_ui_image(
+                        render,
+                        MAIN_MENU_TEXTURE_PATHS[0],
+                        main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
+                    ),
+                    Node {
+                        width: px(32),
+                        height: px(32),
+                        flex_shrink: 0.0,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                ))
+                .with_children(|button| {
+                    button.spawn((
+                        Text::new(if direction < 0 { "<" } else { ">" }),
+                        Pickable::IGNORE,
+                    ));
+                });
+            }
         });
 }
 
@@ -8755,95 +9222,28 @@ fn rebuild_settings_rows(
             ));
             return;
         }
-        for &index in settings_tab_indices(menu.settings_tab) {
-            let (label, value) = settings_value_label(&menu.draft, index);
+        let indices = settings_tab_indices(menu.settings_tab);
+        let split = indices.len().div_ceil(2);
+        for column_indices in [&indices[..split], &indices[split..]] {
             parent
-                .spawn((
-                    BackgroundColor(if menu.selected == index {
-                        Color::srgba(0.211, 0.240, 0.358, 0.82)
-                    } else {
-                        Color::srgba(0.055, 0.071, 0.141, 0.72)
-                    }),
-                    Node {
-                        width: percent(48.0),
-                        height: px(44),
-                        padding: UiRect::horizontal(px(8)),
-                        justify_content: JustifyContent::SpaceBetween,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                ))
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new(label),
-                        TextFont {
-                            font_size: FontSize::Px(15.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.827, 0.745, 0.498)),
-                        Node {
-                            width: percent(48.0),
-                            ..default()
-                        },
-                    ));
-                    row.spawn((
-                        SettingsValueButton {
+                .spawn(Node {
+                    width: percent(48.0),
+                    height: percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(8),
+                    overflow: Overflow::clip(),
+                    ..default()
+                })
+                .with_children(|column| {
+                    for &index in column_indices {
+                        spawn_settings_value_row(
+                            column,
+                            &menu.draft,
+                            menu.selected,
                             index,
-                            direction: -1,
-                        },
-                        Button,
-                        authored_ui_image(
                             &render,
-                            MAIN_MENU_TEXTURE_PATHS[0],
-                            main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]),
-                        ),
-                        Node {
-                            width: px(30),
-                            height: px(30),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_children(|button| {
-                        button.spawn((Text::new("<"), Pickable::IGNORE));
-                    });
-                    row.spawn((
-                        Text::new(value),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextLayout::justify(Justify::Center),
-                        TextColor(Color::WHITE),
-                        Pickable::IGNORE,
-                        Node {
-                            width: percent(28.0),
-                            ..default()
-                        },
-                    ));
-                    row.spawn((
-                        SettingsValueButton {
-                            index,
-                            direction: 1,
-                        },
-                        Button,
-                        authored_ui_image(
-                            &render,
-                            MAIN_MENU_TEXTURE_PATHS[0],
-                            main_menu_texture(&render, MAIN_MENU_TEXTURE_PATHS[0]),
-                        ),
-                        Node {
-                            width: px(30),
-                            height: px(30),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_children(|button| {
-                        button.spawn((Text::new(">"), Pickable::IGNORE));
-                    });
+                        );
+                    }
                 });
         }
     });
@@ -8995,10 +9395,11 @@ fn spawn_menu_overlay(
         .with_children(|root| {
             root.spawn((
                 Name::new("Game menu background"),
-                authored_ui_image(
+                authored_main_ui_image_with_ppu(
                     &render,
                     GAME_MENU_TEXTURE_PATHS[0],
                     main_menu_texture(&render, GAME_MENU_TEXTURE_PATHS[0]),
+                    1.5,
                 ),
                 Node {
                     position_type: PositionType::Absolute,
@@ -9148,7 +9549,7 @@ fn spawn_menu_overlay(
             StateEntity,
             SettingsRoot,
             Name::new("Shipping settings menu"),
-            authored_ui_image(
+            settings_ui_image(
                 &render,
                 SETTINGS_BACKGROUND_TEXTURE_PATH,
                 main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
@@ -9157,13 +9558,10 @@ fn spawn_menu_overlay(
             GlobalZIndex(110),
             Node {
                 position_type: PositionType::Absolute,
-                left: percent(9.0),
-                top: percent(7.0),
-                width: percent(82.0),
-                height: percent(86.0),
-                padding: UiRect::all(percent(2.0)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(12),
+                left: px(0),
+                top: px(0),
+                width: percent(100.0),
+                height: percent(100.0),
                 ..default()
             },
         ))
@@ -9178,8 +9576,11 @@ fn spawn_menu_overlay(
                 TextLayout::justify(Justify::Center),
                 TextColor(Color::WHITE),
                 Node {
-                    width: percent(100.0),
-                    height: px(46),
+                    position_type: PositionType::Absolute,
+                    left: percent(1.0),
+                    top: percent(3.0),
+                    width: percent(18.0),
+                    height: percent(7.0),
                     ..default()
                 },
             ));
@@ -9187,9 +9588,13 @@ fn spawn_menu_overlay(
                 .spawn((
                     Name::new("Settings tab buttons"),
                     Node {
-                        width: percent(100.0),
-                        height: px(52),
-                        column_gap: px(10),
+                        position_type: PositionType::Absolute,
+                        left: percent(1.2),
+                        top: percent(12.0),
+                        width: percent(17.6),
+                        height: percent(42.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(10),
                         ..default()
                     },
                 ))
@@ -9201,6 +9606,7 @@ fn spawn_menu_overlay(
                             BackgroundColor(Color::srgba(0.055, 0.071, 0.141, 0.95)),
                             BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.75)),
                             Node {
+                                width: percent(100.0),
                                 flex_grow: 1.0,
                                 border: UiRect::bottom(px(2)),
                                 justify_content: JustifyContent::Center,
@@ -9225,13 +9631,13 @@ fn spawn_menu_overlay(
                 SettingsRows,
                 Name::new("Settings value rows"),
                 Node {
-                    width: percent(100.0),
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Column,
-                    flex_wrap: FlexWrap::Wrap,
-                    align_content: AlignContent::FlexStart,
-                    row_gap: px(7),
-                    column_gap: percent(3.0),
+                    position_type: PositionType::Absolute,
+                    left: percent(23.0),
+                    top: percent(8.0),
+                    width: percent(69.0),
+                    height: percent(82.0),
+                    flex_direction: FlexDirection::Row,
+                    column_gap: percent(4.0),
                     overflow: Overflow::clip(),
                     ..default()
                 },
@@ -9246,8 +9652,11 @@ fn spawn_menu_overlay(
                 TextLayout::justify(Justify::Center),
                 TextColor(Color::srgb(0.92, 0.97, 0.91)),
                 Node {
-                    width: percent(100.0),
-                    min_height: px(20),
+                    position_type: PositionType::Absolute,
+                    left: percent(23.0),
+                    bottom: percent(4.0),
+                    width: percent(69.0),
+                    height: px(22),
                     ..default()
                 },
             ));
@@ -9255,9 +9664,13 @@ fn spawn_menu_overlay(
                 .spawn((
                     Name::new("Settings actions"),
                     Node {
-                        width: percent(100.0),
-                        height: px(46),
-                        column_gap: px(14),
+                        position_type: PositionType::Absolute,
+                        left: percent(1.2),
+                        bottom: percent(7.0),
+                        width: percent(17.6),
+                        height: percent(27.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(10),
                         ..default()
                     },
                 ))
@@ -9272,7 +9685,7 @@ fn spawn_menu_overlay(
                     Name::new("Confirm settings changes"),
                     Visibility::Hidden,
                     GlobalZIndex(120),
-                    authored_ui_image(
+                    settings_ui_image(
                         &render,
                         SETTINGS_BACKGROUND_TEXTURE_PATH,
                         main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
@@ -16733,6 +17146,7 @@ fn spawn_weather_particles(
             Mesh3d(render.cube.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_xyz(x, y, z).with_scale(scale),
+            Visibility::Inherited,
             // Unity weather particles are transparent VFX. Letting these long
             // rain meshes enter Bevy's shadow map creates fast black streaks
             // racing over the terrain.
@@ -16745,11 +17159,13 @@ fn spawn_weather_particles(
 fn animate_weather_particles(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
-    mut particles: Query<(&WeatherParticle, &mut Transform)>,
+    cameras: Query<&GlobalTransform, With<TownCamera>>,
+    mut particles: Query<(&WeatherParticle, &mut Transform, &mut Visibility)>,
 ) {
     let half_x = f32::from(config.0.world.width) * config.0.world.cell_size * 0.5;
     let half_z = f32::from(config.0.world.height) * config.0.world.cell_size * 0.5;
-    for (particle, mut transform) in &mut particles {
+    let camera_position = cameras.single().ok().map(GlobalTransform::translation);
+    for (particle, mut transform, mut visibility) in &mut particles {
         let speed = if particle.kind == Weather::Rain {
             52.0
         } else {
@@ -16776,7 +17192,20 @@ fn animate_weather_particles(
         } else if transform.translation.z > half_z {
             transform.translation.z -= half_z * 2.0;
         }
+        *visibility = if camera_position.is_none_or(|camera_position| {
+            weather_particle_visible(particle.kind, transform.translation, camera_position)
+        }) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
+}
+
+fn weather_particle_visible(kind: Weather, particle_position: Vec3, camera_position: Vec3) -> bool {
+    kind != Weather::Rain
+        || particle_position.distance_squared(camera_position)
+            >= RAIN_CAMERA_CULL_DISTANCE * RAIN_CAMERA_CULL_DISTANCE
 }
 
 fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
@@ -22582,7 +23011,7 @@ fn update_vote_panels(
             commands.entity(container).with_children(|options| {
                 if lines.is_empty() {
                     options.spawn((
-                        Text::new("Waiting for nominations…"),
+                        Text::new("Waiting for nominations..."),
                         TextFont {
                             font_size: FontSize::Px(14.0),
                             ..default()
@@ -22609,6 +23038,7 @@ fn update_vote_panels(
                                 height: px(42),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
+                                overflow: Overflow::clip(),
                                 ..default()
                             },
                         ))
@@ -25682,8 +26112,8 @@ fn spawn_numbered_world_labels(commands: &mut Commands, targets: &[StableId]) {
                 ..default()
             },
             TextLayout::justify(Justify::Center),
-            TextColor(Color::WHITE),
-            GlobalZIndex(101),
+            TextColor(Color::srgb(0.91, 0.89, 0.81)),
+            GlobalZIndex(19),
             Node {
                 position_type: PositionType::Absolute,
                 width: px(40),
@@ -28480,16 +28910,19 @@ fn spawn_level_up_toast(mut commands: Commands, simulation: Res<SimulationRuntim
         LevelUpToast,
         Text::new("LEVEL UP"),
         TextFont {
-            font_size: FontSize::Px(32.0),
+            font_size: FontSize::Px(26.0),
             ..default()
         },
         TextLayout::justify(Justify::Center),
-        TextColor(Color::WHITE.with_alpha(0.0)),
+        TextColor(Color::srgba(0.93, 0.82, 0.46, 0.0)),
+        GlobalZIndex(19),
         Visibility::Hidden,
         Node {
             position_type: PositionType::Absolute,
-            top: percent(18.0),
-            left: percent(44.0),
+            top: px(96),
+            left: percent(40.0),
+            width: percent(20.0),
+            overflow: Overflow::clip(),
             ..default()
         },
     ));
@@ -28498,6 +28931,7 @@ fn spawn_level_up_toast(mut commands: Commands, simulation: Res<SimulationRuntim
 fn drive_level_up_presentation(
     time: Res<Time>,
     presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
     simulation: Res<SimulationRuntime>,
     mut state: ResMut<LevelUpPresentation>,
     mut toast: Query<(&mut Text, &mut TextColor, &mut Visibility, &mut Node), With<LevelUpToast>>,
@@ -28520,7 +28954,13 @@ fn drive_level_up_presentation(
         return;
     };
     if let Some((actor, level)) = leveled_actor {
-        **text = format!("LEVEL UP\n{actor} | {level}");
+        let label = simulation
+            .0
+            .actors
+            .get(&actor)
+            .and_then(|actor| actor.display_name.as_deref())
+            .unwrap_or_else(|| actor.as_str());
+        **text = format!("LEVEL UP\n{label} | {level}");
     }
     let Some(elapsed) = state.elapsed_seconds.as_mut() else {
         *visibility = Visibility::Hidden;
@@ -28549,8 +28989,8 @@ fn drive_level_up_presentation(
     )
     .unwrap_or(1.0)
     .clamp(0.0, 1.0);
-    node.top = percent(18.0 - y);
-    color.0.set_alpha(alpha);
+    node.top = px(96.0 - y * render.main_ui_scale);
+    color.0 = Color::srgba(0.93, 0.82, 0.46, alpha * 0.88);
     *visibility = Visibility::Inherited;
 }
 
@@ -28604,6 +29044,7 @@ fn clear_loading_runtime(commands: &mut Commands) {
     commands.remove_resource::<WorldGenerationTask>();
     commands.remove_resource::<MenuLoadingRuntime>();
     commands.remove_resource::<MenuRevealRuntime>();
+    commands.remove_resource::<WorldRevealRuntime>();
 }
 
 fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntity>>) {
@@ -28612,6 +29053,7 @@ fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntit
     }
     commands.remove_resource::<WorldRuntime>();
     commands.remove_resource::<SimulationRuntime>();
+    commands.remove_resource::<WorldRevealRuntime>();
     commands.insert_resource(BuildingPlacers::default());
     commands.insert_resource(BuildingCommandQueue::default());
 }
@@ -28636,7 +29078,7 @@ fn stream_user_color(user_type: StreamUserType) -> Color {
         StreamUserType::Broadcaster => Color::srgb(1.0, 0.12, 0.12),
         StreamUserType::Moderator => Color::srgb(0.2, 1.0, 0.3),
         StreamUserType::Subscriber => Color::srgb(0.48, 0.3, 0.78),
-        StreamUserType::Normal => Color::WHITE,
+        StreamUserType::Normal => Color::srgb(0.88, 0.87, 0.80),
     }
 }
 
@@ -28661,12 +29103,14 @@ fn overlay_viewport_position(
     camera
         .world_to_viewport(camera_transform, world_position)
         .ok()
-        .filter(|position| {
-            position.x >= 0.0
-                && position.y >= 0.0
-                && position.x <= viewport.x
-                && position.y <= viewport.y
-        })
+        .filter(|position| overlay_position_clears_hud(viewport, *position))
+}
+
+fn overlay_position_clears_hud(viewport: Vec2, position: Vec2) -> bool {
+    position.x >= 0.0
+        && position.y >= WORLD_UI_SAFE_TOP + WORLD_UI_OVERLAY_MARGIN
+        && position.x <= viewport.x
+        && position.y <= viewport.y - WORLD_UI_SAFE_BOTTOM - WORLD_UI_OVERLAY_MARGIN
 }
 
 #[allow(clippy::type_complexity)]
@@ -28767,7 +29211,7 @@ fn sync_actor_name_overlays(
             },
             TextLayout::justify(Justify::Center),
             TextColor(stream_user_color(actor.user_type)),
-            GlobalZIndex(30),
+            GlobalZIndex(18),
             Node {
                 position_type: PositionType::Absolute,
                 left: px(screen.x - 80.0),
@@ -28930,7 +29374,7 @@ fn sync_actor_health_overlays(
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
-                GlobalZIndex(100),
+                GlobalZIndex(19),
             ))
             .with_children(|parent| {
                 parent.spawn((
@@ -29117,7 +29561,7 @@ fn sync_building_health_overlays(
                 },
                 BackgroundColor(Color::srgba(0.02, 0.025, 0.03, 0.9)),
                 BorderColor::all(Color::srgba(0.8, 0.86, 0.82, 0.8)),
-                GlobalZIndex(29),
+                GlobalZIndex(19),
             ))
             .with_children(|parent| {
                 parent.spawn((
@@ -30267,7 +30711,8 @@ mod tests {
         let world = color_grading_for_state(&settings, &[], GameState::InGame);
         assert!((menu.global.exposure - MAIN_MENU_BASELINE_EXPOSURE_EV).abs() < f32::EPSILON);
         assert!((world.global.exposure - IN_GAME_BASELINE_EXPOSURE_EV).abs() < f32::EPSILON);
-        let prisms = (0..21)
+        let prism_count = MAIN_MENU_CLOUD_COLUMNS * MAIN_MENU_CLOUD_ROWS;
+        let prisms = (0..prism_count)
             .map(main_menu_cloud_prism_transform)
             .collect::<Vec<_>>();
         assert!(prisms.iter().all(|cloud| cloud.scale.min_element() > 2.0));
@@ -30277,9 +30722,29 @@ mod tests {
                 .map(|cloud| cloud.translation.to_array().map(f32::to_bits))
                 .collect::<BTreeSet<_>>()
                 .len()
-                == 21,
+                == prism_count,
             "menu cloud prisms must not overlap exactly and z-fight"
         );
+        let (minimum_x, maximum_x) = prisms.iter().fold(
+            (f32::INFINITY, f32::NEG_INFINITY),
+            |(minimum, maximum), cloud| {
+                (
+                    minimum.min(cloud.translation.x),
+                    maximum.max(cloud.translation.x),
+                )
+            },
+        );
+        assert!(maximum_x - minimum_x > 300.0);
+
+        let sky = include_str!("../../../assets/shaders/menu_sky_material.wgsl");
+        assert!(sky.contains("horizon_color"));
+        assert!(sky.contains("zenith_color"));
+        assert!(sky.contains("sun_disc"));
+        assert!(sky.contains("high_wisps"));
+        let water = include_str!("../../../assets/shaders/water_material.wgsl");
+        assert!(water.contains("menu_wave"));
+        assert!(water.contains("ripple * 0.28"));
+        assert!(water.contains("broad_ripple"));
     }
 
     #[test]
@@ -30535,6 +31000,32 @@ mod tests {
         let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
         assert!(asset_root.join(UI_FONT_ASSET_PATH).is_file());
         assert!(asset_root.join(UI_DISPLAY_FONT_ASSET_PATH).is_file());
+
+        let settings_slicer = presentation
+            .textures
+            .values()
+            .find(|texture| texture.source_path == SETTINGS_BACKGROUND_TEXTURE_PATH)
+            .and_then(|texture| texture.sprite_border)
+            .map(|border| TextureSlicer {
+                border: BorderRect::from(border),
+                center_scale_mode: default(),
+                sides_scale_mode: default(),
+                max_corner_scale: 1.0,
+            })
+            .expect("the authored settings background is a nine-slice sprite");
+        let mut render = RenderAssets {
+            settings_ui_scale: 1.0,
+            ..default()
+        };
+        render
+            .ui_slicers
+            .insert(SETTINGS_BACKGROUND_TEXTURE_PATH.to_owned(), settings_slicer);
+        let image = settings_ui_image(&render, SETTINGS_BACKGROUND_TEXTURE_PATH, Handle::default());
+        let NodeImageMode::Sliced(slicer) = image.image_mode else {
+            panic!("settings menu must render through Bevy's nine-slice mode");
+        };
+        assert_eq!(slicer.border, BorderRect::all(82.0));
+        assert!((slicer.max_corner_scale - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -33513,6 +34004,42 @@ mod tests {
     }
 
     #[test]
+    fn reveal_grace_frames_begin_only_after_scene_readiness() {
+        assert!(!asset_root_collection_ready(0, 0, true));
+        assert!(asset_root_collection_ready(0, 0, false));
+        assert!(!asset_root_collection_ready(3, 2, true));
+        assert!(asset_root_collection_ready(3, 3, true));
+
+        let mut starting_frame = None;
+        assert_eq!(
+            rendered_frames_since_ready(&mut starting_frame, false, 100),
+            0
+        );
+        assert_eq!(starting_frame, None);
+
+        assert_eq!(
+            rendered_frames_since_ready(&mut starting_frame, true, 110),
+            0
+        );
+        assert_eq!(starting_frame, Some(110));
+        assert_eq!(
+            rendered_frames_since_ready(&mut starting_frame, true, 115),
+            5
+        );
+
+        assert_eq!(
+            rendered_frames_since_ready(&mut starting_frame, false, 120),
+            0
+        );
+        assert_eq!(starting_frame, None);
+        assert_eq!(
+            rendered_frames_since_ready(&mut starting_frame, true, 130),
+            0
+        );
+        assert_eq!(starting_frame, Some(130));
+    }
+
+    #[test]
     fn wall_and_gate_tiling_match_unity_tile_value_tables() {
         assert_eq!(wall_tiling(0), (0, 1));
         assert_eq!(wall_tiling(20), (0, 0));
@@ -34420,6 +34947,48 @@ mod tests {
         );
         assert!(material.extension.main_texture.is_none());
         assert!(material.base.base_color_texture.is_none());
+        assert!(CritterMaterialExtension::enable_shadows());
+        let prepass = include_str!("../../../assets/shaders/critter_material_prepass.wgsl");
+        assert!(prepass.contains("deformed_critter_position"));
+        assert!(prepass.contains("textureSampleLevel"));
+        assert!(prepass.contains("previous_world_position"));
+        assert!(prepass.contains("globals.time - globals.delta_time"));
+    }
+
+    #[test]
+    fn rain_near_camera_is_culled_without_hiding_other_weather() {
+        let camera = Vec3::new(2.0, 8.0, -4.0);
+        assert!(!weather_particle_visible(
+            Weather::Rain,
+            camera + Vec3::X * (RAIN_CAMERA_CULL_DISTANCE - 0.1),
+            camera,
+        ));
+        assert!(weather_particle_visible(
+            Weather::Rain,
+            camera + Vec3::X * RAIN_CAMERA_CULL_DISTANCE,
+            camera,
+        ));
+        assert!(weather_particle_visible(Weather::Snow, camera, camera));
+    }
+
+    #[test]
+    fn world_labels_stay_below_the_header_and_above_the_bottom_bar() {
+        let viewport = Vec2::new(1_920.0, 1_080.0);
+        assert!(!overlay_position_clears_hud(
+            viewport,
+            Vec2::new(960.0, WORLD_UI_SAFE_TOP + WORLD_UI_OVERLAY_MARGIN - 1.0,),
+        ));
+        assert!(overlay_position_clears_hud(
+            viewport,
+            Vec2::new(960.0, WORLD_UI_SAFE_TOP + WORLD_UI_OVERLAY_MARGIN),
+        ));
+        assert!(!overlay_position_clears_hud(
+            viewport,
+            Vec2::new(
+                960.0,
+                1_080.0 - WORLD_UI_SAFE_BOTTOM - WORLD_UI_OVERLAY_MARGIN + 1.0,
+            ),
+        ));
     }
 
     #[test]
@@ -37186,7 +37755,7 @@ mod tests {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             Duration::from_millis(250),
         ));
-        for _ in 0..12 {
+        for _ in 0..48 {
             app.update();
             if *app.world().resource::<State<GameState>>().get() == GameState::InGame {
                 break;

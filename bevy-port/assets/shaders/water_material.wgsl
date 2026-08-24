@@ -69,16 +69,48 @@ fn fragment(
 #ifdef VERTEX_COLORS
     depth = clamp(in.color.r, 0.0, 1.0);
 #endif
-    // A flat menu plane has no vertex-depth data. Treating animated broad
-    // noise as physical depth divided it into conspicuous light- and dark-blue
-    // regions, so menu materials can request one fixed authored depth through
-    // opacity_controls.z/w while the generated world keeps its vertex depth.
+    // A flat menu plane has no vertex-depth data. Keep one authored base depth,
+    // but retain a small continuous portion of the broad noise. This avoids the
+    // old two-tone split without reducing the whole ocean to one flat colour.
     if water_material.opacity_controls.z > 0.5 {
-        depth = clamp(water_material.opacity_controls.w, 0.0, 1.0);
+        let menu_wave = 0.5 + 0.25 * (
+            sin(
+                in.world_position.x * 0.105
+                    + time * 0.46
+                    + sin(in.world_position.z * 0.052 - time * 0.21) * 1.7,
+            )
+                + sin(in.world_position.z * 0.143 - time * 0.37)
+        );
+        depth = clamp(
+            water_material.opacity_controls.w
+                + (broad.g - 0.5) * 0.16
+                + (menu_wave - 0.5) * 0.18,
+            0.0,
+            1.0,
+        );
     }
     let shallow = pow(1.0 - depth, water_material.depth_foam_controls.y);
     var color = mix(water_material.deep_color, water_material.surface_color, shallow);
     color = mix(color, vec4<f32>(1.0, 1.0, 1.0, 0.0), clamp(wind_noise, 0.0, 1.0));
+    if water_material.opacity_controls.z > 0.5 {
+        let ripple = 0.5 + 0.25 * (
+            sin(in.world_position.x * 0.18 + time * 0.72)
+                + sin(in.world_position.z * 0.23 - time * 0.54)
+        );
+        color = mix(color, water_material.surface_color, ripple * 0.28);
+        let broad_ripple = 0.5 + 0.5 * sin(
+            in.world_position.x * 0.027
+                + time * 0.20
+                + sin(in.world_position.z * 0.019 - time * 0.16) * 2.4,
+        );
+        color = vec4<f32>(
+            color.rgb * (0.82 + broad_ripple * 0.32)
+                + water_material.foam_color.rgb
+                    * smoothstep(0.78, 1.0, broad_ripple)
+                    * 0.045,
+            color.a,
+        );
+    }
 
     let foam_scale = water_material.scale_foam_ice.y * 0.01;
     let foam_a = textureSample(
