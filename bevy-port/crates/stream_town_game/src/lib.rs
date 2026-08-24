@@ -209,6 +209,7 @@ const GAME_MENU_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/Miscellaneous/UI_Checkmark.png",
 ];
 const SETTINGS_BACKGROUND_TEXTURE_PATH: &str = "Assets/Sprites/Settings/UI_Settings_Background.png";
+const SETTINGS_PANEL_CORNER_SCALE: f32 = 1.5;
 const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_Background.png",
     "Assets/Sprites/TopBar/UI_TopBar_Resources_Food.png",
@@ -8181,6 +8182,19 @@ fn settings_ui_image(render: &RenderAssets, source_path: &str, image: Handle<Ima
     authored_ui_image_with_corner_scale(render, source_path, image, render.settings_ui_scale)
 }
 
+fn settings_panel_ui_image(
+    render: &RenderAssets,
+    source_path: &str,
+    image: Handle<Image>,
+) -> ImageNode {
+    authored_ui_image_with_corner_scale(
+        render,
+        source_path,
+        image,
+        render.settings_ui_scale * SETTINGS_PANEL_CORNER_SCALE,
+    )
+}
+
 fn authored_main_ui_image_with_ppu(
     render: &RenderAssets,
     source_path: &str,
@@ -10156,21 +10170,37 @@ fn spawn_menu_overlay(
                 .spawn((
                     SettingsPanel,
                     Name::new("Shipping settings menu"),
-                    settings_ui_image(
-                        &render,
-                        SETTINGS_BACKGROUND_TEXTURE_PATH,
-                        main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
-                    ),
+                    BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
                     Node {
                         width: percent(78.0),
                         height: percent(80.0),
                         max_width: px(1_420),
                         max_height: px(800),
+                        border: UiRect::all(px(3)),
+                        border_radius: BorderRadius::all(px(36)),
                         overflow: Overflow::clip(),
                         ..default()
                     },
                 ))
                 .with_children(|settings_root| {
+            settings_root.spawn((
+                Name::new("Settings panel nine-slice surface"),
+                settings_panel_ui_image(
+                    &render,
+                    SETTINGS_BACKGROUND_TEXTURE_PATH,
+                    main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                ),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(3),
+                    top: px(3),
+                    right: px(3),
+                    bottom: px(3),
+                    ..default()
+                },
+            ));
             settings_root.spawn((
                 UiDisplayFont,
                 Text::new("SETTINGS"),
@@ -10291,25 +10321,42 @@ fn spawn_menu_overlay(
                     Name::new("Confirm settings changes"),
                     Visibility::Hidden,
                     GlobalZIndex(120),
-                    settings_ui_image(
-                        &render,
-                        SETTINGS_BACKGROUND_TEXTURE_PATH,
-                        main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
-                    ),
+                    BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
                     Node {
                         position_type: PositionType::Absolute,
                         left: percent(25.0),
                         top: percent(27.0),
                         width: percent(50.0),
                         height: percent(38.0),
+                        border: UiRect::all(px(3)),
+                        border_radius: BorderRadius::all(px(28)),
                         padding: UiRect::all(percent(5.0)),
                         flex_direction: FlexDirection::Column,
                         justify_content: JustifyContent::SpaceBetween,
                         align_items: AlignItems::Center,
+                        overflow: Overflow::clip(),
                         ..default()
                     },
                 ))
                 .with_children(|modal| {
+                    modal.spawn((
+                        Name::new("Settings confirmation nine-slice surface"),
+                        settings_panel_ui_image(
+                            &render,
+                            SETTINGS_BACKGROUND_TEXTURE_PATH,
+                            main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                        ),
+                        Pickable::IGNORE,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(3),
+                            top: px(3),
+                            right: px(3),
+                            bottom: px(3),
+                            ..default()
+                        },
+                    ));
                     modal.spawn((
                         Text::new("CONFIRM CHANGES\n\nYou have unsaved changes.\nDo you want to apply these changes?"),
                         TextFont {
@@ -31624,6 +31671,14 @@ mod tests {
         };
         assert_eq!(slicer.border, BorderRect::all(82.0));
         assert!((slicer.max_corner_scale - 1.0).abs() < f32::EPSILON);
+
+        let panel_image =
+            settings_panel_ui_image(&render, SETTINGS_BACKGROUND_TEXTURE_PATH, Handle::default());
+        let NodeImageMode::Sliced(panel_slicer) = panel_image.image_mode else {
+            panic!("settings panel surface must retain the authored nine-slice");
+        };
+        assert_eq!(panel_slicer.border, BorderRect::all(82.0));
+        assert!((panel_slicer.max_corner_scale - SETTINGS_PANEL_CORNER_SCALE).abs() < f32::EPSILON);
     }
 
     #[test]
