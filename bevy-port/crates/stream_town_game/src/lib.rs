@@ -1313,6 +1313,9 @@ struct SettingsValueButton {
 struct SettingsRoot;
 
 #[derive(Component)]
+struct SettingsPanel;
+
+#[derive(Component)]
 struct SettingsRows;
 
 #[derive(Component)]
@@ -9543,6 +9546,7 @@ fn spawn_settings_button(
             Node {
                 flex_grow: 1.0,
                 height: px(44),
+                padding: UiRect::axes(px(18), px(10)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -9572,15 +9576,15 @@ fn spawn_settings_value_row(
     parent
         .spawn((
             BackgroundColor(if selected == index {
-                Color::srgba(0.211, 0.240, 0.358, 0.82)
+                Color::srgb(0.211, 0.240, 0.358)
             } else {
-                Color::srgba(0.055, 0.071, 0.141, 0.72)
+                Color::srgb(0.055, 0.071, 0.141)
             }),
             Node {
                 width: percent(100.0),
                 height: px(48),
                 flex_shrink: 0.0,
-                padding: UiRect::horizontal(px(10)),
+                padding: UiRect::axes(px(14), px(6)),
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
                 overflow: Overflow::clip(),
@@ -9628,9 +9632,10 @@ fn spawn_settings_value_row(
                         main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
                     ),
                     Node {
-                        width: px(32),
-                        height: px(32),
+                        width: px(36),
+                        height: px(34),
                         flex_shrink: 0.0,
+                        padding: UiRect::axes(px(8), px(6)),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
                         ..default()
@@ -10130,13 +10135,8 @@ fn spawn_menu_overlay(
         .spawn((
             StateEntity,
             SettingsRoot,
-            Name::new("Shipping settings menu"),
-            settings_ui_image(
-                &render,
-                SETTINGS_BACKGROUND_TEXTURE_PATH,
-                main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
-            ),
-            BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.92)),
+            Name::new("Settings modal overlay"),
+            BackgroundColor(Color::srgba(0.008, 0.012, 0.025, 0.58)),
             Visibility::Hidden,
             GlobalZIndex(110),
             Node {
@@ -10145,11 +10145,35 @@ fn spawn_menu_overlay(
                 top: px(0),
                 width: percent(100.0),
                 height: percent(100.0),
-                border: UiRect::all(px(4)),
+                padding: UiRect::all(px(24)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
         ))
-        .with_children(|settings_root| {
+        .with_children(|settings_overlay| {
+            settings_overlay
+                .spawn((
+                    SettingsPanel,
+                    Name::new("Shipping settings menu"),
+                    settings_ui_image(
+                        &render,
+                        SETTINGS_BACKGROUND_TEXTURE_PATH,
+                        main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                    ),
+                    BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
+                    Node {
+                        width: percent(78.0),
+                        height: percent(80.0),
+                        max_width: px(1_420),
+                        max_height: px(800),
+                        border: UiRect::all(px(3)),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ))
+                .with_children(|settings_root| {
             settings_root.spawn((
                 UiDisplayFont,
                 Text::new("SETTINGS"),
@@ -10161,9 +10185,9 @@ fn spawn_menu_overlay(
                 TextColor(Color::WHITE),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: percent(1.0),
+                    left: percent(3.0),
                     top: percent(3.0),
-                    width: percent(18.0),
+                    width: percent(16.0),
                     height: percent(7.0),
                     ..default()
                 },
@@ -10173,9 +10197,9 @@ fn spawn_menu_overlay(
                     Name::new("Settings tab buttons"),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: percent(1.2),
+                        left: percent(3.0),
                         top: percent(12.0),
-                        width: percent(17.6),
+                        width: percent(16.0),
                         height: percent(42.0),
                         flex_direction: FlexDirection::Column,
                         row_gap: px(10),
@@ -10187,12 +10211,13 @@ fn spawn_menu_overlay(
                         tabs.spawn((
                             SettingsTabButton(tab),
                             Button,
-                            BackgroundColor(Color::srgba(0.055, 0.071, 0.141, 0.95)),
-                            BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.75)),
+                            BackgroundColor(Color::srgb(0.055, 0.071, 0.141)),
+                            BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
                             Node {
                                 width: percent(100.0),
                                 flex_grow: 1.0,
                                 border: UiRect::bottom(px(2)),
+                                padding: UiRect::axes(px(18), px(10)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 ..default()
@@ -10218,7 +10243,7 @@ fn spawn_menu_overlay(
                     position_type: PositionType::Absolute,
                     left: percent(23.0),
                     top: percent(8.0),
-                    width: percent(69.0),
+                    width: percent(72.0),
                     height: percent(82.0),
                     flex_direction: FlexDirection::Row,
                     column_gap: percent(4.0),
@@ -10239,7 +10264,7 @@ fn spawn_menu_overlay(
                     position_type: PositionType::Absolute,
                     left: percent(23.0),
                     bottom: percent(4.0),
-                    width: percent(69.0),
+                    width: percent(72.0),
                     height: px(22),
                     ..default()
                 },
@@ -10249,9 +10274,9 @@ fn spawn_menu_overlay(
                     Name::new("Settings actions"),
                     Node {
                         position_type: PositionType::Absolute,
-                        left: percent(1.2),
+                        left: percent(3.0),
                         bottom: percent(7.0),
-                        width: percent(17.6),
+                        width: percent(16.0),
                         height: percent(27.0),
                         flex_direction: FlexDirection::Column,
                         row_gap: px(10),
@@ -10274,7 +10299,7 @@ fn spawn_menu_overlay(
                         SETTINGS_BACKGROUND_TEXTURE_PATH,
                         main_menu_texture(&render, SETTINGS_BACKGROUND_TEXTURE_PATH),
                     ),
-                    BorderColor::all(Color::srgba(0.827, 0.745, 0.498, 0.92)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
                     Node {
                         position_type: PositionType::Absolute,
                         left: percent(25.0),
@@ -10322,6 +10347,7 @@ fn spawn_menu_overlay(
                                 &render,
                             );
                         });
+                });
                 });
         });
 }
