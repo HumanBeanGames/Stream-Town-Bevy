@@ -87,6 +87,17 @@ mistaken for production-ready systems.
   compatibility, selected before renderer surface creation, while `Windowed`
   remains distinct. This avoids both the missing-current-monitor panic and the
   subsequent DX12 swapchain/device-loss cascade.
+- Accessibility settings schema 3 adds persisted 75-150% UI scaling, high
+  contrast, and reduced motion without changing upgraded schema-2 files.
+  Every shipping UI button participates in modal-aware keyboard focus with a
+  visible focus ring; Enter/Space and AccessKit Click requests dispatch through
+  the same typed actions as pointer input. Buttons, tabs, checkboxes, labels,
+  disabled states, loading progress, and polite state/feedback announcements
+  are exposed through Bevy's AccessKit bridge. Reduced motion freezes loading,
+  vegetation, water, menu-cloud/fish/windmill, weather, and Credits-firework
+  presentation loops while preserving authoritative gameplay movement. The
+  tools Settings tab edits the same validated fields. Manual and automated
+  acceptance instructions are in `bevy-port/docs/accessibility.md`.
 - Unity's name-display index semantics now drive camera-projected player labels,
   including the privileged-user-only mode and the original game-master,
   broadcaster, moderator, subscriber, and normal-user colors. Twitch privilege
@@ -797,11 +808,11 @@ mistaken for production-ready systems.
   and shadow vertices; and trees cast and receive light/shadows. The prior flat
   no-receiver partial was rejected and removed. The remaining acceptance matrix is in
   `bevy-port/docs/visual-regressions/tree-foliage-flicker.md`.
-- Exact animated-player shadow parity. The visible single-armature rig and full
-  controller data path is present, but Bevy's imported shadow-skinning pass
-  produces an invalid terrain-sized silhouette for this converted asset, so only
-  the player renderer's shadow casting is disabled pending a custom compatible
-  shadow pass.
+- Exact animated-player self-shadow parity. The visible single-armature rig and
+  full controller data path casts ordinary world-space shadows, but receiving
+  the imported skinned self-shadow still produces unstable body facets. Player
+  renderers therefore retain `NotShadowReceiver` pending a custom compatible
+  skinned self-shadow pass; their shadow casting remains enabled.
 - Any remaining animation-event behavior discovered outside the ten reachable
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable
@@ -828,7 +839,7 @@ mistaken for production-ready systems.
   numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
   `!buy` and `!sell` use Unity's authored rates.
 - Final art-direction polish, curated screenshot/audio acceptance baselines,
-  screen-reader/accessibility verification, and source-diff closure for any
+  assistive-technology certification on the release hardware matrix, and source-diff closure for any
   presentation behavior only reachable through missing media. A shipping-scene
   reachability audit found no additional custom shaders, VFX prefabs, or UI
   sound bindings to port: the remaining custom shader/VFX assets belong to
@@ -901,7 +912,7 @@ generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
 ports backed by converted renderer bindings. Shipping-scene particle and custom
 shader reachability is closed; remaining presentation work is final art tuning,
-foliage batching/impostors, accessibility verification, and broader curated
+foliage batching/impostors, release-matrix accessibility certification, and broader curated
 screenshot/audio acceptance coverage.
 Gameplay parity is materially advanced but still needs final source-diff closure;
 presentation and hardening remain long-term work.

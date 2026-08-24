@@ -163,14 +163,19 @@ backup. On first launch, the Windows game imports Unity's
 `STREAM_TOWN_PLAYER_SETTINGS_PATH` or `STREAM_TOWN_UNITY_SETTINGS_PATH` to use
 explicit paths. The Settings tab in `stream_town_tools` and the shipping Main
 Menu/in-game Escape panel edit and validate the native file. The runtime panel
-recreates Unity's authored four-tab Video, Audio, Gameplay, and Connection shell
-with pointer controls, Apply, Defaults, Back, and the unsaved-draft confirmation.
+extends Unity's authored Video, Audio, Gameplay, and Connection shell with a
+focused Accessibility tab, pointer controls, Apply, Defaults, Back, and the
+unsaved-draft confirmation.
 The Connection tab reports runtime Twitch status while OAuth and secret storage
 remain in the focused tools application.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
-all camera controls/sensitivities, name/building-health overlays, and the Unity
-0/5/10/30/60-minute autosave choices are applied by the runtime.
+all camera controls/sensitivities, name/building-health overlays, the Unity
+0/5/10/30/60-minute autosave choices, UI scale, high contrast, and reduced
+motion are applied by the runtime. Schema-2 settings upgrade without changing
+their existing appearance; the three new accessibility fields use neutral
+defaults. See [`docs/accessibility.md`](docs/accessibility.md) for keyboard and
+screen-reader controls and the manual Windows Narrator acceptance procedure.
 On Bevy 0.19, the saved Unity `Fullscreen` choice is implemented as borderless
 fullscreen compatibility. This mode is selected before DX12 surface creation,
 avoiding Bevy's missing-current-monitor panic and driver-dependent device loss
@@ -208,7 +213,9 @@ and its serialized XZ movement bounds. The pose is translated to the generated
 Town Hall so different deterministic terrain seeds retain Unity's opening
 composition. Use
 arrow keys and Enter to select Save Game, Load Game, Settings, Exit Game, or
-Idle Mode. Settings retain keyboard control: Tab/Shift+Tab changes category,
+Idle Mode. On the Main Menu, HUD, vote panels, and Credits, Tab/Shift+Tab moves
+focus, arrow keys continue from visible keyboard focus, and Enter or Space
+activates the focused control. Settings retain keyboard control: Tab/Shift+Tab changes category,
 arrow keys select or change values, Enter confirms, and Escape invokes the same
 unsaved-change prompt as Back. The Main Menu's `S` shortcut opens its keyboard
 menu, from which Settings uses the same workflow. The
@@ -602,7 +609,7 @@ state deterministically.
 `STREAM_TOWN_DEBUG_CREDITS_TIME=<seconds>` starts its authored timeline at a
 specific point for repeatable property-curve smoke captures.
 `STREAM_TOWN_AUTOSTART_SETTINGS=1` opens the authored settings shell on state
-entry so all four categories and the complete runtime draft can be captured
+entry so all five categories and the complete runtime draft can be captured
 repeatably.
 `STREAM_TOWN_AUTOSTART_GAME_MENU=1` opens the shipping in-game menu after world
 loading so its Save, Load, Settings, Exit Game, Close, and Idle Mode controls
