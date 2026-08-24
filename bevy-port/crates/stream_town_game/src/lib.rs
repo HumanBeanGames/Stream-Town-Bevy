@@ -105,8 +105,6 @@ const UNITY_TOWN_CAMERA_MIN_HEIGHT: f32 = 11.0;
 const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
 const UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT: f32 = 15.0;
 const UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT: f32 = 20.0;
-const UNITY_TOWN_CAMERA_MIN_POSITION: Vec2 = Vec2::new(-142.0, -124.0);
-const UNITY_TOWN_CAMERA_MAX_POSITION: Vec2 = Vec2::new(124.0, 124.0);
 const UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS: f32 = 0.5;
 const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
 const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 10.0;
@@ -144,7 +142,8 @@ const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
 const MAIN_MENU_RESOURCE_RENDER_BUDGET: usize = 900;
 const MAIN_MENU_FOLIAGE_RENDER_BUDGET: usize = 3_200;
-const IN_GAME_AMBIENT_LIGHT_MULTIPLIER: f32 = 1.15;
+const IN_GAME_AMBIENT_LIGHT_MULTIPLIER: f32 = 1.30;
+const IN_GAME_SATURATION_MULTIPLIER: f32 = 1.12;
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
 const BUILDING_MATERIAL_PATH: &str = "Assets/Materials/Building_Material.mat";
 const CLOUD_SHADER_ASSET_PATH: &str = "shaders/cloud_material.wgsl";
@@ -1215,6 +1214,23 @@ struct MenuRevealRuntime {
     scene_ready_frames: u8,
 }
 
+#[derive(Resource)]
+struct WorldRevealRuntime {
+    started_at: Instant,
+    rendered_frames: u16,
+    ready_frames: u8,
+}
+
+impl Default for WorldRevealRuntime {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+            rendered_frames: 0,
+            ready_frames: 0,
+        }
+    }
+}
+
 impl Default for MenuRevealRuntime {
     fn default() -> Self {
         Self {
@@ -1524,8 +1540,10 @@ enum VoteTextKind {
     TechnologyCount,
     RulerDescription,
     RulerTimer,
-    RulerOptions,
 }
+
+#[derive(Component)]
+struct RulerOptionsContainer;
 
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 enum VoteFillKind {
@@ -2440,9 +2458,18 @@ impl Plugin for StreamTownGamePlugin {
                     .chain()
                     .run_if(in_state(GameState::WorldLoading)),
             )
-            .add_systems(OnExit(GameState::WorldLoading), cleanup_loading_screen)
-            .add_systems(OnEnter(GameState::InGame), spawn_level_up_toast)
-            .add_systems(OnEnter(GameState::InGame), spawn_menu_overlay)
+            .add_systems(
+                OnEnter(GameState::InGame),
+                (begin_world_reveal, spawn_level_up_toast, spawn_menu_overlay),
+            )
+            .add_systems(
+                Update,
+                (
+                    animate_loading_icon,
+                    finish_world_reveal.after(apply_material_overrides),
+                )
+                    .run_if(in_state(GameState::InGame)),
+            )
             .add_systems(
                 Update,
                 (
@@ -2451,7 +2478,8 @@ impl Plugin for StreamTownGamePlugin {
                     tag_equipment_nodes,
                     sync_equipment_nodes
                         .after(tag_equipment_nodes)
-                        .after(correct_player_rig_axis),
+                        .after(correct_player_rig_axis)
+                        .after(animate_agents),
                     tag_enemy_model_nodes,
                     sync_enemy_model_nodes.after(tag_enemy_model_nodes),
                     tag_cosmetic_nodes,
@@ -3772,6 +3800,12 @@ fn color_grading_for_state(
         // luminance at the old -1.5 brightness setting. Make that the scene's
         // neutral baseline so setting 0 is now the correct exposure.
         grading.global.exposure += MAIN_MENU_BASELINE_EXPOSURE_EV;
+    } else if state == GameState::InGame {
+        // Unity URP's ACES output retains slightly more chroma than Bevy's
+        // fitted implementation for this low-poly palette. This narrow output
+        // compensation restores the authored grass/building separation without
+        // changing source material values or deterministic world content.
+        grading.global.post_saturation *= IN_GAME_SATURATION_MULTIPLIER;
     }
     grading
 }
@@ -5308,7 +5342,10 @@ fn poll_menu_loading(
 }
 
 fn in_rendered_game_state(state: Res<State<GameState>>) -> bool {
-    matches!(state.get(), GameState::MainMenu | GameState::InGame)
+    matches!(
+        state.get(),
+        GameState::MainMenu | GameState::WorldLoading | GameState::InGame
+    )
 }
 
 fn embedded_main_menu_scene() -> &'static MainMenuSceneReference {
@@ -6097,7 +6134,7 @@ fn spawn_loading_screen(
 }
 
 fn world_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTreeSet<String> {
-    content
+    let mut paths = content
         .archetypes
         .values()
         .flat_map(|archetype| archetype.scenes.iter())
@@ -6111,21 +6148,94 @@ fn world_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTreeSet<
         )
         .filter(|(path, _)| converted_asset_exists(asset_root, path))
         .map(|(_, path)| path)
-        .collect()
+        .collect::<BTreeSet<_>>();
+    for archetype in content.archetypes.values() {
+        if let Some(scene) = runtime_archetype_scene(archetype)
+            && converted_asset_exists(asset_root, &scene.asset_path)
+        {
+            paths.insert(scene.asset_path);
+        }
+    }
+    if converted_asset_exists(asset_root, SEAGULL_MODEL_PATH) {
+        paths.insert(SEAGULL_MODEL_PATH.to_owned());
+    }
+    paths
+}
+
+fn world_render_preload_handles(
+    server: &AssetServer,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+) -> Vec<UntypedHandle> {
+    let mut handles = Vec::new();
+    for handle in [
+        render.loading_screen.as_ref(),
+        render.loading_overlay.as_ref(),
+        render.loading_icon.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        handles.push(handle.clone().untyped());
+    }
+    for map in [
+        &render.top_bar_textures,
+        &render.selection_panel_textures,
+        &render.bottom_bar_textures,
+        &render.vote_textures,
+        &render.objective_textures,
+        &render.current_event_textures,
+        &render.main_menu_textures,
+    ] {
+        handles.extend(map.values().cloned().map(Handle::untyped));
+    }
+    // Programmatically created extended materials hold AssetServer image
+    // handles, but are not themselves loaded assets with a dependency graph.
+    // Explicitly include their converted source textures in readiness.
+    let texture_ids = presentation
+        .materials
+        .values()
+        .flat_map(|material| material.textures.values())
+        .collect::<BTreeSet<_>>();
+    handles.extend(texture_ids.into_iter().filter_map(|id| {
+        presentation.textures.get(id).map(|texture| {
+            let image: Handle<Image> = server.load(texture.asset_path.clone());
+            image.untyped()
+        })
+    }));
+    if let Some(mesh) = &render.fish_school_mesh {
+        handles.push(mesh.clone().untyped());
+    }
+    handles
 }
 
 fn begin_world_loading(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
 ) {
     let asset_handles = asset_server.as_deref().map_or_else(Vec::new, |server| {
-        world_preload_paths(&content.0, &asset_root.0)
+        let mut handles = world_preload_paths(&content.0, &asset_root.0)
             .into_iter()
-            .map(|path| server.load_builder().load_untyped(path).untyped())
-            .collect()
+            .map(|path| {
+                // WorldAssetRoot instantiates Scene(0), not the untyped GLB
+                // container. Preloading the same sub-asset prevents a false
+                // 100% followed by blue/black placeholder frames.
+                let scene: Handle<bevy::world_serialization::WorldAsset> =
+                    server.load(GltfAssetLabel::Scene(0).from_asset(path));
+                scene.untyped()
+            })
+            .collect::<Vec<_>>();
+        handles.extend(world_render_preload_handles(
+            server,
+            &presentation.0,
+            &render,
+        ));
+        handles
     });
     let asset_count = asset_handles.len();
     let world_config = config.0.world.clone();
@@ -6147,7 +6257,7 @@ fn begin_world_loading(
         progress: 0.0,
         status: "Preparing new town".to_owned(),
         substatus: format!(
-            "0 / {asset_count} scene assets; terrain {}",
+            "0 / {asset_count} presentation assets; terrain {}",
             if prepared_world.is_some() {
                 "ready"
             } else {
@@ -6198,7 +6308,7 @@ fn poll_world_loading(
     };
     loading.substatus = if failed == 0 {
         format!(
-            "{loaded} / {total_assets} scene assets; terrain {}",
+            "{loaded} / {total_assets} presentation assets; terrain {}",
             if terrain_ready { "ready" } else { "generating" }
         )
     } else {
@@ -6353,6 +6463,92 @@ fn finish_menu_reveal(
     );
     commands.remove_resource::<MenuLoadingRuntime>();
     commands.remove_resource::<MenuRevealRuntime>();
+}
+
+fn begin_world_reveal(mut commands: Commands) {
+    commands.insert_resource(WorldRevealRuntime::default());
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_world_reveal(
+    mut commands: Commands,
+    mut reveal: Option<ResMut<WorldRevealRuntime>>,
+    mut loading: Option<ResMut<WorldLoadingRuntime>>,
+    loading_entities: Query<Entity, With<LoadingScreenEntity>>,
+    scene_roots: Query<Option<&Children>, (With<WorldEntity>, With<WorldAssetRoot>)>,
+    material_specs: Query<(), With<MaterialOverrideSpec>>,
+    mesh_overrides: Query<(Entity, Option<&MaterialOverrideApplied>), With<Mesh3d>>,
+    parents: Query<&ChildOf>,
+) {
+    let Some(reveal) = reveal.as_deref_mut() else {
+        return;
+    };
+    reveal.rendered_frames = reveal.rendered_frames.saturating_add(1);
+
+    let mut root_count = 0;
+    let mut ready_roots = 0;
+    for children in &scene_roots {
+        root_count += 1;
+        if children.is_some_and(|children| !children.is_empty()) {
+            ready_roots += 1;
+        }
+    }
+
+    let mut authored_meshes = 0;
+    let mut applied_meshes = 0;
+    for (entity, applied) in &mesh_overrides {
+        let mut ancestor = entity;
+        let mut has_authored_spec = false;
+        for _ in 0..64 {
+            if material_specs.contains(ancestor) {
+                has_authored_spec = true;
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+        if has_authored_spec {
+            authored_meshes += 1;
+            if applied.is_some() {
+                applied_meshes += 1;
+            }
+        }
+    }
+
+    let roots_ready = root_count == ready_roots;
+    let materials_ready = authored_meshes == applied_meshes;
+    if roots_ready && materials_ready {
+        reveal.ready_frames = reveal.ready_frames.saturating_add(1);
+    } else {
+        reveal.ready_frames = 0;
+    }
+    if let Some(loading) = loading.as_deref_mut() {
+        loading.progress = 1.0;
+        "Preparing first rendered frame".clone_into(&mut loading.status);
+        loading.substatus = format!(
+            "{ready_roots} / {root_count} scenes; {applied_meshes} / {authored_meshes} authored meshes"
+        );
+    }
+
+    // A few fully-ready rendered frames deliberately remain covered. This is
+    // where wgpu compiles the world/selection pipelines and uploads textures;
+    // revealing earlier is what exposed black and fallback-blue frames.
+    if reveal.rendered_frames < 8 || reveal.ready_frames < 5 {
+        return;
+    }
+    for entity in &loading_entities {
+        commands.entity(entity).despawn();
+    }
+    info!(
+        scene_roots = root_count,
+        authored_meshes,
+        elapsed_seconds = reveal.started_at.elapsed().as_secs_f64(),
+        "Stream Town world reveal complete"
+    );
+    commands.remove_resource::<WorldLoadingRuntime>();
+    commands.remove_resource::<WorldRevealRuntime>();
 }
 
 fn animate_loading_icon(
@@ -7208,52 +7404,84 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
             WorldEntity,
             VotePanelKind::Ruler,
             Name::new("Ruler voting menu"),
-            ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[7]))
-                .with_mode(NodeImageMode::Stretch),
+            ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[0])).with_mode(
+                NodeImageMode::Sliced(TextureSlicer {
+                    border: BorderRect::all(44.0),
+                    center_scale_mode: default(),
+                    sides_scale_mode: default(),
+                    max_corner_scale: 1.0,
+                }),
+            ),
             GlobalZIndex(24),
             Visibility::Hidden,
             Node {
                 position_type: PositionType::Absolute,
-                top: px(126),
-                left: px(24),
-                width: px(390),
-                height: px(312),
-                padding: UiRect::all(px(24)),
+                right: percent(1.2),
+                bottom: percent(0.0),
+                width: percent(14.6),
+                min_width: px(280),
+                height: percent(31.4),
+                min_height: px(330),
                 ..default()
             },
         ))
         .with_children(|panel| {
             panel.spawn((
-                VoteTextKind::RulerDescription,
-                Text::new("Who should be Ruler?"),
+                ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[7])),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(21.6),
+                    top: percent(10.5),
+                    width: percent(9.6),
+                    aspect_ratio: Some(1.0),
+                    ..default()
+                },
+            ));
+            panel.spawn((
+                Text::new("VOTE FOR RULER"),
                 TextFont {
-                    font_size: FontSize::Px(25.0),
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
                 TextColor(Color::srgb(0.12, 0.10, 0.07)),
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(25),
-                    left: px(24),
-                    right: px(24),
+                    left: percent(31.2),
+                    right: percent(18.8),
+                    top: percent(11.4),
                     ..default()
                 },
             ));
             panel.spawn((
-                VoteTextKind::RulerOptions,
-                Text::new("Waiting for !vote playername"),
+                VoteTextKind::RulerDescription,
+                Text::new("Who should be Ruler?"),
                 TextFont {
-                    font_size: FontSize::Px(19.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
-                TextColor(Color::srgb(0.13, 0.11, 0.08)),
+                TextColor(Color::srgb(0.12, 0.10, 0.07)),
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(77),
-                    left: px(30),
-                    right: px(30),
+                    top: percent(18.9),
+                    left: percent(10.9),
+                    right: percent(11.1),
+                    ..default()
+                },
+            ));
+            panel.spawn((
+                RulerOptionsContainer,
+                Name::new("Ruler vote options"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: percent(30.6),
+                    bottom: percent(22.8),
+                    left: percent(17.8),
+                    right: percent(17.8),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(3),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
             ));
@@ -7265,10 +7493,10 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VOTE_TEXTURE_PATHS[8],
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(47),
-                    bottom: px(36),
-                    width: px(254),
-                    height: px(28),
+                    left: percent(17.9),
+                    right: percent(17.9),
+                    bottom: percent(10.3),
+                    height: percent(7.4),
                     ..default()
                 },
             );
@@ -7282,8 +7510,9 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 TextColor(Color::srgb(0.12, 0.10, 0.07)),
                 Node {
                     position_type: PositionType::Absolute,
-                    right: px(24),
-                    bottom: px(34),
+                    left: percent(17.9),
+                    right: percent(17.9),
+                    bottom: percent(10.3),
                     ..default()
                 },
             ));
@@ -9892,8 +10121,12 @@ fn generate_and_spawn_world(
         SelectionMarker,
         Mesh3d(render.cloud_plane.clone()),
         MeshMaterial3d(render.selection.clone()),
-        Transform::from_xyz(0.0, SELECTION_OUTLINE_SURFACE_OFFSET, 0.0),
-        Visibility::Hidden,
+        // Render once behind the loading overlay so the selection mesh,
+        // material, and pipeline are resident before the first click. The
+        // InGame selection sync hides it immediately when nothing is selected.
+        Transform::from_translation(town_hall_focus + Vec3::Y * SELECTION_OUTLINE_SURFACE_OFFSET)
+            .with_scale(Vec3::splat(config.0.world.cell_size)),
+        Visibility::Visible,
         bevy::light::NotShadowCaster,
         bevy::light::NotShadowReceiver,
     ));
@@ -10018,13 +10251,6 @@ fn generate_and_spawn_world(
         .then(|| spawn_positions.first().copied())
         .flatten();
     for position in spawn_positions {
-        let x = position.x;
-        let z = position.z;
-        let target = GridPos {
-            x: generated.navigation.width() - 1 - x,
-            z: generated.navigation.height() - 1 - z,
-        };
-        let target = nearest_walkable(&generated, target).unwrap_or(centre);
         let world_position = grid_to_world_on_surface(position, &config.0, &generated);
         if spawned == 0
             && std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
@@ -10041,6 +10267,7 @@ fn generate_and_spawn_world(
         }
         let (actor_id, initial_role) = initial_actor_identity(spawned);
         let actor_id = StableId::new(actor_id).expect("generated ID");
+        let target = deterministic_wander_target(&generated, &actor_id, position);
         let kind = ActorKind::Player;
         simulation.join_player(actor_id.clone(), position);
         if let Some(role) = initial_role {
@@ -10476,9 +10703,45 @@ fn generated_resource_world_position(
     world: &GeneratedWorld,
 ) -> Vec3 {
     let mut position = grid_to_world_on_surface(resource.position, config, world);
-    position.x += f32::from(resource.offset_milli_cells[0]) * config.world.cell_size / 1_000.0;
-    position.z += f32::from(resource.offset_milli_cells[1]) * config.world.cell_size / 1_000.0;
+    let offset = central_cell_visual_offset(
+        world.seed,
+        resource.position,
+        resource.kind.as_str(),
+        0,
+        config.world.cell_size,
+    );
+    position.x += offset.x;
+    position.z += offset.y;
     position
+}
+
+fn central_cell_visual_offset(
+    world_seed: u64,
+    position: GridPos,
+    stable_salt: &str,
+    variant: u64,
+    cell_size: f32,
+) -> Vec2 {
+    let mut hash = world_seed
+        ^ (u64::from(position.x) << 32)
+        ^ (u64::from(position.z) << 16)
+        ^ variant.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    for byte in stable_salt.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash ^= hash >> 30;
+    hash = hash.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    hash ^= hash >> 27;
+    hash = hash.wrapping_mul(0x94d0_49bb_1331_11eb);
+    hash ^= hash >> 31;
+    let x_bits = u16::try_from(hash & u64::from(u16::MAX)).expect("masked offset x fits");
+    let z_bits = u16::try_from((hash >> 16) & u64::from(u16::MAX)).expect("masked offset z fits");
+    let central_half_width = cell_size * 0.25;
+    Vec2::new(
+        (f32::from(x_bits) / f32::from(u16::MAX) * 2.0 - 1.0) * central_half_width,
+        (f32::from(z_bits) / f32::from(u16::MAX) * 2.0 - 1.0) * central_half_width,
+    )
 }
 
 fn resource_mesh_index(resource: &stream_town_domain::GeneratedResource) -> usize {
@@ -10665,11 +10928,14 @@ fn spawn_foliage_visual(
         .from_asset(variant.asset_path.clone()),
     );
     let centre = grid_to_world_on_surface(foliage.position, config, world);
-    let offset = Vec3::new(
-        f32::from(foliage.offset_milli_cells[0]) * config.world.cell_size / 1_000.0,
-        0.0,
-        f32::from(foliage.offset_milli_cells[1]) * config.world.cell_size / 1_000.0,
+    let horizontal_offset = central_cell_visual_offset(
+        world.seed,
+        foliage.position,
+        foliage.layer.as_str(),
+        u64::from(foliage.variant),
+        config.world.cell_size,
     );
+    let offset = Vec3::new(horizontal_offset.x, 0.0, horizontal_offset.y);
     // This is also a primitive-label load, so `resource_visual_scale` restores
     // the glTF scene node's centimetre conversion before authored BaseScale.
     let scale = Vec3::from_array(variant.base_scale)
@@ -11949,7 +12215,10 @@ fn next_agent_goal_with_reservations(
     target_assignments: &BTreeMap<StableId, u32>,
 ) -> (AgentGoal, GridPos) {
     let Some(actor) = simulation.actors.get(actor_id) else {
-        return (AgentGoal::Wander, mirrored_target(world, current));
+        return (
+            AgentGoal::Wander,
+            deterministic_wander_target(world, actor_id, current),
+        );
     };
     if !actor.alive {
         return (AgentGoal::Wander, current);
@@ -12290,7 +12559,10 @@ fn next_agent_goal_with_reservations(
         }
     }
     if !actor_resource_storage_has_room(config, content, simulation, actor) {
-        return (AgentGoal::Wander, mirrored_target(world, current));
+        return (
+            AgentGoal::Wander,
+            deterministic_wander_target(world, actor_id, current),
+        );
     }
     if actor_remaining_carry_capacity(content, simulation, actor) == 0 {
         let destination = station.map_or_else(
@@ -12301,10 +12573,16 @@ fn next_agent_goal_with_reservations(
         return (AgentGoal::Deposit, target);
     }
     let Some(resource_kind) = resource_for_role(content, &actor.role) else {
-        return (AgentGoal::Wander, mirrored_target(world, current));
+        return (
+            AgentGoal::Wander,
+            deterministic_wander_target(world, actor_id, current),
+        );
     };
     let Some(station) = station else {
-        return (AgentGoal::Wander, mirrored_target(world, current));
+        return (
+            AgentGoal::Wander,
+            deterministic_wander_target(world, actor_id, current),
+        );
     };
     if content.roles.get(&actor.role).is_some_and(|role| {
         role_accepts_target(
@@ -12407,7 +12685,12 @@ fn next_agent_goal_with_reservations(
                 .flatten()
                 .map(|approach| (AgentGoal::Gather(resource.id.clone()), approach))
         })
-        .unwrap_or_else(|| (AgentGoal::Wander, mirrored_target(world, current)))
+        .unwrap_or_else(|| {
+            (
+                AgentGoal::Wander,
+                deterministic_wander_target(world, actor_id, current),
+            )
+        })
 }
 
 fn complete_agent_goal(
@@ -14879,7 +15162,8 @@ fn move_agents(
                 transform.translation = world_position;
                 location.0 = actor_position;
                 agent.origin = actor_position;
-                agent.target = mirrored_target(&world.generated, actor_position);
+                agent.target =
+                    deterministic_wander_target(&world.generated, &agent.id, actor_position);
                 agent.path.clear();
                 agent.path_index = 0;
                 agent.action_cooldown_seconds = 0.0;
@@ -14921,7 +15205,7 @@ fn move_agents(
             transform.translation = world_position;
             location.0 = spawn;
             agent.origin = spawn;
-            agent.target = mirrored_target(&world.generated, spawn);
+            agent.target = deterministic_wander_target(&world.generated, &agent.id, spawn);
             agent.action_cooldown_seconds = 0.0;
             spawn_healing_effect(
                 &mut commands,
@@ -16121,7 +16405,7 @@ fn update_environment_presentation(
     mut tree_materials: Option<ResMut<Assets<TreeMaterial>>>,
     mut grass_materials: Option<ResMut<Assets<GrassMaterial>>>,
     mut cameras: Query<(&mut DistanceFog, &mut AmbientLight), With<TownCamera>>,
-    mut lights: Query<&mut DirectionalLight>,
+    mut sun: TownSunMutQuery,
     particles: Query<Entity, With<WeatherParticle>>,
 ) {
     let environment = (simulation.0.season, simulation.0.weather);
@@ -16211,15 +16495,17 @@ fn update_environment_presentation(
             palette.ambient_color[1],
             palette.ambient_color[2],
         );
-        ambient.brightness = in_game_ambient_brightness(palette.ambient_brightness) * light_ratio;
+        let ambient_ratio = 0.55 + 0.45 * light_ratio;
+        ambient.brightness = in_game_ambient_brightness(palette.ambient_brightness) * ambient_ratio;
     }
-    for mut light in &mut lights {
+    for (mut light, mut transform) in &mut sun {
         light.color = Color::srgb(
             palette.sun_color[0],
             palette.sun_color[1],
             palette.sun_color[2],
         );
         light.illuminance = palette.sun_illuminance * light_ratio;
+        *transform = in_game_sun_transform_for_daylight(daylight);
     }
     if environment_changed {
         for entity in &particles {
@@ -16335,7 +16621,7 @@ fn animate_weather_particles(
 fn environment_palette(season: Season, weather: Weather) -> EnvironmentPalette {
     let (terrain_tint, water_color, clear_color, sun_color, ambient_color) = match season {
         Season::Spring => (
-            [0.94, 1.0, 0.92],
+            [0.86, 1.14, 0.84],
             [0.05, 0.29, 0.47, 0.62],
             [0.025, 0.04, 0.055],
             [1.0, 0.95, 0.84],
@@ -17774,14 +18060,18 @@ fn equipment_node_visible(
             && (equipment.left_hand_permanent || carrying))
 }
 
+fn carried_resource_visible(state: MovementAnimationState, has_inventory: bool) -> bool {
+    state == MovementAnimationState::Moving && has_inventory
+}
+
 fn sync_equipment_nodes(
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
-    agents: Query<&Agent, With<AgentEquipmentPresentation>>,
+    agents: Query<(&Agent, &AgentAnimation), With<AgentEquipmentPresentation>>,
     mut nodes: Query<(&EquipmentNode, &mut Visibility)>,
 ) {
     for (node, mut visibility) in &mut nodes {
-        let Ok(agent) = agents.get(node.actor_root) else {
+        let Ok((agent, animation)) = agents.get(node.actor_root) else {
             continue;
         };
         let Some(actor) = simulation.0.actors.get(&agent.id) else {
@@ -17792,7 +18082,13 @@ fn sync_equipment_nodes(
             .roles
             .get(&actor.role)
             .and_then(|role| role.equipment.as_ref());
-        let carrying = actor.inventory.values().any(|amount| *amount > 0);
+        // Unity's carried-resource prop is hidden during the collection action
+        // and shown on the return walk. Inventory alone was too broad and left
+        // the gathered item in-hand throughout the gathering animation.
+        let carrying = carried_resource_visible(
+            animation.state,
+            actor.inventory.values().any(|amount| *amount > 0),
+        );
         let visible = equipment.map_or_else(
             || {
                 [
@@ -19972,6 +20268,7 @@ fn building_damage_value(health: i32, max_health: i32) -> f32 {
 
 fn camera_controls(
     time: Res<Time>,
+    config: Res<RuntimeConfig>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
@@ -20024,7 +20321,8 @@ fn camera_controls(
         let unity_delta = mouse_motion.delta;
         let movement =
             Vec3::new(unity_delta.y, 0.0, -unity_delta.x) * settings.0.camera.pan_sensitivity;
-        controller.move_target = constrain_town_camera_position(transform.translation + movement);
+        controller.move_target =
+            constrain_town_camera_position(transform.translation + movement, &config.0.world);
         transform.translation = unity_smooth_damp_vec3(
             transform.translation,
             controller.move_target,
@@ -20032,7 +20330,8 @@ fn camera_controls(
             UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
             delta_seconds,
         );
-        transform.translation = constrain_town_camera_position(transform.translation);
+        transform.translation =
+            constrain_town_camera_position(transform.translation, &config.0.world);
     } else if !idle.0 {
         let edge_direction = if settings.0.camera.mouse_controls
             && settings.0.camera.edge_scrolling
@@ -20082,7 +20381,8 @@ fn camera_controls(
         };
         controller.move_target +=
             Vec3::new(movement_per_second.x, 0.0, movement_per_second.y) * delta_seconds;
-        controller.move_target = constrain_town_camera_position(controller.move_target);
+        controller.move_target =
+            constrain_town_camera_position(controller.move_target, &config.0.world);
         let current_height = transform.translation.y;
         transform.translation = transform.translation.lerp(
             controller.move_target,
@@ -20141,7 +20441,7 @@ fn camera_controls(
                         controller.move_target +=
                             Vec3::new(direction.x, 0.0, direction.y) * amount * 12.0;
                         controller.move_target =
-                            constrain_town_camera_position(controller.move_target);
+                            constrain_town_camera_position(controller.move_target, &config.0.world);
                     }
                     CameraDirection::In | CameraDirection::Out => {
                         let signed = if action.direction == CameraDirection::In {
@@ -20222,17 +20522,21 @@ fn unity_mouse_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
     }
 }
 
-fn constrain_town_camera_position(position: Vec3) -> Vec3 {
+fn constrain_town_camera_position(
+    position: Vec3,
+    world: &stream_town_domain::WorldGenConfig,
+) -> Vec3 {
+    let half_x = f32::from(world.width) * world.cell_size * 0.5;
+    let half_z = f32::from(world.height) * world.cell_size * 0.5;
+    // This camera looks down +X at 45 degrees, so its terrain focus is one
+    // camera-height ahead of its body. Clamp the focus to the generated map;
+    // fixed body bounds clipped the far shore increasingly as zoom increased.
+    let minimum_x = -half_x - position.y;
+    let maximum_x = half_x - position.y;
     Vec3::new(
-        position.x.clamp(
-            UNITY_TOWN_CAMERA_MIN_POSITION.x,
-            UNITY_TOWN_CAMERA_MAX_POSITION.x,
-        ),
+        position.x.clamp(minimum_x, maximum_x),
         position.y,
-        position.z.clamp(
-            UNITY_TOWN_CAMERA_MIN_POSITION.y,
-            UNITY_TOWN_CAMERA_MAX_POSITION.y,
-        ),
+        position.z.clamp(-half_z, half_z),
     )
 }
 
@@ -20472,6 +20776,15 @@ fn in_game_sun_transform() -> Transform {
     // camera side preserves the elevated authored look while lighting the
     // readable front faces.
     Transform::from_xyz(-250.0, 400.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y)
+}
+
+fn in_game_sun_transform_for_daylight(daylight: f32) -> Transform {
+    let base = in_game_sun_transform();
+    // Unity rotates the directional light's parent from Y=0 degrees at day to
+    // Y=-120 degrees at night during the authored transition.
+    let parent_rotation =
+        Quat::from_rotation_y((-120.0_f32 * (1.0 - daylight.clamp(0.0, 1.0))).to_radians());
+    Transform::from_translation(base.translation).with_rotation(parent_rotation * base.rotation)
 }
 
 const fn in_game_ambient_brightness(authored: f32) -> f32 {
@@ -21952,9 +22265,9 @@ fn technology_vote_tally(simulation: &WorldSimulation) -> Option<(usize, usize, 
     Some((approvals, total, ratio))
 }
 
-fn ruler_vote_option_text(simulation: &WorldSimulation) -> String {
+fn ruler_vote_option_lines(simulation: &WorldSimulation) -> Vec<String> {
     let Some(vote) = simulation.ruler_vote.as_ref() else {
-        return String::new();
+        return Vec::new();
     };
     let mut options = vote
         .option_order
@@ -21970,9 +22283,9 @@ fn ruler_vote_option_text(simulation: &WorldSimulation) -> String {
         })
         .collect::<Vec<_>>();
     options.sort_by_key(|(_, count, order)| (std::cmp::Reverse(*count), *order));
-    let lines = options
+    let mut lines = options
         .into_iter()
-        .take(5)
+        .take(3)
         .map(|(option, count, _)| {
             let label = simulation
                 .actors
@@ -21983,16 +22296,23 @@ fn ruler_vote_option_text(simulation: &WorldSimulation) -> String {
         })
         .collect::<Vec<_>>();
     if lines.is_empty() {
-        match vote.kind {
-            RulerVoteKind::NewRuler => "Waiting for !vote playername".to_owned(),
-            RulerVoteKind::KeepRuler => "!vote yes  (0)\n!vote no  (0)".to_owned(),
-        }
-    } else {
-        lines.join("\n")
+        lines = match vote.kind {
+            RulerVoteKind::NewRuler => Vec::new(),
+            RulerVoteKind::KeepRuler => {
+                vec!["!vote yes  (0)".to_owned(), "!vote no  (0)".to_owned()]
+            }
+        };
     }
+    lines
+}
+
+#[cfg(test)]
+fn ruler_vote_option_text(simulation: &WorldSimulation) -> String {
+    ruler_vote_option_lines(simulation).join("\n")
 }
 
 fn update_vote_panels(
+    mut commands: Commands,
     simulation: Res<SimulationRuntime>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
@@ -22003,6 +22323,7 @@ fn update_vote_panels(
     mut fills: Query<(&VoteFillKind, &mut Node)>,
     mut technology_icons: TechnologyVoteIconQuery,
     mut cast_buttons: TechnologyVoteCastQuery,
+    ruler_options: Query<(Entity, Option<&Children>), With<RulerOptionsContainer>>,
 ) {
     if !simulation.is_changed() {
         return;
@@ -22083,14 +22404,70 @@ fn update_vote_panels(
             RulerVoteKind::NewRuler => "Who should be Ruler?\ntype !vote playername",
             RulerVoteKind::KeepRuler => "Keep the current Ruler?",
         };
-        let options = ruler_vote_option_text(&simulation.0);
         for (kind, mut text) in &mut texts {
             text.0 = match kind {
                 VoteTextKind::RulerDescription => description.to_owned(),
                 VoteTextKind::RulerTimer => vote_timer_text(vote.remaining_seconds),
-                VoteTextKind::RulerOptions => options.clone(),
                 _ => continue,
             };
+        }
+        if let Ok((container, children)) = ruler_options.single() {
+            if let Some(children) = children {
+                for child in children {
+                    commands.entity(*child).despawn();
+                }
+            }
+            let lines = ruler_vote_option_lines(&simulation.0);
+            commands.entity(container).with_children(|options| {
+                if lines.is_empty() {
+                    options.spawn((
+                        Text::new("Waiting for nominations…"),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(0.13, 0.11, 0.08)),
+                        Node {
+                            width: percent(100.0),
+                            margin: UiRect::top(px(12)),
+                            ..default()
+                        },
+                    ));
+                }
+                for line in lines {
+                    options
+                        .spawn((
+                            ImageNode::new(vote_texture(&render, VOTE_TEXTURE_PATHS[4])).with_mode(
+                                NodeImageMode::Sliced(TextureSlicer {
+                                    border: BorderRect::all(12.0),
+                                    center_scale_mode: default(),
+                                    sides_scale_mode: default(),
+                                    max_corner_scale: 1.0,
+                                }),
+                            ),
+                            Node {
+                                width: percent(100.0),
+                                height: px(42),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new(line),
+                                TextFont {
+                                    font_size: FontSize::Px(17.0),
+                                    ..default()
+                                },
+                                TextLayout::justify(Justify::Center),
+                                TextColor(Color::BLACK),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                }
+            });
         }
         for (kind, mut node) in &mut fills {
             if *kind == VoteFillKind::RulerTimer {
@@ -23864,7 +24241,7 @@ fn load_input(
         agent.origin = position;
         agent.path.clear();
         agent.path_index = 0;
-        agent.target = mirrored_target(&world.generated, position);
+        agent.target = deterministic_wander_target(&world.generated, &agent.id, position);
         agent.action_cooldown_seconds = 0.0;
         location.0 = position;
         transform.translation = world_position;
@@ -23904,7 +24281,7 @@ fn load_input(
                 origin: position,
                 path: Vec::new(),
                 path_index: 0,
-                target: mirrored_target(&world.generated, position),
+                target: deterministic_wander_target(&world.generated, &saved.id, position),
                 action_cooldown_seconds: 0.0,
                 health_regen_accumulator: 0.0,
             },
@@ -24128,12 +24505,81 @@ fn report_frame_time_gate(
     }
 }
 
-fn mirrored_target(world: &GeneratedWorld, position: GridPos) -> GridPos {
-    let desired = GridPos {
-        x: world.navigation.width() - 1 - position.x,
-        z: world.navigation.height() - 1 - position.z,
-    };
-    nearest_walkable(world, desired).unwrap_or(position)
+fn deterministic_wander_target(
+    world: &GeneratedWorld,
+    actor: &StableId,
+    position: GridPos,
+) -> GridPos {
+    // Unity's idle state samples a fresh point from a ten-world-unit circle.
+    // Mirroring the whole map produced a deterministic two-point pendulum.
+    // These integer offsets cover the same five-cell radius while the stable
+    // location hash makes each reached cell lead to a new local destination.
+    const OFFSETS: [(i16, i16); 32] = [
+        (5, 0),
+        (5, 2),
+        (4, 3),
+        (3, 4),
+        (2, 5),
+        (0, 5),
+        (-2, 5),
+        (-3, 4),
+        (-4, 3),
+        (-5, 2),
+        (-5, 0),
+        (-5, -2),
+        (-4, -3),
+        (-3, -4),
+        (-2, -5),
+        (0, -5),
+        (2, -5),
+        (3, -4),
+        (4, -3),
+        (5, -2),
+        (3, 0),
+        (3, 2),
+        (2, 3),
+        (0, 3),
+        (-2, 3),
+        (-3, 2),
+        (-3, 0),
+        (-3, -2),
+        (-2, -3),
+        (0, -3),
+        (2, -3),
+        (3, -2),
+    ];
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64 ^ world.seed;
+    for byte in actor.as_str().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash ^= u64::from(position.x) << 16 | u64::from(position.z);
+    hash = hash.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let offset_count = u64::try_from(OFFSETS.len()).expect("wander offset count fits u64");
+    let start = usize::try_from(hash % offset_count).expect("bounded wander index");
+    for attempt in 0..OFFSETS.len() {
+        // Seven is coprime with 32, so every direction is visited exactly once.
+        let (offset_x, offset_z) = OFFSETS[(start + attempt * 7) % OFFSETS.len()];
+        let candidate_x = i32::from(position.x) + i32::from(offset_x);
+        let candidate_z = i32::from(position.z) + i32::from(offset_z);
+        if candidate_x < 0
+            || candidate_z < 0
+            || candidate_x >= i32::from(world.navigation.width())
+            || candidate_z >= i32::from(world.navigation.height())
+        {
+            continue;
+        }
+        let candidate = GridPos {
+            x: u16::try_from(candidate_x).expect("checked wander x"),
+            z: u16::try_from(candidate_z).expect("checked wander z"),
+        };
+        if world.navigation.is_walkable(candidate)
+            && world.navigation.find_path(position, candidate).is_ok()
+        {
+            return candidate;
+        }
+    }
+    position
 }
 
 fn prefixed_id(requested: &StableId, prefix: &str) -> Option<StableId> {
@@ -24826,7 +25272,7 @@ fn spawn_runtime_enemy(
             origin: position,
             path: Vec::new(),
             path_index: 0,
-            target: mirrored_target(world, position),
+            target: deterministic_wander_target(world, &id, position),
             action_cooldown_seconds: 0.0,
             health_regen_accumulator: 0.0,
         },
@@ -25484,7 +25930,7 @@ fn recruit_npcs(
             actor.display_name = Some(format!("Recruit {}", sequence + 1));
             actor.login_name = None;
         }
-        let target = mirrored_target(world, position);
+        let target = deterministic_wander_target(world, &id, position);
         let world_position = grid_to_world_on_surface(position, config, world);
         commands.spawn((
             WorldEntity,
@@ -29279,6 +29725,7 @@ mod tests {
 
     #[test]
     fn town_camera_matches_the_shipping_unity_prefab() {
+        let config = GameConfig::default();
         let focus = Vec3::new(7.0, 2.5, -11.0);
         let transform = unity_town_camera_transform(focus);
         assert!(
@@ -29302,10 +29749,73 @@ mod tests {
         assert!((projection.fov.to_degrees() - 60.0).abs() < 0.000_1);
         assert!((projection.near - 0.3).abs() < 0.000_1);
         assert!((projection.far - 1_000.0).abs() < 0.000_1);
-        assert_eq!(
-            constrain_town_camera_position(Vec3::new(-200.0, 15.0, 200.0)),
-            Vec3::new(-142.0, 15.0, 124.0)
+        let constrained = constrain_town_camera_position(
+            Vec3::new(-500.0, UNITY_TOWN_CAMERA_MAX_HEIGHT, 500.0),
+            &config.world,
         );
+        assert_eq!(
+            constrained,
+            Vec3::new(-260.0, UNITY_TOWN_CAMERA_MAX_HEIGHT, 200.0)
+        );
+        assert!(
+            (camera_ground_focus(
+                &unity_town_camera_transform(Vec3::new(-200.0, 0.0, 200.0))
+                    .with_translation(constrained)
+            ) - Vec2::new(-200.0, 200.0))
+            .length()
+                < 0.001,
+            "the maximum-zoom camera must still reach the far island corner"
+        );
+    }
+
+    #[test]
+    fn local_wander_is_reachable_bounded_and_not_a_two_point_mirror() {
+        let config = GameConfig::default();
+        let world = generate_world(&config.world);
+        let actor = StableId::new("npc:wander_regression").unwrap();
+        let centre = GridPos {
+            x: config.world.width / 2,
+            z: config.world.height / 2,
+        };
+        let mut current = nearest_walkable(&world, centre).unwrap();
+        let mut visited = BTreeSet::from([current]);
+        for _ in 0..8 {
+            let next = deterministic_wander_target(&world, &actor, current);
+            assert_ne!(next, current);
+            assert!(next.x.abs_diff(current.x) <= 5);
+            assert!(next.z.abs_diff(current.z) <= 5);
+            assert!(world.navigation.find_path(current, next).is_ok());
+            visited.insert(next);
+            current = next;
+        }
+        assert!(
+            visited.len() >= 4,
+            "idle wandering must explore locally instead of alternating two endpoints"
+        );
+    }
+
+    #[test]
+    fn visual_hash_offsets_stay_in_the_central_half_of_each_cell() {
+        let first =
+            central_cell_visual_offset(42, GridPos { x: 12, z: 34 }, "resource:wood", 0, 2.0);
+        let repeated =
+            central_cell_visual_offset(42, GridPos { x: 12, z: 34 }, "resource:wood", 0, 2.0);
+        let neighbour =
+            central_cell_visual_offset(42, GridPos { x: 13, z: 34 }, "resource:wood", 0, 2.0);
+        assert_eq!(first, repeated);
+        assert_ne!(first, neighbour);
+        assert!(first.x.abs() <= 0.5 && first.y.abs() <= 0.5);
+    }
+
+    #[test]
+    fn day_night_cycle_rotates_the_shipping_sun_parent() {
+        let day = in_game_sun_transform_for_daylight(1.0);
+        let dusk = in_game_sun_transform_for_daylight(0.5);
+        let night = in_game_sun_transform_for_daylight(0.0);
+        assert!(day.rotation.angle_between(dusk.rotation).to_degrees() > 59.0);
+        assert!(dusk.rotation.angle_between(night.rotation).to_degrees() > 59.0);
+        assert!((day.rotation.angle_between(night.rotation).to_degrees() - 120.0).abs() < 0.01);
+        assert_eq!(day.translation, night.translation);
     }
 
     #[test]
@@ -30481,6 +30991,18 @@ mod tests {
             "LHand_LoggerCarryWood",
             true
         ));
+        assert!(!carried_resource_visible(
+            MovementAnimationState::Idle,
+            true
+        ));
+        assert!(carried_resource_visible(
+            MovementAnimationState::Moving,
+            true
+        ));
+        assert!(!carried_resource_visible(
+            MovementAnimationState::Moving,
+            false
+        ));
 
         let defender = content.roles[&StableId::new("role:defender").unwrap()]
             .equipment
@@ -31107,12 +31629,12 @@ mod tests {
     }
 
     #[test]
-    fn in_game_sun_lights_camera_facing_surfaces_with_a_small_ambient_lift() {
+    fn in_game_sun_lights_camera_facing_surfaces_with_authored_probe_compensation() {
         let sun = in_game_sun_transform();
         let camera = default_town_camera_transform();
         assert!(sun.translation.x < 0.0);
         assert!(sun.forward().dot(*camera.forward()) > 0.7);
-        assert!((in_game_ambient_brightness(90.0) - 103.5).abs() < f32::EPSILON);
+        assert!((in_game_ambient_brightness(90.0) - 117.0).abs() < 0.001);
     }
 
     #[test]
