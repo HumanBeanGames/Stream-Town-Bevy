@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 32;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 33;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -102,11 +102,34 @@ pub struct ArchetypeDef {
     pub enemy_models: Option<EnemyModelSetDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enemy_spawner: Option<EnemySpawnerDef>,
+    /// Unity `Pets.Pet` follow settings and the authored child-model transforms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pet: Option<PetDef>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
 const fn is_zero_u32(value: &u32) -> bool {
     *value == 0
+}
+
+/// Portable form of the shipping pet follower and its selectable model children.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PetDef {
+    pub closest_distance: f32,
+    pub max_distance: f32,
+    pub min_move_speed: f32,
+    pub max_move_speed: f32,
+    pub rotation_radians_per_second: f32,
+    pub models: BTreeMap<StableId, PetModelDef>,
+}
+
+/// One `PetModel` child resolved from prefab overrides into Bevy coordinates.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PetModelDef {
+    pub source_model: String,
+    pub local_position: [f32; 3],
+    pub local_rotation: [f32; 4],
+    pub local_scale: [f32; 3],
 }
 
 /// Authored `HealthHandler` and optional player-revival behavior attached to a prefab.
@@ -616,6 +639,8 @@ pub enum ContentError {
     InvalidBuildingModels(StableId),
     #[error("archetype {0} has invalid rotating-node data")]
     InvalidRotatingNode(StableId),
+    #[error("archetype {0} has invalid pet follower data")]
+    InvalidPet(StableId),
     #[error("building {0} has invalid target-scoring data")]
     InvalidTargetingScore(StableId),
     #[error("station target update policies do not cover the shipping target catalog")]
@@ -832,6 +857,40 @@ impl ContentCatalog {
                         });
                     }
                 }
+            }
+            let has_pet_component = archetype
+                .component_types
+                .iter()
+                .any(|component| component == "Pets.Pet");
+            if has_pet_component != archetype.pet.is_some()
+                || archetype.pet.as_ref().is_some_and(|pet| {
+                    !pet.closest_distance.is_finite()
+                        || pet.closest_distance < 0.0
+                        || !pet.max_distance.is_finite()
+                        || pet.max_distance <= pet.closest_distance
+                        || !pet.min_move_speed.is_finite()
+                        || pet.min_move_speed < 0.0
+                        || !pet.max_move_speed.is_finite()
+                        || pet.max_move_speed < pet.min_move_speed
+                        || !pet.rotation_radians_per_second.is_finite()
+                        || pet.rotation_radians_per_second <= 0.0
+                        || pet.models.is_empty()
+                        || pet.models.values().any(|model| {
+                            model.source_model.trim().is_empty()
+                                || !archetype
+                                    .scenes
+                                    .iter()
+                                    .any(|scene| scene.source_model == model.source_model)
+                                || model.local_position.iter().any(|value| !value.is_finite())
+                                || model.local_rotation.iter().any(|value| !value.is_finite())
+                                || model
+                                    .local_scale
+                                    .iter()
+                                    .any(|value| !value.is_finite() || *value <= 0.0)
+                        })
+                })
+            {
+                return Err(ContentError::InvalidPet(id.clone()));
             }
         }
         for (id, building) in &self.buildings {

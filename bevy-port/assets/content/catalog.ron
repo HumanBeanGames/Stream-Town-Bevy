@@ -1,5 +1,5 @@
 (
-    schema_version: 32,
+    schema_version: 33,
     loading_screen: (
         progress_milli_per_second: 500,
         completion_hold_milliseconds: 500,
@@ -7024,6 +7024,45 @@
                 "Utils.Pooling.PoolableObject",
             ],
             rotating_nodes: [],
+            pet: Some((
+                closest_distance: 1.0,
+                max_distance: 5.0,
+                min_move_speed: 0.0,
+                max_move_speed: 10.0,
+                rotation_radians_per_second: 5.0,
+                models: {
+                    "pet:butterfly": (
+                        source_model: "Assets/Models/Pets/Pet_Butterfly.fbx",
+                        local_position: (0.0, 0.0, -0.0),
+                        local_rotation: (-0.0, -0.0, 0.0, 1.0),
+                        local_scale: (1.0, 1.0, 1.0),
+                    ),
+                    "pet:duck": (
+                        source_model: "Assets/Models/Pets/Pet_Duck.fbx",
+                        local_position: (0.0, 0.0, -0.0),
+                        local_rotation: (-0.0, -0.0, 0.0, 1.0),
+                        local_scale: (1.0, 1.0, 1.0),
+                    ),
+                    "pet:fish_god": (
+                        source_model: "Assets/Models/Critters/Critter_Fish3.fbx",
+                        local_position: (0.0, 1.403, -0.0),
+                        local_rotation: (-0.0, -0.0, 0.0, 1.0),
+                        local_scale: (1.0, 1.0, 1.0),
+                    ),
+                    "pet:giraffe": (
+                        source_model: "Assets/Models/Pets/Pet_TallBoi.fbx",
+                        local_position: (0.0, 0.0, -0.0),
+                        local_rotation: (-0.0, -0.0, 0.0, 1.0),
+                        local_scale: (1.0, 1.0, 1.0),
+                    ),
+                    "pet:red_panda": (
+                        source_model: "Assets/Models/Pets/Pet_RedPanda.fbx",
+                        local_position: (0.0, 0.0, -0.0),
+                        local_rotation: (-0.0, -0.0, 0.0, 1.0),
+                        local_scale: (1.0, 1.0, 1.0),
+                    ),
+                },
+            )),
         ),
         "archetype:prefab:d08a8abfdfdb65841beed4395f9d9f57": (
             display_name: "GraphicsProcessor",

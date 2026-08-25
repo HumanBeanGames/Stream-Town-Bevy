@@ -82,11 +82,11 @@ use stream_town_domain::{
     EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage,
     GeneratedWorld, GridPos, HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata,
     MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
-    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
-    RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
-    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
-    StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
+    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings,
+    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
+    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
+    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
+    StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
     unity_command_usage,
 };
@@ -322,10 +322,6 @@ const BUILDING_LEVEL_UP_TILE_SIZE: f32 = 4.0;
 const BUILDING_DAMAGED_RADIUS: f32 = 1.403_639_8;
 const BUILDING_DAMAGED_FIRE_AMOUNT: u16 = 128;
 const BUILDING_DAMAGED_SMOKE_AMOUNT: u16 = 200;
-const PET_CLOSEST_DISTANCE: f32 = 1.0;
-const PET_MAX_DISTANCE: f32 = 5.0;
-const PET_MAX_MOVE_SPEED: f32 = 10.0;
-const PET_ROTATION_SPEED: f32 = 5.0;
 const AGENT_ROTATION_SPEED: f32 = 5.0;
 const LOCOMOTION_REFERENCE_SPEED_CELLS_PER_SECOND: f32 = 5.0;
 const LOCOMOTION_STOP_GRACE_SECONDS: f32 = 0.12;
@@ -4713,18 +4709,16 @@ fn spawn_giraffe_smoke_pet(
     asset_server: &AssetServer,
     asset_root: &Path,
     position: Vec3,
-    cell_size: f32,
 ) {
     let Some(archetype) = content
         .archetypes
         .values()
-        .filter(|archetype| archetype.kind == ArchetypeKind::Building)
         .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
     else {
         return;
     };
     let pet = StableId::new("pet:giraffe").expect("static pet ID");
-    let Some(scene) = pet_scene(archetype, &pet) else {
+    let Some((scene, model)) = pet_model(archetype, &pet) else {
         return;
     };
     if !converted_asset_exists(asset_root, &scene.asset_path) {
@@ -4733,14 +4727,21 @@ fn spawn_giraffe_smoke_pet(
     let mut giraffe = commands.spawn((
         Name::new("Giraffe material smoke pet"),
         WorldEntity,
-        WorldAssetRoot(
-            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
-        ),
-        Transform::from_translation(position).with_scale(Vec3::splat(cell_size * 0.28)),
+        Transform::from_translation(position),
     ));
     if let Some(materials) = prefab_material_spec(archetype, scene, presentation, render) {
         giraffe.insert(materials);
     }
+    giraffe.with_children(|root| {
+        root.spawn((
+            WorldAssetRoot(
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+            ),
+            Transform::from_translation(Vec3::from_array(model.local_position))
+                .with_rotation(Quat::from_array(model.local_rotation).normalize())
+                .with_scale(Vec3::from_array(model.local_scale)),
+        ));
+    });
 }
 
 fn drive_seagull_flight(
@@ -12692,7 +12693,6 @@ fn generate_and_spawn_world(
             asset_server,
             &asset_root.0,
             focus,
-            config.0.world.cell_size,
         );
     }
     spawn_seagull(
@@ -19738,16 +19738,27 @@ fn mark_converted_animation_instance_ready(
     mut commands: Commands,
     specs: Query<(), With<ConvertedAnimationSpec>>,
     applied: Query<(), With<ConvertedAnimationApplied>>,
+    parents: Query<&ChildOf>,
 ) {
-    if specs.get(ready.entity).is_err() {
+    let mut actor_root = ready.entity;
+    for _ in 0..64 {
+        if specs.contains(actor_root) {
+            break;
+        }
+        let Ok(parent) = parents.get(actor_root) else {
+            return;
+        };
+        actor_root = parent.parent();
+    }
+    if !specs.contains(actor_root) {
         return;
     }
-    let mut entity = commands.entity(ready.entity);
+    let mut entity = commands.entity(actor_root);
     entity.insert(ConvertedAnimationInstanceReady);
     // WorldInstanceReady is emitted again after a hot reload or any other
     // scene-instance replacement. The old player belongs to the discarded
     // hierarchy, so make the replacement hierarchy eligible for attachment.
-    if applied.get(ready.entity).is_ok() {
+    if applied.contains(actor_root) {
         entity.remove::<ConvertedAnimationApplied>();
     }
 }
@@ -23521,25 +23532,22 @@ fn sync_world_render_lod(
     }
 }
 
-fn pet_scene<'a>(archetype: &'a ArchetypeDef, pet: &StableId) -> Option<&'a ArchetypeScene> {
-    let suffix = match pet.as_str() {
-        "pet:red_panda" => "Pet_RedPanda.fbx",
-        "pet:giraffe" => "Pet_TallBoi.fbx",
-        "pet:duck" => "Pet_Duck.fbx",
-        "pet:butterfly" => "Pet_Butterfly.fbx",
-        "pet:fish_god" => "Critter_Fish3.fbx",
-        _ => return None,
-    };
-    archetype
+fn pet_model<'a>(
+    archetype: &'a ArchetypeDef,
+    pet: &StableId,
+) -> Option<(&'a ArchetypeScene, &'a PetModelDef)> {
+    let model = archetype.pet.as_ref()?.models.get(pet)?;
+    let scene = archetype
         .scenes
         .iter()
-        .find(|scene| scene.source_model.ends_with(suffix))
+        .find(|scene| scene.source_model == model.source_model)?;
+    Some((scene, model))
 }
 
 fn pet_follow_step(
     transform: &mut Transform,
     owner_position: Vec3,
-    cell_size: f32,
+    pet: &PetDef,
     delta_seconds: f32,
 ) -> f32 {
     let direction = owner_position - transform.translation;
@@ -23547,23 +23555,26 @@ fn pet_follow_step(
     if distance_squared <= f32::EPSILON {
         return 0.0;
     }
-    let closest_distance_squared = (PET_CLOSEST_DISTANCE * cell_size).powi(2);
-    let max_distance_squared = (PET_MAX_DISTANCE * cell_size).powi(2);
-    let movement_speed = ((distance_squared - closest_distance_squared) * PET_MAX_MOVE_SPEED
-        / (max_distance_squared - closest_distance_squared))
-        .clamp(0.0, PET_MAX_MOVE_SPEED);
+    let closest_distance_squared = pet.closest_distance.powi(2);
+    let max_distance_squared = pet.max_distance.powi(2);
+    let movement_speed = (pet.min_move_speed
+        + (distance_squared - closest_distance_squared)
+            * (pet.max_move_speed - pet.min_move_speed)
+            / (max_distance_squared - closest_distance_squared))
+        .clamp(pet.min_move_speed, pet.max_move_speed);
     let distance = distance_squared.sqrt();
-    let world_step = (movement_speed * cell_size * delta_seconds).min(distance);
+    // Unity's Pet.Update uses world-space speed directly and does not clamp an
+    // overshooting frame to the remaining distance.
+    let world_step = movement_speed * delta_seconds;
     transform.translation += direction / distance * world_step;
 
     let horizontal = Vec3::new(direction.x, 0.0, direction.z);
     if horizontal.length_squared() > f32::EPSILON {
-        let target_rotation = Transform::default()
-            .looking_to(horizontal.normalize(), Vec3::Y)
-            .rotation;
+        // The imported pet meshes face local +Z, matching Unity's Transform.forward.
+        let target_rotation = Quat::from_rotation_arc(Vec3::Z, horizontal.normalize());
         transform.rotation = transform.rotation.slerp(
             target_rotation,
-            (delta_seconds * PET_ROTATION_SPEED).clamp(0.0, 1.0),
+            (delta_seconds * pet.rotation_radians_per_second).clamp(0.0, 1.0),
         );
     }
     movement_speed
@@ -23573,7 +23584,6 @@ fn pet_follow_step(
 fn sync_active_pets(
     mut commands: Commands,
     time: Res<Time>,
-    config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
     presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
@@ -23598,6 +23608,17 @@ fn sync_active_pets(
         .iter()
         .map(|(agent, transform)| (agent.id.clone(), transform.translation))
         .collect();
+    let Some(archetype) = content
+        .0
+        .archetypes
+        .values()
+        .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
+    else {
+        return;
+    };
+    let Some(pet_definition) = archetype.pet.as_ref() else {
+        return;
+    };
     let mut existing = BTreeSet::new();
     for (entity, mut visual, mut transform) in &mut visuals {
         let key = (visual.owner.clone(), visual.pet.clone());
@@ -23607,25 +23628,13 @@ fn sync_active_pets(
             continue;
         };
         if desired.get(&visual.owner) == Some(&visual.pet) {
-            visual.movement_speed = pet_follow_step(
-                &mut transform,
-                *position,
-                config.0.world.cell_size,
-                time.delta_secs(),
-            );
+            visual.movement_speed =
+                pet_follow_step(&mut transform, *position, pet_definition, time.delta_secs());
         } else {
             commands.entity(entity).despawn();
         }
     }
     let Some(server) = asset_server.as_deref() else {
-        return;
-    };
-    let Some(archetype) = content
-        .0
-        .archetypes
-        .values()
-        .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
-    else {
         return;
     };
     for (owner, pet) in desired {
@@ -23635,13 +23644,13 @@ fn sync_active_pets(
         let Some(owner_position) = owner_positions.get(&owner) else {
             continue;
         };
-        let Some(scene) = pet_scene(archetype, &pet)
-            .filter(|scene| converted_asset_exists(&asset_root.0, &scene.asset_path))
+        let Some((scene, model)) = pet_model(archetype, &pet)
+            .filter(|(scene, _)| converted_asset_exists(&asset_root.0, &scene.asset_path))
         else {
             continue;
         };
         let spawn_position = if std::env::var_os("STREAM_TOWN_SMOKE_PET").is_some() {
-            *owner_position + Vec3::X * config.0.world.cell_size * PET_MAX_DISTANCE
+            *owner_position + Vec3::X * pet_definition.max_distance
         } else {
             *owner_position
         };
@@ -23652,11 +23661,7 @@ fn sync_active_pets(
                 pet: pet.clone(),
                 movement_speed: 0.0,
             },
-            WorldAssetRoot(
-                server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
-            ),
-            Transform::from_translation(spawn_position)
-                .with_scale(Vec3::splat(config.0.world.cell_size * 0.28)),
+            Transform::from_translation(spawn_position),
         ));
         if let Some(animation) = pet_animation_spec(&pet, scene, &presentation.0) {
             visual.insert(animation);
@@ -23664,6 +23669,17 @@ fn sync_active_pets(
         if let Some(materials) = prefab_material_spec(archetype, scene, &presentation.0, &render) {
             visual.insert(materials);
         }
+        visual.with_children(|root| {
+            root.spawn((
+                Name::new(format!("{} model", pet.as_str())),
+                WorldAssetRoot(
+                    server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+                ),
+                Transform::from_translation(Vec3::from_array(model.local_position))
+                    .with_rotation(Quat::from_array(model.local_rotation).normalize())
+                    .with_scale(Vec3::from_array(model.local_scale)),
+            ));
+        });
     }
 }
 
@@ -38877,8 +38893,20 @@ mod tests {
             .find(|archetype| archetype.source_path.ends_with("Prefabs/Pets/Pet.prefab"))
             .unwrap();
         let pet = StableId::new("pet:giraffe").unwrap();
-        let scene = pet_scene(archetype, &pet).unwrap();
+        let (scene, model) = pet_model(archetype, &pet).unwrap();
         assert!(scene.source_model.ends_with("Pet_TallBoi.fbx"));
+        assert!(
+            model
+                .local_position
+                .iter()
+                .all(|value| value.abs() < f32::EPSILON)
+        );
+        assert!(
+            model
+                .local_scale
+                .iter()
+                .all(|value| (value - 1.0).abs() < f32::EPSILON)
+        );
         let material_id = presentation.model_materials[&scene.source_model]["MainMaterial"].clone();
         assert_eq!(
             presentation.materials[&material_id].source_path,
@@ -38957,7 +38985,7 @@ mod tests {
         ];
         for (pet, controller, scene_suffix) in cases {
             let pet = StableId::new(pet).unwrap();
-            let scene = pet_scene(archetype, &pet).unwrap();
+            let (scene, _) = pet_model(archetype, &pet).unwrap();
             let spec = pet_animation_spec(&pet, scene, &presentation).unwrap();
             assert_eq!(spec.controller.as_str(), controller);
             assert!(spec.rig_scene.ends_with(scene_suffix));
@@ -38968,27 +38996,54 @@ mod tests {
         assert!(
             pet_animation_spec(
                 &fish_god,
-                pet_scene(archetype, &fish_god).unwrap(),
+                pet_model(archetype, &fish_god).unwrap().0,
                 &presentation
             )
             .is_none()
         );
+        let pet = archetype.pet.as_ref().unwrap();
+        assert_eq!(pet.models.len(), 5);
+        assert!(
+            pet.models[&fish_god]
+                .local_position
+                .iter()
+                .zip([0.0, 1.403, -0.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(pet.models.values().all(|model| {
+            model
+                .local_scale
+                .iter()
+                .all(|value| (value - 1.0).abs() < f32::EPSILON)
+        }));
     }
 
     #[test]
     fn pet_follow_uses_unity_distance_remap_and_rotation() {
+        let content = embedded_content();
+        let pet = content
+            .archetypes
+            .values()
+            .find_map(|archetype| archetype.pet.as_ref())
+            .unwrap();
+        assert!((pet.closest_distance - 1.0).abs() < f32::EPSILON);
+        assert!((pet.max_distance - 5.0).abs() < f32::EPSILON);
+        assert!(pet.min_move_speed.abs() < f32::EPSILON);
+        assert!((pet.max_move_speed - 10.0).abs() < f32::EPSILON);
+        assert!((pet.rotation_radians_per_second - 5.0).abs() < f32::EPSILON);
+
         let mut near = Transform::from_translation(Vec3::ZERO);
-        let stopped = pet_follow_step(&mut near, Vec3::X, 1.0, 0.5);
+        let stopped = pet_follow_step(&mut near, Vec3::X, pet, 0.5);
         assert!(stopped.abs() <= f32::EPSILON);
         assert_eq!(near.translation, Vec3::ZERO);
 
         let mut far = Transform::from_translation(Vec3::ZERO);
-        let speed = pet_follow_step(&mut far, Vec3::new(5.0, 0.0, 0.0), 1.0, 0.1);
-        assert!((speed - PET_MAX_MOVE_SPEED).abs() <= f32::EPSILON);
+        let speed = pet_follow_step(&mut far, Vec3::new(5.0, 0.0, 0.0), pet, 0.1);
+        assert!((speed - pet.max_move_speed).abs() <= f32::EPSILON);
         assert_eq!(far.translation, Vec3::X);
         // Unity's Quaternion.Slerp uses delta * rotation speed, so a 100 ms
         // update rotates halfway toward the owner rather than snapping.
-        assert!(far.forward().dot(Vec3::X) > 0.7);
+        assert!((far.rotation * Vec3::Z).dot(Vec3::X) > 0.7);
     }
 
     #[test]

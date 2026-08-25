@@ -616,7 +616,12 @@ be validated together.
 its exact `MainMaterial` binding. The typed material retains Unity's
 vertex-colour neck/head masks, non-normalized rotation-axis math, textured PBR
 surface, and Bevy skinning path. Live equipped pets now receive the same exact
-prefab/model material overrides as the diagnostic scene.
+prefab/model material overrides as the diagnostic scene. Content schema 33 also
+retains the shipping prefab's world-space 1–5 metre follow band, zero-to-10
+metre-per-second speed remap, local `+Z` visible-forward convention, and model
+child transforms rather than applying a runtime cell-size multiplier. Fish
+God's authored 1.403-metre child lift and all five unit-scale model roots are
+validated from the converter output.
 `STREAM_TOWN_SMOKE_PET=red_panda`, `giraffe`, `duck`, `butterfly`, or `fish_god`
 equips that pet on the starting defender and frames the live follow path. The
 first four exercise translated animation controllers; Fish God verifies the
@@ -928,6 +933,9 @@ after its authored fireworks activation. It also guards state cleanup; this
 found and fixed a stale Credits timeline resource that previously survived a
 return to the Main Menu.
 
-This is an early migration milestone, not a parity release. The repository-level
-[`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) lists implemented behavior and
-remaining work.
+The migration now has source-diff closure for reachable gameplay and balance,
+shipping-scene shader/VFX reachability, converted authoring data and assets,
+and automated runtime/package gates. The repository-level
+[`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) records the remaining
+environment-dependent visual, audio, accessibility, signing, and hosting
+acceptance work.

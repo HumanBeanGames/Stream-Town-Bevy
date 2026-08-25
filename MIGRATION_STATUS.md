@@ -789,12 +789,17 @@ mistaken for production-ready systems.
   radians per second, while gathering preserves its explicit immediate snap to
   the resource. Facing remains presentation-only and does not enter stable save
   state or deterministic navigation hashes.
-- Live pets now reproduce the shipping `Pet.Update` follow behavior with the
-  authored distance-squared speed remap, 10-unit cap, and five-radians-per-
-  second smoothed facing. Red Panda, Giraffe, Duck, and Butterfly resolve their
-  individual Unity controllers and retarget exported idle/walk transform tracks
-  onto their own converted GLB rigs. Fish God intentionally stays static because
-  its shipping model has no Animator.
+- Content schema 33 and the live pet runtime now reproduce the complete shipping
+  `Pet.prefab` contract instead of relying on hand-maintained model suffixes.
+  The converter retains the exact world-space 1–5 metre distance-squared remap,
+  zero-to-10 metre-per-second speed band, five-radians-per-second smoothing,
+  five stable model choices, and every child transform. Imported meshes face
+  Unity's local `+Z`; Fish God's authored 1.403-metre child lift and every
+  model's unit scale are preserved. Red Panda, Giraffe, Duck, and Butterfly
+  resolve their individual Unity controllers on the nested scene hierarchy;
+  Fish God intentionally stays static because its shipping model has no
+  Animator. Converter, catalog, validator, follow, material, and animation-rig
+  regressions pin the contract.
 - Content schema 31 promotes the remaining reachable enemy `TargetSensor`
   contract into neutral data. All nine shipping enemy archetypes now use their
   authored acquisition radius (four logical cells for Goblin and 12.5 for the
@@ -890,9 +895,6 @@ mistaken for production-ready systems.
   Necrolands or development test scenes, and the repository contains no audio
   media files. Authored global post-processing, menus/HUD, particles, procedural
   replacement audio, and persisted presentation settings are live.
-- Legacy target, active/unlocked pet, and customization data now map into native
-  actor state and live presentation. Pet locomotion and per-model animation are
-  live; remaining pet work is presentation polish rather than static follow.
 - Curated screenshot baselines, signed/notarized distribution, and a hosted
   Windows release. The headless launch-through-credits acceptance suite,
   unsigned CI/local Windows archive, and measured reference-machine 60 FPS gate
@@ -955,7 +957,8 @@ its authored 32-second boundary route using the converted model and emits three
 generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
 ports backed by converted renderer bindings. Shipping-scene particle and custom
-shader reachability is closed; remaining presentation work is final art tuning,
+shader reachability is closed; the exact pet-prefab follow/model/transform
+contract is also converted and validated. Remaining presentation work is final art tuning,
 release-matrix accessibility certification, and broader curated
 screenshot/audio acceptance coverage.
 Reachable gameplay and balance source-diff closure is complete. Presentation

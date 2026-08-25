@@ -12,10 +12,11 @@ use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
     BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemyModelSetDef, EnemyRunAnimation,
     EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef,
-    HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution,
-    ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution,
-    RotatingNodeDef, StableId, StationDef, StationUpdateMode, StorageContribution, StorageModelDef,
-    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution, PetDef,
+    PetModelDef, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
+    RoleSlotContribution, RotatingNodeDef, StableId, StationDef, StationUpdateMode,
+    StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode, TechTree,
+    WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -31,6 +32,7 @@ const LAND_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_FoliageGenSettings
 const WATER_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_WaterFoliageGenSettings.asset";
 const TARGET_SETTINGS: &str = "Assets/DefaultSettings/D_TargetSettings.asset";
 const LOADER_SCENE: &str = "Assets/Scenes/LOADER_INITIAL.unity";
+const PET_PREFAB: &str = "Assets/Prefabs/Pets/Pet.prefab";
 
 type ArchetypesById = BTreeMap<StableId, ArchetypeDef>;
 type BuildingArchetypesBySlug = BTreeMap<String, (StableId, [u16; 2])>;
@@ -48,6 +50,8 @@ pub struct ContentConversionReport {
     pub archetype_scenes: usize,
     pub disable_after_time_prefabs: usize,
     pub unit_health_bar_prefabs: usize,
+    pub pet_followers: usize,
+    pub pet_models: usize,
     pub foliage_layers: usize,
     pub foliage_variants: usize,
     pub buildings: usize,
@@ -524,7 +528,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 8,
+        schema_version: 9,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -551,6 +555,17 @@ fn convert_export(
             .values()
             .filter(|archetype| archetype.health_bar_hide_milliseconds.is_some())
             .count(),
+        pet_followers: catalog
+            .archetypes
+            .values()
+            .filter(|archetype| archetype.pet.is_some())
+            .count(),
+        pet_models: catalog
+            .archetypes
+            .values()
+            .filter_map(|archetype| archetype.pet.as_ref())
+            .map(|pet| pet.models.len())
+            .sum(),
         foliage_layers: catalog.foliage.len(),
         foliage_variants: catalog
             .foliage
@@ -606,6 +621,8 @@ fn convert_export(
             "building footprints use the authored two-unit BuildingPlacer grid; Torch falls back to prefab bounds"
                 .to_owned(),
             "prefab archetypes retain spawn-critical component types and converted GLB scene dependencies"
+                .to_owned(),
+            "pet follow distances, speeds, visible-forward rotation, model choices, and child transforms are converted from the shipping prefab"
                 .to_owned(),
             "Unity technology objectives are promoted to typed semantic records; remaining authored fields are retained in source_records"
                 .to_owned(),
@@ -917,6 +934,126 @@ fn health_definition(asset: &UnityAsset) -> Result<Option<HealthDef>> {
         regeneration_milli_per_second,
         regeneration_requires_food,
         revive_milliseconds,
+    }))
+}
+
+fn pet_definition(asset: &UnityAsset) -> Result<Option<PetDef>> {
+    if asset.path != PET_PREFAB {
+        return Ok(None);
+    }
+    let components = &asset
+        .game_object
+        .as_ref()
+        .with_context(|| format!("{} has no exported hierarchy", asset.path))?
+        .components;
+    let pet = components
+        .iter()
+        .find(|component| component_type(component) == "Pets.Pet")
+        .with_context(|| format!("{} has no Pets.Pet component", asset.path))?;
+    let number = |component: &UnityComponent, path: &str| -> Result<f32> {
+        let value = component_field_value(component, path)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite())
+            .with_context(|| format!("{} pet component has invalid {path}", asset.path))?;
+        value
+            .to_string()
+            .parse()
+            .with_context(|| format!("{} pet component {path} is outside f32", asset.path))
+    };
+    let transform_vector = |component: &UnityComponent, path: &str| -> Result<[f32; 3]> {
+        let value = component_field_value(component, path)
+            .and_then(vector3)
+            .with_context(|| format!("{} pet transform has invalid {path}", asset.path))?;
+        let value = |index: usize| {
+            value[index]
+                .to_string()
+                .parse::<f32>()
+                .with_context(|| format!("{} pet transform {path} is outside f32", asset.path))
+        };
+        Ok([value(0)?, value(1)?, value(2)?])
+    };
+    let transform_quaternion = |component: &UnityComponent| -> Result<[f32; 4]> {
+        let value = component_field_value(component, "localRotation")
+            .and_then(Value::as_object)
+            .with_context(|| format!("{} pet transform has invalid rotation", asset.path))?;
+        let component_value = |name: &str| -> Result<f32> {
+            value
+                .get(name)
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite())
+                .with_context(|| format!("{} pet rotation has invalid {name}", asset.path))?
+                .to_string()
+                .parse()
+                .with_context(|| format!("{} pet rotation {name} is outside f32", asset.path))
+        };
+        // Reflect Unity's left-handed +Z into Bevy's right-handed -Z.
+        Ok([
+            -component_value("x")?,
+            -component_value("y")?,
+            component_value("z")?,
+            component_value("w")?,
+        ])
+    };
+
+    let mut models = BTreeMap::new();
+    for model in components
+        .iter()
+        .filter(|component| component_type(component) == "Pets.PetModel")
+    {
+        let pet_name = component_field_value(model, "_petType")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("Name"))
+            .and_then(Value::as_str)
+            .with_context(|| format!("{} pet model has no type", asset.path))?;
+        let id = stable_id("pet", &slug(pet_name))?;
+        let hierarchy_path = model.hierarchy_path.as_str();
+        let transform = components
+            .iter()
+            .find(|component| {
+                component.hierarchy_path == hierarchy_path
+                    && component_type(component) == "UnityEngine.Transform"
+            })
+            .with_context(|| {
+                format!("{} pet model {pet_name} has no root transform", asset.path)
+            })?;
+        let source_model = components
+            .iter()
+            .filter(|component| {
+                component.hierarchy_path == hierarchy_path
+                    || component
+                        .hierarchy_path
+                        .strip_prefix(hierarchy_path)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+            .flat_map(|component| &component.fields)
+            .filter_map(|field| reference(&field.value))
+            .filter_map(|reference| reference.get("Path").and_then(Value::as_str))
+            .find(|path| {
+                Path::new(path)
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("fbx"))
+            })
+            .with_context(|| format!("{} pet model {pet_name} has no FBX", asset.path))?
+            .to_owned();
+        let mut local_position = transform_vector(transform, "localPosition")?;
+        local_position[2] = -local_position[2];
+        let definition = PetModelDef {
+            source_model,
+            local_position,
+            local_rotation: transform_quaternion(transform)?,
+            local_scale: transform_vector(transform, "localScale")?,
+        };
+        if models.insert(id.clone(), definition).is_some() {
+            bail!("{} contains duplicate pet model {id}", asset.path);
+        }
+    }
+    Ok(Some(PetDef {
+        closest_distance: number(pet, "_closestDistanceToPlayer")?,
+        max_distance: number(pet, "_maxDistanceFromPlayer")?,
+        min_move_speed: number(pet, "_minMoveSpeed")?,
+        max_move_speed: number(pet, "_maxMoveSpeed")?,
+        rotation_radians_per_second: number(pet, "_rotationSpeed")?,
+        models,
     }))
 }
 
@@ -1486,6 +1623,7 @@ fn convert_archetypes(
             enemy: enemy_definition(asset, pools)?,
             enemy_models: enemy_model_definition(asset)?,
             enemy_spawner: enemy_spawner_definition(asset, pools)?,
+            pet: pet_definition(asset)?,
         };
         if let Some((building, _)) = active_building {
             let previous = building_archetypes.insert(building.clone(), (id.clone(), footprint));
@@ -3158,6 +3296,88 @@ mod tests {
                 range_milli_cells: 10_000,
                 fire_milliseconds: 3_000,
             })
+        );
+    }
+
+    #[test]
+    fn converts_pet_follow_settings_and_model_overrides() {
+        let mut pet = asset("pet", PET_PREFAB, "UnityEngine.GameObject", vec![]);
+        pet.game_object = Some(UnityGameObject {
+            components: vec![
+                component(
+                    "Pets.Pet, Assembly-CSharp",
+                    vec![
+                        field("_closestDistanceToPlayer", Value::from(1.0)),
+                        field("_maxDistanceFromPlayer", Value::from(5.0)),
+                        field("_minMoveSpeed", Value::from(0.0)),
+                        field("_maxMoveSpeed", Value::from(10.0)),
+                        field("_rotationSpeed", Value::from(5.0)),
+                    ],
+                ),
+                component_at(
+                    "Critter_Fish3",
+                    "UnityEngine.Transform, UnityEngine.CoreModule",
+                    vec![
+                        field(
+                            "localPosition",
+                            serde_json::json!({"x": 0.0, "y": 1.403, "z": 2.0}),
+                        ),
+                        field(
+                            "localRotation",
+                            serde_json::json!({"x": 0.1, "y": 0.2, "z": 0.3, "w": 0.4}),
+                        ),
+                        field(
+                            "localScale",
+                            serde_json::json!({"x": 1.0, "y": 1.0, "z": 1.0}),
+                        ),
+                    ],
+                ),
+                component_at(
+                    "Critter_Fish3",
+                    "Pets.PetModel, Assembly-CSharp",
+                    vec![field("_petType", serde_json::json!({"Name": "Fish God"}))],
+                ),
+                component_at(
+                    "Critter_Fish3",
+                    "UnityEngine.MeshFilter, UnityEngine.CoreModule",
+                    vec![field(
+                        "sharedMesh",
+                        serde_json::json!({
+                            "Guid": "fish",
+                            "Path": "Assets/Models/Critters/Critter_Fish3.fbx"
+                        }),
+                    )],
+                ),
+            ],
+        });
+
+        let definition = pet_definition(&pet).unwrap().unwrap();
+        assert!((definition.closest_distance - 1.0).abs() < f32::EPSILON);
+        assert!((definition.max_distance - 5.0).abs() < f32::EPSILON);
+        assert!(definition.min_move_speed.abs() < f32::EPSILON);
+        assert!((definition.max_move_speed - 10.0).abs() < f32::EPSILON);
+        assert!((definition.rotation_radians_per_second - 5.0).abs() < f32::EPSILON);
+        let fish = &definition.models[&StableId::new("pet:fish_god").unwrap()];
+        assert_eq!(
+            fish.source_model,
+            "Assets/Models/Critters/Critter_Fish3.fbx"
+        );
+        assert!(
+            fish.local_position
+                .iter()
+                .zip([0.0, 1.403, -2.0])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            fish.local_rotation
+                .iter()
+                .zip([-0.1, -0.2, 0.3, 0.4])
+                .all(|(actual, expected)| (actual - expected).abs() < f32::EPSILON)
+        );
+        assert!(
+            fish.local_scale
+                .iter()
+                .all(|value| (value - 1.0).abs() < f32::EPSILON)
         );
     }
 

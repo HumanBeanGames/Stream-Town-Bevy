@@ -1,5 +1,5 @@
 (
-    schema_version: 8,
+    schema_version: 9,
     source_schema_version: 1,
     source_unity_version: "6000.5.6f1",
     source_sha256: "5076f058bc198a27b906e4e2ade71de9f5bd8da8dc43f6c5e1fc4253655b3151",
@@ -10,6 +10,8 @@
     archetype_scenes: 288,
     disable_after_time_prefabs: 1,
     unit_health_bar_prefabs: 1,
+    pet_followers: 1,
+    pet_models: 5,
     foliage_layers: 4,
     foliage_variants: 21,
     buildings: 26,
@@ -31,6 +33,7 @@
     warnings: [
         "building footprints use the authored two-unit BuildingPlacer grid; Torch falls back to prefab bounds",
         "prefab archetypes retain spawn-critical component types and converted GLB scene dependencies",
+        "pet follow distances, speeds, visible-forward rotation, model choices, and child transforms are converted from the shipping prefab",
         "Unity technology objectives are promoted to typed semantic records; remaining authored fields are retained in source_records",
     ],
     outputs: [

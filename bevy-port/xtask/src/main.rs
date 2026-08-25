@@ -189,6 +189,33 @@ fn validate() -> Result<()> {
         .values()
         .filter(|archetype| archetype.health_bar_hide_milliseconds.is_some())
         .count();
+    let pet_archetypes = content
+        .archetypes
+        .values()
+        .filter(|archetype| archetype.pet.is_some())
+        .collect::<Vec<_>>();
+    let pet = pet_archetypes
+        .first()
+        .and_then(|archetype| archetype.pet.as_ref());
+    let pet_model_count = pet.map_or(0, |pet| pet.models.len());
+    let exact = |actual: f32, expected: f32| (actual - expected).abs() < f32::EPSILON;
+    let pet_contract_matches = pet.is_some_and(|pet| {
+        exact(pet.closest_distance, 1.0)
+            && exact(pet.max_distance, 5.0)
+            && pet.min_move_speed.abs() < f32::EPSILON
+            && exact(pet.max_move_speed, 10.0)
+            && exact(pet.rotation_radians_per_second, 5.0)
+            && pet
+                .models
+                .values()
+                .all(|model| model.local_scale.iter().all(|value| exact(*value, 1.0)))
+            && pet
+                .models
+                .values()
+                .filter(|model| exact(model.local_position[1], 1.403))
+                .count()
+                == 1
+    });
     let foliage_variants: usize = content
         .foliage
         .iter()
@@ -261,6 +288,9 @@ fn validate() -> Result<()> {
         || rotating_nodes != 3
         || disable_after_time_prefabs != 1
         || unit_health_bar_prefabs != 1
+        || pet_archetypes.len() != 1
+        || pet_model_count != 5
+        || !pet_contract_matches
         || targeting_scores != 26
         || target_sizes != 44
         || (
@@ -775,7 +805,7 @@ fn validate() -> Result<()> {
         bail!("Unity .meta files must not be created inside bevy-port");
     }
     println!(
-        "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, and 1 unit health-bar contract, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
+        "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
     Ok(())
 }
