@@ -613,7 +613,7 @@ mistaken for production-ready systems.
   mask into typed target IDs. The live selector now chooses the nearest valid
   player or building; the battering ram's building-only mask is preserved, and
   destroyed buildings release their deterministic navigation region. Building
-  construction/repair, enemy hits, upgrades, and damage now drive purpose-built
+  construction, enemy hits, upgrades, and damage now drive purpose-built
   Bevy effects using the Unity VFX Graph values: 0.5-second work smoke/sparks,
   1.5-second level arrows, and health-scaled persistent fire/smoke over the
   authored 1.4036398 spawn radius. The existing per-building WGSL
@@ -717,7 +717,7 @@ mistaken for production-ready systems.
   `STREAM_TOWN_SMOKE_PING` provides a deterministic close-up capture path.
 - Content schema 21 preserves the exact serialized maximum health and per-level
   health increase from every shipping building prefab. Construction, building
-  work, repairs, upgrades, construction models, damage materials, and persistent
+  work, upgrades, construction models, damage materials, and persistent
   damage VFX now share the authoritative level-adjusted maximum. Upgrades retain
   the building's existing damage deficit, and older native snapshots are clamped
   to authored bounds on load.
@@ -832,6 +832,19 @@ mistaken for production-ready systems.
   right-of-way without reciprocal deadlock. Both separation and yielding counts
   are exposed in the external runtime console, and the 300-agent soak remains
   below its acceptance budget.
+- The role-stat source audit now preserves shipping runtime behavior rather than
+  activating dormant serialized fields. Necromancer's retained
+  `ActionRangePerLevel` remains visible to tools but is gated off because Unity
+  never initializes `PlayerRoleData._ranged`; global stat technology values stay
+  authored but do not affect actors because Unity records and never consumes
+  them. Role-specific boosts remain live. Serialized damage-reduction curves
+  likewise remain inspectable, but raw authored damage reaches `HealthHandler`
+  because neither shipping melee nor projectile helper consumes the computed
+  value. Resource actions take the full action amount before personal-inventory
+  clamping, award the authored action amount as XP, and deposits award none. The
+  final construction tick applies without XP, and completed damaged buildings
+  are not retargeted as Construction: Unity has no reachable Builder repair
+  transition.
 - Twitch command dispatch now reproduces Unity's complete ten-name character-
   creation alias set (including its historical misspellings), command-specific
   validation usages, no-character rejection, player/global attribution, exact
@@ -869,12 +882,6 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Final source-diff closure for every reachable balance edge case outside the
-  live worker/combat/healing/construction and role-specific inventory loops. All nine shipping enemy combat archetypes, the
-  weighted night camp spawner, raid waves/boss, retaliation, and prefab-specific
-  target acquisition ranges are now live. The source audit
-  confirms the Tower contains the shipping project's sole `ProjectileShooter`;
-  there is no second reachable combat building to reproduce.
 - Final art-direction polish, curated screenshot/audio acceptance baselines,
   assistive-technology certification on the release hardware matrix, and source-diff closure for any
   presentation behavior only reachable through missing media. A shipping-scene
@@ -951,5 +958,5 @@ ports backed by converted renderer bindings. Shipping-scene particle and custom
 shader reachability is closed; remaining presentation work is final art tuning,
 release-matrix accessibility certification, and broader curated
 screenshot/audio acceptance coverage.
-Gameplay parity is materially advanced but still needs final source-diff closure;
-presentation and hardening remain long-term work.
+Reachable gameplay and balance source-diff closure is complete. Presentation
+acceptance and external release hardening remain environment-dependent work.

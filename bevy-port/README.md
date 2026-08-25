@@ -106,7 +106,7 @@ variants, 15 roles, and the 363-node shipping technology graph. It derives
 building footprints from Unity's authored two-unit grid sizes, emits typed build
 and level costs, `Placeable`, `CanLevel`, per-level multipliers, and all 413
 authored technology effects plus every shipping role's action, XP multiplier,
-level curves, health, defense, movement, carry, resource-affinity, station/target
+level curves, health, retained defense data, movement, carry, resource-affinity, station/target
   masks, all 15 equipment sets, all four reachable building storage components,
   all 11 reachable building role-slot modifiers,
   all 42 reachable prefab health definitions, all nine pooled enemy combat definitions,
@@ -327,9 +327,11 @@ authored 10-unit `BaseMaxResource`, then path back to the Town Hall and deposit
 into the town balances shown by the HUD. Successful actions award Unity-scaled
 role XP; per-role progress survives role changes and saves, levels follow the
 Unity curve through level 99, and action amount/cadence/range, health and
-regeneration, defense, movement, and carrying use converted level curves plus
-the unlocked technology percentages. `!experience` reports the active role's
-current level and XP threshold.
+regeneration, movement, and carrying use the reachable converted level curves
+plus role-specific unlocked technology percentages. Serialized defense curves
+remain inspectable but do not reduce melee or projectile damage because neither
+shipping Unity attack helper consumes `PlayerRoleData.DamageReduction`.
+`!experience` reports the active role's current level and XP threshold.
 Like Unity's `PlayerInventory`, each resource keeps an independent carried
 amount across role changes. Capacity, carry props, and carry animation use only
 the current role's resource, and depositing transfers only that bucket rather
@@ -516,7 +518,7 @@ Missing converted assets retain the resource-cube fallback.
 
 Content schema 21 also preserves each building prefab's authored base maximum
 health and per-level health increase. Construction starts at the Unity-authored
-ceil of ten percent, building work and repairs clamp to the current level's
+ceil of ten percent and building work clamps to the current level's
 maximum, damage presentation uses that same ratio, and upgrades add health while
 preserving the existing damage deficit. Older native saves are normalized to
 the authored maximum when loaded.
@@ -544,7 +546,7 @@ production default.
 and revival cues together for a repeatable gameplay-VFX capture.
 `STREAM_TOWN_SMOKE_COMBAT_VFX=1` retriggers the four typed impact/trail styles
 and frames the converted Arrow GLB for a repeatable combat-VFX capture.
-`STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction/repair smoke, the
+`STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction smoke, the
 spark-emitting construction hit, building-level arrows, and persistent
 damage fire/smoke together.
 `STREAM_TOWN_SMOKE_CHIMNEY=1` spawns and frames a completed House so its

@@ -13581,11 +13581,10 @@ fn effective_role_stats(
                 .saturating_mul(levels),
         )
         .max(100);
-    let base_range = definition.base_action_range_milli_cells.saturating_add(
-        definition
-            .action_range_milli_cells_per_level
-            .saturating_mul(levels),
-    );
+    // Unity retains ActionRangePerLevel in RoleData, but PlayerRoleData gates it
+    // behind `_ranged`; the shipping constructor never sets that TODO field.
+    // Keep the converted value available to tools without activating dead data.
+    let base_range = definition.base_action_range_milli_cells;
     let base_movement = definition
         .base_movement_speed_milli_cells_per_second
         .saturating_add(
@@ -14991,9 +14990,7 @@ fn next_agent_goal_with_station_runtime(
         let candidates: Vec<_> = simulation
             .buildings
             .values()
-            .filter(|building| {
-                !building.complete || building.health < building_max_health(content, building)
-            })
+            .filter(|building| !building.complete)
             .filter(|building| {
                 within_player_target_search_region(building_visual_grid(content, building), current)
             })
@@ -15194,7 +15191,6 @@ fn complete_agent_goal(
             || stats.map_or(1, |stats| stats.action_amount),
             |enemy| enemy.action_amount,
         );
-    let mut experience_amount = action_amount;
     let mut action_presentation = None;
     let action_succeeded = match goal {
         AgentGoal::Gather(resource_id) => {
@@ -15230,14 +15226,14 @@ fn complete_agent_goal(
                 .resources
                 .iter_mut()
                 .find(|resource| resource.id == *resource_id && resource.amount > 0)?;
-            let amount = resource.amount.min(action_amount).min(remaining_carry);
-            experience_amount = amount;
+            let amount = resource.amount.min(action_amount);
+            let stored_amount = amount.min(remaining_carry);
             resource.amount -= amount;
             let resource_kind = resource.kind.clone();
             let cleared_position = (resource.amount == 0
                 && resource.target_kind.as_str() != "target:fish")
                 .then_some(resource.position);
-            if let Err(error) = simulation.gather(actor_id, resource_kind, amount) {
+            if let Err(error) = simulation.gather(actor_id, resource_kind, stored_amount) {
                 warn!(actor = %actor_id, %error, "resource gather action failed");
                 resource.amount = resource.amount.saturating_add(amount);
                 false
@@ -15286,12 +15282,11 @@ fn complete_agent_goal(
             {
                 return None;
             }
-            let amount =
-                action_amount.min(actor_remaining_carry_capacity(content, simulation, actor));
-            if amount == 0 {
+            let remaining_carry = actor_remaining_carry_capacity(content, simulation, actor);
+            if remaining_carry == 0 {
                 return None;
             }
-            experience_amount = amount;
+            let amount = action_amount.min(remaining_carry);
             let food = StableId::new("resource:food").expect("static resource ID");
             match simulation.gather(actor_id, food, amount) {
                 Ok(()) => amount > 0,
@@ -15345,9 +15340,6 @@ fn complete_agent_goal(
                 }));
                 damage > 0
             } else {
-                let defense = effective_role_stats(content, simulation, target)
-                    .map_or(0, |stats| stats.damage_reduction_percent);
-                let damage = percentage_reduced(damage, i32::try_from(defense).unwrap_or(i32::MAX));
                 match apply_combat_damage(
                     config,
                     simulation,
@@ -15463,15 +15455,14 @@ fn complete_agent_goal(
                 .buildings
                 .get(building_id)
                 .is_some_and(|building| {
-                    within_building_work_range(content, simulation, builder, building, current)
+                    !building.complete
+                        && within_building_work_range(
+                            content, simulation, builder, building, current,
+                        )
                 })
             {
                 return None;
             }
-            let was_incomplete = simulation
-                .buildings
-                .get(building_id)
-                .is_some_and(|building| !building.complete);
             let building_position = simulation
                 .buildings
                 .get(building_id)
@@ -15487,17 +15478,10 @@ fn complete_agent_goal(
                     building_max_health(content, building)
                 });
             let max_health = u32::try_from(max_health).unwrap_or(u32::MAX);
-            let result = if was_incomplete {
-                simulation.work_on_building(building_id, action_amount, max_health)
-            } else {
-                simulation
-                    .repair_building(building_id, action_amount, max_health)
-                    .map(|restored| restored > 0)
-            };
+            let result = simulation.work_on_building(building_id, action_amount, max_health);
             match result {
                 Ok(complete) => {
-                    if was_incomplete
-                        && complete
+                    if complete
                         && let Some(building) = archetype.as_ref().and_then(|archetype| {
                             content.buildings.iter().find_map(|(id, definition)| {
                                 (definition.archetype == *archetype).then_some(id.clone())
@@ -15509,11 +15493,11 @@ fn complete_agent_goal(
                             &ObjectiveEvent::BuildingBuilt(building),
                         );
                     }
-                    let succeeded = action_amount > 0 && (was_incomplete || complete);
+                    let succeeded = action_amount > 0;
                     if succeeded && let Some(target) = building_position {
                         action_presentation = Some(ActionPresentation::BuildingWork {
                             target,
-                            sparks: was_incomplete,
+                            sparks: true,
                         });
                     }
                     succeeded
@@ -15526,11 +15510,30 @@ fn complete_agent_goal(
         }
         AgentGoal::WaitForStorage | AgentGoal::Wander => false,
     };
-    if action_succeeded
+    let grants_role_experience = action_succeeded
+        && match goal {
+            AgentGoal::Gather(_)
+            | AgentGoal::HarvestFarm(_)
+            | AgentGoal::Attack(_)
+            | AgentGoal::Heal(_) => true,
+            // Unity's Builder action applies its final construction tick, then
+            // returns false after the Construction target flag disappears.
+            // Completed-building repair and deposits are not PlayerAction
+            // successes and therefore do not award role experience.
+            AgentGoal::Construct(building) => simulation
+                .buildings
+                .get(building)
+                .is_some_and(|building| !building.complete),
+            AgentGoal::AttackBuilding(_)
+            | AgentGoal::Deposit
+            | AgentGoal::WaitForStorage
+            | AgentGoal::Wander => false,
+        };
+    if grants_role_experience
         && let Some(stats) = stats
         && let Ok(levels_gained) = simulation.grant_role_experience(
             actor_id,
-            experience_amount,
+            action_amount,
             stats.experience_multiplier_per_thousand,
         )
         && levels_gained > 0
@@ -16563,16 +16566,6 @@ fn move_combat_projectiles(
         let delta = target_position - transform.translation;
         let step = projectile.speed_cells_per_second * config.0.world.cell_size * time.delta_secs();
         if delta.length_squared() <= step.max(0.1).powi(2) {
-            let defense = simulation
-                .0
-                .actors
-                .get(&projectile.target)
-                .and_then(|target| effective_role_stats(&content.0, &simulation.0, target))
-                .map_or(0, |stats| stats.damage_reduction_percent);
-            let damage = percentage_reduced(
-                projectile.damage,
-                i32::try_from(defense).unwrap_or(i32::MAX),
-            );
             if let Err(error) = apply_combat_damage(
                 &config.0,
                 &mut simulation.0,
@@ -16582,7 +16575,7 @@ fn move_combat_projectiles(
                     ProjectileSource::Building(building) => building,
                 }),
                 &projectile.target,
-                damage,
+                projectile.damage,
             ) {
                 warn!(target = %projectile.target, %error, "projectile impact failed");
             }
@@ -27674,22 +27667,18 @@ fn technology_stat_boost_percent(
         .iter()
         .filter_map(|technology| content.technology.nodes.get(technology))
         .fold(0_i32, |total, technology| {
-            total
-                .saturating_add(
-                    technology
-                        .global_stat_boost_percent
-                        .get(stat)
-                        .copied()
-                        .unwrap_or_default(),
-                )
-                .saturating_add(
-                    technology
-                        .role_stat_boost_percent
-                        .get(role)
-                        .and_then(|stats| stats.get(stat))
-                        .copied()
-                        .unwrap_or_default(),
-                )
+            // Unity records PlayerRole.Count boosts in GlobalStatModifiers, but
+            // PlayerRoleData only consumes role modifiers and per-character
+            // passives. No shipping caller copies the global technology table
+            // into those passives, so activating it here changes live balance.
+            total.saturating_add(
+                technology
+                    .role_stat_boost_percent
+                    .get(role)
+                    .and_then(|stats| stats.get(stat))
+                    .copied()
+                    .unwrap_or_default(),
+            )
         })
 }
 
@@ -35460,6 +35449,72 @@ mod tests {
         );
         assert!(simulation.actors[&actor_id].inventory.is_empty());
         assert_eq!(simulation.town_resources[&resource.kind], 10);
+        assert_eq!(
+            role_progress(&simulation.actors[&actor_id]).experience,
+            10,
+            "Unity's standalone deposit state does not award role experience"
+        );
+    }
+
+    #[test]
+    fn gathering_clamps_inventory_after_the_full_authored_action() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let wood = StableId::new("resource:wood").unwrap();
+        let resource = world
+            .resources
+            .iter()
+            .find(|resource| resource.kind == wood && resource.amount >= 2)
+            .unwrap()
+            .clone();
+        let approach = resource_approach(&world, &resource, resource.position).unwrap();
+        let actor_id = StableId::new("npc:partial_capacity_logger").unwrap();
+        let logger = StableId::new("role:logger").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), approach));
+        simulation.assign_role(&actor_id, logger.clone()).unwrap();
+        simulation
+            .actors
+            .get_mut(&actor_id)
+            .unwrap()
+            .role_progression
+            .insert(
+                logger,
+                stream_town_domain::RoleProgress {
+                    level: 5,
+                    experience: 0,
+                },
+            );
+        simulation.gather(&actor_id, wood.clone(), 17).unwrap();
+        let starting_resource = resource.amount;
+
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &actor_id,
+            &AgentGoal::Gather(resource.id.clone()),
+            approach,
+        );
+
+        assert_eq!(simulation.actors[&actor_id].inventory[&wood], 18);
+        assert_eq!(
+            world
+                .resources
+                .iter()
+                .find(|candidate| candidate.id == resource.id)
+                .unwrap()
+                .amount,
+            starting_resource - 2,
+            "Unity takes the full action amount before PlayerInventory clamps the stored result"
+        );
+        assert_eq!(
+            role_progress(&simulation.actors[&actor_id]).experience,
+            2,
+            "Unity awards BaseActionAmount rather than only the amount that fit"
+        );
     }
 
     #[test]
@@ -36296,7 +36351,7 @@ mod tests {
     #[test]
     fn authored_enemies_drive_damage_range_cadence_and_weighted_spawning() {
         let config = GameConfig::default();
-        let content = embedded_content();
+        let mut content = embedded_content();
         let mut world = generate_world(&config.world);
         let blargul_archetype =
             archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Blargul.prefab").unwrap();
@@ -36318,6 +36373,22 @@ mod tests {
         simulation.town_resources.insert(gold.clone(), 0);
         assert!(simulation.spawn_enemy(enemy_id.clone(), blargul_archetype, enemy_position, 5,));
         assert!(simulation.join_player(player_id.clone(), player_position));
+        let defender = StableId::new("role:defender").unwrap();
+        simulation
+            .assign_role(&player_id, defender.clone())
+            .unwrap();
+        content
+            .roles
+            .get_mut(&defender)
+            .unwrap()
+            .base_damage_reduction_percent = 90;
+        assert_eq!(
+            effective_role_stats(&content, &simulation, &simulation.actors[&player_id])
+                .unwrap()
+                .damage_reduction_percent,
+            90,
+            "the converted role stat remains inspectable"
+        );
         let (goal, target) = next_agent_goal(
             &simulation,
             &world,
@@ -36344,7 +36415,10 @@ mod tests {
                 visual: CombatVisualKind::Physical,
             }) if target == player_position
         ));
-        assert_eq!(simulation.actors[&player_id].health, 95);
+        assert_eq!(
+            simulation.actors[&player_id].health, 95,
+            "Unity computes defense but its reachable attack helpers pass raw authored damage"
+        );
         assert!(
             (action_cooldown(&content, &simulation, &enemy_id, &goal) - 3.0).abs() <= f32::EPSILON
         );
@@ -36852,6 +36926,71 @@ mod tests {
             simulation.buildings[&runtime_id].health,
             building_max_health(&content, &simulation.buildings[&runtime_id]) - 7
         );
+    }
+
+    #[test]
+    fn final_construction_tick_matches_unitys_non_successful_state_exit() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let building_id = StableId::new("building:house").unwrap();
+        let definition = &content.buildings[&building_id];
+        let runtime_id = StableId::new("building:final_tick_house").unwrap();
+        let position = GridPos {
+            x: config.world.width / 2,
+            z: config.world.height / 2,
+        };
+        let max_health = building_base_max_health(&content, definition);
+        let mut simulation = WorldSimulation::new(world.seed);
+        simulation
+            .construct(
+                runtime_id.clone(),
+                definition.archetype.clone(),
+                position,
+                max_health,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+        let building = simulation.buildings.get_mut(&runtime_id).unwrap();
+        building.health = i32::try_from(max_health).unwrap() - 1;
+        building.complete = false;
+
+        let builder = StableId::new("npc:final_tick_builder").unwrap();
+        assert!(simulation.join_player(builder.clone(), position));
+        simulation
+            .assign_role(&builder, StableId::new("role:builder").unwrap())
+            .unwrap();
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &builder,
+            &AgentGoal::Construct(runtime_id.clone()),
+            position,
+        );
+
+        assert!(simulation.buildings[&runtime_id].complete);
+        assert_eq!(
+            role_progress(&simulation.actors[&builder]).experience,
+            0,
+            "Unity applies the last build amount, then exits without OnActionSuccess"
+        );
+
+        simulation.damage_building(&runtime_id, 1).unwrap();
+        let damaged_health = simulation.buildings[&runtime_id].health;
+        let (goal, _) = next_agent_goal(&simulation, &world, &config, &content, &builder, position);
+        assert_ne!(goal, AgentGoal::Construct(runtime_id.clone()));
+        complete_agent_goal(
+            &mut simulation,
+            &mut world,
+            &config,
+            &content,
+            &builder,
+            &AgentGoal::Construct(runtime_id.clone()),
+            position,
+        );
+        assert_eq!(simulation.buildings[&runtime_id].health, damaged_health);
     }
 
     #[test]
@@ -37728,6 +37867,31 @@ mod tests {
         assert_eq!(
             technology_stat_boost_percent(&content, &simulation, &role, &stat),
             boost
+        );
+
+        simulation.unlocked_technology.clear();
+        let (global_technology, global_stat, retained_value) = content
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(technology, node)| {
+                node.global_stat_boost_percent
+                    .iter()
+                    .next()
+                    .map(|(stat, amount)| (technology.clone(), stat.clone(), *amount))
+            })
+            .expect("Unity technology graph retains global stat boost data");
+        assert!(retained_value > 0);
+        simulation.unlocked_technology.insert(global_technology);
+        assert_eq!(
+            technology_stat_boost_percent(
+                &content,
+                &simulation,
+                &StableId::new("role:logger").unwrap(),
+                &global_stat,
+            ),
+            0,
+            "shipping Unity stores global technology stats but PlayerRoleData never consumes them"
         );
 
         simulation.unlocked_technology.clear();
@@ -39760,6 +39924,31 @@ mod tests {
         assert_eq!(stats.action_milliseconds, 980);
         assert_eq!(stats.movement_speed_milli_cells_per_second, 1_600);
         assert_eq!(stats.carry_capacity, 18);
+
+        let necromancer = StableId::new("role:necromancer").unwrap();
+        let necromancer_definition = &content.roles[&necromancer];
+        assert!(necromancer_definition.action_range_milli_cells_per_level > 0);
+        simulation
+            .assign_role(&actor_id, necromancer.clone())
+            .unwrap();
+        simulation
+            .actors
+            .get_mut(&actor_id)
+            .unwrap()
+            .role_progression
+            .insert(
+                necromancer,
+                stream_town_domain::RoleProgress {
+                    level: 25,
+                    experience: 0,
+                },
+            );
+        let stats =
+            effective_role_stats(&content, &simulation, &simulation.actors[&actor_id]).unwrap();
+        assert_eq!(
+            stats.action_range_milli_cells, necromancer_definition.base_action_range_milli_cells,
+            "Unity never initializes PlayerRoleData._ranged, so its serialized range curve is dormant"
+        );
     }
 
     #[test]
