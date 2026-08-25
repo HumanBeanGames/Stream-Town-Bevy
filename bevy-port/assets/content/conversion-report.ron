@@ -1,5 +1,5 @@
 (
-    schema_version: 7,
+    schema_version: 8,
     source_schema_version: 1,
     source_unity_version: "6000.5.6f1",
     source_sha256: "5076f058bc198a27b906e4e2ade71de9f5bd8da8dc43f6c5e1fc4253655b3151",
@@ -27,6 +27,7 @@
     technology_edges: 362,
     technology_roots: 1,
     objectives: 422,
+    station_target_update_modes: 13,
     warnings: [
         "building footprints use the authored two-unit BuildingPlacer grid; Torch falls back to prefab bounds",
         "prefab archetypes retain spawn-critical component types and converted GLB scene dependencies",

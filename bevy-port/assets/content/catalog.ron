@@ -1,5 +1,5 @@
 (
-    schema_version: 31,
+    schema_version: 32,
     loading_screen: (
         progress_milli_per_second: 500,
         completion_hold_milliseconds: 500,
@@ -10346,6 +10346,21 @@
                 "target:enemy",
             ],
         ),
+    },
+    station_target_update_modes: {
+        "target:boss": Clear,
+        "target:building": Clear,
+        "target:bush": Update,
+        "target:construction": Clear,
+        "target:damaged_building": Clear,
+        "target:dead_player": Clear,
+        "target:enemy": Clear,
+        "target:farm": Update,
+        "target:fish": Clear,
+        "target:injured_player": Clear,
+        "target:ore": Update,
+        "target:player": Clear,
+        "target:tree": Update,
     },
     objectives: {
         "objective:008e72338ad787f479c718a3b0061ff6:0": (

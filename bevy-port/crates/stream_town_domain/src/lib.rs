@@ -34,8 +34,8 @@ pub use content::{
     EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat,
     FoliageLayerDef, FoliageVariantDef, HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind,
     PassiveResourceContribution, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
-    RoleSlotContribution, RotatingNodeDef, StationDef, StorageContribution, StorageModelDef,
-    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    RoleSlotContribution, RotatingNodeDef, StationDef, StationUpdateMode, StorageContribution,
+    StorageModelDef, TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 pub use id::{StableId, StableIdError};
 pub use menu_scene::{

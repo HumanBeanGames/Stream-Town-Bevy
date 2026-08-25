@@ -807,6 +807,16 @@ mistaken for production-ready systems.
   valid-but-out-of-range world resources, while the Town Hall retains its
   authored 30-target fallback catalog. Combat, healing, and construction keep
   Unity's separate nearest-target sensor path.
+- Content schema 32 converts all 13 policies from Unity's shipping
+  `D_TargetSettings.asset` and the runtime now reproduces the station cache
+  lifecycle rather than rescanning the world on demand. Each station begins at
+  a deterministic stagger within its authored interval, at most one expired
+  station cache is repopulated per rendered frame, `Update` retains valid
+  tree/ore/bush/farm entries while filling vacancies, `Clear` rebuilds the
+  other nine target lists nearest-first, and one queued reachability entry per
+  station is revalidated on Unity's two-second cadence. Autonomous work,
+  Twitch `!target`, and direct recruit orders share the same live cache. The
+  authored 2.5-second inventory-deposit delay is also restored.
 - Animated players now cast and receive shadows without the previous
   hierarchy-wide `NotShadowReceiver` workaround. Every Standard surface below
   the single shipping armature is promoted through a cached typed character
@@ -835,8 +845,7 @@ mistaken for production-ready systems.
   emitters are converted and live.
 - Predictive congestion avoidance beyond deterministic local
   crowd separation, any obscure advanced role/inventory interactions not yet
-  represented by the live worker/combat/healing/construction loops, exact
-  station refresh/stale-cache timing, and final source-diff closure for every
+  represented by the live worker/combat/healing/construction loops, and final source-diff closure for every
   reachable balance edge case. All nine shipping enemy combat archetypes, the
   weighted night camp spawner, raid waves/boss, retaliation, and prefab-specific
   target acquisition ranges are now live. The source audit

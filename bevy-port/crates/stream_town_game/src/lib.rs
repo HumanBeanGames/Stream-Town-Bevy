@@ -86,8 +86,8 @@ use stream_town_domain::{
     PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
     RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
     RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
-    StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent, VfxGradientDef, Weather,
-    WorldSimulation, WorldSnapshot, generate_world_with_content,
+    StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
+    VfxGradientDef, Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -150,6 +150,7 @@ const GATE_TRIGGER_HALF_EXTENT_UNITY_UNITS: f32 = 2.0;
 // Player_Character.prefab authors 100 Unity world units for both its target
 // and builder-resource sensors. Shipping terrain uses two units per cell.
 const PLAYER_TARGET_SEARCH_RANGE_CELLS: u16 = 50;
+const STATION_TARGET_CHECK_MILLISECONDS: f64 = 2_000.0;
 const BUILDING_PLACEMENT_SUCCESS_COLOR: [f32; 3] = [0.242_250_26, 0.896_226_4, 0.054_957_304];
 const BUILDING_PLACEMENT_FAIL_COLOR: [f32; 3] = [0.933_962_3, 0.0, 0.0];
 const TERRAIN_SHADER_ASSET_PATH: &str = "shaders/terrain_material.wgsl";
@@ -468,6 +469,20 @@ struct WorldRenderStats {
 #[derive(Resource, Default)]
 struct CrowdSeparationRuntime {
     applied_offsets: HashMap<Entity, Vec3>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CachedStationTargets {
+    refresh_elapsed_milliseconds: f64,
+    target_check_elapsed_milliseconds: f64,
+    targets: BTreeMap<StableId, Vec<StableId>>,
+    reachability_queue: VecDeque<(StableId, StableId)>,
+}
+
+#[derive(Resource, Default)]
+struct StationTargetRuntime {
+    stations: BTreeMap<StableId, CachedStationTargets>,
+    refresh_queue: VecDeque<StableId>,
 }
 
 #[derive(Clone, Debug)]
@@ -2830,6 +2845,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<SessionStats>()
             .init_resource::<WorldRenderStats>()
             .init_resource::<CrowdSeparationRuntime>()
+            .init_resource::<StationTargetRuntime>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
@@ -3072,6 +3088,7 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     (
                         reset_crowd_separation,
+                        refresh_station_target_runtime,
                         move_agents.after(correct_player_rig_axis),
                         apply_crowd_separation,
                         update_agent_locomotion,
@@ -14077,6 +14094,288 @@ fn station_target_is_reachable(
     world.navigation.find_path(start, goal).is_ok()
 }
 
+fn stable_station_timer_offset(station: &StableId, update_milliseconds: u32) -> f64 {
+    // Unity starts every station at a random point inside its authored refresh
+    // interval. A stable FNV-1a offset preserves that stagger without allowing
+    // platform RNG or frame order to alter target selection.
+    let hash = station
+        .as_str()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3)
+        });
+    f64::from(u32::try_from(hash % u64::from(update_milliseconds)).unwrap_or_default())
+}
+
+fn active_station_ids(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    config: &GameConfig,
+) -> Vec<StableId> {
+    let town_hall = StableId::new("building:townhall").expect("static building ID");
+    let mut stations = BTreeSet::from([town_hall]);
+    stations.extend(
+        simulation.buildings.keys().filter_map(|id| {
+            station_candidate(content, simulation, config, id).map(|_| id.clone())
+        }),
+    );
+    stations.into_iter().collect()
+}
+
+fn station_target_position(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    kind: &StableId,
+    target: &StableId,
+) -> Option<GridPos> {
+    station_target_catalog_candidates(content, simulation, world, kind)
+        .into_iter()
+        .find_map(|(position, candidate)| (candidate == *target).then_some(position))
+}
+
+fn populate_station_target_cache(
+    runtime: &mut StationTargetRuntime,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    station_id: &StableId,
+) {
+    let Some(station) = station_candidate(content, simulation, config, station_id) else {
+        runtime.stations.remove(station_id);
+        return;
+    };
+    let target_kinds = if station.definition.targets_all {
+        content
+            .station_target_update_modes
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    } else {
+        station.definition.target_kinds.clone()
+    };
+    let cache = runtime.stations.entry(station_id.clone()).or_default();
+    cache.targets.retain(|kind, _| target_kinds.contains(kind));
+    for kind in target_kinds {
+        let mut candidates = station_target_catalog_candidates(content, simulation, world, &kind);
+        candidates.retain(|(position, _)| within_station_search_region(*position, station));
+        candidates.sort_by_key(|(position, id)| {
+            (
+                grid_distance_squared(*position, station.position),
+                id.clone(),
+            )
+        });
+        let available = candidates
+            .iter()
+            .map(|(_, id)| id.clone())
+            .collect::<BTreeSet<_>>();
+        let previous = cache.targets.get(&kind).cloned().unwrap_or_default();
+        let mut next = match content.station_target_update_modes.get(&kind) {
+            Some(StationUpdateMode::Update) => previous
+                .iter()
+                .filter(|target| available.contains(*target))
+                .cloned()
+                .collect::<Vec<_>>(),
+            Some(StationUpdateMode::Clear) | None => Vec::new(),
+        };
+        for (_, target) in candidates {
+            if next.len() >= usize::from(station.definition.max_targets) {
+                break;
+            }
+            if !next.contains(&target) {
+                next.push(target);
+            }
+        }
+        for target in next.iter().filter(|target| !previous.contains(*target)) {
+            let queued = (kind.clone(), target.clone());
+            if !cache.reachability_queue.contains(&queued) {
+                cache.reachability_queue.push_back(queued);
+            }
+        }
+        cache.targets.insert(kind, next);
+    }
+}
+
+#[cfg(test)]
+fn immediate_station_target_runtime(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+) -> StationTargetRuntime {
+    let mut runtime = StationTargetRuntime::default();
+    for station_id in active_station_ids(content, simulation, config) {
+        if let Some(station) = station_candidate(content, simulation, config, &station_id) {
+            runtime.stations.insert(
+                station_id.clone(),
+                CachedStationTargets {
+                    refresh_elapsed_milliseconds: stable_station_timer_offset(
+                        &station_id,
+                        station.definition.update_milliseconds,
+                    ),
+                    ..default()
+                },
+            );
+            populate_station_target_cache(
+                &mut runtime,
+                content,
+                simulation,
+                world,
+                config,
+                &station_id,
+            );
+        }
+    }
+    let station_ids = runtime.stations.keys().cloned().collect::<Vec<_>>();
+    for station_id in station_ids {
+        let Some(station) = station_candidate(content, simulation, config, &station_id) else {
+            continue;
+        };
+        let cached = runtime
+            .stations
+            .get(&station_id)
+            .map(|cache| cache.targets.clone())
+            .unwrap_or_default();
+        for (kind, targets) in cached {
+            let reachable = targets
+                .into_iter()
+                .filter(|target| {
+                    station_target_position(content, simulation, world, &kind, target).is_some_and(
+                        |position| station_target_is_reachable(world, station, &kind, position),
+                    )
+                })
+                .collect();
+            if let Some(cache) = runtime.stations.get_mut(&station_id) {
+                cache.targets.insert(kind, reachable);
+            }
+        }
+    }
+    runtime
+}
+
+fn refresh_station_target_runtime(
+    time: Res<Time>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    world: Res<WorldRuntime>,
+    config: Res<RuntimeConfig>,
+    mut runtime: ResMut<StationTargetRuntime>,
+) {
+    let active = active_station_ids(&content.0, &simulation.0, &config.0);
+    let active_set = active.iter().cloned().collect::<BTreeSet<_>>();
+    runtime.stations.retain(|id, _| active_set.contains(id));
+    runtime.refresh_queue.retain(|id| active_set.contains(id));
+
+    for station_id in &active {
+        if runtime.stations.contains_key(station_id) {
+            continue;
+        }
+        let Some(station) = station_candidate(&content.0, &simulation.0, &config.0, station_id)
+        else {
+            continue;
+        };
+        runtime.stations.insert(
+            station_id.clone(),
+            CachedStationTargets {
+                refresh_elapsed_milliseconds: stable_station_timer_offset(
+                    station_id,
+                    station.definition.update_milliseconds,
+                ),
+                ..default()
+            },
+        );
+        populate_station_target_cache(
+            &mut runtime,
+            &content.0,
+            &simulation.0,
+            &world.generated,
+            &config.0,
+            station_id,
+        );
+    }
+
+    let delta_milliseconds = time.delta_secs_f64() * 1_000.0;
+    let mut due = Vec::new();
+    for station_id in &active {
+        let Some(station) = station_candidate(&content.0, &simulation.0, &config.0, station_id)
+        else {
+            continue;
+        };
+        let cache = runtime
+            .stations
+            .get_mut(station_id)
+            .expect("active stations are initialized above");
+        cache.refresh_elapsed_milliseconds += delta_milliseconds;
+        cache.target_check_elapsed_milliseconds += delta_milliseconds;
+        if cache.refresh_elapsed_milliseconds >= f64::from(station.definition.update_milliseconds) {
+            cache.refresh_elapsed_milliseconds -= f64::from(station.definition.update_milliseconds);
+            due.push(station_id.clone());
+        }
+    }
+    for station_id in due {
+        if !runtime.refresh_queue.contains(&station_id) {
+            runtime.refresh_queue.push_back(station_id);
+        }
+    }
+
+    // Unity's StationProcessor repopulates at most one queued station per
+    // rendered frame, even when several authored timers expire together.
+    if let Some(station_id) = runtime.refresh_queue.pop_front() {
+        populate_station_target_cache(
+            &mut runtime,
+            &content.0,
+            &simulation.0,
+            &world.generated,
+            &config.0,
+            &station_id,
+        );
+    }
+
+    for station_id in active {
+        let check = runtime.stations.get_mut(&station_id).and_then(|cache| {
+            if cache.target_check_elapsed_milliseconds < STATION_TARGET_CHECK_MILLISECONDS {
+                return None;
+            }
+            cache.target_check_elapsed_milliseconds -= STATION_TARGET_CHECK_MILLISECONDS;
+            cache.reachability_queue.pop_front()
+        });
+        let Some((kind, target)) = check else {
+            continue;
+        };
+        let reachable = station_candidate(&content.0, &simulation.0, &config.0, &station_id)
+            .and_then(|station| {
+                station_target_position(&content.0, &simulation.0, &world.generated, &kind, &target)
+                    .map(|position| {
+                        station_target_is_reachable(&world.generated, station, &kind, position)
+                    })
+            })
+            .unwrap_or(false);
+        let cache = runtime
+            .stations
+            .get_mut(&station_id)
+            .expect("active station cache exists");
+        if reachable {
+            cache.reachability_queue.push_back((kind, target));
+        } else if let Some(targets) = cache.targets.get_mut(&kind) {
+            targets.retain(|candidate| candidate != &target);
+        }
+    }
+}
+
+fn cached_station_targets<'a>(
+    runtime: &'a StationTargetRuntime,
+    station: StationCandidate<'_>,
+    kind: &StableId,
+) -> &'a [StableId] {
+    runtime
+        .stations
+        .get(station.id)
+        .and_then(|cache| cache.targets.get(kind))
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
 fn within_player_target_search_region(position: GridPos, player: GridPos) -> bool {
     position.x.abs_diff(player.x) <= PLAYER_TARGET_SEARCH_RANGE_CELLS
         && position.z.abs_diff(player.z) <= PLAYER_TARGET_SEARCH_RANGE_CELLS
@@ -14292,11 +14591,13 @@ fn next_agent_goal(
     actor_id: &StableId,
     current: GridPos,
 ) -> (AgentGoal, GridPos) {
-    next_agent_goal_with_reservations(
+    let station_targets = immediate_station_target_runtime(content, simulation, world, config);
+    next_agent_goal_with_station_runtime(
         simulation,
         world,
         config,
         content,
+        &station_targets,
         actor_id,
         current,
         &BTreeMap::new(),
@@ -14305,11 +14606,38 @@ fn next_agent_goal(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn next_agent_goal_with_reservations(
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
     config: &GameConfig,
     content: &ContentCatalog,
+    actor_id: &StableId,
+    current: GridPos,
+    reservations: &BTreeMap<StableId, StableId>,
+    target_assignments: &BTreeMap<StableId, u32>,
+) -> (AgentGoal, GridPos) {
+    let station_targets = immediate_station_target_runtime(content, simulation, world, config);
+    next_agent_goal_with_station_runtime(
+        simulation,
+        world,
+        config,
+        content,
+        &station_targets,
+        actor_id,
+        current,
+        reservations,
+        target_assignments,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn next_agent_goal_with_station_runtime(
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    content: &ContentCatalog,
+    station_targets: &StationTargetRuntime,
     actor_id: &StableId,
     current: GridPos,
     reservations: &BTreeMap<StableId, StableId>,
@@ -14424,13 +14752,8 @@ fn next_agent_goal_with_reservations(
             .find(|resource| resource.id == *preferred && resource.amount > 0)
             .filter(|resource| {
                 station.is_some_and(|station| {
-                    within_station_search_region(resource.position, station)
-                        && station_target_is_reachable(
-                            world,
-                            station,
-                            &resource.target_kind,
-                            resource.position,
-                        )
+                    cached_station_targets(station_targets, station, &resource.target_kind)
+                        .contains(&resource.id)
                 })
             })
             .filter(|resource| reservation_available(reservations, actor_id, &resource.id))
@@ -14445,6 +14768,12 @@ fn next_agent_goal_with_reservations(
             .buildings
             .get(preferred)
             .filter(|building| is_farm_resource_building(content, building))
+            .filter(|building| {
+                let farm = StableId::new("target:farm").expect("static target ID");
+                station.is_some_and(|station| {
+                    cached_station_targets(station_targets, station, &farm).contains(&building.id)
+                })
+            })
             .filter(|building| reservation_available(reservations, actor_id, &building.id))
             .filter(|_| {
                 content.roles.get(&actor.role).is_some_and(|role| {
@@ -14691,14 +15020,17 @@ fn next_agent_goal_with_reservations(
             &StableId::new("target:farm").expect("static target ID"),
         )
     }) {
+        let farm_kind = StableId::new("target:farm").expect("static target ID");
+        let cached_farms = cached_station_targets(station_targets, station, &farm_kind)
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let mut farms: Vec<_> = simulation
             .buildings
             .values()
             .filter(|building| is_farm_resource_building(content, building))
+            .filter(|building| cached_farms.contains(&building.id))
             .filter(|building| reservation_available(reservations, actor_id, &building.id))
-            .filter(|building| {
-                within_station_search_region(building_visual_grid(content, building), station)
-            })
             .filter_map(|building| {
                 let definition = building_def_for_archetype(content, &building.archetype)?;
                 let approach = building_approach(
@@ -14737,21 +15069,33 @@ fn next_agent_goal_with_reservations(
             })
             .collect();
         farms.sort_by_key(|(station_distance, _, id, _)| (*station_distance, id.clone()));
-        farms.truncate(usize::from(station.definition.max_targets));
         farms.sort_by_key(|(_, score, id, _)| (*score, id.clone()));
-        if let Some((_, _, building, approach)) = farms.into_iter().find(|(_, _, building, _)| {
-            simulation.buildings.get(building).is_some_and(|building| {
-                station_target_is_reachable(
-                    world,
-                    station,
-                    &StableId::new("target:farm").expect("static target ID"),
-                    building_visual_grid(content, building),
-                )
-            })
-        }) {
+        if let Some((_, _, building, approach)) = farms.into_iter().next() {
             return (AgentGoal::HarvestFarm(building), approach);
         }
     }
+    let role = content
+        .roles
+        .get(&actor.role)
+        .expect("live actor role is validated");
+    let resource_target_kind =
+        role.target_kinds
+            .iter()
+            .find(|kind| {
+                world.resources.iter().any(|resource| {
+                    resource.kind == resource_kind && resource.target_kind == **kind
+                })
+            })
+            .cloned();
+    let cached_resources = resource_target_kind
+        .as_ref()
+        .map(|kind| {
+            cached_station_targets(station_targets, station, kind)
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
     let mut resources: Vec<_> = world
         .resources
         .iter()
@@ -14759,16 +15103,9 @@ fn next_agent_goal_with_reservations(
             resource.kind == resource_kind
                 && resource.amount > 0
                 && actor_accepts_resource(content, actor, resource)
-                && within_station_search_region(resource.position, station)
+                && cached_resources.contains(&resource.id)
         })
         .collect();
-    resources.sort_by_key(|resource| {
-        (
-            grid_distance_squared(resource.position, station.position),
-            resource.id.clone(),
-        )
-    });
-    resources.truncate(usize::from(station.definition.max_targets));
     resources.sort_by_key(|resource| {
         (
             grid_distance_squared(resource.position, current),
@@ -14781,9 +15118,7 @@ fn next_agent_goal_with_reservations(
         .into_iter()
         .filter(|resource| reservation_available(reservations, actor_id, &resource.id))
         .find_map(|resource| {
-            station_target_is_reachable(world, station, &resource.target_kind, resource.position)
-                .then(|| resource_approach(world, resource, current))
-                .flatten()
+            resource_approach(world, resource, current)
                 .map(|approach| (AgentGoal::Gather(resource.id.clone()), approach))
         })
         .unwrap_or_else(|| {
@@ -16943,7 +17278,9 @@ fn action_cooldown(
         AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_) | AgentGoal::Heal(_) => 1.0,
         AgentGoal::Construct(_) => 0.5,
         AgentGoal::Gather(_) | AgentGoal::HarvestFarm(_) => 0.75,
-        AgentGoal::Deposit => 0.25,
+        // `PlayerInventory.DepositResources` waits 2.5 seconds before its
+        // transfer callback. Keep the complete authored station cadence.
+        AgentGoal::Deposit => 2.5,
         AgentGoal::Wander => 0.0,
     };
     let Some(actor) = simulation.actors.get(actor) else {
@@ -17088,6 +17425,7 @@ fn move_agents(
     content: Res<RuntimeContent>,
     authored_presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
+    station_targets: Res<StationTargetRuntime>,
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
@@ -17427,11 +17765,12 @@ fn move_agents(
                     target_assignment_counts.remove(target);
                 }
             }
-            let (goal, target) = next_agent_goal_with_reservations(
+            let (goal, target) = next_agent_goal_with_station_runtime(
                 &simulation.0,
                 &world.generated,
                 &config.0,
                 &content.0,
+                &station_targets,
                 &agent.id,
                 location.0,
                 &resource_reservations,
@@ -23361,6 +23700,7 @@ fn recruit_group_selection_input(
     config: Res<RuntimeConfig>,
     world: Res<WorldRuntime>,
     content: Res<RuntimeContent>,
+    station_targets: Res<StationTargetRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut selected: ResMut<SelectedCell>,
     mut selected_actor: ResMut<SelectedActor>,
@@ -23469,6 +23809,7 @@ fn recruit_group_selection_input(
         &content.0,
         &config.0,
         &world.generated,
+        &station_targets,
         &mut simulation.0,
     );
     if ordered == 0 {
@@ -23537,6 +23878,7 @@ fn apply_recruit_group_order(
     content: &ContentCatalog,
     config: &GameConfig,
     world: &GeneratedWorld,
+    station_targets: &StationTargetRuntime,
     simulation: &mut WorldSimulation,
 ) -> usize {
     let mut applied = 0;
@@ -23548,10 +23890,15 @@ fn apply_recruit_group_order(
                 RecruitGroupOrder::Station(station) => {
                     compatible_station_ids(content, simulation, config, actor).contains(station)
                 }
-                RecruitGroupOrder::Target(target) => {
-                    compatible_target_ids(content, simulation, world, config, actor)
-                        .contains(target)
-                }
+                RecruitGroupOrder::Target(target) => compatible_target_ids_with_station_runtime(
+                    content,
+                    simulation,
+                    world,
+                    config,
+                    station_targets,
+                    actor,
+                )
+                .contains(target),
             });
         if !valid {
             continue;
@@ -27888,11 +28235,31 @@ fn compatible_station_ids(
     stations
 }
 
+#[cfg(test)]
 fn compatible_target_ids(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
     world: &GeneratedWorld,
     config: &GameConfig,
+    actor: &ActorState,
+) -> Vec<StableId> {
+    let station_targets = immediate_station_target_runtime(content, simulation, world, config);
+    compatible_target_ids_with_station_runtime(
+        content,
+        simulation,
+        world,
+        config,
+        &station_targets,
+        actor,
+    )
+}
+
+fn compatible_target_ids_with_station_runtime(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    station_targets: &StationTargetRuntime,
     actor: &ActorState,
 ) -> Vec<StableId> {
     let Some(role) = content.roles.get(&actor.role) else {
@@ -27914,18 +28281,13 @@ fn compatible_target_ids(
         if !station.definition.targets_all && !station.definition.target_kinds.contains(kind) {
             continue;
         }
+        let cached = cached_station_targets(station_targets, station, kind)
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let mut candidates = station_target_candidates(content, simulation, world, actor, kind);
-        candidates.retain(|(position, _)| {
-            within_station_search_region(*position, station)
-                && station_target_is_reachable(world, station, kind, *position)
-        });
-        candidates.sort_by_key(|(position, id)| {
-            (
-                grid_distance_squared(*position, station.position),
-                id.clone(),
-            )
-        });
-        candidates.truncate(usize::from(station.definition.max_targets));
+        candidates.retain(|(_, id)| cached.contains(id));
+        candidates.sort_by_key(|(_, id)| id.clone());
         targets.extend(candidates.into_iter().map(|(_, id)| id));
     }
     targets
@@ -27938,15 +28300,38 @@ fn station_target_candidates(
     actor: &ActorState,
     kind: &StableId,
 ) -> Vec<(GridPos, StableId)> {
+    let mut candidates = station_target_catalog_candidates(content, simulation, world, kind);
+    if matches!(
+        kind.as_str(),
+        "target:tree" | "target:ore" | "target:bush" | "target:fish"
+    ) {
+        candidates.retain(|(_, id)| {
+            world
+                .resources
+                .iter()
+                .find(|resource| resource.id == *id)
+                .is_some_and(|resource| actor_accepts_resource(content, actor, resource))
+        });
+    } else if matches!(
+        kind.as_str(),
+        "target:player" | "target:injured_player" | "target:dead_player"
+    ) {
+        candidates.retain(|(_, id)| *id != actor.id);
+    }
+    candidates
+}
+
+fn station_target_catalog_candidates(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    kind: &StableId,
+) -> Vec<(GridPos, StableId)> {
     match kind.as_str() {
         "target:tree" | "target:ore" | "target:bush" | "target:fish" => world
             .resources
             .iter()
-            .filter(|resource| {
-                resource.amount > 0
-                    && resource.target_kind == *kind
-                    && actor_accepts_resource(content, actor, resource)
-            })
+            .filter(|resource| resource.amount > 0 && resource.target_kind == *kind)
             .map(|resource| (resource.position, resource.id.clone()))
             .collect(),
         "target:farm" => simulation
@@ -27971,8 +28356,7 @@ fn station_target_candidates(
             .actors
             .values()
             .filter(|target| {
-                target.id != actor.id
-                    && target.alive
+                target.alive
                     && target.role.as_str() != "role:enemy"
                     && target.health == target.max_health
             })
@@ -27982,11 +28366,16 @@ fn station_target_candidates(
             .actors
             .values()
             .filter(|target| {
-                target.id != actor.id
-                    && target.alive
+                target.alive
                     && target.role.as_str() != "role:enemy"
                     && target.health < target.max_health
             })
+            .map(|target| (target.position, target.id.clone()))
+            .collect(),
+        "target:dead_player" => simulation
+            .actors
+            .values()
+            .filter(|target| !target.alive && target.role.as_str() != "role:enemy")
             .map(|target| (target.position, target.id.clone()))
             .collect(),
         "target:construction" => simulation
@@ -28264,6 +28653,7 @@ fn process_injected_commands(
     mut queues: RuntimeCommandQueues,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    station_targets: Res<StationTargetRuntime>,
     presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
     asset_server: Option<Res<AssetServer>>,
@@ -29033,11 +29423,12 @@ fn process_injected_commands(
                     .actors
                     .get(&actor_id)
                     .ok_or_else(|| "join before selecting a target".to_owned())?;
-                let targets = compatible_target_ids(
+                let targets = compatible_target_ids_with_station_runtime(
                     &content.0,
                     &simulation.0,
                     &world.generated,
                     &config.0,
+                    &station_targets,
                     actor,
                 );
                 if let Some(index) = index {
@@ -30642,7 +31033,11 @@ fn clear_loading_runtime(commands: &mut Commands) {
     commands.remove_resource::<WorldRevealRuntime>();
 }
 
-fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntity>>) {
+fn cleanup_world(
+    mut commands: Commands,
+    entities: Query<Entity, With<WorldEntity>>,
+    mut station_targets: ResMut<StationTargetRuntime>,
+) {
     for entity in &entities {
         commands.entity(entity).despawn();
     }
@@ -30651,6 +31046,7 @@ fn cleanup_world(mut commands: Commands, entities: Query<Entity, With<WorldEntit
     commands.remove_resource::<WorldRevealRuntime>();
     commands.insert_resource(BuildingPlacers::default());
     commands.insert_resource(BuildingCommandQueue::default());
+    *station_targets = StationTargetRuntime::default();
 }
 
 fn cleanup_menu_overlay(mut commands: Commands, overlays: MenuOverlayEntityQuery) {
@@ -33080,6 +33476,135 @@ mod tests {
         assert!(
             diagonal.x.abs_diff(station.position.x) + diagonal.z.abs_diff(station.position.z)
                 > axis.x.abs_diff(station.position.x) + axis.z.abs_diff(station.position.z)
+        );
+    }
+
+    #[test]
+    fn shipping_station_target_policies_match_unity_target_settings() {
+        let content = embedded_content();
+        let update = ["target:tree", "target:ore", "target:bush", "target:farm"];
+        let clear = [
+            "target:player",
+            "target:fish",
+            "target:enemy",
+            "target:boss",
+            "target:building",
+            "target:damaged_building",
+            "target:construction",
+            "target:injured_player",
+            "target:dead_player",
+        ];
+        assert_eq!(content.station_target_update_modes.len(), 13);
+        for kind in update {
+            assert_eq!(
+                content.station_target_update_modes[&StableId::new(kind).unwrap()],
+                StationUpdateMode::Update
+            );
+        }
+        for kind in clear {
+            assert_eq!(
+                content.station_target_update_modes[&StableId::new(kind).unwrap()],
+                StationUpdateMode::Clear
+            );
+        }
+    }
+
+    #[test]
+    fn station_update_mode_retains_targets_while_clear_mode_rebuilds_nearest_first() {
+        let config = GameConfig::default();
+        let mut content = embedded_content();
+        let station_id = StableId::new("building:townhall").unwrap();
+        content
+            .buildings
+            .get_mut(&station_id)
+            .unwrap()
+            .station
+            .as_mut()
+            .unwrap()
+            .max_targets = 1;
+        let simulation = WorldSimulation::new(config.world.seed);
+        let mut world = generate_world(&config.world);
+        world.resources.clear();
+        let station = station_candidate(&content, &simulation, &config, &station_id).unwrap();
+        let retained = stream_town_domain::GeneratedResource {
+            id: StableId::new("resource:cache_retained").unwrap(),
+            kind: StableId::new("resource:wood").unwrap(),
+            target_kind: StableId::new("target:tree").unwrap(),
+            position: GridPos {
+                x: station.position.x.saturating_add(2),
+                z: station.position.z,
+            },
+            offset_milli_cells: [0, 0],
+            generation_occupancy: [0, 0],
+            amount: 100,
+        };
+        world.resources.push(retained.clone());
+        let mut runtime = StationTargetRuntime::default();
+        populate_station_target_cache(
+            &mut runtime,
+            &content,
+            &simulation,
+            &world,
+            &config,
+            &station_id,
+        );
+        let tree = StableId::new("target:tree").unwrap();
+        assert_eq!(
+            runtime.stations[&station_id].targets[&tree],
+            std::slice::from_ref(&retained.id)
+        );
+
+        let nearer = stream_town_domain::GeneratedResource {
+            id: StableId::new("resource:cache_nearer").unwrap(),
+            position: GridPos {
+                x: station.position.x.saturating_add(1),
+                z: station.position.z,
+            },
+            ..retained.clone()
+        };
+        world.resources.push(nearer.clone());
+        populate_station_target_cache(
+            &mut runtime,
+            &content,
+            &simulation,
+            &world,
+            &config,
+            &station_id,
+        );
+        assert_eq!(
+            runtime.stations[&station_id].targets[&tree],
+            std::slice::from_ref(&retained.id),
+            "Unity Update mode keeps valid cached targets"
+        );
+
+        content
+            .station_target_update_modes
+            .insert(tree.clone(), StationUpdateMode::Clear);
+        populate_station_target_cache(
+            &mut runtime,
+            &content,
+            &simulation,
+            &world,
+            &config,
+            &station_id,
+        );
+        assert_eq!(
+            runtime.stations[&station_id].targets[&tree],
+            [nearer.id],
+            "Unity Clear mode replaces the bounded cache from nearest to farthest"
+        );
+    }
+
+    #[test]
+    fn deposit_cooldown_matches_unity_inventory_transfer_delay() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let actor_id = StableId::new("npc:deposit_timing").unwrap();
+        let mut simulation = WorldSimulation::new(config.world.seed);
+        assert!(simulation.join_player(actor_id.clone(), GridPos { x: 1, z: 1 }));
+        assert!(
+            (action_cooldown(&content, &simulation, &actor_id, &AgentGoal::Deposit) - 2.5).abs()
+                <= f32::EPSILON
         );
     }
 
@@ -37141,6 +37666,8 @@ mod tests {
 
         let town_hall = StableId::new("building:townhall").unwrap();
         let town_hall_cell = simulation.buildings[&town_hall].position;
+        let station_targets =
+            immediate_station_target_runtime(&content, &simulation, &world, &config);
         assert_eq!(
             recruit_group_order_at_cell(town_hall_cell, &content, &world, &simulation),
             Some(RecruitGroupOrder::Station(town_hall.clone()))
@@ -37152,6 +37679,7 @@ mod tests {
                 &content,
                 &config,
                 &world,
+                &station_targets,
                 &mut simulation,
             ),
             2
@@ -37181,14 +37709,19 @@ mod tests {
             })
             .count();
         assert_eq!(
-            apply_recruit_group_order(
-                &selected,
-                &RecruitGroupOrder::Target(resource.id.clone()),
-                &content,
-                &config,
-                &world,
-                &mut simulation,
-            ),
+            {
+                let station_targets =
+                    immediate_station_target_runtime(&content, &simulation, &world, &config);
+                apply_recruit_group_order(
+                    &selected,
+                    &RecruitGroupOrder::Target(resource.id.clone()),
+                    &content,
+                    &config,
+                    &world,
+                    &station_targets,
+                    &mut simulation,
+                )
+            },
             compatible
         );
 

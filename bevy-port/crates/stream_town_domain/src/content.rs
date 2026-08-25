@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 31;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 32;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -20,6 +20,9 @@ pub struct ContentCatalog {
     pub foliage: Vec<FoliageLayerDef>,
     pub buildings: BTreeMap<StableId, BuildingDef>,
     pub roles: BTreeMap<StableId, RoleDef>,
+    /// Unity `TargetSettings` policy controlling whether a station replaces or
+    /// incrementally repairs each bounded target list when its timer elapses.
+    pub station_target_update_modes: BTreeMap<StableId, StationUpdateMode>,
     #[serde(default)]
     pub objectives: BTreeMap<StableId, ObjectiveDef>,
     pub technology: TechTree,
@@ -339,6 +342,12 @@ pub struct StationDef {
     pub search_range_milli_cells: u32,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum StationUpdateMode {
+    Update,
+    Clear,
+}
+
 /// Authored `Targetable.CalculateScore` weights converted to logical grid units.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TargetingScoreDef {
@@ -609,6 +618,8 @@ pub enum ContentError {
     InvalidRotatingNode(StableId),
     #[error("building {0} has invalid target-scoring data")]
     InvalidTargetingScore(StableId),
+    #[error("station target update policies do not cover the shipping target catalog")]
+    InvalidStationTargetUpdateModes,
 }
 
 impl ContentCatalog {
@@ -626,6 +637,28 @@ impl ContentCatalog {
                 .any(|tooltip| tooltip.trim().is_empty())
         {
             return Err(ContentError::InvalidLoadingScreen);
+        }
+        let shipping_target_kinds = [
+            "target:player",
+            "target:tree",
+            "target:ore",
+            "target:bush",
+            "target:farm",
+            "target:fish",
+            "target:enemy",
+            "target:boss",
+            "target:building",
+            "target:damaged_building",
+            "target:construction",
+            "target:injured_player",
+            "target:dead_player",
+        ];
+        if shipping_target_kinds.iter().any(|kind| {
+            StableId::new(*kind)
+                .ok()
+                .is_none_or(|kind| !self.station_target_update_modes.contains_key(&kind))
+        }) {
+            return Err(ContentError::InvalidStationTargetUpdateModes);
         }
         let mut foliage_ids = BTreeSet::new();
         for layer in &self.foliage {

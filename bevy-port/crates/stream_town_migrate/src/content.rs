@@ -14,8 +14,8 @@ use stream_town_domain::{
     EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef,
     HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution,
     ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution,
-    RotatingNodeDef, StableId, StationDef, StorageContribution, StorageModelDef, TargetingScoreDef,
-    TechGroup, TechNode, TechTree, WeightedEnemySpawn,
+    RotatingNodeDef, StableId, StationDef, StationUpdateMode, StorageContribution, StorageModelDef,
+    TargetingScoreDef, TechGroup, TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -29,6 +29,7 @@ const PLAYER_PREFAB: &str = "Assets/Prefabs/Player_Character.prefab";
 const POOL_SETTINGS: &str = "Assets/DefaultSettings/D_ObjectPoolingSettings.asset";
 const LAND_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_FoliageGenSettings.asset";
 const WATER_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_WaterFoliageGenSettings.asset";
+const TARGET_SETTINGS: &str = "Assets/DefaultSettings/D_TargetSettings.asset";
 const LOADER_SCENE: &str = "Assets/Scenes/LOADER_INITIAL.unity";
 
 type ArchetypesById = BTreeMap<StableId, ArchetypeDef>;
@@ -64,6 +65,7 @@ pub struct ContentConversionReport {
     pub technology_edges: usize,
     pub technology_roots: usize,
     pub objectives: usize,
+    pub station_target_update_modes: usize,
     pub warnings: Vec<String>,
     pub outputs: Vec<String>,
 }
@@ -223,6 +225,8 @@ fn convert_export(
         FoliageHabitat::Underwater,
     )?);
     let role_equipment = role_equipment(required_asset(&assets_by_path, PLAYER_PREFAB)?)?;
+    let station_target_update_modes =
+        station_target_update_modes(required_asset(&assets_by_path, TARGET_SETTINGS)?)?;
 
     let building_guids = referenced_guids(
         required_asset(&assets_by_path, BUILDING_CONTAINER)?,
@@ -512,6 +516,7 @@ fn convert_export(
         foliage,
         buildings,
         roles,
+        station_target_update_modes,
         objectives,
         technology: TechTree { nodes, groups },
         source_records,
@@ -519,7 +524,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 7,
+        schema_version: 8,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -596,6 +601,7 @@ fn convert_export(
         technology_edges,
         technology_roots,
         objectives: catalog.objectives.len(),
+        station_target_update_modes: catalog.station_target_update_modes.len(),
         warnings: vec![
             "building footprints use the authored two-unit BuildingPlacer grid; Torch falls back to prefab bounds"
                 .to_owned(),
@@ -694,6 +700,29 @@ fn mask_ids(
         return Ok((false, BTreeSet::new()));
     }
     Ok((false, BTreeSet::from([stable_id(prefix, &slug(name))?])))
+}
+
+fn station_target_update_modes(
+    asset: &UnityAsset,
+) -> Result<BTreeMap<StableId, StationUpdateMode>> {
+    let count: usize = required_i64(asset, "_targetableData.Array.size")?
+        .try_into()
+        .with_context(|| format!("{} target-policy count is out of range", asset.path))?;
+    let mut modes = BTreeMap::new();
+    for index in 0..count {
+        let prefix = format!("_targetableData.Array.data[{index}]");
+        let target = required_enum(asset, &format!("{prefix}.TargetType"))?;
+        let mode = match required_enum(asset, &format!("{prefix}.UpdateType"))?.as_str() {
+            "Update" => StationUpdateMode::Update,
+            "Clear" => StationUpdateMode::Clear,
+            other => bail!("{} has unsupported station update mode {other}", asset.path),
+        };
+        let target = stable_id("target", &slug(&target))?;
+        if modes.insert(target.clone(), mode).is_some() {
+            bail!("{} repeats station target policy {target}", asset.path);
+        }
+    }
+    Ok(modes)
 }
 
 fn station_definition(asset: &UnityAsset) -> Result<Option<StationDef>> {
@@ -2879,6 +2908,48 @@ mod tests {
     }
 
     #[test]
+    fn converts_station_target_refresh_policies() {
+        let settings = asset(
+            "targets",
+            TARGET_SETTINGS,
+            "ScriptablesProcessorInfrastructure.TargetSettings",
+            vec![
+                field("_targetableData.Array.size", Value::from(2)),
+                field(
+                    "_targetableData.Array.data[0].TargetType",
+                    serde_json::json!({"Index": 2, "Name": "Tree", "RawValue": 2}),
+                ),
+                field(
+                    "_targetableData.Array.data[0].UpdateType",
+                    serde_json::json!({"Index": 0, "Name": "Update", "RawValue": 0}),
+                ),
+                field(
+                    "_targetableData.Array.data[1].TargetType",
+                    serde_json::json!({"Index": 6, "Name": "Fish", "RawValue": 32}),
+                ),
+                field(
+                    "_targetableData.Array.data[1].UpdateType",
+                    serde_json::json!({"Index": 1, "Name": "Clear", "RawValue": 1}),
+                ),
+            ],
+        );
+
+        assert_eq!(
+            station_target_update_modes(&settings).unwrap(),
+            BTreeMap::from([
+                (
+                    StableId::new("target:fish").unwrap(),
+                    StationUpdateMode::Clear,
+                ),
+                (
+                    StableId::new("target:tree").unwrap(),
+                    StationUpdateMode::Update,
+                ),
+            ])
+        );
+    }
+
+    #[test]
     fn converts_targetable_assignment_and_distance_weights() {
         let mut prefab = asset(
             "farm",
@@ -3689,6 +3760,44 @@ mod tests {
                     foliage_fixture_fields("_waterFoliageGenerationSettings", "Seaweed", 0.7),
                 ),
                 asset(
+                    "33333333333333333333333333333333",
+                    TARGET_SETTINGS,
+                    "ScriptablesProcessorInfrastructure.TargetSettings",
+                    std::iter::once(field("_targetableData.Array.size", Value::from(13)))
+                        .chain(
+                            [
+                                ("Player", "Clear"),
+                                ("Tree", "Update"),
+                                ("Ore", "Update"),
+                                ("Bush", "Update"),
+                                ("Farm", "Update"),
+                                ("Fish", "Clear"),
+                                ("Enemy", "Clear"),
+                                ("Boss", "Clear"),
+                                ("Building", "Clear"),
+                                ("Damaged Building", "Clear"),
+                                ("Construction", "Clear"),
+                                ("Injured Player", "Clear"),
+                                ("Dead Player", "Clear"),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .flat_map(|(index, (target, mode))| {
+                                [
+                                    field(
+                                        &format!("_targetableData.Array.data[{index}].TargetType"),
+                                        enum_value(target),
+                                    ),
+                                    field(
+                                        &format!("_targetableData.Array.data[{index}].UpdateType"),
+                                        enum_value(mode),
+                                    ),
+                                ]
+                            }),
+                        )
+                        .collect(),
+                ),
+                asset(
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     BUILDING_CONTAINER,
                     "Container",
@@ -3788,7 +3897,7 @@ mod tests {
         };
 
         let (catalog, report) = convert_export(&export, "fixture-sha".to_owned()).unwrap();
-        assert_eq!(report.source_assets, 14);
+        assert_eq!(report.source_assets, 15);
         assert_eq!(report.archetypes, 3);
         assert_eq!(report.archetype_scenes, 1);
         assert_eq!(report.disable_after_time_prefabs, 0);
@@ -3805,6 +3914,7 @@ mod tests {
         assert_eq!(report.technology_edges, 1);
         assert_eq!(report.technology_roots, 1);
         assert_eq!(report.objectives, 1);
+        assert_eq!(report.station_target_update_modes, 13);
         assert_eq!(catalog.source_records.len(), 4);
         let builder = StableId::new("role:builder").unwrap();
         assert_eq!(catalog.roles[&builder].base_action_amount, 1);
