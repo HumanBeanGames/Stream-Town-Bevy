@@ -1161,6 +1161,7 @@ mod tests {
             frames_per_second: 30,
             video_bitrate_kbps: 500,
             audio_bitrate_kbps: 96,
+            encoder: BroadcastEncoderPreference::OpenH264,
             ..BroadcastConfig::default()
         };
         ffmpeg::init().unwrap();
