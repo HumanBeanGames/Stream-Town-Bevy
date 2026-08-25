@@ -84,6 +84,35 @@ jobs:
           "VCPKGRS_DYNAMIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKG_DEFAULT_BINARY_CACHE=$binaryCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "$root\installed\x64-windows\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Fetch corresponding native-library sources
+        shell: pwsh
+        run: |
+          $downloads = Join-Path $env:VCPKG_ROOT "downloads"
+          New-Item -ItemType Directory -Path $downloads -Force | Out-Null
+          function Ensure-SourceArchive($name, $url, $sha512) {
+            $path = Join-Path $downloads $name
+            if (-not (Test-Path -LiteralPath $path)) {
+              $partial = "$path.partial"
+              Invoke-WebRequest -Uri $url -OutFile $partial
+              $partialHash = (Get-FileHash -LiteralPath $partial -Algorithm SHA512).Hash.ToLowerInvariant()
+              if ($partialHash -ne $sha512) {
+                throw "Downloaded source archive $name has SHA-512 $partialHash, expected $sha512"
+              }
+              Move-Item -LiteralPath $partial -Destination $path
+            }
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA512).Hash.ToLowerInvariant()
+            if ($actual -ne $sha512) {
+              throw "Source archive $name has SHA-512 $actual, expected $sha512"
+            }
+          }
+          Ensure-SourceArchive `
+            "ffmpeg-ffmpeg-n8.1.1.tar.gz" `
+            "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n8.1.1.tar.gz" `
+            "e858e92e5eb08d562302cde371af55917df6e1fe53994e18462a3c929a40ede1828c2bd53c2a7d65a2cfd791782ead3cd94efb2def904f49cb5dd8ab5cd4256f"
+          Ensure-SourceArchive `
+            "cisco-openh264-v2.6.0.tar.gz" `
+            "https://github.com/cisco/openh264/archive/refs/tags/v2.6.0.tar.gz" `
+            "26a03acde7153a6b40b99f00641772433a244c72a3cc4bca6d903cf3b770174d028369a2fb73b2f0774e1124db0e269758eed6d88975347a815e0366c820d247"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bevy-port
