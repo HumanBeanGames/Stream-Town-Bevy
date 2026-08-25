@@ -857,6 +857,36 @@ impl WorldSimulation {
         Ok(total)
     }
 
+    /// Deposits one resource while preserving every other inventory entry.
+    ///
+    /// Unity workers retain resources collected by previous roles and only
+    /// transfer the resource assigned to their current role at a station.
+    pub fn deposit_resource_with_capacity(
+        &mut self,
+        actor: &StableId,
+        resource: &StableId,
+        capacity: u32,
+    ) -> Result<u32, SimulationError> {
+        let amount = self
+            .actor_mut(actor)?
+            .inventory
+            .remove(resource)
+            .unwrap_or_default();
+        if amount == 0 {
+            return Ok(0);
+        }
+
+        let current = self.town_resources.entry(resource.clone()).or_default();
+        let deposited = amount.min(capacity.saturating_sub(*current));
+        *current = current.saturating_add(deposited);
+        if deposited < amount {
+            self.actor_mut(actor)?
+                .inventory
+                .insert(resource.clone(), amount - deposited);
+        }
+        Ok(deposited)
+    }
+
     pub fn construct(
         &mut self,
         id: StableId,
@@ -2142,6 +2172,28 @@ mod tests {
         assert_eq!(deposited, 10);
         assert_eq!(simulation.town_resources[&wood], 100);
         assert_eq!(simulation.actors[&player].inventory[&wood], 15);
+    }
+
+    #[test]
+    fn role_resource_deposit_preserves_other_carried_resources() {
+        let mut simulation = WorldSimulation::new(42);
+        let player = id("twitch:viewer");
+        let wood = id("resource:wood");
+        let ore = id("resource:ore");
+        assert!(simulation.join_player(player.clone(), GridPos { x: 0, z: 0 }));
+        simulation.gather(&player, wood.clone(), 7).unwrap();
+        simulation.gather(&player, ore.clone(), 12).unwrap();
+        simulation.town_resources.insert(ore.clone(), 95);
+
+        assert_eq!(
+            simulation
+                .deposit_resource_with_capacity(&player, &ore, 100)
+                .unwrap(),
+            5
+        );
+        assert_eq!(simulation.town_resources[&ore], 100);
+        assert_eq!(simulation.actors[&player].inventory[&ore], 7);
+        assert_eq!(simulation.actors[&player].inventory[&wood], 7);
     }
 
     #[test]

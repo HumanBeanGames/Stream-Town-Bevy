@@ -330,6 +330,10 @@ Unity curve through level 99, and action amount/cadence/range, health and
 regeneration, defense, movement, and carrying use converted level curves plus
 the unlocked technology percentages. `!experience` reports the active role's
 current level and XP threshold.
+Like Unity's `PlayerInventory`, each resource keeps an independent carried
+amount across role changes. Capacity, carry props, and carry animation use only
+the current role's resource, and depositing transfers only that bucket rather
+than silently unloading resources retained from earlier roles.
 Food, ore, and wood start with Unity's 15,000-unit capacity, recruit capacity
 starts at five, and gold is unbounded. Completed Food/Ore/Wood Storage buildings
 add the authored level-scaled capacity; Houses add recruit slots. A capped

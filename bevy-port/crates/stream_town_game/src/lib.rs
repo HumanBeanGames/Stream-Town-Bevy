@@ -13517,11 +13517,9 @@ fn actor_remaining_carry_capacity(
     simulation: &WorldSimulation,
     actor: &ActorState,
 ) -> u32 {
-    let carried = actor
-        .inventory
-        .values()
-        .copied()
-        .fold(0_u32, u32::saturating_add);
+    let carried = resource_for_role(content, &actor.role)
+        .and_then(|resource| actor.inventory.get(&resource).copied())
+        .unwrap_or_default();
     let capacity = effective_role_stats(content, simulation, actor)
         .map(|stats| stats.carry_capacity)
         .filter(|capacity| *capacity > 0)
@@ -15304,40 +15302,18 @@ fn complete_agent_goal(
             }
         }
         AgentGoal::Deposit => {
-            let capacities = simulation
+            let resource = simulation
                 .actors
                 .get(actor_id)
-                .into_iter()
-                .flat_map(|actor| actor.inventory.keys())
-                .map(|resource| {
-                    (
-                        resource.clone(),
-                        resource_storage_capacity(config, content, simulation, resource),
-                    )
-                })
-                .collect();
-            let resources_before = simulation.town_resources.clone();
-            match simulation.deposit_all_with_capacities(actor_id, &capacities) {
+                .and_then(|actor| resource_for_role(content, &actor.role))?;
+            let capacity = resource_storage_capacity(config, content, simulation, &resource);
+            match simulation.deposit_resource_with_capacity(actor_id, &resource, capacity) {
                 Ok(amount) => {
                     if amount > 0 {
-                        let gained: Vec<_> = simulation
-                            .town_resources
-                            .iter()
-                            .filter_map(|(resource, current)| {
-                                let previous =
-                                    resources_before.get(resource).copied().unwrap_or_default();
-                                current
-                                    .saturating_sub(previous)
-                                    .gt(&0)
-                                    .then(|| (resource.clone(), current.saturating_sub(previous)))
-                            })
-                            .collect();
-                        for (resource, amount) in gained {
-                            let _ = simulation.record_objective_event(
-                                &content.objectives,
-                                &ObjectiveEvent::ResourceGained { resource, amount },
-                            );
-                        }
+                        let _ = simulation.record_objective_event(
+                            &content.objectives,
+                            &ObjectiveEvent::ResourceGained { resource, amount },
+                        );
                     }
                     amount > 0
                 }
@@ -20717,6 +20693,11 @@ fn carried_resource_visible(state: MovementAnimationState, has_inventory: bool) 
     state == MovementAnimationState::Moving && has_inventory
 }
 
+fn actor_carries_role_resource(content: &ContentCatalog, actor: &ActorState) -> bool {
+    resource_for_role(content, &actor.role)
+        .is_some_and(|resource| actor.inventory.get(&resource).copied().unwrap_or_default() > 0)
+}
+
 fn sync_equipment_nodes(
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
@@ -20744,7 +20725,7 @@ fn sync_equipment_nodes(
         let carrying = transient_carry.is_some_and(|carry| carry.0)
             || carried_resource_visible(
                 animation.state,
-                actor.inventory.values().any(|amount| *amount > 0),
+                actor_carries_role_resource(&content.0, actor),
             );
         let visible = equipment.map_or_else(
             || {
@@ -21552,7 +21533,7 @@ fn drive_converted_animations(
                 }
                 driver.active_action = action;
             }
-            let carrying = actor.inventory.values().any(|amount| *amount > 0);
+            let carrying = actor_carries_role_resource(&content.0, actor);
             let carry_kind = content
                 .0
                 .roles
@@ -35479,6 +35460,73 @@ mod tests {
         );
         assert!(simulation.actors[&actor_id].inventory.is_empty());
         assert_eq!(simulation.town_resources[&resource.kind], 10);
+    }
+
+    #[test]
+    fn role_switch_keeps_independent_inventory_capacity_and_deposits_current_resource_only() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let actor_id = StableId::new("npc:role_switch_inventory").unwrap();
+        let logger = StableId::new("role:logger").unwrap();
+        let miner = StableId::new("role:miner").unwrap();
+        let wood = StableId::new("resource:wood").unwrap();
+        let ore = StableId::new("resource:ore").unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        assert!(simulation.join_player(actor_id.clone(), GridPos { x: 1, z: 1 }));
+        simulation.assign_role(&actor_id, logger.clone()).unwrap();
+        simulation.gather(&actor_id, wood.clone(), 50).unwrap();
+        simulation.assign_role(&actor_id, miner.clone()).unwrap();
+
+        let miner_capacity =
+            effective_role_stats(&content, &simulation, &simulation.actors[&actor_id])
+                .unwrap()
+                .carry_capacity;
+        assert_eq!(
+            actor_remaining_carry_capacity(&content, &simulation, &simulation.actors[&actor_id]),
+            miner_capacity,
+            "wood retained from the logger role must not consume ore capacity"
+        );
+        assert!(!actor_carries_role_resource(
+            &content,
+            &simulation.actors[&actor_id]
+        ));
+
+        simulation.gather(&actor_id, ore.clone(), 3).unwrap();
+        assert_eq!(
+            actor_remaining_carry_capacity(&content, &simulation, &simulation.actors[&actor_id]),
+            miner_capacity.saturating_sub(3)
+        );
+        assert!(actor_carries_role_resource(
+            &content,
+            &simulation.actors[&actor_id]
+        ));
+
+        assert!(
+            complete_agent_goal(
+                &mut simulation,
+                &mut world,
+                &config,
+                &content,
+                &actor_id,
+                &AgentGoal::Deposit,
+                GridPos { x: 1, z: 1 },
+            )
+            .is_none()
+        );
+        assert_eq!(simulation.town_resources[&ore], 3);
+        assert_eq!(simulation.actors[&actor_id].inventory[&wood], 50);
+        assert!(!simulation.actors[&actor_id].inventory.contains_key(&ore));
+        assert!(!actor_carries_role_resource(
+            &content,
+            &simulation.actors[&actor_id]
+        ));
+
+        simulation.assign_role(&actor_id, logger).unwrap();
+        assert!(actor_carries_role_resource(
+            &content,
+            &simulation.actors[&actor_id]
+        ));
     }
 
     #[test]

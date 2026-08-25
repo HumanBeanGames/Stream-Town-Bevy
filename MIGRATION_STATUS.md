@@ -859,12 +859,18 @@ mistaken for production-ready systems.
   (7.545s–13.203s), reset when the fishing take exits, and leave the ordinary
   carried-resource prop restricted to the return walk. Converter, catalog,
   timing, and runtime dispatch tests pin the complete event surface.
+- Worker inventory now retains Unity's independent per-resource buckets across
+  role changes. Capacity checks, carry animation parameters, and equipment
+  visibility inspect only the current role's resource, while a station deposit
+  transfers only that resource and leaves any previous role's cargo untouched.
+  Bounded town storage still leaves current-role overflow on the actor. Domain
+  and runtime regressions cover a Logger-to-Miner switch, capacity isolation,
+  role-specific presentation, partial deposit, and retained Wood.
 
 ## Not yet at parity
 
-- Any obscure advanced role/inventory interactions not yet represented by the
-  live worker/combat/healing/construction loops, and final source-diff closure for every
-  reachable balance edge case. All nine shipping enemy combat archetypes, the
+- Final source-diff closure for every reachable balance edge case outside the
+  live worker/combat/healing/construction and role-specific inventory loops. All nine shipping enemy combat archetypes, the
   weighted night camp spawner, raid waves/boss, retaliation, and prefab-specific
   target acquisition ranges are now live. The source audit
   confirms the Tower contains the shipping project's sole `ProjectileShooter`;
