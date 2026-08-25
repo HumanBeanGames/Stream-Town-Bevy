@@ -689,9 +689,14 @@ mistaken for production-ready systems.
   contract: its 0.5 progress rate, 0.5-second completion hold, and tooltip list.
   `WorldLoading` now presents status, percentage, a progress fill, and a
   deterministic authored tip; it renders the loading screen for a frame before
-  synchronous generation and holds the truthful `Ready`/100% state for the
-  authored interval before entering the game. The focused tool exposes those
-  values and repository validation locks them to the verified Unity baseline.
+  synchronous generation. The cold Main Menu -> New Game handoff retains one
+  cover on a dedicated UI camera while the HDR world pipeline initializes, then
+  retires that camera atomically with the cover. Progress includes terrain,
+  scene construction, materials, animation, GPU resources, pipelines, and
+  presented-frame stability; it cannot display 100% until those gates pass, and
+  the completed state is presented before gameplay is revealed. The focused
+  tool exposes the authored values and repository validation locks them to the
+  verified Unity baseline.
 - The `!rid`, parameterless `!station`, and parameterless `!target` command
   paths now reproduce Unity's `UnitTextDisplay` feedback by projecting matching
   numbered labels over recruits, compatible stations, resources, buildings, or

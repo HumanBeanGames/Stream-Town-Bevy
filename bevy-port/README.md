@@ -900,7 +900,16 @@ deterministically renders at most 900 visible resources and 3,200 visible foliag
 instances to bound startup work. The 186 repeated completed farms bypass generic
 scene spawning and load their exact Base/Full GLB primitives. Boot preloads the
 same `Scene(0)` handles later consumed by the menu, and the loading overlay stays
-up until every remaining scene root has children. Diagnostic logs report boot
+up until every remaining scene root has children. New Game keeps that already
+rendered cover on a dedicated SDR UI camera while the town camera changes from
+the menu projection to the HDR gameplay pipeline. The camera and cover survive
+the `MainMenu` -> `WorldLoading` -> `InGame` boundary as one operation, then
+retire together after a fully prepared gameplay frame; leaving the no-clear UI
+camera alive would retain its last loading frame over the world. Progress now
+reserves explicit ranges for asset I/O, terrain generation, ECS scene
+construction, material and animation setup, GPU uploads, pipeline compilation,
+and stable presented frames. It is capped at 99% until all reveal gates pass,
+then presents one truthful 100% frame before removal. Diagnostic logs report boot
 asset time and menu-scene reveal time separately; on the recorded DX12 debug
 machine asset I/O is about 0.4s while first-use scene/material GPU preparation is
 still about 12s and is the dominant remaining startup cost.
@@ -954,6 +963,11 @@ queue, saves and reloads the generated town, then enters and exits `Credits`
 after its authored fireworks activation. It also guards state cleanup; this
 found and fixed a stale Credits timeline resource that previously survived a
 return to the Main Menu.
+
+`STREAM_TOWN_SMOKE_NEW_GAME_TRANSITION=1` exercises the real cold Main Menu New
+Game handoff instead of the direct autostart shortcut. An optional
+`STREAM_TOWN_SMOKE_NEW_GAME_DELAY_SECONDS` delay lets external frame recorders
+attach after the menu is stable without changing the production button path.
 
 The migration now has source-diff closure for reachable gameplay and balance,
 shipping-scene shader/VFX reachability, converted authoring data and assets,

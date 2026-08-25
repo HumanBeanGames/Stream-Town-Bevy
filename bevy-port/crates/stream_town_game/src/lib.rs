@@ -1409,6 +1409,9 @@ struct GameMenuIdleCheckmark;
 struct LoadingScreenEntity;
 
 #[derive(Component)]
+struct LoadingUiCamera;
+
+#[derive(Component)]
 struct LoadingIconSpinner {
     radians_per_second: f32,
 }
@@ -1508,6 +1511,7 @@ struct WorldRevealRuntime {
     started_at: Instant,
     starting_render_frame: u64,
     ready_starting_render_frame: Option<u64>,
+    completion_starting_render_frame: Option<u64>,
     fallback_updates: u16,
     ready_frames: u8,
 }
@@ -1518,6 +1522,7 @@ impl Default for WorldRevealRuntime {
             started_at: Instant::now(),
             starting_render_frame: 0,
             ready_starting_render_frame: None,
+            completion_starting_render_frame: None,
             fallback_updates: 0,
             ready_frames: 0,
         }
@@ -2154,6 +2159,12 @@ type LoadingPercentQuery<'w, 's> = Query<
         Without<LoadingStatusText>,
         Without<LoadingSubstatusText>,
     ),
+>;
+type LoadingCoverEntityQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, Option<&'static mut Visibility>),
+    Or<(With<LoadingScreenEntity>, With<LoadingUiCamera>)>,
 >;
 type MenuWorldAssetRootQuery<'w, 's> = Query<
     'w,
@@ -3014,6 +3025,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
+                smoke_start_new_game_after_menu_reveal
+                    .after(finish_menu_reveal)
+                    .run_if(in_state(GameState::MainMenu)),
+            )
+            .add_systems(
+                Update,
                 apply_material_overrides.run_if(in_rendered_game_state),
             )
             .add_systems(OnExit(GameState::MainMenu), cleanup_state_entities)
@@ -3051,6 +3068,9 @@ impl Plugin for StreamTownGamePlugin {
                     finish_world_reveal
                         .after(apply_material_overrides)
                         .after(tag_cosmetic_renderers),
+                    sync_loading_screen_status
+                        .after(finish_world_reveal)
+                        .run_if(resource_exists::<WorldLoadingRuntime>),
                     enforce_loading_overlay_retired.after(finish_world_reveal),
                 )
                     .run_if(in_state(GameState::InGame)),
@@ -6044,6 +6064,15 @@ fn loading_fraction(completed: usize, total: usize) -> f32 {
     f32::from(completed) / f32::from(total)
 }
 
+fn loading_display_percent(progress: f32) -> f32 {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress >= 1.0 {
+        100.0
+    } else {
+        (progress * 100.0).floor().min(99.0)
+    }
+}
+
 fn poll_menu_loading(
     mut loading: ResMut<MenuLoadingRuntime>,
     asset_server: Option<Res<AssetServer>>,
@@ -6120,6 +6149,34 @@ fn next_state_targets_world_loading(next_state: &NextState<GameState>) -> bool {
 
 fn queue_world_loading(commands: &mut Commands) {
     commands.insert_resource(WorldLoadingCoverRuntime::default());
+}
+
+fn smoke_start_new_game_after_menu_reveal(
+    mut commands: Commands,
+    time: Res<Time>,
+    reveal: Option<Res<MenuRevealRuntime>>,
+    cover: Option<Res<WorldLoadingCoverRuntime>>,
+    mut requested: Local<bool>,
+    mut ready_seconds: Local<f32>,
+) {
+    if *requested || std::env::var_os("STREAM_TOWN_SMOKE_NEW_GAME_TRANSITION").is_none() {
+        return;
+    }
+    if reveal.is_some() || cover.is_some() {
+        *ready_seconds = 0.0;
+        return;
+    }
+    *ready_seconds += time.delta_secs();
+    let delay_seconds = std::env::var("STREAM_TOWN_SMOKE_NEW_GAME_DELAY_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(0.5);
+    if *ready_seconds < delay_seconds {
+        return;
+    }
+    *requested = true;
+    queue_world_loading(&mut commands);
 }
 
 fn world_loading_cover_requested(cover: Option<Res<WorldLoadingCoverRuntime>>) -> bool {
@@ -6875,6 +6932,7 @@ fn spawn_loading_screen(
     content: Res<RuntimeContent>,
     render: Option<Res<RenderAssets>>,
     existing: Query<(), With<LoadingScreenEntity>>,
+    loading_cameras: Query<Entity, With<LoadingUiCamera>>,
 ) {
     // The overlay is deliberately persistent across Boot/MainMenu ->
     // WorldLoading. Recreating already-decoded ImageNodes still costs one render
@@ -6883,11 +6941,35 @@ fn spawn_loading_screen(
     if !existing.is_empty() {
         return;
     }
+    // The town camera changes projection, HDR, tonemapping, and post-process
+    // pipelines between MainMenu, WorldLoading, and InGame. Rendering the
+    // loading UI through that camera lets a first-use pipeline rebuild blank
+    // the entire window even though the overlay entities remain alive. Keep a
+    // separate, stable UI-only camera above the world for the complete loading
+    // operation so scene-camera compilation can never interrupt the cover. It
+    // is retired with the cover; leaving a no-clear camera on the swapchain can
+    // preserve its last SDR frame over the HDR world.
+    let loading_camera = loading_cameras.iter().next().unwrap_or_else(|| {
+        commands
+            .spawn((
+                LoadingUiCamera,
+                Name::new("Persistent loading UI camera"),
+                Camera2d,
+                Camera {
+                    order: 1_000,
+                    clear_color: bevy::camera::ClearColorConfig::None,
+                    ..default()
+                },
+                Msaa::Off,
+            ))
+            .id()
+    });
     // This solid layer is immediately renderable even before the authored PNG
     // finishes its own first asset-server round trip. It prevents the partially
     // instantiated destination scene from showing through during boot.
     commands.spawn((
         LoadingScreenEntity,
+        UiTargetCamera(loading_camera),
         BackgroundColor(Color::srgb(0.025, 0.04, 0.055)),
         GlobalZIndex(1_000),
         Node {
@@ -6903,6 +6985,7 @@ fn spawn_loading_screen(
     {
         commands.spawn((
             LoadingScreenEntity,
+            UiTargetCamera(loading_camera),
             ImageNode::new(background.clone()).with_mode(NodeImageMode::Stretch),
             GlobalZIndex(1_001),
             Node {
@@ -6919,6 +7002,7 @@ fn spawn_loading_screen(
     {
         commands.spawn((
             LoadingScreenEntity,
+            UiTargetCamera(loading_camera),
             ImageNode::new(overlay.clone()).with_mode(NodeImageMode::Stretch),
             GlobalZIndex(1_002),
             Node {
@@ -6931,6 +7015,7 @@ fn spawn_loading_screen(
     }
     commands.spawn((
         LoadingScreenEntity,
+        UiTargetCamera(loading_camera),
         LoadingStatusText,
         Text::new("Preparing town..."),
         TextFont {
@@ -6950,6 +7035,7 @@ fn spawn_loading_screen(
     ));
     commands.spawn((
         LoadingScreenEntity,
+        UiTargetCamera(loading_camera),
         LoadingSubstatusText,
         Text::new("Discovering dependencies..."),
         TextFont {
@@ -6969,6 +7055,7 @@ fn spawn_loading_screen(
     ));
     commands.spawn((
         LoadingScreenEntity,
+        UiTargetCamera(loading_camera),
         LoadingPercentText,
         Text::new("0%"),
         TextFont {
@@ -6989,6 +7076,7 @@ fn spawn_loading_screen(
     commands
         .spawn((
             LoadingScreenEntity,
+            UiTargetCamera(loading_camera),
             GlobalZIndex(1_004),
             Node {
                 position_type: PositionType::Absolute,
@@ -7019,6 +7107,7 @@ fn spawn_loading_screen(
         % content.0.loading_screen.tooltips.len()];
     commands.spawn((
         LoadingScreenEntity,
+        UiTargetCamera(loading_camera),
         Text::new(tooltip.clone()),
         TextFont {
             font_size: FontSize::Px(15.0),
@@ -7045,6 +7134,7 @@ fn spawn_loading_screen(
         .expect("validated content contains the authored loading-icon rotation");
     commands.spawn((
         LoadingScreenEntity,
+        UiTargetCamera(loading_camera),
         LoadingIconSpinner {
             radians_per_second: rotation.degrees_per_second.to_radians(),
         },
@@ -7250,7 +7340,10 @@ fn poll_world_loading(
     let total_assets = loading.asset_handles.len();
     let asset_progress = loading_fraction(loaded, total_assets);
     let terrain_ready = loading.prepared_world.is_some();
-    loading.progress = 0.05 + asset_progress * 0.55 + if terrain_ready { 0.30 } else { 0.0 };
+    // Reserve the final 40% for ECS scene construction, material/animation
+    // setup, GPU uploads, pipeline compilation, and presented-frame proof.
+    // Those stages were previously hidden behind a false 100% display.
+    loading.progress = 0.05 + asset_progress * 0.35 + if terrain_ready { 0.20 } else { 0.0 };
     loading.status = if terrain_ready {
         "Loading town presentation".to_owned()
     } else {
@@ -7269,7 +7362,7 @@ fn poll_world_loading(
     };
     if loaded == total_assets && failed == 0 && terrain_ready {
         loading.phase = WorldLoadingPhase::Spawning;
-        loading.progress = 0.92;
+        loading.progress = 0.62;
         "Building the town scene".clone_into(&mut loading.status);
         "Terrain and presentation assets are ready".clone_into(&mut loading.substatus);
     }
@@ -7308,15 +7401,17 @@ fn advance_loading_phase(
         } else {
             loading.scene_ready_frames = 0;
         }
+        let root_fraction = loading_fraction(ready_count, root_count);
+        let stable_fraction = f32::from(loading.scene_ready_frames.min(5)) / 5.0;
+        loading.progress = 0.78 + root_fraction * 0.04 + stable_fraction * 0.02;
         if loading.scene_ready_frames < 5 {
-            loading.progress = 0.98;
             "Finalizing town presentation".clone_into(&mut loading.status);
             loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
             return;
         }
-        loading.progress = 1.0;
-        "Town ready".clone_into(&mut loading.status);
-        "All initial scene roots are instantiated".clone_into(&mut loading.substatus);
+        loading.progress = 0.84;
+        "Scene graph ready".clone_into(&mut loading.status);
+        "Preparing materials, animation, and GPU resources".clone_into(&mut loading.substatus);
     }
     if advance_loading_runtime(&mut loading, time.delta_secs()) {
         next_state.set(GameState::InGame);
@@ -7344,7 +7439,7 @@ fn sync_loading_screen_status(
     mut percent_text: LoadingPercentQuery,
     mut fills: Query<(&mut Node, &mut AccessibilityNode), With<LoadingProgressFill>>,
 ) {
-    let progress_percent = (loading.progress * 100.0).round();
+    let progress_percent = loading_display_percent(loading.progress);
     if let Ok(mut text) = status.single_mut() {
         (**text).clone_from(&loading.status);
     }
@@ -7373,7 +7468,7 @@ fn sync_boot_loading_screen(
     let Some(loading) = loading else {
         return;
     };
-    let progress_percent = (boot_loading_display_progress(&loading) * 100.0).round();
+    let progress_percent = loading_display_percent(boot_loading_display_progress(&loading));
     if let Ok(mut text) = status.single_mut() {
         (**text).clone_from(&loading.status);
     }
@@ -7463,7 +7558,7 @@ fn finish_menu_reveal(
     world_cover: Option<Res<WorldLoadingCoverRuntime>>,
     mut reveal: Option<ResMut<MenuRevealRuntime>>,
     mut loading: Option<ResMut<MenuLoadingRuntime>>,
-    mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
+    mut loading_entities: LoadingCoverEntityQuery,
     scene_roots: MenuWorldAssetRootQuery,
 ) {
     if world_cover.is_some() {
@@ -7507,8 +7602,10 @@ fn finish_menu_reveal(
     if ready_rendered_frames < 12 || reveal.scene_ready_frames < 8 {
         return;
     }
-    for (entity, mut visibility) in &mut loading_entities {
-        *visibility = Visibility::Hidden;
+    for (entity, visibility) in &mut loading_entities {
+        if let Some(mut visibility) = visibility {
+            *visibility = Visibility::Hidden;
+        }
         commands.entity(entity).try_despawn();
     }
     info!(
@@ -7527,9 +7624,39 @@ fn begin_world_reveal(mut commands: Commands, presented_frames: Res<PresentedRen
         started_at: Instant::now(),
         starting_render_frame: presented_frames.current(),
         ready_starting_render_frame: None,
+        completion_starting_render_frame: None,
         fallback_updates: 0,
         ready_frames: 0,
     });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn world_reveal_progress(
+    ready_roots: usize,
+    root_count: usize,
+    applied_meshes: usize,
+    authored_meshes: usize,
+    ready_character_receivers: usize,
+    animated_player_meshes: usize,
+    gpu: GpuReadinessSnapshot,
+    stable_frames: u64,
+) -> f32 {
+    let pipeline_ready = f32::from(gpu.pending_pipelines == 0 && gpu.failed_pipelines == 0);
+    let stable_frames = u16::try_from(stable_frames.min(WORLD_REVEAL_GPU_STABLE_FRAMES))
+        .expect("the reveal frame gate fits u16");
+    let required_stable_frames =
+        u16::try_from(WORLD_REVEAL_GPU_STABLE_FRAMES).expect("the reveal frame gate fits u16");
+    let stable_fraction = f32::from(stable_frames) / f32::from(required_stable_frames);
+    (0.84
+        + loading_fraction(ready_roots, root_count) * 0.02
+        + loading_fraction(applied_meshes, authored_meshes) * 0.03
+        + loading_fraction(ready_character_receivers, animated_player_meshes) * 0.03
+        + loading_fraction(gpu.ready_images, gpu.expected_images) * 0.02
+        + loading_fraction(gpu.ready_meshes, gpu.expected_meshes) * 0.03
+        + loading_fraction(gpu.ready_materials, gpu.expected_materials) * 0.02
+        + pipeline_ready * 0.005
+        + stable_fraction * 0.005)
+        .clamp(0.84, 0.999)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7540,7 +7667,7 @@ fn finish_world_reveal(
     world_instance_spawner: Option<Res<WorldInstanceSpawner>>,
     mut reveal: Option<ResMut<WorldRevealRuntime>>,
     mut loading: Option<ResMut<WorldLoadingRuntime>>,
-    mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
+    mut loading_entities: LoadingCoverEntityQuery,
     scene_roots: WorldAssetRootQuery,
     material_specs: Query<(), With<MaterialOverrideSpec>>,
     mesh_overrides: Query<(Entity, Option<&MaterialOverrideApplied>), With<Mesh3d>>,
@@ -7626,9 +7753,33 @@ fn finish_world_reveal(
         world_ready,
         presented_render_frame,
     );
+    let stable_frames = ready_rendered_frames.min(u64::from(reveal.ready_frames));
     if let Some(loading) = loading.as_deref_mut() {
-        loading.progress = 1.0;
-        "Preparing first rendered frame".clone_into(&mut loading.status);
+        loading.progress = world_reveal_progress(
+            ready_roots,
+            root_count,
+            applied_meshes,
+            authored_meshes,
+            ready_character_receivers,
+            animated_player_meshes,
+            gpu,
+            stable_frames,
+        );
+        let status = if !roots_ready {
+            "Instantiating town scenes"
+        } else if !materials_ready || !character_receivers_ready {
+            "Finalizing models and animation"
+        } else if gpu.ready_images != gpu.expected_images
+            || gpu.ready_meshes != gpu.expected_meshes
+            || gpu.ready_materials != gpu.expected_materials
+        {
+            "Uploading town presentation"
+        } else if gpu.pending_pipelines > 0 || gpu.failed_pipelines > 0 {
+            "Compiling render pipelines"
+        } else {
+            "Validating first rendered frames"
+        };
+        status.clone_into(&mut loading.status);
         loading.substatus = format!(
             "{ready_roots}/{root_count} scenes; characters {ready_character_receivers}/{animated_player_meshes}; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines",
             gpu.ready_images,
@@ -7649,10 +7800,27 @@ fn finish_world_reveal(
     if ready_rendered_frames < WORLD_REVEAL_GPU_STABLE_FRAMES
         || u64::from(reveal.ready_frames) < WORLD_REVEAL_GPU_STABLE_FRAMES
     {
+        reveal.completion_starting_render_frame = None;
         return;
     }
-    for (entity, mut visibility) in &mut loading_entities {
-        *visibility = Visibility::Hidden;
+    let completion_starting_render_frame = *reveal
+        .completion_starting_render_frame
+        .get_or_insert(presented_render_frame);
+    if let Some(loading) = loading.as_deref_mut() {
+        loading.progress = 1.0;
+        "Town ready".clone_into(&mut loading.status);
+        "All scenes, materials, animation, and GPU pipelines are ready"
+            .clone_into(&mut loading.substatus);
+    }
+    // Present one truthful 100% frame. The cover can only retire after the
+    // renderer has actually shown that completed state.
+    if presented_render_frame.saturating_sub(completion_starting_render_frame) < 1 {
+        return;
+    }
+    for (entity, visibility) in &mut loading_entities {
+        if let Some(mut visibility) = visibility {
+            *visibility = Visibility::Hidden;
+        }
         commands.entity(entity).try_despawn();
     }
     info!(
@@ -7680,6 +7848,7 @@ fn enforce_loading_overlay_retired(
     mut commands: Commands,
     reveal: Option<Res<WorldRevealRuntime>>,
     mut loading_entities: Query<(Entity, &mut Visibility), With<LoadingScreenEntity>>,
+    loading_cameras: Query<Entity, With<LoadingUiCamera>>,
     mut retirement_verified: Local<bool>,
 ) {
     if reveal.is_some() {
@@ -7689,6 +7858,9 @@ fn enforce_loading_overlay_retired(
     for (entity, mut visibility) in &mut loading_entities {
         survivors += 1;
         *visibility = Visibility::Hidden;
+        commands.entity(entity).try_despawn();
+    }
+    for entity in &loading_cameras {
         commands.entity(entity).try_despawn();
     }
     if survivors > 0 {
@@ -12732,7 +12904,7 @@ fn generate_and_spawn_world(
     commands.insert_resource(SimulationRuntime(simulation));
     commands.insert_resource(EnvironmentPresentation::default());
     loading.phase = WorldLoadingPhase::Complete;
-    loading.progress = 0.96;
+    loading.progress = 0.78;
     "Finalizing town presentation".clone_into(&mut loading.status);
     "Waiting for initial scene roots to instantiate".clone_into(&mut loading.substatus);
     loading.completion_remaining_seconds = Duration::from_millis(u64::from(
@@ -31664,8 +31836,12 @@ fn cleanup_credits(mut commands: Commands) {
 fn cleanup_loading_screen(
     mut commands: Commands,
     entities: Query<Entity, With<LoadingScreenEntity>>,
+    cameras: Query<Entity, With<LoadingUiCamera>>,
 ) {
     for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+    for entity in &cameras {
         commands.entity(entity).despawn();
     }
     clear_loading_runtime(&mut commands);
@@ -37389,6 +37565,46 @@ mod tests {
     }
 
     #[test]
+    fn loading_progress_only_reports_one_hundred_after_the_gpu_reveal_gate() {
+        assert!(loading_display_percent(0.0).abs() < f32::EPSILON);
+        assert!((loading_display_percent(0.999) - 99.0).abs() < f32::EPSILON);
+        assert!((loading_display_percent(1.0) - 100.0).abs() < f32::EPSILON);
+
+        let incomplete_gpu = GpuReadinessSnapshot {
+            epoch: 1,
+            expected_images: 10,
+            ready_images: 5,
+            expected_meshes: 20,
+            ready_meshes: 10,
+            expected_materials: 8,
+            ready_materials: 4,
+            pending_pipelines: 2,
+            ..default()
+        };
+        let incomplete = world_reveal_progress(5, 6, 300, 600, 300, 600, incomplete_gpu, 0);
+        assert!(incomplete < 0.95);
+        assert!(loading_display_percent(incomplete) < 95.0);
+
+        let ready_gpu = GpuReadinessSnapshot {
+            epoch: 1,
+            expected_images: 10,
+            ready_images: 10,
+            expected_meshes: 20,
+            ready_meshes: 20,
+            expected_materials: 8,
+            ready_materials: 8,
+            ..default()
+        };
+        let validating = world_reveal_progress(6, 6, 600, 600, 600, 600, ready_gpu, 5);
+        assert!(validating < 1.0);
+        assert!((loading_display_percent(validating) - 99.0).abs() < f32::EPSILON);
+        let stable = world_reveal_progress(6, 6, 600, 600, 600, 600, ready_gpu, 6);
+        assert!(stable < 1.0);
+        assert!((loading_display_percent(stable) - 99.0).abs() < f32::EPSILON);
+        assert!((loading_display_percent(1.0) - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn autostart_loading_handoff_stays_covered_and_uses_one_progress_range() {
         let loading = MenuLoadingRuntime {
             started_at: Instant::now(),
@@ -41455,6 +41671,38 @@ mod tests {
             .iter(app.world())
             .collect::<BTreeSet<_>>();
         assert!(!before.is_empty());
+        let loading_camera_before = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<(Entity, &Camera), With<LoadingUiCamera>>();
+            let (entity, camera) = query
+                .single(world)
+                .expect("exactly one persistent loading UI camera");
+            assert_eq!(camera.order, 1_000);
+            assert!(matches!(
+                camera.clear_color,
+                bevy::camera::ClearColorConfig::None
+            ));
+            entity
+        };
+        assert!(
+            app.world()
+                .get::<StateEntity>(loading_camera_before)
+                .is_none(),
+            "the loading camera must survive scene-state cleanup"
+        );
+        let targeted_roots_before = {
+            let world = app.world_mut();
+            let mut query = world
+                .query_filtered::<&UiTargetCamera, (With<LoadingScreenEntity>, Without<ChildOf>)>();
+            query.iter(world).map(|target| target.0).collect::<Vec<_>>()
+        };
+        assert!(!targeted_roots_before.is_empty());
+        assert!(
+            targeted_roots_before
+                .iter()
+                .all(|target| *target == loading_camera_before),
+            "every loading overlay root must use the stable UI-only camera"
+        );
 
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
@@ -41467,6 +41715,12 @@ mod tests {
             .iter(app.world())
             .collect::<BTreeSet<_>>();
         assert_eq!(before, after);
+        let loading_camera_after = app
+            .world_mut()
+            .query_filtered::<Entity, With<LoadingUiCamera>>()
+            .single(app.world())
+            .expect("the persistent loading UI camera survives WorldLoading");
+        assert_eq!(loading_camera_before, loading_camera_after);
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::WorldLoading
@@ -41517,6 +41771,25 @@ mod tests {
         assert!(main_menu_actions.contains(&MainMenuAction::LoadGame));
 
         enter_headless_world(&mut app);
+        for _ in 0..16 {
+            app.update();
+        }
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<LoadingScreenEntity>>()
+                .iter(app.world())
+                .next()
+                .is_none(),
+            "the loading cover must retire after the reveal gate"
+        );
+        assert!(
+            app.world_mut()
+                .query_filtered::<Entity, With<LoadingUiCamera>>()
+                .iter(app.world())
+                .next()
+                .is_none(),
+            "the no-clear loading camera must retire with its cover"
+        );
         let viewer = StableId::new("twitch:acceptance_viewer").unwrap();
         app.world_mut()
             .resource_mut::<InjectedCommands>()
