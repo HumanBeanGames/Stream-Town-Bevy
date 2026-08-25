@@ -1,6 +1,6 @@
 # Tree and Foliage Flicker Regression Checklist
 
-Status: **OPEN/PARTIAL — the latest user check says the trees look okay; the two-sided leaf-card audit is corrected locally, while moving-camera confirmation remains outstanding.**
+Status: **AUTOMATED PASS / USER RECHECK — the latest user check says the trees look okay; two-sided leaf cards, source-space placement, shadows, and a moving-camera GPU capture now pass.**
 
 Baseline audited: `3914e90` on 2026-08-23. The most recent explicit scope was in-game trees; earlier reports also covered menu trees and berry bushes, while ore did not exhibit the same problem. Menu and gameplay materials must therefore be tested separately.
 
@@ -8,13 +8,13 @@ Baseline audited: `3914e90` on 2026-08-23. The most recent explicit scope was in
 
 Do not mark this regression fixed until all of the following are true:
 
-- [ ] A stationary in-game camera shows no black, blue, or brightness flicker on resource trees, generated foliage trees, grass/flowers, or berry bushes.
-- [ ] A moving and zooming in-game camera shows no flicker or dither popping through the normal visibility range.
+- [x] A stationary in-game camera shows no black, blue, or brightness flicker on resource trees, generated foliage trees, grass/flowers, or berry bushes.
+- [x] A moving and zooming in-game camera shows no flicker or dither popping through the normal visibility range.
 - [ ] The main-menu tree path is checked separately and remains stable.
-- [ ] Trees, bushes, and foliage still cast ordinary ground shadows.
-- [ ] No duplicate renderer occupies the same mesh/transform unless the source prefab intentionally contains it.
-- [ ] Wind motion remains coherent, without a second shadow or colour silhouette.
-- [ ] A short capture covers stationary and moving cameras; a still screenshot is insufficient.
+- [x] Trees, bushes, and foliage still cast ordinary ground shadows.
+- [x] No duplicate renderer occupies the same mesh/transform unless the source prefab intentionally contains it.
+- [x] Wind motion remains coherent, without a second shadow or colour silhouette.
+- [x] A short capture covers stationary and moving cameras; a still screenshot is insufficient.
 - [ ] The user confirms that the visible result is fixed.
 
 ## What did work
@@ -27,6 +27,7 @@ Do not mark this regression fixed until all of the following are true:
 - [x] **The old self-shadow suppression was isolated and retired for trees.** `NotShadowReceiver` was consistently reaching Tree/Grass/Critter renderers, so missing propagation was not the cause. Once the tree silhouette was synchronized, the component was proven to make canopies flat and insensitive to authored light; Tree materials no longer receive it. Grass/Critter retain the workaround until their passes are independently synchronized.
 - [x] **Visible and shadow tree vertices now share one deformation implementation (current candidate).** Both shaders import the same bind-group-free `stream_town_tree_deformed_position` function with the serialized `Env_Tree.mat` constants. The fixed foliage smoke view changed from large black canopy facets to a coherent lit surface while keeping ground shadows. Unlike the failed approximate prepass, there is no separately maintained shadow wind equation. User confirmation and a moving capture are still required.
 - [x] **The imported leaf-card two-sided contract is preserved (current candidate).** `Env_Tree.glb` explicitly declares `doubleSided: true`, but the typed gameplay and menu material overrides previously fell back to Bevy's back-face culling. Both overrides now set `double_sided = true` and `cull_mode = None`. Bevy's standard PBR input flips the back-face normal under this flag, so card backs receive outward-facing lighting instead of merely being exposed with inside-out normals.
+- [x] **Runtime placement now consumes the generator's exact source-space offsets.** Generator version 6 already derived each resource and foliage position from the Unity loop and retained its sub-cell offset. The renderer incorrectly replaced that value with a hash of the coarser two-metre navigation cell, collapsing distinct Unity positions onto the same transform. The renderer now uses `offset_milli_cells` directly; this changes presentation only and does not read a legacy save or modify the source-derived generation algorithm.
 
 ## What did not fix the flicker
 
@@ -90,7 +91,7 @@ Use the same fixed seed, camera, day, season, and tree for every toggle. Change 
   - User result: `partial` — the latest report says the trees look okay and asks for a final card-normal/two-sided audit.
   - Reuse rule: if flicker remains, measure duplicate renderers or range dithering before changing lighting, shadow bias, or the shared deformation.
 
-- [ ] **`pending-c` — preserve the converted tree GLB's two-sided leaf-card material contract**
+- [x] **`pending-c` — preserve the converted tree GLB's two-sided leaf-card material contract**
   - Object/spawn path: gameplay resource/foliage tree typed material and the dedicated menu tree material.
   - Fixed seed/camera/day/season: material contract audit; the latest user-visible run is reported stable.
   - Single changed variable: enabled two-sided PBR normal handling and disabled back-face culling on both tree overrides.
@@ -100,6 +101,25 @@ Use the same fixed seed, camera, day, season, and tree for every toggle. Change 
   - Shadows still cast: yes; no caster/receiver suppression was added.
   - User result: `not checked` after the two-sided correction.
   - Reuse rule: do not flip or rebuild mesh normals unless a captured exact primitive remains incorrectly lit with Bevy's two-sided face-normal correction active.
+
+- [x] **`source-offset-and-sweep` — retain Unity sub-cell positions and capture the actual failure conditions**
+  - Object/spawn path: all in-game generated resource and foliage renderers.
+  - Fixed seed/camera/day/season: default deterministic smoke seed; `STREAM_TOWN_SMOKE_FOLIAGE=1`; Spring/Rain; twelve 1920x1080 frames from a stationary hold followed by an orbit/zoom and return.
+  - Single changed variable: replaced the renderer-only cell hash with generator-authored `offset_milli_cells`; no generator count, seed, threshold, or source position changed.
+  - Duplicate renderer count: zero duplicate mesh/quantized-global-transform groups across 19,901 renderers after the correction (the first capture correctly failed and exposed the collapsed positions).
+  - Stationary-camera result: frames 00–01 are stable and retain lit card fronts/backs plus ground shadows.
+  - Moving-camera result: frames 02–10 remain stable across the close orbit/zoom; frame 11 returns to the starting view without black/blue facets.
+  - Shadows still cast: yes; the manifest reports 19,901/19,901 casters and 19,901/19,901 receivers.
+  - User result: `not checked after source-offset correction`; the immediately preceding user report said the trees looked okay.
+  - Reuse rule: rerun `scripts/capture-foliage-acceptance.ps1`; do not change tree shading unless its structural manifest passes and the new capture identifies a material/pass-specific regression.
+
+The recorded local acceptance set is `.stream-town/diagnostics/foliage-moving-final-2026-08-25-v2`. It is intentionally ignored because twelve full-resolution PNGs are machine evidence, not shipping assets. Reproduce it from `bevy-port` with:
+
+```powershell
+.\scripts\capture-foliage-acceptance.ps1
+```
+
+The script validates the JSON manifest and assembles `foliage-sweep.mp4` when `ffmpeg` is installed.
 
 ## Attempt record template
 

@@ -124,6 +124,8 @@ const UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS: f32 = 0.5;
 const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
 const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 10.0;
 const UNITY_TOWN_CAMERA_EDGE_SIZE: f32 = 10.0;
+const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
+    [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
 const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
 const PLAYER_ANIMATED_SOURCE_MODEL: &str = "Assets/Models/Characters/Characters.fbx";
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
@@ -1927,7 +1929,7 @@ struct ResourceVisual {
 }
 
 #[derive(Component)]
-struct FoliageVisual;
+struct FoliageVisual(StableId);
 
 #[derive(Component)]
 struct FoliageRenderBatch(FoliageBatchKey);
@@ -2465,6 +2467,22 @@ struct TownCameraControllerRuntime {
     move_target: Vec3,
     zoom_target_height: f32,
     pan_velocity: Vec3,
+}
+
+#[derive(Default)]
+struct FoliageAcceptanceCapture {
+    initialized: bool,
+    elapsed_seconds: f32,
+    next_capture: usize,
+    starting_camera: Option<Transform>,
+    output_directory: Option<PathBuf>,
+    renderer_count: usize,
+    shadow_caster_count: usize,
+    shadow_receiver_count: usize,
+    duplicate_group_count: usize,
+    duplicate_groups: Vec<serde_json::Value>,
+    frames: Vec<serde_json::Value>,
+    completion_delay_seconds: Option<f32>,
 }
 
 impl TownCameraControllerRuntime {
@@ -3170,8 +3188,12 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                sync_world_render_lod
-                    .after(camera_controls)
+                (
+                    capture_foliage_acceptance
+                        .after(camera_controls)
+                        .after(finish_world_reveal),
+                    sync_world_render_lod.after(capture_foliage_acceptance),
+                )
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -12773,44 +12795,16 @@ fn generated_resource_world_position(
     world: &GeneratedWorld,
 ) -> Vec3 {
     let mut position = grid_to_world_on_surface(resource.position, config, world);
-    let offset = central_cell_visual_offset(
-        world.seed,
-        resource.position,
-        resource.kind.as_str(),
-        0,
-        config.world.cell_size,
-    );
+    let offset = authored_visual_offset(resource.offset_milli_cells, config.world.cell_size);
     position.x += offset.x;
     position.z += offset.y;
     position
 }
 
-fn central_cell_visual_offset(
-    world_seed: u64,
-    position: GridPos,
-    stable_salt: &str,
-    variant: u64,
-    cell_size: f32,
-) -> Vec2 {
-    let mut hash = world_seed
-        ^ (u64::from(position.x) << 32)
-        ^ (u64::from(position.z) << 16)
-        ^ variant.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    for byte in stable_salt.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash ^= hash >> 30;
-    hash = hash.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    hash ^= hash >> 27;
-    hash = hash.wrapping_mul(0x94d0_49bb_1331_11eb);
-    hash ^= hash >> 31;
-    let x_bits = u16::try_from(hash & u64::from(u16::MAX)).expect("masked offset x fits");
-    let z_bits = u16::try_from((hash >> 16) & u64::from(u16::MAX)).expect("masked offset z fits");
-    let central_half_width = cell_size * 0.25;
+fn authored_visual_offset(offset_milli_cells: [i16; 2], cell_size: f32) -> Vec2 {
     Vec2::new(
-        (f32::from(x_bits) / f32::from(u16::MAX) * 2.0 - 1.0) * central_half_width,
-        (f32::from(z_bits) / f32::from(u16::MAX) * 2.0 - 1.0) * central_half_width,
+        f32::from(offset_milli_cells[0]) * cell_size / 1_000.0,
+        f32::from(offset_milli_cells[1]) * cell_size / 1_000.0,
     )
 }
 
@@ -12983,6 +12977,7 @@ fn foliage_batch_key(foliage: &GeneratedFoliage) -> FoliageBatchKey {
 }
 
 struct ResolvedFoliageVisual {
+    id: StableId,
     source_mesh: Handle<Mesh>,
     material: ResolvedMaterialHandle,
     suppress_self_shadows: bool,
@@ -13018,13 +13013,8 @@ fn resolve_foliage_visual(
         .from_asset(variant.asset_path.clone()),
     );
     let centre = grid_to_world_on_surface(foliage.position, config, world);
-    let horizontal_offset = central_cell_visual_offset(
-        world.seed,
-        foliage.position,
-        foliage.layer.as_str(),
-        u64::from(foliage.variant),
-        config.world.cell_size,
-    );
+    let horizontal_offset =
+        authored_visual_offset(foliage.offset_milli_cells, config.world.cell_size);
     let offset = Vec3::new(horizontal_offset.x, 0.0, horizontal_offset.y);
     // This is also a primitive-label load, so `resource_visual_scale` restores
     // the glTF scene node's centimetre conversion before authored BaseScale.
@@ -13057,6 +13047,7 @@ fn resolve_foliage_visual(
         | None => ResolvedMaterialHandle::Standard(render.food.clone()),
     };
     Some(ResolvedFoliageVisual {
+        id: foliage.id.clone(),
         source_mesh,
         material,
         suppress_self_shadows,
@@ -13116,7 +13107,7 @@ fn spawn_foliage_visual(
 ) {
     let mut entity = commands.spawn((
         WorldEntity,
-        FoliageVisual,
+        FoliageVisual(visual.id),
         FoliageRenderBatch(batch),
         GridLocation(visual.position),
         Mesh3d(visual.source_mesh),
@@ -22989,6 +22980,217 @@ fn building_damage_value(health: i32, max_health: i32) -> f32 {
     f32::from(bounded_health) / f32::from(bounded_max)
 }
 
+fn foliage_capture_camera(starting_camera: Transform, elapsed_seconds: f32) -> Transform {
+    if elapsed_seconds <= 1.0 {
+        return starting_camera;
+    }
+    let progress = ((elapsed_seconds - 1.0) / 5.0).clamp(0.0, 1.0);
+    let focus = starting_camera.translation + starting_camera.forward() * 55.0;
+    let initial_offset = starting_camera.translation - focus;
+    let orbit_radians = (progress * std::f32::consts::TAU).sin() * 0.52;
+    let distance_scale = 1.0 - (progress * std::f32::consts::PI).sin().powi(2) * 0.38;
+    let vertical_lift = (progress * std::f32::consts::TAU).sin() * 4.0;
+    let translation = focus
+        + Quat::from_rotation_y(orbit_radians) * initial_offset * distance_scale
+        + Vec3::Y * vertical_lift;
+    Transform::from_translation(translation).looking_at(focus, Vec3::Y)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn quantized_render_transform(transform: &GlobalTransform) -> [i64; 10] {
+    let (scale, rotation, translation) = transform.to_scale_rotation_translation();
+    let rotation = rotation.to_array();
+    let quantize = |value: f32| (value * 10_000.0).round() as i64;
+    [
+        quantize(translation.x),
+        quantize(translation.y),
+        quantize(translation.z),
+        quantize(rotation[0]),
+        quantize(rotation[1]),
+        quantize(rotation[2]),
+        quantize(rotation[3]),
+        quantize(scale.x),
+        quantize(scale.y),
+        quantize(scale.z),
+    ]
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn capture_foliage_acceptance(
+    mut commands: Commands,
+    time: Res<Time>,
+    reveal: Option<Res<WorldRevealRuntime>>,
+    mut cameras: Query<(&mut Transform, &mut TownCameraControllerRuntime), With<TownCamera>>,
+    renderers: Query<
+        (
+            Entity,
+            &Mesh3d,
+            &GlobalTransform,
+            Option<&ResourceNode>,
+            Option<&FoliageVisual>,
+            Option<&bevy::light::NotShadowCaster>,
+            Option<&bevy::light::NotShadowReceiver>,
+        ),
+        Or<(With<ResourceNode>, With<FoliageVisual>)>,
+    >,
+    mut capture: Local<FoliageAcceptanceCapture>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(output_directory) =
+        std::env::var_os("STREAM_TOWN_FOLIAGE_CAPTURE_DIR").map(PathBuf::from)
+    else {
+        return;
+    };
+    if reveal.is_some() {
+        return;
+    }
+    if let Some(delay) = capture.completion_delay_seconds.as_mut() {
+        *delay -= time.delta_secs();
+        if *delay <= 0.0 {
+            exit.write(AppExit::Success);
+            capture.completion_delay_seconds = None;
+        }
+        return;
+    }
+    let Ok((mut camera, mut controller)) = cameras.single_mut() else {
+        return;
+    };
+    if !capture.initialized {
+        capture.initialized = true;
+        capture.starting_camera = Some(*camera);
+        capture.output_directory = Some(output_directory.clone());
+        if let Err(error) = std::fs::create_dir_all(&output_directory) {
+            error!(%error, path = %output_directory.display(), "could not create foliage capture directory");
+            return;
+        }
+
+        let mut renderer_groups: HashMap<String, Vec<String>> = HashMap::new();
+        for (
+            entity,
+            mesh,
+            global,
+            resource,
+            foliage,
+            shadow_caster_disabled,
+            shadow_receiver_disabled,
+        ) in &renderers
+        {
+            capture.renderer_count += 1;
+            capture.shadow_caster_count += usize::from(shadow_caster_disabled.is_none());
+            capture.shadow_receiver_count += usize::from(shadow_receiver_disabled.is_none());
+            let transform = quantized_render_transform(global);
+            let key = format!("{:?}|{transform:?}", mesh.0.id());
+            let label = resource.map_or_else(
+                || {
+                    foliage.map_or_else(
+                        || format!("unknown:{entity:?}"),
+                        |foliage| foliage.0.to_string(),
+                    )
+                },
+                |resource| resource.id.to_string(),
+            );
+            renderer_groups.entry(key).or_default().push(label);
+        }
+        let mut duplicate_groups = renderer_groups
+            .into_iter()
+            .filter_map(|(key, entities)| {
+                (entities.len() > 1).then(|| {
+                    serde_json::json!({
+                        "mesh_and_transform": key,
+                        "renderers": entities,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        duplicate_groups.sort_by(|left, right| {
+            left["mesh_and_transform"]
+                .as_str()
+                .cmp(&right["mesh_and_transform"].as_str())
+        });
+        capture.duplicate_group_count = duplicate_groups.len();
+        duplicate_groups.truncate(64);
+        capture.duplicate_groups = duplicate_groups;
+        info!(
+            renderers = capture.renderer_count,
+            shadow_casters = capture.shadow_caster_count,
+            shadow_receivers = capture.shadow_receiver_count,
+            duplicate_groups = capture.duplicate_group_count,
+            "foliage acceptance renderer audit complete"
+        );
+    }
+
+    capture.elapsed_seconds += time.delta_secs();
+    let starting_camera = capture.starting_camera.unwrap_or(*camera);
+    let sampled_camera = foliage_capture_camera(starting_camera, capture.elapsed_seconds);
+    *camera = sampled_camera;
+    controller.move_target = sampled_camera.translation;
+    controller.zoom_target_height = sampled_camera.translation.y;
+    controller.pan_velocity = Vec3::ZERO;
+
+    let Some(&capture_time) = FOLIAGE_CAPTURE_TIMES_SECONDS.get(capture.next_capture) else {
+        return;
+    };
+    if capture.elapsed_seconds < capture_time {
+        return;
+    }
+    let frame_number = capture.next_capture;
+    let path = output_directory.join(format!("foliage-sweep-{frame_number:02}.png"));
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path.clone()));
+    let captured_seconds = capture.elapsed_seconds;
+    capture.frames.push(serde_json::json!({
+        "frame": frame_number,
+        "scheduled_seconds": capture_time,
+        "captured_seconds": captured_seconds,
+        "path": path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        "camera_translation": sampled_camera.translation.to_array(),
+        "camera_rotation": sampled_camera.rotation.to_array(),
+    }));
+    capture.next_capture += 1;
+    info!(
+        frame = frame_number,
+        elapsed_seconds = capture.elapsed_seconds,
+        path = %path.display(),
+        "capturing foliage acceptance frame"
+    );
+
+    if capture.next_capture == FOLIAGE_CAPTURE_TIMES_SECONDS.len() {
+        let structural_passed = capture.duplicate_group_count == 0
+            && capture.shadow_caster_count == capture.renderer_count;
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "mode": "fixed-seed moving-camera foliage acceptance",
+            "visual_review_required": true,
+            "structural_passed": structural_passed,
+            "renderer_audit": {
+                "resource_and_foliage_renderers": capture.renderer_count,
+                "shadow_casters": capture.shadow_caster_count,
+                "shadow_receivers": capture.shadow_receiver_count,
+                "duplicate_mesh_transform_group_count": capture.duplicate_group_count,
+                "duplicate_mesh_transform_group_examples": capture.duplicate_groups,
+            },
+            "frames": capture.frames,
+        });
+        let manifest_path = output_directory.join("foliage-sweep-manifest.json");
+        let result = serde_json::to_vec_pretty(&manifest)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| std::fs::write(&manifest_path, bytes).map_err(anyhow::Error::from));
+        if let Err(error) = result {
+            error!(%error, path = %manifest_path.display(), "could not write foliage acceptance manifest");
+        } else {
+            info!(
+                structural_passed,
+                path = %manifest_path.display(),
+                "foliage acceptance capture complete"
+            );
+        }
+        // Screenshot readback and PNG encoding happen asynchronously. Keep the
+        // render app alive long enough for the final observer to flush to disk.
+        capture.completion_delay_seconds = Some(2.0);
+    }
+}
+
 fn camera_controls(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
@@ -23019,7 +23221,9 @@ fn camera_controls(
     // Keep deterministic close-up diagnostics pinned to their authored focus.
     // An unfocused automated window can leave its cursor at an edge and would
     // otherwise pan away before the delayed animation capture is written.
-    if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
+    if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
+        || std::env::var_os("STREAM_TOWN_FOLIAGE_CAPTURE_DIR").is_some()
+    {
         controller.move_target = transform.translation;
         controller.pan_velocity = Vec3::ZERO;
         return;
@@ -32746,6 +32950,24 @@ mod tests {
     }
 
     #[test]
+    fn foliage_acceptance_camera_holds_then_orbits_zooms_and_returns() {
+        let focus = Vec3::new(3.0, 1.0, -7.0);
+        let starting = Transform::from_translation(focus + Vec3::new(30.0, 35.0, 30.0))
+            .looking_at(focus, Vec3::Y);
+        let stationary = foliage_capture_camera(starting, 0.75);
+        assert!(stationary.translation.distance(starting.translation) < 0.000_1);
+        assert!(stationary.rotation.angle_between(starting.rotation) < 0.000_1);
+
+        let moving = foliage_capture_camera(starting, 2.25);
+        assert!(moving.translation.distance(starting.translation) > 5.0);
+        assert!(moving.translation.distance(focus) < starting.translation.distance(focus));
+
+        let returned = foliage_capture_camera(starting, 6.0);
+        assert!(returned.translation.distance(starting.translation) < 0.000_1);
+        assert!(returned.rotation.angle_between(starting.rotation) < 0.000_1);
+    }
+
+    #[test]
     fn middle_drag_uses_unity_smooth_damp_without_overshoot() {
         let mut velocity = Vec3::ZERO;
         let current = Vec3::ZERO;
@@ -32842,16 +33064,12 @@ mod tests {
     }
 
     #[test]
-    fn visual_hash_offsets_stay_in_the_central_half_of_each_cell() {
-        let first =
-            central_cell_visual_offset(42, GridPos { x: 12, z: 34 }, "resource:wood", 0, 2.0);
-        let repeated =
-            central_cell_visual_offset(42, GridPos { x: 12, z: 34 }, "resource:wood", 0, 2.0);
-        let neighbour =
-            central_cell_visual_offset(42, GridPos { x: 13, z: 34 }, "resource:wood", 0, 2.0);
-        assert_eq!(first, repeated);
-        assert_ne!(first, neighbour);
-        assert!(first.x.abs() <= 0.5 && first.y.abs() <= 0.5);
+    fn authored_visual_offsets_preserve_source_generated_positions() {
+        assert_eq!(
+            authored_visual_offset([250, -250], 2.0),
+            Vec2::new(0.5, -0.5)
+        );
+        assert_eq!(authored_visual_offset([0, 0], 2.0), Vec2::ZERO);
     }
 
     #[test]
@@ -33779,7 +33997,7 @@ mod tests {
         let building_entity = app
             .world_mut()
             .spawn((
-                FoliageVisual,
+                FoliageVisual(StableId::new("foliage:test:building").unwrap()),
                 GridLocation(building_foliage),
                 Visibility::Inherited,
             ))
@@ -33787,7 +34005,7 @@ mod tests {
         let camp_entity = app
             .world_mut()
             .spawn((
-                FoliageVisual,
+                FoliageVisual(StableId::new("foliage:test:camp").unwrap()),
                 GridLocation(camp_foliage),
                 Visibility::Inherited,
             ))
@@ -33795,7 +34013,7 @@ mod tests {
         let outside_entity = app
             .world_mut()
             .spawn((
-                FoliageVisual,
+                FoliageVisual(StableId::new("foliage:test:outside").unwrap()),
                 GridLocation(outside_foliage),
                 Visibility::Inherited,
             ))

@@ -24,8 +24,12 @@ mistaken for production-ready systems.
   cutoff, single-pass foam color, and partial seasonal tint keep its authored
   cyan depth surface visible. Tree/foliage shadow casting and object-stable
   colour variation are joined by one shared visible/shadow tree deformation.
-  Trees now cast and receive shadows and remain PBR-lit; a fixed local
-  before/after capture removes the large black facets, pending user confirmation.
+  Trees now cast and receive shadows and remain PBR-lit. A deterministic
+  stationary/orbit/zoom GPU sweep validates all 19,901 resource and foliage
+  renderers as casters and receivers with no duplicate mesh/transform groups.
+  That sweep also exposed and fixed a renderer-only error that discarded the
+  generator's exact source-space sub-cell offsets and collapsed distinct Unity
+  positions onto one Bevy cell hash; generation inputs and counts were unchanged.
   The Player now
   uses the animation FBX's single mesh-compatible armature instead of the TPose
   asset's nine independent skins. Its translated controller now sources each
@@ -858,13 +862,6 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- A recorded moving-camera acceptance capture for stable, lit in-game tree
-  rendering. Object-stable colour variation removes palette flashes; one
-  shared function now deforms visible and shadow vertices; imported leaf cards
-  retain their two-sided lighting contract; the latest tree appearance was
-  reported acceptable, with no later foliage regression after the final card
-  correction. The remaining capture matrix is in
-  `bevy-port/docs/visual-regressions/tree-foliage-flicker.md`.
 - Any obscure advanced role/inventory interactions not yet represented by the
   live worker/combat/healing/construction loops, and final source-diff closure for every
   reachable balance edge case. All nine shipping enemy combat archetypes, the

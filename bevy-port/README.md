@@ -58,6 +58,17 @@ cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --
 cargo run -p xtask -- package-windows --output dist
 ```
 
+Run the deterministic in-game foliage acceptance sweep (stationary plus moving
+and zooming camera, exact-transform duplicate audit, and shadow-policy audit)
+with:
+
+```powershell
+.\scripts\capture-foliage-acceptance.ps1
+```
+
+The ignored output contains twelve full-resolution frames, a machine-readable
+manifest, and an MP4 when `ffmpeg` is available.
+
 On Windows, `scripts\launch-tools.ps1` launches the authoring suite from any
 working directory. Pass `-Release` for an optimized build or `-ValidateOnly`
 for a headless authoring-data check.
