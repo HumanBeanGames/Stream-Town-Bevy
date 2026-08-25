@@ -120,7 +120,7 @@ prefab/controller/model bindings. The YAML fallback converts 57 standalone
 maps 122 embedded FBX takes to stable model-GUID/local-ID clip records and their
 exact GLB animation indexes. It
 retains 110 component/UI property curves with 261 keys across 18 clips, including
-the four transform-free clips, plus all ten authored animation events, and
+the four transform-free clips, plus all twelve authored animation events, and
 fixed/normalized duration plus destination offset for all 166 transitions. It retains
 11 authored 1D blend states and
 typed transition conditions; the stale `Slam` and `Swipe` conditions become
@@ -800,12 +800,16 @@ building detail/emission, placement bounds, and flags within the authored
 +1.1 EV/ACES daytime range instead of washing the world into yellow-white.
 
 The same schema retains all 35 Unity role-action `AudioClip` GUIDs across the
-14 roles that authored them. The ten reachable animation events now choose an
+14 roles that authored them. The ten reachable audio events now choose an
 original variant deterministically and play smooth role-specific procedural WAV
 cues spatially at the actor, using Unity's 20-unit enable distance and the live
 master/SFX mix. No missing recording is redistributed. Use
 `STREAM_TOWN_AUTOSTART=1` with `STREAM_TOWN_SMOKE_ROLE_AUDIO=1` to keep the
 camera/listener near the starting Logger while workers enter authored actions.
+The two remaining events are the model-importer `ToggleOn`/`ToggleOff` pair on
+`CharacterFishing`; their normalized times become seconds on conversion and
+show the carry prop only during the catch window before returning to the normal
+inventory-on-return-walk rule.
 Main Menu and Credits also recreate the reachable `VFX_Clouds` prefab's 21
 stacked built-in planes directly in Bevy. A typed WGSL material consumes its
 authored texture and exact dual world-space time offsets, cutoff, tint, and

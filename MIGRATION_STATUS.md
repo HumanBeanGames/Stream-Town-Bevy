@@ -848,6 +848,13 @@ mistaken for production-ready systems.
   reference close-up proved 615/615 initial player primitives ready with zero
   failed pipelines while the run controller completed eight uninterrupted
   wraps across sampled, cleanly shaded poses.
+- The animation-event source audit is closed. All twelve shipping events are
+  now converted: ten standalone `PlayRoleActionAudio` events plus the two
+  normalized FBX-importer `ToggleOn`/`ToggleOff` events on
+  `CharacterFishing`. The latter drive only the authored catch window
+  (7.545s–13.203s), reset when the fishing take exits, and leave the ordinary
+  carried-resource prop restricted to the return walk. Converter, catalog,
+  timing, and runtime dispatch tests pin the complete event surface.
 
 ## Not yet at parity
 
@@ -858,10 +865,6 @@ mistaken for production-ready systems.
   reported acceptable, with no later foliage regression after the final card
   correction. The remaining capture matrix is in
   `bevy-port/docs/visual-regressions/tree-foliage-flicker.md`.
-- Any remaining animation-event behavior discovered outside the ten reachable
-  `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
-  conditioned entries, parent exits, masks, property curves, and the reachable
-  emitters are converted and live.
 - Any obscure advanced role/inventory interactions not yet represented by the
   live worker/combat/healing/construction loops, and final source-diff closure for every
   reachable balance edge case. All nine shipping enemy combat archetypes, the

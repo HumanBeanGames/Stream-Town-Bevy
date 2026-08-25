@@ -2200,6 +2200,7 @@ fn convert_embedded_model_clips(
         let meta = fs::read_to_string(&meta_path)
             .with_context(|| format!("failed to read model metadata {}", meta_path.display()))?;
         let local_ids = parse_model_clip_local_ids(&meta);
+        let model_clip_events = parse_model_clip_events(&meta)?;
         let animation_names = glb_animation_names(
             &unity_root
                 .join("bevy-port/assets")
@@ -2270,19 +2271,27 @@ fn convert_embedded_model_clips(
             let looping = field_bool(&model.importer_fields, &format!("{clip_prefix}.loopTime"))
                 .unwrap_or(false);
             let id = embedded_clip_id(&model.guid, local_id)?;
+            let duration_seconds = (stop - start).max(0.0);
+            let mut events = model_clip_events.get(name).cloned().unwrap_or_default();
+            // ModelImporterClipAnimation serializes event time normalized to
+            // the configured clip range, unlike standalone .anim YAML which
+            // stores seconds directly.
+            for event in &mut events {
+                event.time *= duration_seconds;
+            }
             clips.insert(
                 id.clone(),
                 AnimationClipDef {
                     display_name: name.to_owned(),
                     source_guid: model.guid.clone(),
                     source_path: model.path.clone(),
-                    duration_seconds: (stop - start).max(0.0),
+                    duration_seconds,
                     sample_rate,
                     looping,
                     rig_asset_path: Some(glb_asset_path(&model.path)),
                     transform_tracks: Vec::new(),
                     property_curves: Vec::new(),
-                    events: Vec::new(),
+                    events,
                     converted_asset_path: Some(glb_asset_path(&model.path)),
                     gltf_animation_index: Some(
                         u32::try_from(animation_index)
@@ -2312,6 +2321,99 @@ fn parse_model_clip_local_ids(contents: &str) -> BTreeMap<String, i64> {
         }
     }
     result
+}
+
+fn parse_model_clip_events(contents: &str) -> Result<BTreeMap<String, Vec<AnimationEventDef>>> {
+    let mut result = BTreeMap::<String, Vec<AnimationEventDef>>::new();
+    let mut active = false;
+    let mut clip_indent = 0;
+    let mut clip_name: Option<String> = None;
+    let mut reading_events = false;
+    let mut pending: Option<AnimationEventDef> = None;
+
+    let finish_event = |result: &mut BTreeMap<String, Vec<AnimationEventDef>>,
+                        clip_name: &Option<String>,
+                        pending: &mut Option<AnimationEventDef>| {
+        if let (Some(name), Some(event)) = (clip_name, pending.take()) {
+            result.entry(name.clone()).or_default().push(event);
+        }
+    };
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        let indentation = line.len().saturating_sub(line.trim_start().len());
+        if trimmed == "clipAnimations:" {
+            active = true;
+            clip_indent = indentation;
+            continue;
+        }
+        if !active {
+            continue;
+        }
+        if !trimmed.is_empty() && indentation <= clip_indent && !line.trim_start().starts_with("- ")
+        {
+            finish_event(&mut result, &clip_name, &mut pending);
+            break;
+        }
+        if indentation == clip_indent + 2
+            && let Some(value) = trimmed.strip_prefix("name: ")
+        {
+            finish_event(&mut result, &clip_name, &mut pending);
+            clip_name = Some(unity_scalar(value));
+            reading_events = false;
+            continue;
+        }
+        if indentation == clip_indent + 2 && trimmed == "events: []" {
+            reading_events = false;
+            continue;
+        }
+        if indentation == clip_indent + 2 && trimmed == "events:" {
+            reading_events = true;
+            continue;
+        }
+        if reading_events && indentation == clip_indent + 2 && trimmed.starts_with("transformMask:")
+        {
+            finish_event(&mut result, &clip_name, &mut pending);
+            reading_events = false;
+            continue;
+        }
+        if !reading_events {
+            continue;
+        }
+        if indentation == clip_indent + 2
+            && let Some(value) = trimmed.strip_prefix("- time: ")
+        {
+            finish_event(&mut result, &clip_name, &mut pending);
+            pending = Some(AnimationEventDef {
+                time: value.parse()?,
+                function_name: String::new(),
+                string_parameter: String::new(),
+                object_reference: None,
+                float_parameter: 0.0,
+                int_parameter: 0,
+                message_options: 0,
+            });
+            continue;
+        }
+        let Some(event) = pending.as_mut() else {
+            continue;
+        };
+        if let Some(value) = trimmed.strip_prefix("functionName: ") {
+            event.function_name = unity_scalar(value);
+        } else if let Some(value) = trimmed.strip_prefix("data:") {
+            event.string_parameter = unity_scalar(value);
+        } else if let Some(value) = trimmed.strip_prefix("objectReferenceParameter: ") {
+            event.object_reference = parse_object_reference(value);
+        } else if let Some(value) = trimmed.strip_prefix("floatParameter: ") {
+            event.float_parameter = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("intParameter: ") {
+            event.int_parameter = value.parse()?;
+        } else if let Some(value) = trimmed.strip_prefix("messageOptions: ") {
+            event.message_options = value.parse()?;
+        }
+    }
+    finish_event(&mut result, &clip_name, &mut pending);
+    Ok(result)
 }
 
 fn parse_transform_tracks(contents: &str) -> Result<Vec<AnimationTransformTrack>> {
@@ -4693,6 +4795,51 @@ AnimationClip:
         assert!((events[0].float_parameter - 1.25).abs() < f32::EPSILON);
         assert_eq!(events[0].int_parameter, 3);
         assert!(events[0].object_reference.is_none());
+    }
+
+    #[test]
+    fn parses_normalized_animation_events_from_model_importer_clips() {
+        let yaml = r"ModelImporter:
+  animations:
+    clipAnimations:
+    - serializedVersion: 16
+      name: CharacterFishing
+      takeName: CharacterFishing
+      events:
+      - time: 0.4920343
+        functionName: ToggleOn
+        data:
+        objectReferenceParameter: {fileID: 11500000, guid: 44209b81aecce8846865aef75d00ed52, type: 3}
+        floatParameter: 0
+        intParameter: 0
+        messageOptions: 0
+      - time: 0.86103547
+        functionName: ToggleOff
+        data:
+        objectReferenceParameter: {fileID: 11500000, guid: 44209b81aecce8846865aef75d00ed52, type: 3}
+        floatParameter: 0
+        intParameter: 0
+        messageOptions: 0
+      transformMask: []
+    - serializedVersion: 16
+      name: CharacterMining
+      events: []
+      transformMask: []
+    isReadable: 0
+";
+        let events = parse_model_clip_events(yaml).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events["CharacterFishing"].len(), 2);
+        assert_eq!(events["CharacterFishing"][0].function_name, "ToggleOn");
+        assert_eq!(events["CharacterFishing"][1].function_name, "ToggleOff");
+        assert_eq!(
+            events["CharacterFishing"][0]
+                .object_reference
+                .as_ref()
+                .and_then(|reference| reference.guid.as_deref()),
+            Some("44209b81aecce8846865aef75d00ed52")
+        );
+        assert!((events["CharacterFishing"][1].time - 0.861_035_47).abs() < f32::EPSILON);
     }
 
     #[test]

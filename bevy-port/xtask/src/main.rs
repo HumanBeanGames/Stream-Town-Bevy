@@ -700,13 +700,13 @@ fn validate() -> Result<()> {
             .values()
             .filter(|clip| !clip.events.is_empty())
             .count()
-            != 10
+            != 11
         || presentation
             .clips
             .values()
             .map(|clip| clip.events.len())
             .sum::<usize>()
-            != 10
+            != 12
     {
         bail!("presentation counts differ from the verified Unity baseline");
     }

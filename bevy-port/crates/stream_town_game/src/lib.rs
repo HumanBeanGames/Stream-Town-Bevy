@@ -2538,6 +2538,9 @@ struct AgentAnimation {
 #[derive(Component, Default)]
 struct AgentEquipmentPresentation;
 
+#[derive(Component, Default)]
+struct TransientCarryVisibility(bool);
+
 #[derive(Component)]
 struct EquipmentNode {
     actor_root: Entity,
@@ -2695,6 +2698,7 @@ struct ConvertedAnimationDriver {
     layers: Vec<ConvertedAnimationLayerDriver>,
     last_alive: Option<bool>,
     active_action: Option<String>,
+    transient_carry_visible: bool,
 }
 
 struct ConvertedAnimationLayerDriver {
@@ -3046,7 +3050,8 @@ impl Plugin for StreamTownGamePlugin {
                     sync_equipment_nodes
                         .after(tag_equipment_nodes)
                         .after(correct_player_rig_axis)
-                        .after(animate_agents),
+                        .after(animate_agents)
+                        .after(drive_converted_animations),
                     tag_enemy_model_nodes,
                     sync_enemy_model_nodes.after(tag_enemy_model_nodes),
                     tag_cosmetic_nodes,
@@ -19747,6 +19752,7 @@ fn attach_converted_animations(
                 layers,
                 last_alive: None,
                 active_action: None,
+                transient_carry_visible: false,
             },
         ));
         commands
@@ -20723,11 +20729,14 @@ fn carried_resource_visible(state: MovementAnimationState, has_inventory: bool) 
 fn sync_equipment_nodes(
     content: Res<RuntimeContent>,
     simulation: Res<SimulationRuntime>,
-    agents: Query<(&Agent, &AgentAnimation), With<AgentEquipmentPresentation>>,
+    agents: Query<
+        (&Agent, &AgentAnimation, Option<&TransientCarryVisibility>),
+        With<AgentEquipmentPresentation>,
+    >,
     mut nodes: Query<(&EquipmentNode, &mut Visibility)>,
 ) {
     for (node, mut visibility) in &mut nodes {
-        let Ok((agent, animation)) = agents.get(node.actor_root) else {
+        let Ok((agent, animation, transient_carry)) = agents.get(node.actor_root) else {
             continue;
         };
         let Some(actor) = simulation.0.actors.get(&agent.id) else {
@@ -20741,10 +20750,11 @@ fn sync_equipment_nodes(
         // Unity's carried-resource prop is hidden during the collection action
         // and shown on the return walk. Inventory alone was too broad and left
         // the gathered item in-hand throughout the gathering animation.
-        let carrying = carried_resource_visible(
-            animation.state,
-            actor.inventory.values().any(|amount| *amount > 0),
-        );
+        let carrying = transient_carry.is_some_and(|carry| carry.0)
+            || carried_resource_visible(
+                animation.state,
+                actor.inventory.values().any(|amount| *amount > 0),
+            );
         let visible = equipment.map_or_else(
             || {
                 [
@@ -21571,6 +21581,8 @@ fn drive_converted_animations(
         let actor_root = driver.actor_root;
         let mut combined = Vec::new();
         let mut restarts = Vec::new();
+        let mut transient_carry_visible = driver.transient_carry_visible;
+        let mut carry_event_clip_selected = false;
         for layer in &mut driver.layers {
             let source_selection = layer.runtime.motion_selection(controller).ok().flatten();
             let source_speed = layer
@@ -21644,7 +21656,7 @@ fn drive_converted_animations(
             if let Some((agent, _)) = agent
                 && let Ok(transform) = agent_transforms.get(actor_root)
             {
-                collect_animation_audio_events(
+                carry_event_clip_selected |= collect_animation_events(
                     &player,
                     layer,
                     &selection,
@@ -21652,6 +21664,7 @@ fn drive_converted_animations(
                     &agent.id,
                     transform.translation(),
                     &mut audio_cues,
+                    &mut transient_carry_visible,
                 );
             }
             let state_speed = layer.runtime.state_speed(controller).unwrap_or(1.0);
@@ -21679,6 +21692,15 @@ fn drive_converted_animations(
             combined.extend(applied.iter().copied());
             layer.active = desired;
             layer.applied = applied;
+        }
+        if !carry_event_clip_selected {
+            transient_carry_visible = false;
+        }
+        driver.transient_carry_visible = transient_carry_visible;
+        if agent.is_some() {
+            commands
+                .entity(actor_root)
+                .insert(TransientCarryVisibility(transient_carry_visible));
         }
         apply_animation_blend(&mut player, &combined, &restarts);
     }
@@ -21757,7 +21779,7 @@ fn resolve_animation_exit_fallback(
     playback
 }
 
-fn collect_animation_audio_events(
+fn collect_animation_events(
     player: &AnimationPlayer,
     layer: &mut ConvertedAnimationLayerDriver,
     selection: &AnimationBlendSelection,
@@ -21765,8 +21787,10 @@ fn collect_animation_audio_events(
     actor: &StableId,
     position: Vec3,
     output: &mut Vec<PendingRoleActionAudio>,
-) {
+    transient_carry_visible: &mut bool,
+) -> bool {
     let mut selected = BTreeSet::new();
+    let mut carry_event_clip_selected = false;
     for motion in std::iter::once(&selection.first).chain(selection.second.as_ref()) {
         if motion.weight <= f32::EPSILON {
             continue;
@@ -21786,24 +21810,50 @@ fn collect_animation_audio_events(
             continue;
         };
         for event in &clip.events {
-            if event.function_name != "PlayRoleActionAudio" {
-                continue;
-            }
             let occurrences =
                 animation_event_occurrences(event.time, clip.duration_seconds, previous, current);
-            for _ in 0..occurrences {
-                output.push(PendingRoleActionAudio {
-                    actor: actor.clone(),
-                    clip: motion.clip.clone(),
-                    display_name: clip.display_name.clone(),
-                    position,
-                });
+            if apply_transient_carry_event(
+                &event.function_name,
+                occurrences,
+                transient_carry_visible,
+            ) {
+                carry_event_clip_selected = true;
+                continue;
+            }
+            if event.function_name == "PlayRoleActionAudio" {
+                for _ in 0..occurrences {
+                    output.push(PendingRoleActionAudio {
+                        actor: actor.clone(),
+                        clip: motion.clip.clone(),
+                        display_name: clip.display_name.clone(),
+                        position,
+                    });
+                }
             }
         }
     }
     layer
         .event_elapsed
         .retain(|clip, _| selected.contains(clip));
+    carry_event_clip_selected
+}
+
+fn apply_transient_carry_event(function_name: &str, occurrences: u32, visible: &mut bool) -> bool {
+    match function_name {
+        "ToggleOn" => {
+            if occurrences > 0 {
+                *visible = true;
+            }
+            true
+        }
+        "ToggleOff" => {
+            if occurrences > 0 {
+                *visible = false;
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 fn clip_event_offset_seconds(
@@ -32862,6 +32912,7 @@ mod tests {
             layers: Vec::new(),
             last_alive: None,
             active_action: None,
+            transient_carry_visible: false,
         });
 
         app.update();
@@ -34641,6 +34692,22 @@ mod tests {
         assert_eq!(animation_event_occurrences(0.25, 1.0, Some(0.10), 3.10), 3);
         assert_eq!(animation_event_occurrences(0.0, 1.0, None, 0.0), 1);
         assert_eq!(animation_event_occurrences(0.25, 0.0, None, 1.0), 0);
+    }
+
+    #[test]
+    fn fishing_carry_events_toggle_only_inside_the_authored_catch_window() {
+        let mut visible = false;
+        assert!(apply_transient_carry_event("ToggleOn", 0, &mut visible));
+        assert!(!visible);
+        assert!(apply_transient_carry_event("ToggleOn", 1, &mut visible));
+        assert!(visible);
+        assert!(apply_transient_carry_event("ToggleOff", 1, &mut visible));
+        assert!(!visible);
+        assert!(!apply_transient_carry_event(
+            "PlayRoleActionAudio",
+            1,
+            &mut visible
+        ));
     }
 
     #[test]
@@ -39612,6 +39679,32 @@ mod tests {
         assert_eq!(presentation.fireworks_effects.len(), 1);
         assert_eq!(
             presentation
+                .clips
+                .values()
+                .flat_map(|clip| &clip.events)
+                .count(),
+            12
+        );
+        let fishing = presentation
+            .clips
+            .values()
+            .find(|clip| {
+                clip.source_path == PLAYER_ANIMATED_SOURCE_MODEL
+                    && clip.display_name == "CharacterFishing"
+            })
+            .expect("shipping embedded fishing take");
+        assert_eq!(
+            fishing
+                .events
+                .iter()
+                .map(|event| event.function_name.as_str())
+                .collect::<Vec<_>>(),
+            ["ToggleOn", "ToggleOff"]
+        );
+        assert!(fishing.events[0].time > 7.5 && fishing.events[0].time < 7.6);
+        assert!(fishing.events[1].time > 13.2 && fishing.events[1].time < 13.3);
+        assert_eq!(
+            presentation
                 .scene_fireworks
                 .get(CREDITS_SCENE_PATH)
                 .map(Vec::len),
@@ -39811,7 +39904,7 @@ mod tests {
                 .values()
                 .map(|clip| clip.events.len())
                 .sum::<usize>(),
-            10
+            12
         );
         assert_eq!(
             animation_property_value(
