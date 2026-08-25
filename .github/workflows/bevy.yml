@@ -26,6 +26,7 @@ jobs:
           $root = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
           git -C $root fetch origin e0b785fa42e9b3ee27f62e54f65e41358a1d2671 --depth 1
           git -C $root checkout --detach e0b785fa42e9b3ee27f62e54f65e41358a1d2671
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
           & "$root\vcpkg.exe" install --triplet x64-windows --x-install-root="$root\installed"
           "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKG_INSTALLED_ROOT=$root\installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -59,6 +60,7 @@ jobs:
           $root = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
           git -C $root fetch origin e0b785fa42e9b3ee27f62e54f65e41358a1d2671 --depth 1
           git -C $root checkout --detach e0b785fa42e9b3ee27f62e54f65e41358a1d2671
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
           & "$root\vcpkg.exe" install --triplet x64-windows --x-install-root="$root\installed"
           "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKG_INSTALLED_ROOT=$root\installed" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
