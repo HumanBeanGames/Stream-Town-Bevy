@@ -5,6 +5,100 @@ use thiserror::Error;
 
 use crate::StableId;
 
+/// Shipping Unity accepted these misspellings as aliases for character creation.
+pub const UNITY_CREATE_COMMAND_ALIASES: [&str; 10] = [
+    "create", "crate", "crete", "join", "start", "creta", "ceate", "cate", "crtea", "ligma",
+];
+
+/// Returns the source-authored usage string for a recognized Unity command.
+///
+/// This intentionally takes the raw chat input so malformed commands can still
+/// receive the same useful response Unity sent before dispatch.
+#[must_use]
+pub fn unity_command_usage(input: &str) -> Option<&'static str> {
+    let command = input
+        .split_whitespace()
+        .next()?
+        .strip_prefix('!')?
+        .to_ascii_lowercase();
+    if UNITY_CREATE_COMMAND_ALIASES.contains(&command.as_str()) {
+        return Some("!join");
+    }
+    Some(match command.as_str() {
+        "role" => "!role <role> (or !role to view your current role)",
+        "build" => "!build <building>",
+        "move" => "!move <up|down|left|right|rotate> [amount]",
+        "up" => "!up [amount]",
+        "down" => "!down [amount]",
+        "left" => "!left [amount]",
+        "right" => "!right [amount]",
+        "rotate" => "!rotate [amount]",
+        "level" => "!level <role> OR !level <building> <id> [amount]",
+        "remove" => "!remove <building> <id>",
+        "bid" => "!bid <building>",
+        "station" => "!station <id> (or !station to list IDs)",
+        "target" => "!target <id> (or !target to list IDs)",
+        "hair" => "!hair <index>",
+        "facialhair" => "!facialhair <index>",
+        "eyes" => "!eyes <index>",
+        "body" => "!body <index>",
+        "haircolor" => "!haircolor <index>",
+        "eyecolor" => "!eyecolor <index>",
+        "addresource" => "!addresource <resource> <amount>",
+        "vote" => "!vote <option number>",
+        "modrole" => "!modrole <player> <role>",
+        "kill" => "!kill <player>",
+        "grevive" => "!grevive <player>",
+        "revive" => "!revive [player]",
+        "givexp" => "!givexp <player> <amount>",
+        "givexpall" => "!givexpall <amount>",
+        "levelup" => "!levelup <player> [amount]",
+        "qevent" => "!qevent <event>",
+        "buy" => "!buy <amount> <resource>",
+        "sell" => "!sell <amount> <resource>",
+        "levelall" => "!levelall <building> <level>",
+        "recruit" => "!recruit <role> [amount]",
+        "givepet" => "!givepet <player> <pet>",
+        "pet" => "!pet <pet> (or !pet to list pets)",
+        "cam" => "!cam <up|down|left|right|in|out> [amount]",
+        "info" => "!info <resource|role|building|enemy> [id]",
+        "rrole" => "!rrole <id> <role>",
+        "rinfo" => "!rinfo <id>",
+        "rdismiss" => "!rdismiss <id>",
+        "resetid" => "!resetid <id>",
+        "roles" => "!roles",
+        "help" => "!help",
+        "stdiscord" => "!stdiscord",
+        "townstats" => "!townstats",
+        // These source commands use the validator's `!{command}` fallback.
+        "health" => "!health",
+        "confirm" => "!confirm",
+        "accept" => "!accept",
+        "cancel" => "!cancel",
+        "tbuildcosts" => "!tbuildcosts",
+        "trolelimits" => "!trolelimits",
+        "ping" => "!ping",
+        "rulervote" => "!rulervote",
+        "stopevent" => "!stopevent",
+        "cobj" => "!cobj",
+        "randtech" => "!randtech",
+        "techvote" => "!techvote",
+        "pets" => "!pets",
+        "gaction" => "!gaction",
+        "unlockall" => "!unlockall",
+        "unlockage2" => "!unlockage2",
+        "resetcam" => "!resetcam",
+        "stuck" => "!stuck",
+        "praise" => "!praise",
+        "buildings" => "!buildings",
+        "rid" => "!rid",
+        "recruits" => "!recruits",
+        "resign" => "!resign",
+        // Bevy-only debug/convenience commands deliberately have no Unity usage.
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ChatCommand {
     Join,
@@ -378,7 +472,9 @@ impl FromStr for ChatCommand {
                     return Err(CommandParseError::TooManyArguments);
                 }
                 match command.as_str() {
-                    "join" => no_argument(argument, Self::Join),
+                    command if UNITY_CREATE_COMMAND_ALIASES.contains(&command) => {
+                        no_argument(argument, Self::Join)
+                    }
                     "experience" | "exp" => no_argument(argument, Self::Experience),
                     "health" => no_argument(argument, Self::Health),
                     "roles" => no_argument(argument, Self::Roles),
@@ -609,6 +705,9 @@ mod tests {
     #[test]
     fn parses_shipping_command_grammar() {
         assert_eq!("!join".parse(), Ok(ChatCommand::Join));
+        for alias in UNITY_CREATE_COMMAND_ALIASES {
+            assert_eq!(format!("!{alias}").parse(), Ok(ChatCommand::Join));
+        }
         assert_eq!("!experience".parse(), Ok(ChatCommand::Experience));
         assert_eq!("!exp".parse(), Ok(ChatCommand::Experience));
         assert_eq!(
@@ -805,5 +904,16 @@ mod tests {
             "build house".parse::<ChatCommand>(),
             Err(CommandParseError::MissingPrefix)
         ));
+    }
+
+    #[test]
+    fn reports_source_authored_usage_for_invalid_shipping_commands() {
+        assert_eq!(
+            unity_command_usage("!move sideways"),
+            Some("!move <up|down|left|right|rotate> [amount]")
+        );
+        assert_eq!(unity_command_usage("!CrTeA extra"), Some("!join"));
+        assert_eq!(unity_command_usage("!health extra"), Some("!health"));
+        assert_eq!(unity_command_usage("!not-a-command"), None);
     }
 }

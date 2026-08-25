@@ -22,7 +22,7 @@ pub use animation::{
 };
 pub use command::{
     BuildingAction, BuildingDirection, CameraAction, CameraDirection, ChatCommand,
-    CommandParseError, CustomizationKind,
+    CommandParseError, CustomizationKind, UNITY_CREATE_COMMAND_ALIASES, unity_command_usage,
 };
 pub use config::{
     GameConfig, GameplayConfig, SHIPPING_FISH_GOD_REWARD_ID, SHIPPING_SECONDS_PER_DAY,

@@ -88,6 +88,7 @@ use stream_town_domain::{
     RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
     StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
+    unity_command_usage,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -26332,6 +26333,14 @@ fn handle_twitch_event(
                 }),
                 Err(parse_error) => {
                     debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
+                    if let Some(usage) = unity_command_usage(&message.message)
+                        && let Some(transport) = &connection.transport
+                    {
+                        let _ = transport.send(TwitchControl::SendMessage(format!(
+                            "{}: Invalid arguments. Usage: {usage}",
+                            message.display_name
+                        )));
+                    }
                 }
             }
         }
@@ -28740,12 +28749,118 @@ fn recruit_npcs(
     Ok(format!("recruited {spawned} {role}"))
 }
 
-fn send_command_feedback(connection: &TwitchConnection, display_name: &str, message: &str) {
+fn send_command_feedback(connection: &TwitchConnection, message: String) {
     if let Some(transport) = &connection.transport {
-        let _ = transport.send(TwitchControl::SendMessage(format!(
-            "@{display_name} {message}"
-        )));
+        let _ = transport.send(TwitchControl::SendMessage(message));
     }
+}
+
+fn unity_outbound_reply(
+    command: &ChatCommand,
+    succeeded: bool,
+    message: &str,
+    display_name: &str,
+) -> Option<String> {
+    if !succeeded {
+        let message = message
+            .strip_prefix("command rejected: ")
+            .unwrap_or(message);
+        return Some(if message.contains("join before") {
+            format!("{display_name}: You need to create a character first with !join")
+        } else {
+            format!("{display_name}: {message}")
+        });
+    }
+    match command {
+        ChatCommand::Join if message == "welcome to Stream Town" => Some(format!(
+            "{display_name} Welcome to the game, your character was successfully created!"
+        )),
+        ChatCommand::Join => Some(format!(
+            "{display_name} Character already registered into the game!"
+        )),
+        ChatCommand::SelectRole(_) => Some(format!("{display_name}  Role switched successfully!")),
+        ChatCommand::Role
+        | ChatCommand::Health
+        | ChatCommand::Level(_)
+        | ChatCommand::Experience
+        | ChatCommand::Pets
+        | ChatCommand::Pet(None)
+        | ChatCommand::RecruitCount
+        | ChatCommand::RecruitInfo(_)
+        | ChatCommand::RecruitRole { .. }
+        | ChatCommand::DismissRecruit(_)
+        | ChatCommand::Resign
+        | ChatCommand::LevelBuilding { .. }
+        | ChatCommand::LevelAll { .. }
+        | ChatCommand::RemoveBuilding { .. } => Some(format!("{display_name} {message}")),
+        ChatCommand::Station(Some(_)) => Some(format!("{display_name}: Station Switched!")),
+        ChatCommand::Target(Some(_)) => Some(format!("{display_name}: Target Switched!")),
+        ChatCommand::Customize { kind, .. } => Some(format!(
+            "{display_name}: {}",
+            match kind {
+                CustomizationKind::Hair => "Hair Style Changed!",
+                CustomizationKind::Eyes => "Eye Style Changed!",
+                CustomizationKind::FacialHair => "Facial Hair Style Changed!",
+                CustomizationKind::Body => "Body Type Changed!",
+                CustomizationKind::HairColor => "Hair Color Changed!",
+                CustomizationKind::EyeColor => "Eye Color Changed!",
+            }
+        )),
+        ChatCommand::Pet(Some(_)) => Some(format!("{display_name} pet switched!")),
+        ChatCommand::Buy { .. } | ChatCommand::Sell { .. } => {
+            Some(format!("{display_name} : {message}"))
+        }
+        ChatCommand::Discord | ChatCommand::Help | ChatCommand::Roles | ChatCommand::Info(_) => {
+            Some(message.to_owned())
+        }
+        ChatCommand::ToggleBuildCosts | ChatCommand::ToggleRoleLimits => Some(message.to_owned()),
+        // Unity performs these successfully without writing another chat line.
+        ChatCommand::Build(_)
+        | ChatCommand::MoveBuilding(_)
+        | ChatCommand::ConfirmBuilding
+        | ChatCommand::CancelBuilding
+        | ChatCommand::Unstuck
+        | ChatCommand::Ping
+        | ChatCommand::Camera(_)
+        | ChatCommand::ResetCamera
+        | ChatCommand::ModRole { .. }
+        | ChatCommand::StartRulerVote
+        | ChatCommand::TownStats
+        | ChatCommand::Station(None)
+        | ChatCommand::Target(None)
+        | ChatCommand::RecruitIds
+        | ChatCommand::AddResource { .. }
+        | ChatCommand::KillPlayer(_)
+        | ChatCommand::GameMasterRevive(_)
+        | ChatCommand::GiveExperience { .. }
+        | ChatCommand::GiveExperienceAll(_)
+        | ChatCommand::LevelUpPlayer { .. }
+        | ChatCommand::QueueEvent(_)
+        | ChatCommand::GivePet { .. }
+        | ChatCommand::StopEvent
+        | ChatCommand::CompleteObjective
+        | ChatCommand::RandomTechnology
+        | ChatCommand::TechnologyVote
+        | ChatCommand::GameEventAction
+        | ChatCommand::UnlockAllTechnology
+        | ChatCommand::UnlockAgeTwo
+        | ChatCommand::TriggerEvent(_)
+        | ChatCommand::Praise => None,
+        _ => Some(format!("{display_name}: {message}")),
+    }
+}
+
+fn twitch_pascal_case(value: &str) -> String {
+    value
+        .split(['_', '-', ' '])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            characters.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(characters).collect()
+            })
+        })
+        .collect()
 }
 
 fn can_afford(simulation: &WorldSimulation, cost: &BTreeMap<StableId, u32>) -> bool {
@@ -29007,14 +29122,19 @@ fn process_injected_commands(
                 .ok_or_else(|| "join before checking your role".to_owned())
                 .map(|actor| {
                     let progress = actor.role_progression.get(&actor.role).copied().unwrap_or_default();
-                    format!("you are a level {} {}", progress.level, actor.role)
+                    let role = content
+                        .0
+                        .roles
+                        .get(&actor.role)
+                        .map_or(actor.role.as_str(), |role| role.display_name.as_str());
+                    format!("you are currently a level {} {role}", progress.level)
                 }),
             ChatCommand::Health => simulation
                 .0
                 .actors
                 .get(&actor_id)
                 .ok_or_else(|| "join before checking health".to_owned())
-                .map(|actor| format!("health: {}/{}", actor.health, actor.max_health)),
+                .map(|actor| format!("your health is: ({}/{})", actor.health, actor.max_health)),
             ChatCommand::Buildings => {
                 let names = content
                     .0
@@ -29257,8 +29377,9 @@ fn process_injected_commands(
                     .get(&role)
                     .copied()
                     .ok_or_else(|| format!("you have no progression for {role}"))?;
+                let role_name = content.0.roles[&role].display_name.as_str();
                 Ok(format!(
-                    "{role} level {}, experience {}/{}",
+                    "you are a level ({}/100) {role_name}. Current Exp: ({}/{}).",
                     progress.level,
                     progress.experience,
                     stream_town_domain::required_role_experience(progress.level)
@@ -29295,10 +29416,9 @@ fn process_injected_commands(
                 if successful == 0 {
                     Err(last_error.unwrap_or_else(|| "building could not be leveled".to_owned()))
                 } else {
-                    let level = simulation.0.buildings[&runtime_id].level;
                     Ok(format!(
-                        "leveled {} ID {index} {successful} time(s) to level {level}",
-                        definition.display_name
+                        "Successfully Leveled Building {successful} {}",
+                        if successful > 1 { "Times" } else { "Time" }
                     ))
                 }
             }
@@ -29341,10 +29461,7 @@ fn process_injected_commands(
                         definition.display_name
                     ))
                 } else {
-                    Ok(format!(
-                        "leveled {} buildings {successful} time(s) toward level {target_level}",
-                        definition.display_name
-                    ))
+                    Ok(format!("Successfully leveled {successful} times!"))
                 }
             }
             ChatCommand::RemoveBuilding { building, index } => {
@@ -29368,7 +29485,7 @@ fn process_injected_commands(
                     .building
                     .0
                     .push_back(BuildingRuntimeCommand::Despawn(runtime_id));
-                Ok(format!("removed {} building ID {index}", definition.display_name))
+                Ok("Successfully Removed Building".to_owned())
             }
             ChatCommand::Sell { amount, resource } => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
@@ -29514,7 +29631,7 @@ fn process_injected_commands(
             ChatCommand::RecruitCount => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
                 let recruits = recruited_actor_ids(&simulation.0).len();
-                Ok(format!("the town has {recruits} recruited NPCs"))
+                Ok(format!("The town has {recruits} recruits!"))
             }
             ChatCommand::RecruitIds => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
@@ -29541,9 +29658,18 @@ fn process_injected_commands(
                     .get(&recruit.role)
                     .copied()
                     .unwrap_or_default();
+                let role = content
+                    .0
+                    .roles
+                    .get(&recruit.role)
+                    .map_or(recruit.role.as_str(), |role| role.display_name.as_str());
                 Ok(format!(
-                    "recruit {index}: {id}, {}, health {}/{}, level {}, experience {}",
-                    recruit.role, recruit.health, recruit.max_health, progress.level, progress.experience
+                    "----- Recruit {index} | Current role {role} |  Health: {} / {} |  Level: {} / 100 |  Experience: {} / {}",
+                    recruit.health,
+                    recruit.max_health,
+                    progress.level,
+                    progress.experience,
+                    stream_town_domain::required_role_experience(progress.level)
                 ))
             }
             ChatCommand::RecruitRole { recruit, role } => {
@@ -29563,7 +29689,8 @@ fn process_injected_commands(
                     .0
                     .assign_role(&id, role.clone())
                     .map_err(|error| error.to_string())?;
-                Ok(format!("recruit {recruit} changed to {role}"))
+                let role_name = content.0.roles[&role].display_name.as_str();
+                Ok(format!("Successfully changed recruit {recruit} to {role_name}!"))
             }
             ChatCommand::DismissRecruit(index) => {
                 require_ruler_or_staff(&simulation.0, &pending)?;
@@ -29574,7 +29701,7 @@ fn process_injected_commands(
                 let current = simulation.0.town_resources.get(&resource).copied().unwrap_or_default();
                 simulation.0.town_resources.insert(resource, current.saturating_sub(1));
                 queues.agent.0.push_back(AgentCommand::Despawn(id));
-                Ok(format!("dismissed recruit {index}"))
+                Ok(format!("Successfully Dismissed recruit {index}!"))
             }
             ChatCommand::StartRulerVote => {
                 require_staff(&pending)?;
@@ -29592,7 +29719,7 @@ fn process_injected_commands(
             ChatCommand::Resign => simulation
                 .0
                 .resign_ruler(&actor_id)
-                .map(|()| "you resigned; a new ruler vote started".to_owned())
+                .map(|()| "you have been succesfully resigned!".to_owned())
                 .map_err(|error| error.to_string()),
             ChatCommand::Station(index) => {
                 let actor = simulation
@@ -29734,17 +29861,16 @@ fn process_injected_commands(
                     .get(&actor_id)
                     .ok_or_else(|| "join before checking pets".to_owned())?;
                 Ok(if actor.unlocked_pets.is_empty() {
-                    "you have no unlocked pets".to_owned()
+                    "You have no pets".to_owned()
                 } else {
                     format!(
-                        "pets: {}; active: {}",
+                        "Pets: {}, ",
                         actor
                             .unlocked_pets
                             .iter()
-                            .map(StableId::as_str)
+                            .map(|pet| twitch_pascal_case(pet.as_str().trim_start_matches("pet:")))
                             .collect::<Vec<_>>()
-                            .join(", "),
-                        actor.active_pet.as_ref().map_or("none", StableId::as_str)
+                            .join(", ")
                     )
                 })
             }
@@ -29807,7 +29933,14 @@ fn process_injected_commands(
                     .filter(|(id, _)| role_is_available(&content.0, &simulation.0, id, None))
                     .map(|(_, role)| role.display_name.as_str())
                     .collect::<Vec<_>>();
-                Ok(format!("available roles: {}", roles.join(", ")))
+                let role_list = if roles.is_empty() {
+                    "none currently available".to_owned()
+                } else {
+                    roles.join(", ")
+                };
+                Ok(format!(
+                    "Available roles: {role_list}. Use !role <role> after joining; use !info <role> for details."
+                ))
             }
             ChatCommand::TownStats => Ok(format!(
                 "town: {} players, {} recruits, {} buildings, day {}, {:?}/{:?}, resources {}",
@@ -29837,12 +29970,18 @@ fn process_injected_commands(
             ChatCommand::ToggleBuildCosts => {
                 require_game_master(&config.0, &pending)?;
                 let enabled = simulation.0.toggle_building_costs();
-                Ok(format!("Buildings Cost Resources: {enabled}"))
+                Ok(format!(
+                    "Buildings Cost Resources: {}",
+                    if enabled { "True" } else { "False" }
+                ))
             }
             ChatCommand::ToggleRoleLimits => {
                 require_game_master(&config.0, &pending)?;
                 let enabled = simulation.0.toggle_role_limits();
-                Ok(format!("Player Role Limits: {enabled}"))
+                Ok(format!(
+                    "Player Role Limits: {}",
+                    if enabled { "True" } else { "False" }
+                ))
             }
             ChatCommand::AddResource { resource, amount } => {
                 require_game_master(&config.0, &pending)?;
@@ -30228,12 +30367,14 @@ fn process_injected_commands(
                 .and_then(|actor| {
                     effective_role_stats(&content.0, &simulation.0, actor)
                         .map(|stats| {
+                            let role = content
+                                .0
+                                .roles
+                                .get(&actor.role)
+                                .map_or(actor.role.as_str(), |role| role.display_name.as_str());
                             format!(
-                                "{} level {}/99, experience {}/{}",
-                                actor.role,
-                                stats.level,
-                                stats.experience,
-                                stats.required_experience
+                                "you are a level ({}/100) {role}. Current Exp: ({}/{}).",
+                                stats.level, stats.experience, stats.required_experience
                             )
                         })
                         .ok_or_else(|| format!("{} has no authored progression", actor.role))
@@ -30247,18 +30388,22 @@ fn process_injected_commands(
                     .map_err(|error| format!("save failed: {error}"))
             }
             ChatCommand::Help => Ok(
-                "commands: !join, !role [role], !roles, !health, !experience/!level [role], !station [id], !target [id], !stuck, !ping, !pets/!pet [pet], !hair/!eyes/!facialhair/!body/!haircolor/!eyecolor <id>, !build <type>, !move/!up/!down/!left/!right/!rotate, !confirm/!accept/!cancel, !buildings/!bid, !level <building> <id> [times], !levelall <building> <level>, !remove <building> <id>, !upgrade, !info, !townstats, !stdiscord, !buy/!sell (Ruler), !recruit/!recruits/!rid/!rinfo/!rrole/!rdismiss (Ruler), !cam/!resetcam (Ruler), !modrole/!rulervote/!event (staff), !resign, !revive, !praise, !vote, !save, !help; GM: !tbuildcosts/!trolelimits/!addresource/!kill/!grevive/!givexp/!givexpall/!levelup/!givepet/!qevent/!stopevent/!cobj/!randtech/!techvote/!gaction/!unlockall/!unlockage2/!resetid"
+                " type !create to start your character, then you can choose a role. type !roles to learn more"
                     .to_owned(),
             ),
             }
         })();
+        let succeeded = result.is_ok();
         let message = match result {
             Ok(message) => message,
             Err(error) => format!("command rejected: {error}"),
         };
         feedback.0 = format!("{}: {message}", pending.display_name);
-        if pending.origin != CommandOrigin::LocalUi {
-            send_command_feedback(&connection, &pending.display_name, &message);
+        if pending.origin != CommandOrigin::LocalUi
+            && let Some(outbound) =
+                unity_outbound_reply(&command, succeeded, &message, &pending.display_name)
+        {
+            send_command_feedback(&connection, outbound);
         }
         info!(user = %pending.display_name, ?command, result = %message, "processed Twitch command");
         stats.commands_processed += 1;
@@ -32449,6 +32594,47 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 mod tests {
     use super::*;
     use stream_town_domain::generate_world;
+
+    #[test]
+    fn twitch_outbound_replies_preserve_unity_attribution_and_silence() {
+        assert_eq!(
+            unity_outbound_reply(&ChatCommand::Join, true, "welcome to Stream Town", "Viewer"),
+            Some("Viewer Welcome to the game, your character was successfully created!".to_owned())
+        );
+        assert_eq!(
+            unity_outbound_reply(
+                &ChatCommand::Station(Some(2)),
+                true,
+                "station changed to station:mill",
+                "Viewer"
+            ),
+            Some("Viewer: Station Switched!".to_owned())
+        );
+        assert_eq!(
+            unity_outbound_reply(
+                &ChatCommand::Health,
+                false,
+                "command rejected: join before checking health",
+                "Viewer"
+            ),
+            Some("Viewer: You need to create a character first with !join".to_owned())
+        );
+        assert_eq!(
+            unity_outbound_reply(
+                &ChatCommand::MoveBuilding(Vec::new()),
+                true,
+                "building moved",
+                "Viewer"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn twitch_pascal_case_matches_unity_enum_names() {
+        assert_eq!(twitch_pascal_case("red_panda"), "RedPanda");
+        assert_eq!(twitch_pascal_case("fish_god"), "FishGod");
+    }
 
     #[test]
     fn fullscreen_uses_startup_safe_borderless_compatibility() {
@@ -41366,7 +41552,7 @@ mod tests {
             app.world()
                 .resource::<CommandFeedback>()
                 .0
-                .contains("commands: !join")
+                .contains("type !create to start your character")
         );
         app.world_mut()
             .resource_mut::<SimulationRuntime>()

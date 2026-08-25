@@ -266,6 +266,10 @@ Technology administration chooses stable catalog order instead of Unity's
 process-global random state. `!resetid` reports the stable-ID state because Bevy
 does not have Unity's pooled per-type counter to repair. `!stdiscord` preserves
 the remaining registered no-character utility command.
+The IRC parser also retains Unity's complete `!create`/`!join` typo-alias set,
+returns the source-authored usage for malformed registered commands, and routes
+source-compatible player, global, and silent responses instead of applying one
+generic bot prefix to every command.
 The numbered-list forms of `!rid`, `!station`, and `!target` also project their
 matching IDs over live world objects for Unity's authored 15-second lifetime.
 

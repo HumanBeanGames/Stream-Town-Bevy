@@ -828,6 +828,14 @@ mistaken for production-ready systems.
   right-of-way without reciprocal deadlock. Both separation and yielding counts
   are exposed in the external runtime console, and the 300-agent soak remains
   below its acceptance budget.
+- Twitch command dispatch now reproduces Unity's complete ten-name character-
+  creation alias set (including its historical misspellings), command-specific
+  validation usages, no-character rejection, player/global attribution, exact
+  high-traffic role/health/progression/station/target/cosmetic/pet/recruit/help
+  wording, C# boolean casing, and intentionally silent success paths. Malformed
+  registered commands are no longer discarded by the IRC bridge; unknown
+  commands remain silent as in Unity. Tests pin the source-authored usages and
+  reply routing independently of a live Twitch account.
 - Animated players now cast and receive shadows without the previous
   hierarchy-wide `NotShadowReceiver` workaround. Every Standard surface below
   the single shipping armature is promoted through a cached typed character
@@ -861,17 +869,6 @@ mistaken for production-ready systems.
   target acquisition ranges are now live. The source audit
   confirms the Tower contains the shipping project's sole `ProjectileShooter`;
   there is no second reachable combat building to reproduce.
-- Exact production outbound response wording. The authenticated IRC path now includes player
-  role/health/progression, role/station/target selection, unstuck/ping,
-  pets and cosmetics, catalogs/info/town stats, recruit inspection/dismissal/
-  re-role, camera movement/reset, moderator role assignment, governance,
-  economy, save, event, staged building-placement, indexed/all-building upgrade,
-  and indexed removal commands. The full registered Unity game-master surface,
-  queued Fish God/Monster Raid administration, current-event action, direct
-  goals/technology control, persisted build-cost and role-limit toggles, and
-  the remaining `!stdiscord` utility command are implemented behind an explicit
-  numeric Twitch-ID allowlist. Unity registers no shipping emote commands.
-  `!buy` and `!sell` use Unity's authored rates.
 - Final art-direction polish, curated screenshot/audio acceptance baselines,
   assistive-technology certification on the release hardware matrix, and source-diff closure for any
   presentation behavior only reachable through missing media. A shipping-scene
