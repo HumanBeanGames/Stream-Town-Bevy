@@ -973,6 +973,15 @@ Game handoff instead of the direct autostart shortcut. An optional
 `STREAM_TOWN_SMOKE_NEW_GAME_DELAY_SECONDS` delay lets external frame recorders
 attach after the menu is stable without changing the production button path.
 
+Loading animation remains in Bevy's main/render schedule because window events,
+UI extraction, and GPU presentation cannot safely be driven from an independent
+application thread. CPU-only world generation, terrain/water mesh construction,
+and terrain collider construction run on `AsyncComputeTaskPool`. Main-thread ECS
+construction yields after bounded batches (32 menu descriptors, 96 world
+resources, or 192 world foliage descriptors), so every batch can be extracted
+and presented before loading continues. Runtime logs report both construction
+updates and actually presented render frames for cold-load diagnostics.
+
 The migration now has source-diff closure for reachable gameplay and balance,
 shipping-scene shader/VFX reachability, converted authoring data and assets,
 curated visual/audio acceptance contracts, and automated runtime/package gates.

@@ -164,6 +164,12 @@ const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
 const IN_GAME_BASELINE_EXPOSURE_EV: f32 = 0.5;
 const MAIN_MENU_RESOURCE_RENDER_BUDGET: usize = 900;
 const MAIN_MENU_FOLIAGE_RENDER_BUDGET: usize = 3_200;
+// Entity construction must yield back to Bevy regularly so the loading UI can
+// be extracted and presented. Asset decoding and deterministic generation run
+// on worker pools; these budgets bound the ECS-only portion of each frame.
+const MAIN_MENU_SPAWN_BUDGET_PER_FRAME: usize = 32;
+const WORLD_RESOURCE_SPAWN_BUDGET_PER_FRAME: usize = 96;
+const WORLD_FOLIAGE_SPAWN_BUDGET_PER_FRAME: usize = 192;
 const IN_GAME_AMBIENT_LIGHT_MULTIPLIER: f32 = 1.30;
 const IN_GAME_SATURATION_MULTIPLIER: f32 = 1.12;
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
@@ -1600,10 +1606,38 @@ struct WorldLoadingRuntime {
     asset_handles: Vec<UntypedHandle>,
     loaded_assets: usize,
     failed_assets: usize,
-    prepared_world: Option<GeneratedWorld>,
+    prepared_world: Option<PreparedWorld>,
+    spawn_runtime: Option<WorldSpawnRuntime>,
+    presented_frames: Option<PresentedRenderFrames>,
     scene_ready_frames: u8,
     completion_remaining_seconds: f32,
     work: WorldLoadingWork,
+}
+
+struct PreparedWorld {
+    world: GeneratedWorld,
+    terrain_mesh: Option<Mesh>,
+    terrain_collider: Option<Collider>,
+    water_mesh: Option<Mesh>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorldSpawnPhase {
+    Resources,
+    Foliage,
+    Gameplay,
+}
+
+struct WorldSpawnRuntime {
+    phase: WorldSpawnPhase,
+    resource_cursor: usize,
+    foliage_cursor: usize,
+    resource_total: usize,
+    foliage_total: usize,
+    foliage_gpu_batches: BTreeSet<(StableId, u16)>,
+    foliage_spatial_groups: BTreeSet<FoliageBatchKey>,
+    update_count: u32,
+    starting_render_frame: u64,
 }
 
 #[derive(Resource)]
@@ -1631,7 +1665,7 @@ impl Default for WorldLoadingCoverRuntime {
 
 #[derive(Resource)]
 struct WorldGenerationTask {
-    task: Task<GeneratedWorld>,
+    task: Task<PreparedWorld>,
     completed: Arc<Mutex<BTreeSet<WorldGenerationStage>>>,
 }
 
@@ -1662,6 +1696,27 @@ struct MenuRevealRuntime {
     ready_starting_render_frame: Option<u64>,
     fallback_updates: u16,
     scene_ready_frames: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainMenuSpawnPhase {
+    Models,
+    Resources,
+    Foliage,
+    Complete,
+}
+
+#[derive(Resource)]
+struct MainMenuSpawnRuntime {
+    phase: MainMenuSpawnPhase,
+    model_indices: Vec<usize>,
+    resource_indices: Vec<usize>,
+    foliage_indices: Vec<usize>,
+    cursor: usize,
+    completed: usize,
+    total: usize,
+    update_count: u32,
+    starting_render_frame: u64,
 }
 
 #[derive(Resource)]
@@ -3179,8 +3234,12 @@ impl Plugin for StreamTownGamePlugin {
                     )
                         .chain()
                         .run_if(world_loading_cover_requested),
-                    animate_loading_icon,
-                    finish_menu_reveal,
+                    (
+                        animate_loading_icon,
+                        spawn_main_menu_incrementally,
+                        finish_menu_reveal,
+                    )
+                        .chain(),
                     sync_boot_loading_screen,
                     animate_fish_school,
                     animate_main_menu_clouds,
@@ -6266,12 +6325,14 @@ fn loading_percent_text(progress_percent: f32) -> String {
 fn main_menu_loading_progress(
     loaded_assets: usize,
     total_assets: usize,
+    constructed_entities: LoadingWork,
     ready_roots: LoadingWork,
     rendered_frames: LoadingWork,
     stable_updates: LoadingWork,
 ) -> f32 {
     LoadingWorkNode::group([
         LoadingWorkNode::leaf(LoadingWork::count(loaded_assets, total_assets)),
+        LoadingWorkNode::leaf(constructed_entities),
         LoadingWorkNode::leaf(ready_roots),
         LoadingWorkNode::group([
             LoadingWorkNode::leaf(rendered_frames),
@@ -6300,6 +6361,7 @@ fn poll_menu_loading(
         BootDestination::MainMenu => main_menu_loading_progress(
             loaded,
             total,
+            LoadingWork::Pending,
             LoadingWork::Pending,
             LoadingWork::Pending,
             LoadingWork::Pending,
@@ -6830,8 +6892,6 @@ fn spawn_main_menu(
     presented_frames: Res<PresentedRenderFrames>,
     render: Res<RenderAssets>,
     presentation: Res<RuntimePresentation>,
-    content: Res<RuntimeContent>,
-    asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     mut cameras: TownCameraMutQuery,
@@ -6921,87 +6981,49 @@ fn spawn_main_menu(
         ));
     }
 
-    if let Some(asset_server) = asset_server.as_deref() {
-        let visible_instances = reference
+    if asset_server.is_some() {
+        let model_indices = reference
             .instances
             .iter()
-            .filter(|instance| {
+            .enumerate()
+            .filter(|(_, instance)| {
                 menu_baked_position_visible(reference, Vec3::from_array(instance.position))
             })
+            .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let direct_farms = visible_instances
+        let (resource_indices, foliage_indices) = main_menu_baked_decoration_indices(reference);
+        let total = model_indices.len() + resource_indices.len() + foliage_indices.len();
+        let direct_farms = model_indices
             .iter()
-            .filter(|instance| instance.source_path.ends_with("/Age02_Farm.fbx"))
+            .filter(|index| {
+                reference.instances[**index]
+                    .source_path
+                    .ends_with("/Age02_Farm.fbx")
+            })
             .count();
         info!(
             baked_instances = reference.instances.len(),
-            rendered_instances = visible_instances.len(),
+            rendered_instances = model_indices.len(),
             direct_farms,
-            "culled static main-menu model instances"
+            queued_resources = resource_indices.len(),
+            queued_foliage = foliage_indices.len(),
+            "queued frame-budgeted main-menu scene construction"
         );
-        for instance in visible_instances {
-            let Some((archetype_id, archetype, scene)) =
-                menu_scene_for_source_model(&content.0, &instance.source_path).filter(
-                    |(_, _, scene)| converted_asset_exists(&asset_root.0, &scene.asset_path),
-                )
-            else {
-                warn!(
-                    source_model = %instance.source_path,
-                    hierarchy = %instance.hierarchy_path,
-                    "authored main-menu model has no converted scene"
-                );
-                continue;
-            };
-            if spawn_completed_main_menu_farm(
-                &mut commands,
-                instance,
-                scene,
-                &presentation.0,
-                &render,
-                asset_server,
-            ) {
-                continue;
-            }
-            let mut entity = commands.spawn((
-                StateEntity,
-                Name::new(format!(
-                    "Authored menu instance: {}",
-                    instance.hierarchy_path
-                )),
-                WorldAssetRoot(
-                    asset_server
-                        .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
-                ),
-                Transform::from_translation(Vec3::from_array(instance.position))
-                    .with_rotation(authored_scene_rotation(instance.rotation))
-                    .with_scale(Vec3::from_array(instance.scale)),
-            ));
-            if archetype.kind == ArchetypeKind::Building {
-                entity.insert(MainMenuBuildingShadowRoot);
-            }
-            if let Some(material) = prefab_material_spec(archetype, scene, &presentation.0, &render)
-            {
-                entity.insert(material);
-            }
-            if !archetype.rotating_nodes.is_empty() {
-                entity.insert(MainMenuRotatingDefinitions(
-                    archetype.rotating_nodes.clone(),
-                ));
-            }
-            let hidden_nodes = main_menu_hidden_model_node_names(&content.0, archetype_id, scene);
-            if !hidden_nodes.is_empty() {
-                entity.insert(MainMenuHiddenModelNodes(hidden_nodes));
-            }
-        }
-        spawn_main_menu_baked_decorations(
-            &mut commands,
-            reference,
-            &content.0,
-            &presentation.0,
-            &render,
-            asset_server,
-            &asset_root.0,
-        );
+        commands.insert_resource(MainMenuSpawnRuntime {
+            phase: if model_indices.is_empty() {
+                MainMenuSpawnPhase::Resources
+            } else {
+                MainMenuSpawnPhase::Models
+            },
+            model_indices,
+            resource_indices,
+            foliage_indices,
+            cursor: 0,
+            completed: 0,
+            total,
+            update_count: 0,
+            starting_render_frame: presented_frames.current(),
+        });
     }
 
     spawn_authored_main_menu_clouds(&mut commands, &render);
@@ -7473,6 +7495,44 @@ fn world_render_preload_handles(
     handles
 }
 
+fn prepare_generated_world(
+    world: GeneratedWorld,
+    config: &GameConfig,
+    prepare_render_geometry: bool,
+) -> PreparedWorld {
+    if !prepare_render_geometry {
+        return PreparedWorld {
+            world,
+            terrain_mesh: None,
+            terrain_collider: None,
+            water_mesh: None,
+        };
+    }
+    // Mesh topology and trimesh acceleration data are pure CPU work. Building
+    // them in the generation task prevents a single long main-thread frame;
+    // only insertion into Bevy's asset/ECS worlds remains on the app thread.
+    let collision_mesh = generated_terrain_chunk_mesh(
+        &world,
+        config,
+        0,
+        0,
+        world.navigation.width(),
+        world.navigation.height(),
+        1,
+        false,
+    );
+    let terrain_collider = Collider::trimesh_from_mesh(&collision_mesh)
+        .expect("generated terrain has indexed triangle geometry");
+    let terrain_mesh = generated_terrain_mesh(&world, config);
+    let water_mesh = generated_water_mesh(&world, config);
+    PreparedWorld {
+        world,
+        terrain_mesh: Some(terrain_mesh),
+        terrain_collider: Some(terrain_collider),
+        water_mesh: Some(water_mesh),
+    }
+}
+
 fn begin_world_loading(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
@@ -7482,6 +7542,7 @@ fn begin_world_loading(
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
     gpu_readiness: Res<GpuReadinessProbe>,
+    presented_frames: Res<PresentedRenderFrames>,
 ) {
     let asset_handles = asset_server.as_deref().map_or_else(Vec::new, |server| {
         let mut handles = world_preload_paths(&content.0, &asset_root.0)
@@ -7512,21 +7573,24 @@ fn begin_world_loading(
         render.world_gpu_material_ids(),
     );
     let asset_count = asset_handles.len();
-    let world_config = config.0.world.clone();
+    let game_config = config.0.clone();
     let content = content.0.clone();
     let completed_generation = Arc::new(Mutex::new(BTreeSet::new()));
-    let prepared_world = if asset_server.is_some()
+    let prepare_render_geometry = asset_server.is_some();
+    let prepared_world = if prepare_render_geometry
         && let Some(pool) = AsyncComputeTaskPool::try_get()
     {
         let task_progress = Arc::clone(&completed_generation);
         commands.insert_resource(WorldGenerationTask {
             task: pool.spawn(async move {
-                generate_world_with_content_observed(&world_config, &content, |stage| {
-                    task_progress
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .insert(stage);
-                })
+                let world =
+                    generate_world_with_content_observed(&game_config.world, &content, |stage| {
+                        task_progress
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .insert(stage);
+                    });
+                prepare_generated_world(world, &game_config, true)
             }),
             completed: Arc::clone(&completed_generation),
         });
@@ -7534,15 +7598,16 @@ fn begin_world_loading(
     } else {
         // Headless tests and reduced apps have no asset pipeline to overlap,
         // so keep their deterministic generation synchronous and immediate.
-        Some(generate_world_with_content_observed(
-            &world_config,
-            &content,
-            |stage| {
-                completed_generation
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(stage);
-            },
+        let world = generate_world_with_content_observed(&game_config.world, &content, |stage| {
+            completed_generation
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(stage);
+        });
+        Some(prepare_generated_world(
+            world,
+            &game_config,
+            prepare_render_geometry,
         ))
     };
     let mut work = WorldLoadingWork::default();
@@ -7570,6 +7635,8 @@ fn begin_world_loading(
         loaded_assets: 0,
         failed_assets: 0,
         prepared_world,
+        spawn_runtime: None,
+        presented_frames: Some(presented_frames.clone()),
         scene_ready_frames: 0,
         completion_remaining_seconds: 0.0,
         work,
@@ -7866,6 +7933,7 @@ fn finish_menu_reveal(
     world_cover: Option<Res<WorldLoadingCoverRuntime>>,
     mut reveal: Option<ResMut<MenuRevealRuntime>>,
     mut loading: Option<ResMut<MenuLoadingRuntime>>,
+    menu_spawn: Option<Res<MainMenuSpawnRuntime>>,
     mut loading_entities: LoadingCoverEntityQuery,
     scene_roots: MenuWorldAssetRootQuery,
 ) {
@@ -7890,8 +7958,15 @@ fn finish_menu_reveal(
             ready_count += 1;
         }
     }
-    let roots_ready =
-        asset_root_collection_ready(root_count, ready_count, world_instance_spawner.is_some());
+    let construction_work = menu_spawn.as_deref().map_or_else(
+        || LoadingWork::boolean(true),
+        |spawn| LoadingWork::count(spawn.completed, spawn.total),
+    );
+    let construction_ready = menu_spawn
+        .as_deref()
+        .is_none_or(|spawn| spawn.phase == MainMenuSpawnPhase::Complete);
+    let roots_ready = construction_ready
+        && asset_root_collection_ready(root_count, ready_count, world_instance_spawner.is_some());
     if roots_ready {
         reveal.scene_ready_frames = reveal.scene_ready_frames.saturating_add(1);
     } else {
@@ -7906,6 +7981,7 @@ fn finish_menu_reveal(
         loading.progress = main_menu_loading_progress(
             loading.loaded_assets,
             loading.asset_handles.len(),
+            construction_work,
             if root_count == 0 && world_instance_spawner.is_some() {
                 LoadingWork::Pending
             } else {
@@ -7919,7 +7995,12 @@ fn finish_menu_reveal(
             LoadingWork::count(usize::from(reveal.scene_ready_frames.min(8)), 8),
         );
         "Building main menu scene".clone_into(&mut loading.status);
-        loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
+        let (constructed, construction_total) = menu_spawn
+            .as_deref()
+            .map_or((0, 0), |spawn| (spawn.completed, spawn.total));
+        loading.substatus = format!(
+            "{constructed} / {construction_total} scene entities; {ready_count} / {root_count} scene roots instantiated"
+        );
     }
     if ready_rendered_frames < 12 || reveal.scene_ready_frames < 8 {
         return;
@@ -8351,10 +8432,128 @@ fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> 
     )
 }
 
+fn main_menu_baked_decoration_indices(
+    reference: &MainMenuSceneReference,
+) -> (Vec<usize>, Vec<usize>) {
+    let bake = reference
+        .corrective_bake
+        .as_ref()
+        .expect("validated main-menu corrective bake");
+    let visible_resources = bake
+        .resources
+        .iter()
+        .enumerate()
+        .filter(|(_, resource)| {
+            menu_baked_position_visible(reference, Vec3::from_array(resource.position))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let resource_count = visible_resources.len();
+    let resource_indices = visible_resources
+        .into_iter()
+        .enumerate()
+        .filter(|(visible_index, _)| {
+            main_menu_even_sample(
+                *visible_index,
+                resource_count,
+                MAIN_MENU_RESOURCE_RENDER_BUDGET,
+            )
+        })
+        .map(|(_, index)| index)
+        .collect();
+    let visible_foliage = bake
+        .foliage
+        .iter()
+        .enumerate()
+        .filter(|(_, foliage)| {
+            menu_baked_position_visible(reference, Vec3::from_array(foliage.position))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let foliage_count = visible_foliage.len();
+    let foliage_indices = visible_foliage
+        .into_iter()
+        .enumerate()
+        .filter(|(visible_index, _)| {
+            main_menu_even_sample(
+                *visible_index,
+                foliage_count,
+                MAIN_MENU_FOLIAGE_RENDER_BUDGET,
+            )
+        })
+        .map(|(_, index)| index)
+        .collect();
+    (resource_indices, foliage_indices)
+}
+
 #[allow(clippy::too_many_arguments)]
-fn spawn_main_menu_baked_decorations(
+fn spawn_main_menu_model_instance(
     commands: &mut Commands,
     reference: &MainMenuSceneReference,
+    index: usize,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+) {
+    let instance = &reference.instances[index];
+    let Some((archetype_id, archetype, scene)) =
+        menu_scene_for_source_model(content, &instance.source_path)
+            .filter(|(_, _, scene)| converted_asset_exists(asset_root, &scene.asset_path))
+    else {
+        warn!(
+            source_model = %instance.source_path,
+            hierarchy = %instance.hierarchy_path,
+            "authored main-menu model has no converted scene"
+        );
+        return;
+    };
+    if spawn_completed_main_menu_farm(
+        commands,
+        instance,
+        scene,
+        presentation,
+        render,
+        asset_server,
+    ) {
+        return;
+    }
+    let mut entity = commands.spawn((
+        StateEntity,
+        Name::new(format!(
+            "Authored menu instance: {}",
+            instance.hierarchy_path
+        )),
+        WorldAssetRoot(
+            asset_server.load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+        ),
+        Transform::from_translation(Vec3::from_array(instance.position))
+            .with_rotation(authored_scene_rotation(instance.rotation))
+            .with_scale(Vec3::from_array(instance.scale)),
+    ));
+    if archetype.kind == ArchetypeKind::Building {
+        entity.insert(MainMenuBuildingShadowRoot);
+    }
+    if let Some(material) = prefab_material_spec(archetype, scene, presentation, render) {
+        entity.insert(material);
+    }
+    if !archetype.rotating_nodes.is_empty() {
+        entity.insert(MainMenuRotatingDefinitions(
+            archetype.rotating_nodes.clone(),
+        ));
+    }
+    let hidden_nodes = main_menu_hidden_model_node_names(content, archetype_id, scene);
+    if !hidden_nodes.is_empty() {
+        entity.insert(MainMenuHiddenModelNodes(hidden_nodes));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_main_menu_baked_resource(
+    commands: &mut Commands,
+    reference: &MainMenuSceneReference,
+    index: usize,
     content: &ContentCatalog,
     presentation: &PresentationCatalog,
     render: &RenderAssets,
@@ -8365,117 +8564,37 @@ fn spawn_main_menu_baked_decorations(
         .corrective_bake
         .as_ref()
         .expect("validated main-menu corrective bake");
-    let visible_resources = bake
-        .resources
-        .iter()
-        .filter(|resource| {
-            menu_baked_position_visible(reference, Vec3::from_array(resource.position))
-        })
-        .collect::<Vec<_>>();
-    let rendered_resources = visible_resources
-        .len()
-        .min(MAIN_MENU_RESOURCE_RENDER_BUDGET);
-    for (visible_index, resource) in visible_resources.iter().enumerate() {
-        if !main_menu_even_sample(
-            visible_index,
-            visible_resources.len(),
-            MAIN_MENU_RESOURCE_RENDER_BUDGET,
-        ) {
-            continue;
-        }
-        let position = Vec3::from_array(resource.position);
-        let visual_archetype = resource_visual_archetype(content, &resource.kind);
-        let visual = visual_archetype
-            .and_then(default_archetype_scene)
-            .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
-        let material = visual.and_then(|scene| {
-            presentation
-                .model_materials
-                .get(&scene.source_model)
-                .and_then(|materials| materials.get("MainMaterial"))
-                .and_then(|id| render.presentation_materials.get(id))
-        });
-        if let Some(scene) = visual {
-            let mesh = asset_server.load(
-                GltfAssetLabel::Primitive {
-                    mesh: usize::from(resource.mesh_index),
-                    primitive: 0,
-                }
-                .from_asset(scene.asset_path.clone()),
-            );
-            let visual_position = visual_archetype.map_or(position, |archetype| {
-                centred_resource_visual_position(position, archetype, bake.cell_size)
-            });
-            let mut entity = commands.spawn((
-                StateEntity,
-                Name::new(format!("Baked menu resource: {}", resource.id)),
-                Mesh3d(mesh),
-                Transform::from_translation(visual_position)
-                    .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::splat(resource_visual_scale(bake.cell_size))),
-            ));
-            if let Some(material) = material {
-                insert_main_menu_material(&mut entity, material, render);
-            } else {
-                entity.insert(MeshMaterial3d(render.food.clone()));
-            }
-        }
-    }
-    let visible_foliage = bake
-        .foliage
-        .iter()
-        .filter(|foliage| {
-            menu_baked_position_visible(reference, Vec3::from_array(foliage.position))
-        })
-        .collect::<Vec<_>>();
-    let rendered_foliage = visible_foliage.len().min(MAIN_MENU_FOLIAGE_RENDER_BUDGET);
-    for (visible_index, foliage) in visible_foliage.iter().enumerate() {
-        if !main_menu_even_sample(
-            visible_index,
-            visible_foliage.len(),
-            MAIN_MENU_FOLIAGE_RENDER_BUDGET,
-        ) {
-            continue;
-        }
-        let position = Vec3::from_array(foliage.position);
-        let Some(layer) = content
-            .foliage
-            .iter()
-            .find(|layer| layer.id == foliage.layer)
-        else {
-            continue;
-        };
-        let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
-            continue;
-        };
-        if !converted_asset_exists(asset_root, &variant.asset_path) {
-            continue;
-        }
-        let material = presentation
+    let resource = &bake.resources[index];
+    let position = Vec3::from_array(resource.position);
+    let visual_archetype = resource_visual_archetype(content, &resource.kind);
+    let visual = visual_archetype
+        .and_then(default_archetype_scene)
+        .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
+    let material = visual.and_then(|scene| {
+        presentation
             .model_materials
-            .get(&variant.source_model)
-            .and_then(|materials| materials.values().next())
-            .and_then(|id| render.presentation_materials.get(id));
+            .get(&scene.source_model)
+            .and_then(|materials| materials.get("MainMaterial"))
+            .and_then(|id| render.presentation_materials.get(id))
+    });
+    if let Some(scene) = visual {
         let mesh = asset_server.load(
             GltfAssetLabel::Primitive {
-                mesh: 0,
+                mesh: usize::from(resource.mesh_index),
                 primitive: 0,
             }
-            .from_asset(variant.asset_path.clone()),
+            .from_asset(scene.asset_path.clone()),
         );
-        let scale = Vec3::from_array(variant.base_scale)
-            * resource_visual_scale(bake.cell_size)
-            * (f32::from(foliage.scale_milli) / 1_000.0);
+        let visual_position = visual_archetype.map_or(position, |archetype| {
+            centred_resource_visual_position(position, archetype, bake.cell_size)
+        });
         let mut entity = commands.spawn((
             StateEntity,
-            Name::new(format!("Baked menu foliage: {}", foliage.id)),
+            Name::new(format!("Baked menu resource: {}", resource.id)),
             Mesh3d(mesh),
-            Transform::from_translation(position)
-                .with_rotation(
-                    Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
-                        * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
-                )
-                .with_scale(scale),
+            Transform::from_translation(visual_position)
+                .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::splat(resource_visual_scale(bake.cell_size))),
         ));
         if let Some(material) = material {
             insert_main_menu_material(&mut entity, material, render);
@@ -8483,15 +8602,157 @@ fn spawn_main_menu_baked_decorations(
             entity.insert(MeshMaterial3d(render.food.clone()));
         }
     }
-    info!(
-        baked_resources = bake.resources.len(),
-        visible_resources = visible_resources.len(),
-        rendered_resources,
-        baked_foliage = bake.foliage.len(),
-        visible_foliage = visible_foliage.len(),
-        rendered_foliage,
-        "spawned deterministic main-menu decoration sample"
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_main_menu_baked_foliage(
+    commands: &mut Commands,
+    reference: &MainMenuSceneReference,
+    index: usize,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    render: &RenderAssets,
+    asset_server: &AssetServer,
+    asset_root: &Path,
+) {
+    let bake = reference
+        .corrective_bake
+        .as_ref()
+        .expect("validated main-menu corrective bake");
+    let foliage = &bake.foliage[index];
+    let position = Vec3::from_array(foliage.position);
+    let Some(layer) = content
+        .foliage
+        .iter()
+        .find(|layer| layer.id == foliage.layer)
+    else {
+        return;
+    };
+    let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
+        return;
+    };
+    if !converted_asset_exists(asset_root, &variant.asset_path) {
+        return;
+    }
+    let material = presentation
+        .model_materials
+        .get(&variant.source_model)
+        .and_then(|materials| materials.values().next())
+        .and_then(|id| render.presentation_materials.get(id));
+    let mesh = asset_server.load(
+        GltfAssetLabel::Primitive {
+            mesh: 0,
+            primitive: 0,
+        }
+        .from_asset(variant.asset_path.clone()),
     );
+    let scale = Vec3::from_array(variant.base_scale)
+        * resource_visual_scale(bake.cell_size)
+        * (f32::from(foliage.scale_milli) / 1_000.0);
+    let mut entity = commands.spawn((
+        StateEntity,
+        Name::new(format!("Baked menu foliage: {}", foliage.id)),
+        Mesh3d(mesh),
+        Transform::from_translation(position)
+            .with_rotation(
+                Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
+                    * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            )
+            .with_scale(scale),
+    ));
+    if let Some(material) = material {
+        insert_main_menu_material(&mut entity, material, render);
+    } else {
+        entity.insert(MeshMaterial3d(render.food.clone()));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_main_menu_incrementally(
+    mut commands: Commands,
+    mut runtime: Option<ResMut<MainMenuSpawnRuntime>>,
+    content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    render: Res<RenderAssets>,
+    asset_root: Res<RuntimeAssetRoot>,
+    asset_server: Option<Res<AssetServer>>,
+    presented_frames: Res<PresentedRenderFrames>,
+) {
+    let (Some(runtime), Some(asset_server)) = (runtime.as_deref_mut(), asset_server.as_deref())
+    else {
+        return;
+    };
+    let reference = embedded_main_menu_scene();
+    runtime.update_count = runtime.update_count.saturating_add(1);
+    let mut budget = MAIN_MENU_SPAWN_BUDGET_PER_FRAME;
+    while budget > 0 && runtime.phase != MainMenuSpawnPhase::Complete {
+        let indices = match runtime.phase {
+            MainMenuSpawnPhase::Models => &runtime.model_indices,
+            MainMenuSpawnPhase::Resources => &runtime.resource_indices,
+            MainMenuSpawnPhase::Foliage => &runtime.foliage_indices,
+            MainMenuSpawnPhase::Complete => break,
+        };
+        if runtime.cursor >= indices.len() {
+            runtime.cursor = 0;
+            runtime.phase = match runtime.phase {
+                MainMenuSpawnPhase::Models => MainMenuSpawnPhase::Resources,
+                MainMenuSpawnPhase::Resources => MainMenuSpawnPhase::Foliage,
+                MainMenuSpawnPhase::Foliage | MainMenuSpawnPhase::Complete => {
+                    MainMenuSpawnPhase::Complete
+                }
+            };
+            continue;
+        }
+        let index = indices[runtime.cursor];
+        match runtime.phase {
+            MainMenuSpawnPhase::Models => spawn_main_menu_model_instance(
+                &mut commands,
+                reference,
+                index,
+                &content.0,
+                &presentation.0,
+                &render,
+                asset_server,
+                &asset_root.0,
+            ),
+            MainMenuSpawnPhase::Resources => spawn_main_menu_baked_resource(
+                &mut commands,
+                reference,
+                index,
+                &content.0,
+                &presentation.0,
+                &render,
+                asset_server,
+                &asset_root.0,
+            ),
+            MainMenuSpawnPhase::Foliage => spawn_main_menu_baked_foliage(
+                &mut commands,
+                reference,
+                index,
+                &content.0,
+                &presentation.0,
+                &render,
+                asset_server,
+                &asset_root.0,
+            ),
+            MainMenuSpawnPhase::Complete => break,
+        }
+        runtime.cursor += 1;
+        runtime.completed += 1;
+        budget -= 1;
+    }
+    if runtime.phase == MainMenuSpawnPhase::Complete {
+        info!(
+            spawned_entities = runtime.completed,
+            scheduled_entities = runtime.total,
+            construction_updates = runtime.update_count,
+            presented_frames = presented_frames
+                .current()
+                .saturating_sub(runtime.starting_render_frame),
+            "completed frame-budgeted main-menu scene construction"
+        );
+        commands.remove_resource::<MainMenuSpawnRuntime>();
+    }
 }
 
 fn tag_main_menu_rotating_nodes(
@@ -12397,17 +12658,427 @@ fn generate_and_spawn_world(
     if loading.phase != WorldLoadingPhase::Spawning {
         return;
     }
-    selected.0 = None;
-    commands.insert_resource(SelectedActor::default());
-    selected_group.actors.clear();
-    selected_group.drag_start = None;
-    *render_stats = WorldRenderStats::default();
-    let Some(mut generated) = loading.prepared_world.take() else {
+    if loading.spawn_runtime.is_none() {
+        let construction_starting_render_frame = loading
+            .presented_frames
+            .as_ref()
+            .map_or(0, PresentedRenderFrames::current);
+        selected.0 = None;
+        commands.insert_resource(SelectedActor::default());
+        selected_group.actors.clear();
+        selected_group.drag_start = None;
+        *render_stats = WorldRenderStats::default();
+        let Some(prepared) = loading.prepared_world.as_mut() else {
+            loading.phase = WorldLoadingPhase::Loading;
+            "Waiting for deterministic terrain".clone_into(&mut loading.status);
+            "The generation task has not completed yet".clone_into(&mut loading.substatus);
+            return;
+        };
+        let generated = &mut prepared.world;
+        let centre = GridPos {
+            x: config.0.world.width / 2,
+            z: config.0.world.height / 2,
+        };
+        let town_hall_position = GridPos {
+            x: (centre.x + 4).min(config.0.world.width - 2),
+            z: centre.z,
+        };
+        let town_hall_id = StableId::new("building:townhall").expect("static ID");
+        let town_hall_definition = &content.0.buildings[&town_hall_id];
+        let town_hall_placement =
+            town_hall_placement_position(&config.0, town_hall_definition.footprint);
+        let town_hall_focus = grid_to_world_on_surface(town_hall_position, &config.0, generated);
+        if let Ok((mut camera, mut controller)) = cameras.single_mut() {
+            let transform = if std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some() {
+                let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
+                let focus = Vec3::new(145.0, water_height - 2.0, 0.0);
+                Transform::from_translation(focus + Vec3::new(0.0, 45.0, 0.01))
+                    .looking_at(focus, Vec3::Z)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_ROLE_AUDIO").is_some() {
+                let focus = initial_actor_position(generated, town_hall_position, 1)
+                    .map_or(Vec3::ZERO, |position| {
+                        grid_to_world_on_surface(position, &config.0, generated)
+                    });
+                Transform::from_translation(focus + Vec3::new(7.0, 7.0, 7.0))
+                    .looking_at(focus + Vec3::Y * 2.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some() {
+                let requested_kind = std::env::var("STREAM_TOWN_SMOKE_RESOURCE_KIND")
+                    .unwrap_or_else(|_| "resource:wood".to_owned());
+                let focus = generated
+                    .resources
+                    .iter()
+                    .filter(|resource| resource.kind.as_str() == requested_kind)
+                    .min_by_key(|resource| {
+                        let dx = i32::from(resource.position.x) - i32::from(centre.x);
+                        let dz = i32::from(resource.position.z) - i32::from(centre.z);
+                        dx * dx + dz * dz
+                    })
+                    .map_or(Vec3::ZERO, |resource| {
+                        generated_resource_world_position(resource, &config.0, generated)
+                    });
+                Transform::from_xyz(focus.x + 5.0, focus.y + 6.0, focus.z + 5.0)
+                    .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_xyz(focus.x + 28.0, focus.y + 32.0, focus.z + 28.0)
+                    .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_xyz(focus.x + 34.0, focus.y + 38.0, focus.z + 34.0)
+                    .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some()
+                || std::env::var_os("STREAM_TOWN_SMOKE_CHIMNEY").is_some()
+            {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
+                    .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_PING").is_some() {
+                let focus = initial_actor_position(generated, town_hall_position, 0)
+                    .map_or(Vec3::ZERO, |position| {
+                        grid_to_world_on_surface(position, &config.0, generated)
+                    });
+                Transform::from_xyz(focus.x + 14.0, focus.y + 13.0, focus.z + 14.0)
+                    .looking_at(focus + Vec3::Y * 3.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_xyz(focus.x + 12.0, focus.y + 10.0, focus.z + 12.0)
+                    .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_xyz(focus.x + 30.0, focus.y + 35.0, focus.z + 30.0)
+                    .looking_at(focus + Vec3::Y, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some() {
+                shoreline_camera_transform(generated, &config.0)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
+                let focus = initial_actor_position(generated, town_hall_position, 0)
+                    .map_or(Vec3::ZERO, |position| {
+                        grid_to_world_on_surface(position, &config.0, generated)
+                    });
+                Transform::from_xyz(focus.x + 7.0, focus.y + 6.0, focus.z + 7.0)
+                    .looking_at(focus + Vec3::Y * 1.6, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some() {
+                let focus = grid_to_world_on_surface(town_hall_position, &config.0, generated);
+                Transform::from_xyz(focus.x + 74.0, focus.y + 88.0, focus.z + 74.0)
+                    .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some() {
+                let (start, end) = deterministic_seagull_leg(generated.seed, 0);
+                let focus = start.lerp(end, 0.1);
+                Transform::from_translation(focus + Vec3::new(42.0, 32.0, 42.0))
+                    .looking_at(focus, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_translation(focus + Vec3::new(30.0, 34.0, 30.0))
+                    .looking_at(focus + Vec3::Y * 7.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_translation(focus + Vec3::new(52.0, 66.0, 52.0))
+                    .looking_at(focus + Vec3::Y * 22.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_PET").is_some() {
+                let focus = initial_actor_position(generated, town_hall_position, 1)
+                    .map_or(Vec3::ZERO, |position| {
+                        grid_to_world_on_surface(position, &config.0, generated)
+                    });
+                Transform::from_translation(focus + Vec3::new(22.0, 20.0, 22.0))
+                    .looking_at(focus + Vec3::Y * 3.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some() {
+                let focus = grid_to_world_on_surface(centre, &config.0, generated);
+                Transform::from_translation(focus + Vec3::new(24.0, 24.0, 24.0))
+                    .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some() {
+                let focus = grid_to_world_on_surface(town_hall_position, &config.0, generated);
+                Transform::from_translation(focus + Vec3::new(32.0, 38.0, 32.0))
+                    .looking_at(focus, Vec3::Y)
+            } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
+                let focus = grid_to_world_on_surface(town_hall_position, &config.0, generated);
+                Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
+            } else {
+                unity_town_camera_transform(town_hall_focus)
+            };
+            *camera = transform;
+            controller.set_home(transform);
+        }
+        let town_hall_region = building_region(
+            town_hall_placement,
+            town_hall_definition.footprint,
+            generated,
+        )
+        .expect("the configured Town Hall footprint fits the generated world");
+        generated
+            .navigation
+            .set_blocked(town_hall_region, true)
+            .expect("the configured Town Hall footprint updates navigation");
+
+        if std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some() {
+            let building = StableId::new("building:house").expect("static building ID");
+            if let Some(definition) = content.0.buildings.get(&building)
+                && let Some(valid_position) = find_building_site(
+                    generated,
+                    GridPos {
+                        x: town_hall_placement
+                            .x
+                            .saturating_add(town_hall_definition.footprint[0] + 2)
+                            .min(generated.navigation.width() - 1),
+                        z: town_hall_placement.z.saturating_sub(6),
+                    },
+                    definition.footprint,
+                )
+            {
+                placers.0.insert(
+                    StableId::new("actor:smoke_placement_valid").expect("static actor ID"),
+                    BuildingPlacement {
+                        building: building.clone(),
+                        position: valid_position,
+                        rotation_quarter_turns: 0,
+                    },
+                );
+                placers.0.insert(
+                    StableId::new("actor:smoke_placement_blocked").expect("static actor ID"),
+                    BuildingPlacement {
+                        building,
+                        position: town_hall_placement,
+                        rotation_quarter_turns: 1,
+                    },
+                );
+            }
+        }
+
+        let world_size = Vec2::new(
+            f32::from(config.0.world.width) * config.0.world.cell_size,
+            f32::from(config.0.world.height) * config.0.world.cell_size,
+        );
+        if let Some(meshes) = meshes.as_deref_mut() {
+            // The worker task normally supplies all three CPU-heavy products. The
+            // fallback keeps reduced test apps valid when they install Assets<Mesh>
+            // without an AssetServer/compute pool.
+            let terrain_mesh = prepared
+                .terrain_mesh
+                .take()
+                .unwrap_or_else(|| generated_terrain_mesh(generated, &config.0));
+            let terrain_collider = prepared.terrain_collider.take().unwrap_or_else(|| {
+                let collision_mesh = generated_terrain_chunk_mesh(
+                    generated,
+                    &config.0,
+                    0,
+                    0,
+                    generated.navigation.width(),
+                    generated.navigation.height(),
+                    1,
+                    false,
+                );
+                Collider::trimesh_from_mesh(&collision_mesh)
+                    .expect("generated terrain has indexed triangle geometry")
+            });
+            let terrain = meshes.add(terrain_mesh);
+            commands.spawn((
+                WorldEntity,
+                TerrainSurface,
+                Name::new("Terrain"),
+                Mesh3d(terrain),
+                MeshMaterial3d(render.ground.clone()),
+                terrain_collider,
+                RigidBody::Static,
+            ));
+            render_stats.terrain_high_chunks = 1;
+        } else {
+            commands.spawn((
+                WorldEntity,
+                TerrainSurface,
+                Mesh3d(render.cube.clone()),
+                MeshMaterial3d(render.ground.clone()),
+                Transform::from_xyz(0.0, -0.15, 0.0).with_scale(Vec3::new(
+                    world_size.x,
+                    0.3,
+                    world_size.y,
+                )),
+            ));
+        }
+        if let Some(meshes) = meshes.as_deref_mut() {
+            let water_mesh = prepared
+                .water_mesh
+                .take()
+                .unwrap_or_else(|| generated_water_mesh(generated, &config.0));
+            commands.spawn((
+                WorldEntity,
+                Mesh3d(meshes.add(water_mesh)),
+                MeshMaterial3d(render.water.clone()),
+            ));
+        } else {
+            let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
+            commands.spawn((
+                WorldEntity,
+                Mesh3d(render.cube.clone()),
+                MeshMaterial3d(render.water.clone()),
+                Transform::from_xyz(0.0, water_height - 0.08, 0.0).with_scale(Vec3::new(
+                    world_size.x,
+                    0.12,
+                    world_size.y,
+                )),
+            ));
+        }
+        spawn_fish_school_scene(
+            &mut commands,
+            &presentation.0,
+            &render,
+            WORLD_SCENE_PATH,
+            generated.seed,
+            f32::from(config.0.world.water_level_centimetres) * 0.01,
+            false,
+            None,
+            Some((generated, &config.0)),
+        );
+
+        let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
+        let foliage_rendering_enabled = std::env::var("STREAM_TOWN_BENCHMARK_FOLIAGE")
+            .map_or(true, |value| value.trim() != "0");
+        let resource_total = if isolate_animation {
+            0
+        } else {
+            generated.resources.len()
+        };
+        let foliage_total =
+            if isolate_animation || !foliage_rendering_enabled || asset_server.is_none() {
+                0
+            } else {
+                generated.foliage.len()
+            };
+        loading.spawn_runtime = Some(WorldSpawnRuntime {
+            phase: WorldSpawnPhase::Resources,
+            resource_cursor: 0,
+            foliage_cursor: 0,
+            resource_total,
+            foliage_total,
+            foliage_gpu_batches: BTreeSet::new(),
+            foliage_spatial_groups: BTreeSet::new(),
+            update_count: 0,
+            starting_render_frame: construction_starting_render_frame,
+        });
+        loading.work.terrain_entities = LoadingWork::count(2, 2);
+        loading.work.resource_entities = LoadingWork::count(0, resource_total);
+        loading.work.foliage_entities = LoadingWork::count(0, foliage_total);
+        loading.progress = loading.work.progress();
+        "Populating town resources".clone_into(&mut loading.status);
+        loading.substatus = format!("0 / {resource_total} resource entities");
+        return;
+    }
+
+    let mut spawn_runtime = loading
+        .spawn_runtime
+        .take()
+        .expect("world spawn runtime checked above");
+    spawn_runtime.update_count = spawn_runtime.update_count.saturating_add(1);
+    let Some(prepared) = loading.prepared_world.as_ref() else {
+        loading.spawn_runtime = Some(spawn_runtime);
         loading.phase = WorldLoadingPhase::Loading;
         "Waiting for deterministic terrain".clone_into(&mut loading.status);
-        "The generation task has not completed yet".clone_into(&mut loading.substatus);
         return;
     };
+    let generated = &prepared.world;
+    let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
+    if spawn_runtime.phase == WorldSpawnPhase::Resources {
+        let end = spawn_runtime
+            .resource_cursor
+            .saturating_add(WORLD_RESOURCE_SPAWN_BUDGET_PER_FRAME)
+            .min(spawn_runtime.resource_total);
+        if !isolate_animation {
+            for resource in &generated.resources[spawn_runtime.resource_cursor..end] {
+                let position = generated_resource_world_position(resource, &config.0, generated);
+                spawn_resource_visual(
+                    &mut commands,
+                    &content.0,
+                    &presentation.0,
+                    &render,
+                    asset_server.as_deref(),
+                    &asset_root.0,
+                    resource,
+                    position,
+                    config.0.world.cell_size,
+                );
+            }
+        }
+        spawn_runtime.resource_cursor = end;
+        loading.work.resource_entities =
+            LoadingWork::count(spawn_runtime.resource_cursor, spawn_runtime.resource_total);
+        loading.progress = loading.work.progress();
+        "Populating town resources".clone_into(&mut loading.status);
+        loading.substatus = format!(
+            "{} / {} resource entities",
+            spawn_runtime.resource_cursor, spawn_runtime.resource_total
+        );
+        if spawn_runtime.resource_cursor >= spawn_runtime.resource_total {
+            spawn_runtime.phase = WorldSpawnPhase::Foliage;
+        }
+        loading.spawn_runtime = Some(spawn_runtime);
+        return;
+    }
+    if spawn_runtime.phase == WorldSpawnPhase::Foliage {
+        let end = spawn_runtime
+            .foliage_cursor
+            .saturating_add(WORLD_FOLIAGE_SPAWN_BUDGET_PER_FRAME)
+            .min(spawn_runtime.foliage_total);
+        if let Some(asset_server) = asset_server.as_deref() {
+            for foliage in &generated.foliage[spawn_runtime.foliage_cursor..end] {
+                let Some(visual) = resolve_foliage_visual(
+                    &content.0,
+                    &presentation.0,
+                    &render,
+                    asset_server,
+                    &asset_root.0,
+                    generated,
+                    &config.0,
+                    foliage,
+                ) else {
+                    continue;
+                };
+                let key = foliage_batch_key(foliage);
+                spawn_runtime
+                    .foliage_gpu_batches
+                    .insert((foliage.layer.clone(), foliage.variant));
+                spawn_runtime.foliage_spatial_groups.insert(key.clone());
+                spawn_foliage_visual(&mut commands, key, visual);
+                render_stats.foliage_instances += 1;
+                render_stats.foliage_visible_instances += 1;
+            }
+        }
+        spawn_runtime.foliage_cursor = end;
+        loading.work.foliage_entities =
+            LoadingWork::count(spawn_runtime.foliage_cursor, spawn_runtime.foliage_total);
+        loading.progress = loading.work.progress();
+        "Planting town foliage".clone_into(&mut loading.status);
+        loading.substatus = format!(
+            "{} / {} foliage entities",
+            spawn_runtime.foliage_cursor, spawn_runtime.foliage_total
+        );
+        if spawn_runtime.foliage_cursor < spawn_runtime.foliage_total {
+            loading.spawn_runtime = Some(spawn_runtime);
+            return;
+        }
+        // Matching Mesh3d/material handles are automatically instanced by
+        // Bevy's opaque and shadow render phases. These deterministic spatial
+        // groups are retained for auditing and clearance/streaming telemetry;
+        // they do not duplicate source geometry.
+        render_stats.foliage_batches = spawn_runtime.foliage_gpu_batches.len();
+        render_stats.foliage_spatial_groups = spawn_runtime.foliage_spatial_groups.len();
+        spawn_runtime.phase = WorldSpawnPhase::Gameplay;
+        loading.spawn_runtime = Some(spawn_runtime);
+        return;
+    }
+
+    let Some(prepared) = loading.prepared_world.take() else {
+        loading.phase = WorldLoadingPhase::Loading;
+        return;
+    };
+    info!(
+        resources = spawn_runtime.resource_total,
+        foliage = spawn_runtime.foliage_total,
+        construction_updates = spawn_runtime.update_count,
+        presented_frames = loading.presented_frames.as_ref().map_or(0, |frames| {
+            frames
+                .current()
+                .saturating_sub(spawn_runtime.starting_render_frame)
+        }),
+        "completed frame-budgeted world scene construction"
+    );
+    let mut generated = prepared.world;
     let centre = GridPos {
         x: config.0.world.width / 2,
         z: config.0.world.height / 2,
@@ -12421,288 +13092,6 @@ fn generate_and_spawn_world(
     let town_hall_placement =
         town_hall_placement_position(&config.0, town_hall_definition.footprint);
     let town_hall_focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
-    if let Ok((mut camera, mut controller)) = cameras.single_mut() {
-        let transform = if std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some() {
-            let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
-            let focus = Vec3::new(145.0, water_height - 2.0, 0.0);
-            Transform::from_translation(focus + Vec3::new(0.0, 45.0, 0.01))
-                .looking_at(focus, Vec3::Z)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_ROLE_AUDIO").is_some() {
-            let focus = initial_actor_position(&generated, town_hall_position, 1)
-                .map_or(Vec3::ZERO, |position| {
-                    grid_to_world_on_surface(position, &config.0, &generated)
-                });
-            Transform::from_translation(focus + Vec3::new(7.0, 7.0, 7.0))
-                .looking_at(focus + Vec3::Y * 2.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_RESOURCE_CLOSEUP").is_some() {
-            let requested_kind = std::env::var("STREAM_TOWN_SMOKE_RESOURCE_KIND")
-                .unwrap_or_else(|_| "resource:wood".to_owned());
-            let focus = generated
-                .resources
-                .iter()
-                .filter(|resource| resource.kind.as_str() == requested_kind)
-                .min_by_key(|resource| {
-                    let dx = i32::from(resource.position.x) - i32::from(centre.x);
-                    let dz = i32::from(resource.position.z) - i32::from(centre.z);
-                    dx * dx + dz * dz
-                })
-                .map_or(Vec3::ZERO, |resource| {
-                    generated_resource_world_position(resource, &config.0, &generated)
-                });
-            Transform::from_xyz(focus.x + 5.0, focus.y + 6.0, focus.z + 5.0)
-                .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_xyz(focus.x + 28.0, focus.y + 32.0, focus.z + 28.0)
-                .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_COMBAT_VFX").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_xyz(focus.x + 34.0, focus.y + 38.0, focus.z + 34.0)
-                .looking_at(focus + Vec3::Y * 4.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_BUILDING_VFX").is_some()
-            || std::env::var_os("STREAM_TOWN_SMOKE_CHIMNEY").is_some()
-        {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_xyz(focus.x + 40.0, focus.y + 42.0, focus.z + 40.0)
-                .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_PING").is_some() {
-            let focus = initial_actor_position(&generated, town_hall_position, 0)
-                .map_or(Vec3::ZERO, |position| {
-                    grid_to_world_on_surface(position, &config.0, &generated)
-                });
-            Transform::from_xyz(focus.x + 14.0, focus.y + 13.0, focus.z + 14.0)
-                .looking_at(focus + Vec3::Y * 3.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_GATE").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_xyz(focus.x + 12.0, focus.y + 10.0, focus.z + 12.0)
-                .looking_at(focus + Vec3::Y * 1.5, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_FOLIAGE").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_xyz(focus.x + 30.0, focus.y + 35.0, focus.z + 30.0)
-                .looking_at(focus + Vec3::Y, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some() {
-            shoreline_camera_transform(&generated, &config.0)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
-            let focus = initial_actor_position(&generated, town_hall_position, 0)
-                .map_or(Vec3::ZERO, |position| {
-                    grid_to_world_on_surface(position, &config.0, &generated)
-                });
-            Transform::from_xyz(focus.x + 7.0, focus.y + 6.0, focus.z + 7.0)
-                .looking_at(focus + Vec3::Y * 1.6, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some() {
-            let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
-            Transform::from_xyz(focus.x + 74.0, focus.y + 88.0, focus.z + 74.0)
-                .looking_at(focus + Vec3::Y * 5.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_SEAGULL").is_some() {
-            let (start, end) = deterministic_seagull_leg(generated.seed, 0);
-            let focus = start.lerp(end, 0.1);
-            Transform::from_translation(focus + Vec3::new(42.0, 32.0, 42.0))
-                .looking_at(focus, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_translation(focus + Vec3::new(30.0, 34.0, 30.0))
-                .looking_at(focus + Vec3::Y * 7.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_translation(focus + Vec3::new(52.0, 66.0, 52.0))
-                .looking_at(focus + Vec3::Y * 22.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_PET").is_some() {
-            let focus = initial_actor_position(&generated, town_hall_position, 1)
-                .map_or(Vec3::ZERO, |position| {
-                    grid_to_world_on_surface(position, &config.0, &generated)
-                });
-            Transform::from_translation(focus + Vec3::new(22.0, 20.0, 22.0))
-                .looking_at(focus + Vec3::Y * 3.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some() {
-            let focus = grid_to_world_on_surface(centre, &config.0, &generated);
-            Transform::from_translation(focus + Vec3::new(24.0, 24.0, 24.0))
-                .looking_at(focus + Vec3::Y * 6.0, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some() {
-            let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
-            Transform::from_translation(focus + Vec3::new(32.0, 38.0, 32.0))
-                .looking_at(focus, Vec3::Y)
-        } else if std::env::var_os("STREAM_TOWN_SMOKE_CLOSEUP").is_some() {
-            let focus = grid_to_world_on_surface(town_hall_position, &config.0, &generated);
-            Transform::from_xyz(focus.x + 66.0, 78.0, focus.z + 66.0).looking_at(focus, Vec3::Y)
-        } else {
-            unity_town_camera_transform(town_hall_focus)
-        };
-        *camera = transform;
-        controller.set_home(transform);
-    }
-    let town_hall_region = building_region(
-        town_hall_placement,
-        town_hall_definition.footprint,
-        &generated,
-    )
-    .expect("the configured Town Hall footprint fits the generated world");
-    generated
-        .navigation
-        .set_blocked(town_hall_region, true)
-        .expect("the configured Town Hall footprint updates navigation");
-
-    if std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some() {
-        let building = StableId::new("building:house").expect("static building ID");
-        if let Some(definition) = content.0.buildings.get(&building)
-            && let Some(valid_position) = find_building_site(
-                &generated,
-                GridPos {
-                    x: town_hall_placement
-                        .x
-                        .saturating_add(town_hall_definition.footprint[0] + 2)
-                        .min(generated.navigation.width() - 1),
-                    z: town_hall_placement.z.saturating_sub(6),
-                },
-                definition.footprint,
-            )
-        {
-            placers.0.insert(
-                StableId::new("actor:smoke_placement_valid").expect("static actor ID"),
-                BuildingPlacement {
-                    building: building.clone(),
-                    position: valid_position,
-                    rotation_quarter_turns: 0,
-                },
-            );
-            placers.0.insert(
-                StableId::new("actor:smoke_placement_blocked").expect("static actor ID"),
-                BuildingPlacement {
-                    building,
-                    position: town_hall_placement,
-                    rotation_quarter_turns: 1,
-                },
-            );
-        }
-    }
-
-    let world_size = Vec2::new(
-        f32::from(config.0.world.width) * config.0.world.cell_size,
-        f32::from(config.0.world.height) * config.0.world.cell_size,
-    );
-    if let Some(meshes) = meshes.as_deref_mut() {
-        // Unity shipped one ProceduralMeshGenerator mesh. Keeping the authored
-        // voxel faces in one Bevy mesh eliminates independent chunk normals and
-        // mismatched LOD edge topology, the two sources of visible seams.
-        let collision_mesh = generated_terrain_chunk_mesh(
-            &generated,
-            &config.0,
-            0,
-            0,
-            generated.navigation.width(),
-            generated.navigation.height(),
-            1,
-            false,
-        );
-        let terrain_collider = Collider::trimesh_from_mesh(&collision_mesh)
-            .expect("generated terrain has indexed triangle geometry");
-        let terrain = meshes.add(generated_terrain_mesh(&generated, &config.0));
-        commands.spawn((
-            WorldEntity,
-            TerrainSurface,
-            Name::new("Terrain"),
-            Mesh3d(terrain),
-            MeshMaterial3d(render.ground.clone()),
-            terrain_collider,
-            RigidBody::Static,
-        ));
-        render_stats.terrain_high_chunks = 1;
-    } else {
-        commands.spawn((
-            WorldEntity,
-            TerrainSurface,
-            Mesh3d(render.cube.clone()),
-            MeshMaterial3d(render.ground.clone()),
-            Transform::from_xyz(0.0, -0.15, 0.0).with_scale(Vec3::new(
-                world_size.x,
-                0.3,
-                world_size.y,
-            )),
-        ));
-    }
-    if let Some(meshes) = meshes.as_deref_mut() {
-        commands.spawn((
-            WorldEntity,
-            Mesh3d(meshes.add(generated_water_mesh(&generated, &config.0))),
-            MeshMaterial3d(render.water.clone()),
-        ));
-    } else {
-        let water_height = f32::from(config.0.world.water_level_centimetres) * 0.01;
-        commands.spawn((
-            WorldEntity,
-            Mesh3d(render.cube.clone()),
-            MeshMaterial3d(render.water.clone()),
-            Transform::from_xyz(0.0, water_height - 0.08, 0.0).with_scale(Vec3::new(
-                world_size.x,
-                0.12,
-                world_size.y,
-            )),
-        ));
-    }
-    spawn_fish_school_scene(
-        &mut commands,
-        &presentation.0,
-        &render,
-        WORLD_SCENE_PATH,
-        generated.seed,
-        f32::from(config.0.world.water_level_centimetres) * 0.01,
-        false,
-        None,
-        Some((&generated, &config.0)),
-    );
-
-    let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
-    if !isolate_animation {
-        for resource in &generated.resources {
-            let position = generated_resource_world_position(resource, &config.0, &generated);
-            spawn_resource_visual(
-                &mut commands,
-                &content.0,
-                &presentation.0,
-                &render,
-                asset_server.as_deref(),
-                &asset_root.0,
-                resource,
-                position,
-                config.0.world.cell_size,
-            );
-        }
-    }
-    let foliage_rendering_enabled =
-        std::env::var("STREAM_TOWN_BENCHMARK_FOLIAGE").map_or(true, |value| value.trim() != "0");
-    if !isolate_animation
-        && foliage_rendering_enabled
-        && let Some(asset_server) = asset_server.as_deref()
-    {
-        let mut gpu_batches = BTreeSet::new();
-        let mut spatial_groups = BTreeSet::new();
-        for foliage in &generated.foliage {
-            let Some(visual) = resolve_foliage_visual(
-                &content.0,
-                &presentation.0,
-                &render,
-                asset_server,
-                &asset_root.0,
-                &generated,
-                &config.0,
-                foliage,
-            ) else {
-                continue;
-            };
-            let key = foliage_batch_key(foliage);
-            gpu_batches.insert((foliage.layer.clone(), foliage.variant));
-            spatial_groups.insert(key.clone());
-            spawn_foliage_visual(&mut commands, key, visual);
-            render_stats.foliage_instances += 1;
-            render_stats.foliage_visible_instances += 1;
-        }
-        // Matching Mesh3d/material handles are automatically instanced by
-        // Bevy's opaque and shadow render phases. These deterministic spatial
-        // groups are retained for auditing and clearance/streaming telemetry;
-        // they do not duplicate source geometry.
-        render_stats.foliage_batches = gpu_batches.len();
-        render_stats.foliage_spatial_groups = spatial_groups.len();
-    }
-
     let hall = town_hall_focus;
     let mut hall_entity = commands.spawn((
         WorldEntity,
@@ -32236,6 +32625,7 @@ fn clear_loading_runtime(commands: &mut Commands) {
     commands.remove_resource::<WorldLoadingCoverRuntime>();
     commands.remove_resource::<MenuLoadingRuntime>();
     commands.remove_resource::<MenuRevealRuntime>();
+    commands.remove_resource::<MainMenuSpawnRuntime>();
     commands.remove_resource::<WorldRevealRuntime>();
 }
 
@@ -34098,6 +34488,28 @@ mod tests {
         assert_eq!(selected.len(), 3_200);
         assert!(selected.windows(2).all(|pair| pair[1] > pair[0]));
         assert!((0..500).all(|index| main_menu_even_sample(index, 500, 900)));
+
+        let reference = embedded_main_menu_scene();
+        let (resource_indices, foliage_indices) = main_menu_baked_decoration_indices(reference);
+        assert!(resource_indices.len() <= MAIN_MENU_RESOURCE_RENDER_BUDGET);
+        assert!(foliage_indices.len() <= MAIN_MENU_FOLIAGE_RENDER_BUDGET);
+        let model_count = reference
+            .instances
+            .iter()
+            .filter(|instance| {
+                menu_baked_position_visible(reference, Vec3::from_array(instance.position))
+            })
+            .count();
+        let scheduled = model_count + resource_indices.len() + foliage_indices.len();
+        let construction_updates = scheduled.div_ceil(MAIN_MENU_SPAWN_BUDGET_PER_FRAME);
+        assert!(construction_updates > 1);
+
+        let mut spinner = UiTransform::IDENTITY;
+        for _ in 0..construction_updates {
+            let before = spinner.rotation;
+            apply_loading_icon_rotation(&mut spinner, 500.0_f32.to_radians(), 1.0 / 60.0);
+            assert_ne!(spinner.rotation, before);
+        }
     }
 
     #[test]
