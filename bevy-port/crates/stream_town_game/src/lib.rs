@@ -3137,8 +3137,10 @@ impl Plugin for StreamTownGamePlugin {
                     update_environment_presentation.after(move_agents),
                     animate_weather_particles.after(update_environment_presentation),
                     follow_animation_closeup_camera.after(move_agents),
-                    camera_controls.after(follow_animation_closeup_camera),
                     sync_active_pets.after(move_agents),
+                    camera_controls
+                        .after(follow_animation_closeup_camera)
+                        .after(follow_pet_closeup_camera),
                     select_grid_cell,
                     game_input,
                     save_input
@@ -3150,6 +3152,13 @@ impl Plugin for StreamTownGamePlugin {
                     drive_level_up_presentation.after(move_agents),
                     update_hud,
                 )
+                    .run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
+                follow_pet_closeup_camera
+                    .after(move_agents)
+                    .after(sync_active_pets)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3649,13 +3658,14 @@ fn setup_rendering(
     let flag_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FLAG").is_some();
     let godray_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GODRAY").is_some();
     let giraffe_closeup = std::env::var_os("STREAM_TOWN_SMOKE_GIRAFFE").is_some();
+    let live_pet_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PET").is_some();
     let placement_closeup = std::env::var_os("STREAM_TOWN_SMOKE_PLACEMENT").is_some();
     let fish_school_closeup = std::env::var_os("STREAM_TOWN_SMOKE_FISH_SCHOOL").is_some();
     let role_audio_closeup = std::env::var_os("STREAM_TOWN_SMOKE_ROLE_AUDIO").is_some();
     let smoke_viewport_height = if material_closeup {
         Some(96.0)
     } else if animation_closeup {
-        Some(8.0)
+        Some(6.0)
     } else if resource_closeup {
         Some(24.0)
     } else if healing_closeup {
@@ -3669,7 +3679,7 @@ fn setup_rendering(
     } else if foliage_closeup {
         Some(45.0)
     } else if shoreline_closeup {
-        Some(80.0)
+        Some(48.0)
     } else if overlay_closeup {
         Some(105.0)
     } else if seagull_closeup {
@@ -3680,6 +3690,8 @@ fn setup_rendering(
         Some(86.0)
     } else if giraffe_closeup {
         Some(42.0)
+    } else if live_pet_closeup {
+        Some(10.0)
     } else if placement_closeup {
         Some(52.0)
     } else if fish_school_closeup {
@@ -11930,9 +11942,7 @@ fn generate_and_spawn_world(
             Transform::from_xyz(focus.x + 30.0, focus.y + 35.0, focus.z + 30.0)
                 .looking_at(focus + Vec3::Y, Vec3::Y)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_SHORELINE").is_some() {
-            let focus = shoreline_focus(&generated, &config.0);
-            Transform::from_translation(focus + Vec3::new(45.0, 48.0, 45.0))
-                .looking_at(focus, Vec3::Y)
+            shoreline_camera_transform(&generated, &config.0)
         } else if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some() {
             let focus = initial_actor_position(&generated, town_hall_position, 0)
                 .map_or(Vec3::ZERO, |position| {
@@ -23397,6 +23407,36 @@ fn follow_animation_closeup_camera(
     controller.set_home(transform);
 }
 
+#[allow(clippy::type_complexity)]
+fn follow_pet_closeup_camera(
+    agents: Query<(&Agent, &Transform), Without<TownCamera>>,
+    pets: Query<(&ActivePetVisual, &Transform), Without<TownCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut TownCameraControllerRuntime),
+        (With<TownCamera>, Without<Agent>, Without<ActivePetVisual>),
+    >,
+) {
+    if std::env::var_os("STREAM_TOWN_SMOKE_PET").is_none() {
+        return;
+    }
+    let Some((pet, pet_transform)) = pets.iter().next() else {
+        return;
+    };
+    let Some((_, owner_transform)) = agents.iter().find(|(agent, _)| agent.id == pet.owner) else {
+        return;
+    };
+    let Ok((mut camera, mut controller)) = cameras.single_mut() else {
+        return;
+    };
+    let focus = owner_transform
+        .translation
+        .lerp(pet_transform.translation, 0.5);
+    let transform = Transform::from_translation(focus + Vec3::new(7.0, 6.0, 7.0))
+        .looking_at(focus + Vec3::Y * 1.8, Vec3::Y);
+    *camera = transform;
+    controller.set_home(transform);
+}
+
 fn unity_smooth_damp_vec3(
     current: Vec3,
     target: Vec3,
@@ -27303,7 +27343,13 @@ fn capture_screenshot(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut runtime_request: ResMut<RuntimeCaptureRequest>,
     time: Res<Time>,
+    state: Res<State<GameState>>,
+    menu_loading: Option<Res<MenuLoadingRuntime>>,
+    menu_reveal: Option<Res<MenuRevealRuntime>>,
+    world_reveal: Option<Res<WorldRevealRuntime>>,
+    loading_screens: Query<(), With<LoadingScreenEntity>>,
     mut elapsed: Local<f32>,
+    mut automatic_state: Local<Option<GameState>>,
     mut automatic_complete: Local<bool>,
     mut counter: Local<u32>,
     mut exit_delay: Local<Option<f32>>,
@@ -27317,13 +27363,24 @@ fn capture_screenshot(
             *exit_delay = None;
         }
     }
-    *elapsed += time.delta_secs();
+    let current_state = *state.get();
+    let automatic_ready = !matches!(current_state, GameState::Boot | GameState::WorldLoading)
+        && menu_loading.is_none()
+        && menu_reveal.is_none()
+        && world_reveal.is_none()
+        && loading_screens.is_empty();
+    if *automatic_state != Some(current_state) || !automatic_ready {
+        *elapsed = 0.0;
+        *automatic_state = Some(current_state);
+    } else {
+        *elapsed += time.delta_secs();
+    }
     let automatic_delay = std::env::var("STREAM_TOWN_SCREENSHOT_DELAY")
         .ok()
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value >= 0.25)
         .unwrap_or(3.0);
-    let automatic_path = if !*automatic_complete && *elapsed >= automatic_delay {
+    let automatic_path = if automatic_ready && !*automatic_complete && *elapsed >= automatic_delay {
         std::env::var_os("STREAM_TOWN_SCREENSHOT").map(PathBuf::from)
     } else {
         None
@@ -32209,9 +32266,10 @@ fn shoreline_focus(world: &GeneratedWorld, config: &GameConfig) -> Vec3 {
         x: world.navigation.width() / 2,
         z: world.navigation.height() / 2,
     };
+    let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
     let best = (0..world.navigation.height())
         .flat_map(|z| (0..world.navigation.width()).map(move |x| GridPos { x, z }))
-        .filter(|position| !world.navigation.is_walkable(*position))
+        .filter(|position| terrain_height(world, *position) <= water_height)
         .filter(|position| {
             [
                 position
@@ -32233,11 +32291,10 @@ fn shoreline_focus(world: &GeneratedWorld, config: &GameConfig) -> Vec3 {
             ]
             .into_iter()
             .flatten()
-            .any(|neighbor| world.navigation.is_walkable(neighbor))
+            .any(|neighbor| terrain_height(world, neighbor) > water_height)
         })
         .min_by_key(|position| position.x.abs_diff(centre.x) + position.z.abs_diff(centre.z))
         .unwrap_or(centre);
-    let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
     let mut boundary = grid_to_world_on_surface(best, config, world);
     boundary.y = water_height;
     let centre_world = grid_to_world_on_surface(centre, config, world);
@@ -32248,6 +32305,21 @@ fn shoreline_focus(world: &GeneratedWorld, config: &GameConfig) -> Vec3 {
     )
     .normalize_or_zero();
     boundary + inward * config.world.cell_size * 2.5
+}
+
+fn shoreline_camera_transform(world: &GeneratedWorld, config: &GameConfig) -> Transform {
+    let focus = shoreline_focus(world, config);
+    let centre = GridPos {
+        x: world.navigation.width() / 2,
+        z: world.navigation.height() / 2,
+    };
+    let centre_world = grid_to_world_on_surface(centre, config, world);
+    let inward =
+        Vec3::new(centre_world.x - focus.x, 0.0, centre_world.z - focus.z).normalize_or_zero();
+    let outward = -inward;
+    let tangent = Vec3::new(-inward.z, 0.0, inward.x);
+    Transform::from_translation(focus + outward * 28.0 + tangent * 8.0 + Vec3::Y * 24.0)
+        .looking_at(focus + Vec3::Y, Vec3::Y)
 }
 
 struct GeneratedTerrainChunk {
@@ -32833,7 +32905,82 @@ fn world_to_grid(position: Vec3, config: &GameConfig) -> Option<GridPos> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     use stream_town_domain::generate_world;
+
+    fn audio_acceptance_record(wav: &[u8]) -> serde_json::Value {
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        let samples = wav[44..]
+            .chunks_exact(2)
+            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+            .collect::<Vec<_>>();
+        let peak = samples
+            .iter()
+            .map(|sample| i32::from(*sample).abs())
+            .max()
+            .unwrap_or_default();
+        let maximum_step = samples
+            .windows(2)
+            .map(|pair| (i32::from(pair[1]) - i32::from(pair[0])).abs())
+            .max()
+            .unwrap_or_default();
+        let sum_squares = samples.iter().fold(0_u128, |sum, sample| {
+            let sample = i128::from(*sample);
+            sum.saturating_add(u128::try_from(sample * sample).expect("sample square is positive"))
+        });
+        serde_json::json!({
+            "sha256": format!("{:x}", Sha256::digest(wav)),
+            "bytes": wav.len(),
+            "samples": samples.len(),
+            "peak": peak,
+            "maximum_step": maximum_step,
+            "sum_squares": sum_squares.to_string(),
+        })
+    }
+
+    fn audio_acceptance_wavs() -> BTreeMap<String, Vec<u8>> {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        let mut clips = BTreeMap::new();
+        clips.insert(
+            "ambience".to_owned(),
+            procedural_ambience_wav(PROCEDURAL_AUDIO_SAMPLE_RATE, 24.0),
+        );
+        for variant in 0..3 {
+            clips.insert(
+                format!("seagull-{variant}"),
+                procedural_seagull_call_wav(variant, PROCEDURAL_AUDIO_SAMPLE_RATE),
+            );
+        }
+        for (role, definition) in &presentation.role_action_audio {
+            let display_name = &content.roles[role].action_animation;
+            for guid in &definition.clip_guids {
+                clips.insert(
+                    format!("{role}:{guid}"),
+                    procedural_role_action_wav(
+                        role,
+                        display_name,
+                        guid,
+                        PROCEDURAL_AUDIO_SAMPLE_RATE,
+                    ),
+                );
+            }
+        }
+        clips
+    }
+
+    fn audio_acceptance_manifest() -> serde_json::Value {
+        let clips = audio_acceptance_wavs()
+            .into_iter()
+            .map(|(name, wav)| (name, format!("{:x}", Sha256::digest(wav))))
+            .collect::<BTreeMap<_, _>>();
+        serde_json::json!({
+            "schema_version": 1,
+            "sample_rate": PROCEDURAL_AUDIO_SAMPLE_RATE,
+            "clips": clips,
+        })
+    }
 
     #[test]
     fn twitch_outbound_replies_preserve_unity_attribution_and_silence() {
@@ -35209,6 +35356,83 @@ mod tests {
         assert_ne!(calls[0], calls[1]);
         assert_ne!(calls[1], calls[2]);
         assert_eq!(calls[0], procedural_seagull_call_wav(0, 8_000));
+    }
+
+    #[test]
+    fn procedural_audio_matches_curated_acceptance_baseline() {
+        let actual = audio_acceptance_manifest();
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/acceptance/audio-baseline.json");
+        let expected: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(actual, expected);
+        let clips = audio_acceptance_wavs();
+        assert_eq!(clips.len(), 39);
+        for (name, wav) in clips {
+            let record = audio_acceptance_record(&wav);
+            assert!(
+                record["peak"].as_i64().unwrap() > 512,
+                "{name} is inaudible"
+            );
+            let maximum_step = record["maximum_step"].as_i64().unwrap();
+            let limit = if name == "ambience" { 128 } else { 12_000 };
+            assert!(
+                maximum_step < limit,
+                "{name} contains a static-like discontinuity"
+            );
+        }
+    }
+
+    #[test]
+    fn shoreline_acceptance_camera_frames_water_and_land_from_the_ocean() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let focus = shoreline_focus(&world, &config);
+        let centre = GridPos {
+            x: world.navigation.width() / 2,
+            z: world.navigation.height() / 2,
+        };
+        let centre_world = grid_to_world_on_surface(centre, &config, &world);
+        let inward = Vec3::new(centre_world.x - focus.x, 0.0, centre_world.z - focus.z).normalize();
+        let boundary_world = focus - inward * config.world.cell_size * 2.5;
+        let boundary = world_to_grid(boundary_world, &config).expect("shoreline is on the grid");
+        let water_height = f32::from(config.world.water_level_centimetres) * 0.01;
+        assert!(terrain_height(&world, boundary) <= water_height);
+        assert!(
+            [
+                boundary
+                    .x
+                    .checked_sub(1)
+                    .map(|x| GridPos { x, z: boundary.z }),
+                (boundary.x + 1 < world.navigation.width()).then_some(GridPos {
+                    x: boundary.x + 1,
+                    z: boundary.z,
+                }),
+                boundary
+                    .z
+                    .checked_sub(1)
+                    .map(|z| GridPos { x: boundary.x, z }),
+                (boundary.z + 1 < world.navigation.height()).then_some(GridPos {
+                    x: boundary.x,
+                    z: boundary.z + 1,
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|neighbor| terrain_height(&world, neighbor) > water_height),
+            "acceptance focus must be derived from the generated water/land boundary"
+        );
+
+        let camera = shoreline_camera_transform(&world, &config);
+        let horizontal_camera_offset = Vec3::new(
+            camera.translation.x - focus.x,
+            0.0,
+            camera.translation.z - focus.z,
+        );
+        assert!(horizontal_camera_offset.dot(inward) < -20.0);
+        let to_focus = (focus + Vec3::Y - camera.translation).normalize();
+        assert!(camera.forward().dot(to_focus) > 0.999);
     }
 
     #[test]

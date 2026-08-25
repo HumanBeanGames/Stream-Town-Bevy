@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "reference_width": 320,
+  "reference_height": 180,
+  "scenarios": [
+    {
+      "name": "main-menu",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.06,
+      "environment": {}
+    },
+    {
+      "name": "town-overview",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.07,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1"
+      }
+    },
+    {
+      "name": "settings",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.05,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_AUTOSTART_SETTINGS": "1"
+      }
+    },
+    {
+      "name": "game-menu",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.05,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_AUTOSTART_GAME_MENU": "1"
+      }
+    },
+    {
+      "name": "build-menu",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.06,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_BOTTOM_BAR": "build"
+      }
+    },
+    {
+      "name": "ruler-vote",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.06,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_VOTE": "ruler"
+      }
+    },
+    {
+      "name": "current-event",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.08,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_EVENT": "fish"
+      }
+    },
+    {
+      "name": "foliage",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.1,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_FOLIAGE": "1"
+      }
+    },
+    {
+      "name": "shoreline",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.08,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_SHORELINE": "1"
+      }
+    },
+    {
+      "name": "animation",
+      "delay_seconds": 4.0,
+      "max_mean_absolute_error": 0.12,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP": "1"
+      }
+    },
+    {
+      "name": "giraffe-pet",
+      "delay_seconds": 4.0,
+      "max_mean_absolute_error": 0.12,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART": "1",
+        "STREAM_TOWN_SMOKE_PET": "giraffe"
+      }
+    },
+    {
+      "name": "credits",
+      "delay_seconds": 2.5,
+      "max_mean_absolute_error": 0.08,
+      "environment": {
+        "STREAM_TOWN_AUTOSTART_CREDITS": "1"
+      }
+    }
+  ]
+}

@@ -7,6 +7,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use image::{DynamicImage, RgbImage, imageops::FilterType};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ContentCatalog, DirtyRegion, GameConfig, GridPos, PlayerSettings, PresentationCatalog,
     SHIPPING_SECONDS_PER_DAY, TechnologyGraphLayout, generate_world_with_content,
@@ -39,6 +42,50 @@ enum Command {
         #[arg(long)]
         skip_build: bool,
     },
+    /// Compare deterministic GPU captures with the curated visual references.
+    VisualAcceptance {
+        #[arg(long)]
+        capture_dir: std::path::PathBuf,
+        #[arg(long)]
+        scenario: Vec<String>,
+        /// Replace the curated references with the supplied, manually reviewed captures.
+        #[arg(long)]
+        update_baseline: bool,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+struct VisualAcceptanceConfig {
+    schema_version: u32,
+    reference_width: u32,
+    reference_height: u32,
+    scenarios: Vec<VisualAcceptanceScenario>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisualAcceptanceScenario {
+    name: String,
+    max_mean_absolute_error: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisualBaselineManifest {
+    schema_version: u32,
+    references: BTreeMap<String, VisualBaselineReference>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisualBaselineReference {
+    sha256: String,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct AudioBaselineManifest {
+    schema_version: u32,
+    sample_rate: u32,
+    clips: BTreeMap<String, String>,
 }
 
 struct StressAgent {
@@ -62,6 +109,11 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
+        Command::VisualAcceptance {
+            capture_dir,
+            scenario,
+            update_baseline,
+        } => visual_acceptance(&capture_dir, &scenario, update_baseline),
     }
 }
 
@@ -138,6 +190,8 @@ fn validate() -> Result<()> {
     )
     .with_context(|| format!("failed to parse {}", presentation_path.display()))?;
     presentation.validate()?;
+    validate_visual_baseline_assets()?;
+    validate_audio_baseline_assets()?;
     let model_baseline_path = Path::new("assets/content/model-conversion-baseline.json");
     let model_baseline: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(model_baseline_path)
@@ -807,6 +861,221 @@ fn validate() -> Result<()> {
     println!(
         "Configuration, 215 prefab archetypes with 44 target sizes, 1 disable-after-time lifetime, 1 unit health-bar contract, and 1 exact pet follower with 5 authored models, 16 enemy model handlers (21 base / 9 permanent / 66 optional / 16 weapons), 4 foliage layers with 21 variants, 42 building model handlers, 6 storage model handlers, 3 authored rotating nodes, 1 passive resource generator, 26 target scoring definitions, 26 building health definitions, 42 total health definitions, 9 enemy definitions with 9 kill rewards, 1 enemy camp, 1 projectile shooter, 422 objectives, 404 source records, 133 textures, 33 materials, 31 animation controllers, 122 embedded FBX clips, 2 active fish-school bindings, 14 role-audio contracts with 35 variants, and all 253 converted models are valid; checked {checked_json} generated JSON files"
     );
+    Ok(())
+}
+
+fn visual_acceptance_config() -> Result<VisualAcceptanceConfig> {
+    let path = Path::new("assets/acceptance/visual-scenarios.json");
+    let config: VisualAcceptanceConfig = serde_json::from_str(
+        &fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+    if config.schema_version != 1
+        || config.reference_width < 64
+        || config.reference_height < 36
+        || config.scenarios.is_empty()
+    {
+        bail!("visual acceptance configuration is invalid");
+    }
+    let mut names = BTreeSet::new();
+    for scenario in &config.scenarios {
+        if !names.insert(scenario.name.clone())
+            || scenario.name.is_empty()
+            || !scenario
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            || !(0.0..=0.25).contains(&scenario.max_mean_absolute_error)
+        {
+            bail!("visual acceptance scenario {:?} is invalid", scenario.name);
+        }
+    }
+    Ok(config)
+}
+
+fn visual_baseline_manifest() -> Result<VisualBaselineManifest> {
+    let path = Path::new("assets/acceptance/visual-baseline.json");
+    serde_json::from_str(
+        &fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn reference_image(image: DynamicImage, width: u32, height: u32) -> RgbImage {
+    image::imageops::resize(&image.to_rgb8(), width, height, FilterType::Lanczos3)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn image_mean_absolute_error(left: &RgbImage, right: &RgbImage) -> Result<f64> {
+    if left.dimensions() != right.dimensions() {
+        bail!("visual acceptance images have different dimensions");
+    }
+    let total_difference = left
+        .pixels()
+        .zip(right.pixels())
+        .flat_map(|(left, right)| {
+            left.0
+                .into_iter()
+                .zip(right.0)
+                .map(|(left, right)| u64::from(left.abs_diff(right)))
+        })
+        .sum::<u64>();
+    let channels = u64::from(left.width()) * u64::from(left.height()) * 3;
+    Ok(total_difference as f64 / channels as f64 / 255.0)
+}
+
+fn validate_visual_baseline_assets() -> Result<()> {
+    let config = visual_acceptance_config()?;
+    let manifest = visual_baseline_manifest()?;
+    if manifest.schema_version != config.schema_version
+        || manifest.references.len() != config.scenarios.len()
+    {
+        bail!("visual baseline manifest does not cover the configured scenarios");
+    }
+    for scenario in &config.scenarios {
+        let path = Path::new("assets/acceptance/visual").join(format!("{}.png", scenario.name));
+        let reference = manifest
+            .references
+            .get(&scenario.name)
+            .with_context(|| format!("visual baseline is missing {}", scenario.name))?;
+        let image =
+            image::open(&path).with_context(|| format!("failed to decode {}", path.display()))?;
+        if image.width() != config.reference_width
+            || image.height() != config.reference_height
+            || reference.width != image.width()
+            || reference.height != image.height()
+            || reference.sha256 != sha256_file(&path)?
+        {
+            bail!(
+                "visual baseline {} failed its integrity check",
+                scenario.name
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_audio_baseline_assets() -> Result<()> {
+    let path = Path::new("assets/acceptance/audio-baseline.json");
+    let manifest: AudioBaselineManifest = serde_json::from_str(
+        &fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", path.display()))?;
+    if manifest.schema_version != 1
+        || manifest.sample_rate != 16_000
+        || manifest.clips.len() != 39
+        || !manifest.clips.contains_key("ambience")
+        || !(0..3).all(|variant| manifest.clips.contains_key(&format!("seagull-{variant}")))
+    {
+        bail!("audio acceptance manifest does not cover the shipping replacement clips");
+    }
+    for (name, hash) in &manifest.clips {
+        if name.is_empty()
+            || hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            bail!("audio acceptance fingerprint for {name:?} is invalid");
+        }
+    }
+    Ok(())
+}
+
+fn visual_acceptance(
+    capture_dir: &Path,
+    selected_scenarios: &[String],
+    update_baseline: bool,
+) -> Result<()> {
+    let config = visual_acceptance_config()?;
+    if update_baseline && !selected_scenarios.is_empty() {
+        bail!("updating the curated baseline requires the complete scenario matrix");
+    }
+    let scenarios = config
+        .scenarios
+        .iter()
+        .filter(|scenario| {
+            selected_scenarios.is_empty() || selected_scenarios.contains(&scenario.name)
+        })
+        .collect::<Vec<_>>();
+    if !selected_scenarios.is_empty() && scenarios.len() != selected_scenarios.len() {
+        bail!("one or more requested visual-acceptance scenarios are unknown");
+    }
+    let baseline_dir = Path::new("assets/acceptance/visual");
+    if update_baseline {
+        fs::create_dir_all(baseline_dir)?;
+    } else {
+        validate_visual_baseline_assets()?;
+    }
+    let mut references = serde_json::Map::new();
+    for scenario in scenarios {
+        let capture_path = capture_dir.join(format!("{}.png", scenario.name));
+        let capture = image::open(&capture_path)
+            .with_context(|| format!("failed to decode capture {}", capture_path.display()))?;
+        if capture.width() < config.reference_width
+            || capture.height() < config.reference_height
+            || u64::from(capture.width()) * u64::from(config.reference_height)
+                != u64::from(capture.height()) * u64::from(config.reference_width)
+        {
+            bail!(
+                "capture {} must preserve the {}x{} reference aspect ratio",
+                capture_path.display(),
+                config.reference_width,
+                config.reference_height
+            );
+        }
+        let sampled = reference_image(capture, config.reference_width, config.reference_height);
+        let baseline_path = baseline_dir.join(format!("{}.png", scenario.name));
+        if update_baseline {
+            sampled
+                .save(&baseline_path)
+                .with_context(|| format!("failed to save {}", baseline_path.display()))?;
+        }
+        let baseline = image::open(&baseline_path)
+            .with_context(|| format!("failed to decode {}", baseline_path.display()))?
+            .to_rgb8();
+        let error = image_mean_absolute_error(&sampled, &baseline)?;
+        if error > scenario.max_mean_absolute_error {
+            bail!(
+                "visual acceptance {} differs by {:.4}, above its {:.4} limit",
+                scenario.name,
+                error,
+                scenario.max_mean_absolute_error
+            );
+        }
+        println!(
+            "Visual acceptance {:<20} mean error {:.4} / {:.4}",
+            scenario.name, error, scenario.max_mean_absolute_error
+        );
+        references.insert(
+            scenario.name.clone(),
+            serde_json::json!({
+                "sha256": sha256_file(&baseline_path)?,
+                "width": baseline.width(),
+                "height": baseline.height(),
+            }),
+        );
+    }
+    if update_baseline {
+        let manifest = serde_json::json!({
+            "schema_version": config.schema_version,
+            "references": references,
+        });
+        fs::write(
+            "assets/acceptance/visual-baseline.json",
+            format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+        )?;
+        validate_visual_baseline_assets()?;
+        println!(
+            "Updated {} curated visual references",
+            config.scenarios.len()
+        );
+    }
     Ok(())
 }
 

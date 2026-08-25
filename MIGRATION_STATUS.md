@@ -887,18 +887,21 @@ mistaken for production-ready systems.
 
 ## Not yet at parity
 
-- Final art-direction polish, curated screenshot/audio acceptance baselines,
-  assistive-technology certification on the release hardware matrix, and source-diff closure for any
-  presentation behavior only reachable through missing media. A shipping-scene
-  reachability audit found no additional custom shaders, VFX prefabs, or UI
-  sound bindings to port: the remaining custom shader/VFX assets belong to
-  Necrolands or development test scenes, and the repository contains no audio
-  media files. Authored global post-processing, menus/HUD, particles, procedural
-  replacement audio, and persisted presentation settings are live.
-- Curated screenshot baselines, signed/notarized distribution, and a hosted
-  Windows release. The headless launch-through-credits acceptance suite,
-  unsigned CI/local Windows archive, and measured reference-machine 60 FPS gate
-  are now implemented.
+- Manual assistive-technology certification on the intended Windows release
+  hardware matrix. The AccessKit contract and automated keyboard/action tests
+  are complete, but Narrator and alternate input hardware still require a human
+  release sign-off.
+- Presentation behavior that could exist only in missing licensed media cannot
+  be reproduced from this repository. A shipping-scene reachability audit found
+  no additional reachable custom shader, VFX prefab, UI sound binding, or audio
+  file to port; Necrolands and development test scenes remain intentionally out
+  of shipping scope. Deterministic provenance-documented replacements cover the
+  reachable ambience, seagull, role-action, and seasonal-music paths.
+- Code signing/notarization and public hosting of the Windows release require
+  owner credentials and a destination. The unsigned local/CI archive, complete
+  launch-through-Credits suite, curated 12-scenario GPU references, exact
+  39-waveform audio fingerprints, and measured reference-machine 60 FPS gate
+  are implemented.
 
 ## Validation
 
@@ -911,6 +914,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo xtask validate
 cargo xtask stress --agents 300
+.\scripts\capture-visual-acceptance.ps1
+cargo run -p xtask -- package-windows --output dist
 ```
 
 Run the applications with:
@@ -958,8 +963,10 @@ generated ambience calls at the source's random cadence and rolloff. The
 shipping grass, critter, and castle-flag custom materials now have typed WGSL
 ports backed by converted renderer bindings. Shipping-scene particle and custom
 shader reachability is closed; the exact pet-prefab follow/model/transform
-contract is also converted and validated. Remaining presentation work is final art tuning,
-release-matrix accessibility certification, and broader curated
-screenshot/audio acceptance coverage.
-Reachable gameplay and balance source-diff closure is complete. Presentation
-acceptance and external release hardening remain environment-dependent work.
+contract is also converted and validated. Curated GPU references now cover 12
+shipping presentation scenarios and exact waveform contracts cover all 39
+generated audio replacements. Reachable gameplay, balance, content,
+presentation, and shipping-scene source-diff closure are complete within the
+available repository oracle. Only external accessibility certification,
+credentialed signing/hosting, and behavior unknowable without absent licensed
+media remain outside the repository-complete migration.

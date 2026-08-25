@@ -27,5 +27,12 @@ by the shipping `SeagulSpawner` prefab; only that prefab's three-variant choice,
 random 1–5 second cadence, ambience routing, and custom distance rolloff are
 retained. No audio samples or third-party recordings are present.
 
+`assets/acceptance/audio-baseline.json` records exact SHA-256 fingerprints for
+the ambience loop, all three seagull calls, and all 35 role-action GUID
+variants. The game test suite regenerates these 39 mono 16-bit/16 kHz WAVs and
+requires byte-for-byte identity. It also checks audible peak levels and bounded
+adjacent-sample steps, so a silent regression or the former static-noise failure
+cannot pass merely because a file remains valid WAV data.
+
 Future replacement recordings must be added to this file with their author,
 source URL, license, and any attribution text before release packaging.

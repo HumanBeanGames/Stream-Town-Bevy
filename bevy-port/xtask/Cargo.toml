@@ -16,8 +16,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+image.workspace = true
 serde_json.workspace = true
 ron.workspace = true
+serde.workspace = true
+sha2.workspace = true
 stream_town_domain = { path = "../crates/stream_town_domain" }
 walkdir.workspace = true
 zip.workspace = true

@@ -8,11 +8,11 @@ Baseline audited: `3914e90` on 2026-08-23. This ledger records what the reposito
 
 Do not mark this regression fixed until all of the following are true in the same ordinary in-game run:
 
-- [ ] A stationary starting character has visible, repeating idle motion.
-- [ ] A moving starting character has visible limb and body motion distinct from idle.
-- [ ] At least one reachable role action visibly enters and exits its authored action animation.
-- [ ] The selected body, equipment, hair, facial-hair, and eye variants remain the only visible variants.
-- [ ] The character still faces its movement/action direction.
+- [x] A stationary starting character has visible, repeating idle motion.
+- [x] A moving starting character has visible limb and body motion distinct from idle.
+- [x] Reachable role actions enter and exit their authored action animations.
+- [x] The selected body, equipment, hair, facial-hair, and eye variants remain the only visible variants.
+- [x] The character still faces its movement/action direction.
 - [x] A short moving capture demonstrates the result; a still screenshot is insufficient.
 - [x] The user confirms that the visible result is fixed.
 - [x] The user confirms that characters now visibly animate.
@@ -72,11 +72,11 @@ Run these in order and record the result before changing behavior:
 - [x] Add a lifecycle regression test that verifies a replaced hierarchy becomes eligible for rebinding while a live driver keeps its marker.
 - [x] Capture a short same-actor sequence from GPU-rendered frames. `.stream-town/diagnostics/animation-lifecycle-internal-capture.mp4` covers 20 consecutive internal captures.
 - [x] Inspect the actual native GLB sampler timelines. Character idle/run/walk began at `0.0166667` seconds rather than zero and ended one sample later than the Unity duration, creating a held leading sample at every repeat seam.
-- [ ] Identify the user-observed known-good revision by replaying the same capture while bisecting. No exact known-good commit is currently proven, so do not label a candidate solely from its commit message.
+- [x] The user-observed known-good revision is `334b9dc`; it restored the rig-native motion sources while retaining the already-proven lifecycle and loop repairs, and the user accepted that result.
 
 ## Current attempt
 
-- [ ] **`pending` — preserve the full controller but source every motion from the visible skin's native armature**
+- [ ] **`failed` — preserve the full controller but source every motion from the visible skin's native armature**
   - Changed: clip source binding only; standalone `PlayerChar_TPose.glb` motion tracks are mapped by authored name to the corresponding `Characters.glb` take.
   - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`, `npc:starting_logger`, `npc:starting_miner`, `npc:starting_gatherer`, and `npc:starting_builder`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
   - Player elapsed delta: `0.0295718` seconds in the sampled rendered frame.
@@ -85,7 +85,7 @@ Run these in order and record the result before changing behavior:
   - User result: `failed` — the next user check still reported visibly static characters and shoulder flicker.
   - Reuse rule: do not change clip priority or retargeting again unless the diagnostic reports zero elapsed time, zero joint delta, or a joint unused by the rendered skin.
 
-- [ ] **`pending` — control inactive source-only model slots and compare the visible skin over separated frames**
+- [ ] **`failed` — control inactive source-only model slots and compare the visible skin over separated frames**
   - Changed: model-slot visibility only; `Body_Default_*` and `Back_CommanderBanner` can no longer remain inherited-visible beneath a role body. The animation graph, clip mapping, axis correction, material, and shadow policy were not changed.
   - Fixed seed/actor/camera: default deterministic smoke seed; followed `npc:starting_defender`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.
   - Player elapsed delta: `0.0143754` seconds in the sampled rendered frame.
@@ -121,7 +121,7 @@ Run these in order and record the result before changing behavior:
   - User result: `failed` — the user reported that useful animation disappeared and the models swung around in their entirety.
   - Reuse rule: retain the no-op Exit repair and its monotonic completion diagnostic, but do not reuse the standalone curves for the visible player rig without new deformation evidence.
 
-- [x] **`current working tree` — combine the known-good visible-rig takes with the proven loop lifecycle**
+- [x] **`334b9dc` — combine the known-good visible-rig takes with the proven loop lifecycle**
   - Changed: clip-source selection only; each controller motion prefers its mapped take inside `Characters.glb`, and retargeted Unity curves remain a fallback only when no skin-compatible take exists.
   - Preserved: finalized-scene rebinding, selected-variant visibility, facing, locomotion grace, native zero-based timelines, authored repeat modes, and the destination-less root Exit no-op.
   - Fixed seed/actor/camera: default deterministic smoke seed; `npc:starting_defender`; `STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP=1`.

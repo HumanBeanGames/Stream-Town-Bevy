@@ -69,6 +69,28 @@ with:
 The ignored output contains twelve full-resolution frames, a machine-readable
 manifest, and an MP4 when `ffmpeg` is available.
 
+Run the complete curated GPU acceptance matrix with:
+
+```powershell
+.\scripts\capture-visual-acceptance.ps1
+```
+
+The runner performs twelve independent fresh-process launches at 1920x1080
+and waits for the real scene-reveal gate before timing each capture. It covers
+the Main Menu, town overview, Settings, game menu, build menu, ruler vote,
+current event, foliage, generated shoreline, live character animation, the
+converted Giraffe pet follower, and Credits. `xtask visual-acceptance` downsamples
+the results to the checked 320x180 references, verifies their SHA-256 integrity,
+and applies a scenario-specific mean-error budget. Use `-Scenario shoreline`
+for a focused run. Only use `-UpdateBaseline` after manually reviewing a full
+capture matrix; partial baseline replacement is rejected.
+
+The audio acceptance gate is part of `cargo test -p stream_town_game`. It
+regenerates all 39 deterministic replacement waveforms, compares their exact
+SHA-256 fingerprints with `assets/acceptance/audio-baseline.json`, and rejects
+inaudible output or static-like sample discontinuities. `xtask validate` checks
+both visual and audio baseline coverage and integrity.
+
 On Windows, `scripts\launch-tools.ps1` launches the authoring suite from any
 working directory. Pass `-Release` for an optimized build or `-ValidateOnly`
 for a headless authoring-data check.
@@ -935,7 +957,6 @@ return to the Main Menu.
 
 The migration now has source-diff closure for reachable gameplay and balance,
 shipping-scene shader/VFX reachability, converted authoring data and assets,
-and automated runtime/package gates. The repository-level
-[`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) records the remaining
-environment-dependent visual, audio, accessibility, signing, and hosting
-acceptance work.
+curated visual/audio acceptance contracts, and automated runtime/package gates.
+The repository-level [`MIGRATION_STATUS.md`](../MIGRATION_STATUS.md) records the
+few remaining external release-certification constraints.

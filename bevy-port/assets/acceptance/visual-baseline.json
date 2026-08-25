@@ -1,0 +1,65 @@
+{
+  "references": {
+    "animation": {
+      "height": 180,
+      "sha256": "fd9141e0fc4013b3b97b84e71dff8f68382ba74f73ae91ccfc8164c553c140bd",
+      "width": 320
+    },
+    "build-menu": {
+      "height": 180,
+      "sha256": "f683005ae300e065dfc96f5679b1a7873923907460b34a7eee79afb62f626a61",
+      "width": 320
+    },
+    "credits": {
+      "height": 180,
+      "sha256": "62ca68963f76346fb39f6053099bbe977dfe6b11455d941d3451a38f67a28d04",
+      "width": 320
+    },
+    "current-event": {
+      "height": 180,
+      "sha256": "54481d110134d45aa71baf5855b6feb821f4ffaac7b5c44280d613c6ae524e71",
+      "width": 320
+    },
+    "foliage": {
+      "height": 180,
+      "sha256": "922d5d424dc9b5aea4a5524155832662d262c6366744d9967db65d06a7e19a1f",
+      "width": 320
+    },
+    "game-menu": {
+      "height": 180,
+      "sha256": "c295517ad6b283899853f3c352915d6ae14a145a227597f33d073a2cc383033b",
+      "width": 320
+    },
+    "giraffe-pet": {
+      "height": 180,
+      "sha256": "465eee9d0d057a2c132c82391d5a1aba69dbfa727ac4de57d47bc69d1e1b91e4",
+      "width": 320
+    },
+    "main-menu": {
+      "height": 180,
+      "sha256": "719743a0a1ad983c21b3fcc2f8a7dd54b18518ea0c74f727ac29b5d69e917cf9",
+      "width": 320
+    },
+    "ruler-vote": {
+      "height": 180,
+      "sha256": "a65563cf8537755015a7921d9664b87da7c86b012e4cedd24640f7ee026f9d39",
+      "width": 320
+    },
+    "settings": {
+      "height": 180,
+      "sha256": "be2b7cfb66ef44b1b7ba4e67e4042f71b0ffcb59cffd28756a2cb31f04aadfd3",
+      "width": 320
+    },
+    "shoreline": {
+      "height": 180,
+      "sha256": "568f2fec6cab5ade6ebc3b81f69e450b4472aad85629a9b515dba171db0c712c",
+      "width": 320
+    },
+    "town-overview": {
+      "height": 180,
+      "sha256": "4fd8da7df9c0c82ae75474fb4d33981a6eacc85d93ace3d6546d933d5f9eef49",
+      "width": 320
+    }
+  },
+  "schema_version": 1
+}
