@@ -2200,21 +2200,7 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         egui::Slider::new(&mut state.player_settings.audio.ambience, 0.0..=1.0).text("Ambience"),
     );
     ui.separator();
-    ui.label("Camera and input");
-    ui.add(
-        egui::Slider::new(
-            &mut state.player_settings.camera.pan_sensitivity,
-            0.0..=100.0,
-        )
-        .text("Mouse pan sensitivity"),
-    );
-    ui.add(
-        egui::Slider::new(
-            &mut state.player_settings.camera.keyboard_pan_sensitivity,
-            0.0..=100.0,
-        )
-        .text("WASD sensitivity"),
-    );
+    ui.label("Camera");
     ui.add(
         egui::Slider::new(
             &mut state.player_settings.camera.zoom_sensitivity,
@@ -2224,29 +2210,10 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     );
     ui.add(
         egui::Slider::new(
-            &mut state.player_settings.camera.edge_scroll_sensitivity,
-            0.0..=100.0,
-        )
-        .text("Edge-scroll sensitivity"),
-    );
-    ui.add(
-        egui::Slider::new(
             &mut state.player_settings.camera.field_of_view_degrees,
             30..=120,
         )
         .text("Field of view"),
-    );
-    ui.checkbox(
-        &mut state.player_settings.camera.keyboard_movement,
-        "Keyboard movement",
-    );
-    ui.checkbox(
-        &mut state.player_settings.camera.edge_scrolling,
-        "Edge scrolling",
-    );
-    ui.checkbox(
-        &mut state.player_settings.camera.mouse_controls,
-        "Mouse controls",
     );
     egui::ComboBox::from_label("Autosave")
         .selected_text(if state.player_settings.autosave_minutes == 0 {

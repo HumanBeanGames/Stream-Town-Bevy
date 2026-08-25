@@ -235,18 +235,18 @@ Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
 
-In game: use WASD to pan, Q/E to zoom, left-click to select a grid cell,
-J to inject a parsed `!join`, F1/F2 to disconnect/reconnect Twitch, F5/F9 to
-save/load, F12 to capture a screenshot, and Escape to open the game menu. Use
-the screen edges for the same Unity-relative pan directions. Gameplay now uses
+In-game gameplay interaction is text-command only. Keyboard, edge, and
+middle-mouse panning are disabled, pointer selection is opt-in for future
+automatic-camera work, and the pointer is hidden until Escape opens the game
+menu or one of its Settings children. Mouse-wheel and Q/E zoom remain
+view-only controls; F12 remains a diagnostic screenshot shortcut. Gameplay uses
 the shipping `MainCamera.prefab` contract directly: a 60-degree perspective
 lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
-the town's negative-X side, physical 11-60 height zoom, its ten-pixel edge band,
-and its serialized XZ movement bounds. The pose is translated to the generated
+the town's negative-X side and physical 11-60 height zoom. The pose is translated to the generated
 Town Hall so different deterministic terrain seeds retain Unity's opening
 composition. Use
 arrow keys and Enter to select Save Game, Load Game, Settings, Exit Game, or
-Idle Mode. On the Main Menu, HUD, vote panels, and Credits, Tab/Shift+Tab moves
+Idle Mode. On the Main Menu and Credits, Tab/Shift+Tab moves
 focus, arrow keys continue from visible keyboard focus, and Enter or Space
 activates the focused control. Settings retain keyboard control: Tab/Shift+Tab changes category,
 arrow keys select or change values, Enter confirms, and Escape invokes the same
@@ -260,7 +260,7 @@ catalog/prerequisite validation and HUD/Twitch feedback.
 For an automated legacy-load smoke test, set `STREAM_TOWN_SAVE_PATH` to an
 imported `.stbevy` file and `STREAM_TOWN_AUTO_LOAD=1`. A retained schema-1
 terrain mesh is validated during conversion and native-save reads, rebuilt as a
-Bevy render mesh and Avian collider on load, and preserved by later F5 saves.
+Bevy render mesh and Avian collider on load, and preserved by later native saves.
 
 `!build` starts a Unity-style per-player placement preview at the last successful
 position, `!move`/direction aliases and `!rotate` adjust
@@ -434,35 +434,15 @@ Unity's explicit immediate snap toward the resource.
 The vertical slice renders the deterministic 200x200 navigation height field as
 a single continuous 636,804-vertex voxel-style terrain mesh, a water surface at
 the authored level, an Avian
-trimesh collider used for surface picking, lighting, converted GLB scenes for
+trimesh collider used for spatial queries, lighting, converted GLB scenes for
 the representative town hall and actors, and primitive fallbacks when an asset
 is unavailable. Actors, resources, buildings, movement, joins, save restores,
-and selection outlines use the same centimetre height data as navigation. The
-live picker uses the converted `SelectionMask` texture and authored emissive
-alpha-cutout material on a terrain-following plane; actor outlines preserve
-Unity's 1.5-unit collider and 1.25 scale, while building selections cover their
-full rotated footprint. Drag selection recreates Unity's local-recruit group
-selection with one outline per member, mass role assignment, confirmed mass
-dismissal, and compatible right-click orders for stations, enemies, and
-resources. Transient selection stores stable actor IDs and is cleared across
-load/new-world boundaries rather than entering save data. The same action
-surface supports single-recruit role changes and confirmed dismissal, plus
-selected-building level-up and confirmed removal through the authoritative
-cost, level-cap, navigation, station, and target cleanup transactions; the Town
-Hall remains protected. Role choices now follow Unity's live `RoleSlot`
-availability contract: full and zero-slot roles are omitted, building-granted
-roles such as Blacksmith appear when their station contributes capacity, and
-mass changes fill the remaining slots deterministically. Enemy selection
-resolves the converted enemy type, and
-enemy camps are selectable across their complete authored footprint with live
-health, maximum-health, and correctly sized outline feedback. Player selection
-restores distinct live health and role-experience meters (including level caps
-and XP requirements), building details show authored maximum levels, and finite
-resources retain Unity's amount-only presentation instead of inventing a cap.
-Selected marketplaces also report their level-scaled hourly output, while
-building level-up controls live-refresh from the authoritative technology cap,
-construction state, adjusted resource cost, and town inventory; unaffordable
-upgrades are visibly disabled and cannot dispatch.
+and retained programmatic selection outlines use the same centimetre height data
+as navigation. The selection model keeps stable actor and grid IDs, complete
+rotated building footprints, terrain-following outline geometry, and authoritative
+actor/building/resource detail resolution for future automatic-camera work. It
+is cleared across load/new-world boundaries rather than entering save data. The
+shipping game does not schedule the pointer picker or expose selection actions.
 The generated heightfield uses a Bevy PBR material extension whose WGSL port
 reconstructs the Unity terrain shader's authored sand/grass height blend, grid
 texture, palette, and tint controls. Runtime-generated terrain now follows the
@@ -660,10 +640,6 @@ at once. The live placer uses a typed port of Unity's transparent lit
 `STREAM_TOWN_SMOKE_SELECTION=1` selects the Town Hall after world generation so
 the image-backed selection window and authored footprint outline can be
 captured without pointer automation.
-`STREAM_TOWN_SMOKE_GROUP_SELECTION=1` selects all starting recruits so their
-authored outlines and mass-action panel can be captured without drag input.
-`STREAM_TOWN_SMOKE_BOTTOM_BAR=build`, `recruit`, or `technology` opens the
-corresponding shipping bottom-bar context for repeatable UI captures.
 `STREAM_TOWN_DEBUG_AGE_TWO=1` unlocks the authored Town Hall age upgrade for a
 repeatable presentation smoke without modifying production configuration.
 `STREAM_TOWN_DEBUG_CARRY=1` equips the converted Player smoke actor as a Logger
@@ -931,26 +907,21 @@ still about 12s and is the dominant remaining startup cost.
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/
 play-time counters, and four-season gauge are loaded from the converted catalog
-and updated from authoritative ECS state. The remaining runtime diagnostics and
-keyboard hints occupy a compact bottom strip and stay available for migration
-testing.
+and updated from authoritative ECS state. Optional runtime diagnostics remain
+available for migration testing without becoming an interactive HUD.
 
-Selecting an occupied grid cell now opens a shipping-style selection window.
-Actors, resource nodes, and every cell in a building footprint resolve against
-authoritative runtime state; the packaged unfilled, green, and red slider art
-shows live health or remaining resources. Selecting empty terrain keeps the
-window hidden.
+The authoritative object-selection model remains available for future automatic
+camera targeting. Pointer selection is not enabled in the shipping game, so its
+selection window and outline remain dormant unless another system selects an
+actor, resource, building, or cell programmatically.
 
-The permanent bottom bar reconstructs Unity's Build, Recruit, and Technology
-buttons from packaged nine-slice, keybind, arrow, and icon artwork. Mouse clicks
-or the original B/R/T shortcuts open a ten-item paged context. Entries preserve
-Unity's serialized ordering and live enabled state, and dispatch through the
-same typed building-placement, NPC recruitment, and technology-vote command
-path used by Twitch rather than duplicating gameplay rules.
+The Unity Build, Recruit, and Technology bottom bar is intentionally omitted.
+Building placement, recruitment, and technology voting are reached exclusively
+through the stable chat grammar and its typed command queues.
 
 Active technology and governance votes use the shipping voting-menu art.
 Technology votes show their converted icon, live approval share, total votes,
-countdown, and a broadcaster-equivalent local vote button. Ruler elections and
+countdown, and a text-command reminder. Ruler elections and
 retention votes show the Unity prompt, deterministic top-five/yes-no tally, and
 the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|keep`
 opens reproducible visual-acceptance fixtures without bypassing the real vote

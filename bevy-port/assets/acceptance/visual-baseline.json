@@ -5,11 +5,6 @@
       "sha256": "fd9141e0fc4013b3b97b84e71dff8f68382ba74f73ae91ccfc8164c553c140bd",
       "width": 320
     },
-    "build-menu": {
-      "height": 180,
-      "sha256": "f683005ae300e065dfc96f5679b1a7873923907460b34a7eee79afb62f626a61",
-      "width": 320
-    },
     "credits": {
       "height": 180,
       "sha256": "62ca68963f76346fb39f6053099bbe977dfe6b11455d941d3451a38f67a28d04",
@@ -57,7 +52,7 @@
     },
     "town-overview": {
       "height": 180,
-      "sha256": "4fd8da7df9c0c82ae75474fb4d33981a6eacc85d93ace3d6546d933d5f9eef49",
+      "sha256": "24bbc0e7480ce73ce8c39a02a96356deb2c7a36b792a5803ac5119f7e0960dc1",
       "width": 320
     }
   },

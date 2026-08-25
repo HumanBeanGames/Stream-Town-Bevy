@@ -36,15 +36,6 @@
       }
     },
     {
-      "name": "build-menu",
-      "delay_seconds": 2.5,
-      "max_mean_absolute_error": 0.06,
-      "environment": {
-        "STREAM_TOWN_AUTOSTART": "1",
-        "STREAM_TOWN_SMOKE_BOTTOM_BAR": "build"
-      }
-    },
-    {
       "name": "ruler-vote",
       "delay_seconds": 2.5,
       "max_mean_absolute_error": 0.06,

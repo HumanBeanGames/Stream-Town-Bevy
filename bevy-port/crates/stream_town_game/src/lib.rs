@@ -36,7 +36,7 @@ use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::{query::QueryData, system::SystemParam},
     gltf::{GltfMaterialName, GltfMeshName},
-    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    input::mouse::AccumulatedMouseScroll,
     input_focus::{FocusCause, InputFocus, InputFocusVisible},
     light::DirectionalLightShadowMap,
     math::Affine2,
@@ -66,7 +66,8 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
     transform::TransformSystems,
     window::{
-        MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode, WindowResolution,
+        CursorOptions, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode,
+        WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
     world_serialization::{WorldInstance, WorldInstanceReady},
@@ -120,10 +121,7 @@ const UNITY_TOWN_CAMERA_MIN_HEIGHT: f32 = 11.0;
 const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
 const UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT: f32 = 15.0;
 const UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT: f32 = 20.0;
-const UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS: f32 = 0.5;
 const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
-const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 10.0;
-const UNITY_TOWN_CAMERA_EDGE_SIZE: f32 = 10.0;
 const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
     [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
 const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
@@ -143,9 +141,8 @@ const SELECTION_MASK_MATERIAL_ID: &str = "material:631afbf4de8b7ad4eabc5e30e0b2c
 #[cfg(test)]
 const SELECTION_MASK_TEXTURE_PATH: &str = "Assets/Textures/SelectionMask.png";
 const PLAYER_SELECTION_OUTLINE_SCALE_CELLS: f32 = 1.5 * 1.25 / 2.0;
-const SELECTION_OUTLINE_SURFACE_OFFSET: f32 = 0.15;
 const SELECTION_OUTLINE_COLOR: Vec4 = Vec4::new(1.0, 0.92, 0.02, 0.92);
-const GROUP_SELECTION_OUTLINE_DEPTH_BIAS: f32 = 8.0;
+const SELECTION_OUTLINE_DEPTH_BIAS: f32 = 8.0;
 const WORLD_REVEAL_GPU_STABLE_FRAMES: u64 = 6;
 // Building_Gate.prefab uses a 4 x 1 x 4 trigger centred on the gate. Converted
 // building models are authored at Unity scale and then scaled by cell_size / 2.
@@ -245,19 +242,6 @@ const SELECTION_PANEL_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/SelectionWindow/UI_SelectionWindow_GreenSlider_Filled.png",
     "Assets/Sprites/SelectionWindow/UI_SelectionWindow_RedSlider_Filled.png",
 ];
-const BOTTOM_BAR_TEXTURE_PATHS: [&str; 11] = [
-    "Assets/Sprites/Buttons/UI_Button.png",
-    "Assets/Sprites/Buttons/UI_Button_Unpressed.png",
-    "Assets/Sprites/Buttons/UI_Button_Disabled.png",
-    "Assets/Sprites/Buttons/UI_Button_DropShadow.png",
-    "Assets/Sprites/Buttons/UI_Button_Keybind.png",
-    "Assets/Sprites/Buttons/UI_Icon_Build_Small.png",
-    "Assets/Sprites/Buttons/UI_Icon_Recruit_Small.png",
-    "Assets/Sprites/Buttons/UI_Icon_TechTree_Small.png",
-    "Assets/Sprites/BuildRecruitMenus/UI_BuildRecruit_Background.png",
-    "Assets/Sprites/BuildRecruitMenus/UI_Arrow.png",
-    "Assets/Resources/Icons/UI_Icon_BuildRecruit_Background.png",
-];
 const VOTE_TEXTURE_PATHS: [&str; 9] = [
     "Assets/Sprites/VotingMenu/UI_VotingMenu_Background.png",
     "Assets/Sprites/VotingMenu/UI_VotingMenu_TimerSlider_Filled.png",
@@ -301,10 +285,10 @@ const FIREBALL_TRAIL_SIZE: f32 = 0.3;
 const BUILDING_HIT_SECONDS: f32 = 0.5;
 const BUILDING_HIT_SMOKE_SPEED: f32 = 3.0;
 const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
-const SETTINGS_APPLY_INDEX: usize = 29;
-const SETTINGS_DEFAULTS_INDEX: usize = 30;
-const SETTINGS_BACK_INDEX: usize = 31;
-const SETTINGS_MENU_ITEM_COUNT: usize = 32;
+const SETTINGS_APPLY_INDEX: usize = 23;
+const SETTINGS_DEFAULTS_INDEX: usize = 24;
+const SETTINGS_BACK_INDEX: usize = 25;
+const SETTINGS_MENU_ITEM_COUNT: usize = 26;
 const AMBIENCE_GAIN: f32 = 0.16;
 const SEAGULL_GAIN: f32 = 0.28;
 const SEAGULL_FLIGHT_SECONDS: f32 = 32.0;
@@ -313,7 +297,7 @@ const SEAGULL_MAX_AUDIO_DISTANCE: f32 = 50.0;
 const SEAGULL_MODEL_PATH: &str = "migrated/models/Models/Critters/Critter_Seagull_01.glb";
 const RAIN_CAMERA_CULL_DISTANCE: f32 = 7.5;
 const WORLD_UI_SAFE_TOP: f32 = 78.0;
-const WORLD_UI_SAFE_BOTTOM: f32 = 112.0;
+const WORLD_UI_SAFE_BOTTOM: f32 = 0.0;
 const WORLD_UI_OVERLAY_MARGIN: f32 = 36.0;
 const UNITY_MAIN_UI_REFERENCE_HEIGHT: f32 = 2_160.0;
 const UNITY_SETTINGS_UI_REFERENCE_HEIGHT: f32 = 1_080.0;
@@ -520,8 +504,6 @@ enum CommandOrigin {
     Twitch,
     /// Local tool/keyboard injection mirrors Unity's debug bridge permission bypass.
     LocalDebug,
-    /// Local shipping UI reuses command dispatch without impersonating a Twitch identity.
-    LocalUi,
 }
 
 #[derive(Resource, Default)]
@@ -596,7 +578,6 @@ enum AccessibleButtonScope {
     GameMenu,
     Settings,
     SettingsConfirm,
-    InGame,
     Credits,
 }
 
@@ -618,21 +599,6 @@ struct MenuIoRequest {
 
 #[derive(Resource, Default)]
 struct CameraIdleMode(bool);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BottomBarContext {
-    Build,
-    Recruit,
-    Technology,
-}
-
-#[derive(Resource, Default)]
-struct BottomBarRuntime {
-    context: Option<BottomBarContext>,
-    scroll_index: usize,
-    rebuild: bool,
-    signature: String,
-}
 
 #[derive(Resource)]
 struct RuntimeConsoleRuntime {
@@ -707,7 +673,6 @@ struct CameraRequest {
 #[derive(Clone, Debug)]
 enum AgentCommand {
     Teleport { actor: StableId, position: GridPos },
-    Retarget(StableId),
     Ping(StableId),
     Despawn(StableId),
 }
@@ -739,18 +704,11 @@ struct SelectedCell(Option<GridPos>);
 #[derive(Resource, Default)]
 struct SelectedActor(Option<StableId>);
 
-#[derive(Resource, Default)]
-struct SelectedRecruitGroup {
-    actors: BTreeSet<StableId>,
-    drag_start: Option<Vec2>,
-}
-
-#[derive(Resource, Default)]
-struct GroupSelectionActions {
-    dismiss_armed: bool,
-    remove_armed: Option<StableId>,
-    panel_signature: Option<String>,
-}
+/// Opt-in marker for the retained pointer-to-object resolver. Shipping gameplay
+/// never inserts this resource: text commands own interaction, while the
+/// selection model stays available for future automatic camera targeting.
+#[derive(Resource)]
+struct PointerObjectSelectionEnabled;
 
 #[derive(Resource, Default)]
 struct EnvironmentPresentation {
@@ -1248,7 +1206,6 @@ struct RenderAssets {
     main_menu_textures: BTreeMap<String, Handle<Image>>,
     top_bar_textures: BTreeMap<String, Handle<Image>>,
     selection_panel_textures: BTreeMap<String, Handle<Image>>,
-    bottom_bar_textures: BTreeMap<String, Handle<Image>>,
     vote_textures: BTreeMap<String, Handle<Image>>,
     objective_textures: BTreeMap<String, Handle<Image>>,
     current_event_textures: BTreeMap<String, Handle<Image>>,
@@ -2221,51 +2178,6 @@ impl SelectionPanelDetails {
     }
 }
 
-#[derive(Component)]
-struct GroupSelectionPanel;
-
-#[derive(Component)]
-struct GroupDismissLabel;
-
-#[derive(Component)]
-struct BuildingRemoveLabel;
-
-#[derive(Component)]
-struct BuildingLevelEnabled(bool);
-
-#[derive(Component, Clone, Debug)]
-enum GroupSelectionAction {
-    AssignRole(StableId),
-    Dismiss,
-    LevelBuilding(StableId),
-    RemoveBuilding(StableId),
-}
-
-#[derive(Component)]
-struct BottomBarMain;
-
-#[derive(Component)]
-struct BottomBarContextPanel;
-
-#[derive(Component, Clone, Copy)]
-struct BottomBarMainButton(BottomBarContext);
-
-#[derive(Component)]
-struct BottomBarScrollButton {
-    direction: i8,
-    enabled: bool,
-}
-
-#[derive(Component, Clone, Debug)]
-enum BottomBarAction {
-    Build(StableId),
-    Recruit(StableId),
-    Technology(StableId),
-}
-
-#[derive(Component)]
-struct BottomBarActionEnabled(bool);
-
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 enum VotePanelKind {
     Technology,
@@ -2295,12 +2207,6 @@ enum VoteFillKind {
 struct TechnologyVoteIcon;
 
 #[derive(Component)]
-struct TechnologyVoteCastButton;
-
-#[derive(Component)]
-struct TechnologyVoteCastEnabled(bool);
-
-#[derive(Component)]
 struct TownGoalPanel;
 
 #[derive(Component)]
@@ -2316,31 +2222,8 @@ enum CurrentEventText {
 #[derive(Component)]
 struct CurrentEventFill;
 
-type TechnologyVoteIconQuery<'w, 's> = Query<
-    'w,
-    's,
-    &'static mut ImageNode,
-    (With<TechnologyVoteIcon>, Without<TechnologyVoteCastButton>),
->;
-type TechnologyVoteCastQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static mut TechnologyVoteCastEnabled,
-        &'static mut ImageNode,
-    ),
-    (With<TechnologyVoteCastButton>, Without<TechnologyVoteIcon>),
->;
-type TechnologyVoteCastInteractionQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static Interaction,
-        &'static TechnologyVoteCastEnabled,
-        &'static mut ImageNode,
-    ),
-    (Changed<Interaction>, With<TechnologyVoteCastButton>),
->;
+type TechnologyVoteIconQuery<'w, 's> =
+    Query<'w, 's, &'static mut ImageNode, With<TechnologyVoteIcon>>;
 type GameMenuIdleToggleQuery<'w, 's> = Query<
     'w,
     's,
@@ -2701,12 +2584,6 @@ struct BuildingPresentation {
 }
 
 #[derive(Component)]
-struct GroupSelectionOutline(StableId);
-
-#[derive(Component)]
-struct GroupSelectionRect;
-
-#[derive(Component)]
 struct TownCamera;
 
 #[derive(Component, Clone)]
@@ -2714,7 +2591,6 @@ struct TownCameraControllerRuntime {
     home: Transform,
     move_target: Vec3,
     zoom_target_height: f32,
-    pan_velocity: Vec3,
 }
 
 #[derive(Default)]
@@ -2738,7 +2614,6 @@ impl TownCameraControllerRuntime {
         Self {
             move_target: home.translation,
             zoom_target_height: UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT,
-            pan_velocity: Vec3::ZERO,
             home,
         }
     }
@@ -2746,7 +2621,6 @@ impl TownCameraControllerRuntime {
     fn set_home(&mut self, home: Transform) {
         self.move_target = home.translation;
         self.zoom_target_height = UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT;
-        self.pan_velocity = Vec3::ZERO;
         self.home = home;
     }
 
@@ -2754,7 +2628,6 @@ impl TownCameraControllerRuntime {
         *transform = self.home;
         self.move_target = transform.translation;
         self.zoom_target_height = UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT;
-        self.pan_velocity = Vec3::ZERO;
     }
 }
 
@@ -3138,7 +3011,6 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<InputFocusVisible>()
             .init_resource::<MenuIoRequest>()
             .init_resource::<CameraIdleMode>()
-            .init_resource::<BottomBarRuntime>()
             .init_resource::<RuntimeConsoleRuntime>()
             .init_resource::<RuntimeCaptureRequest>()
             .init_resource::<CameraCommandQueue>()
@@ -3148,8 +3020,6 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<TwitchConnection>()
             .init_resource::<SelectedCell>()
             .init_resource::<SelectedActor>()
-            .init_resource::<SelectedRecruitGroup>()
-            .init_resource::<GroupSelectionActions>()
             .init_resource::<EnvironmentPresentation>()
             .init_resource::<PostProcessPresentation>()
             .init_resource::<BuildingMaterialInstances>()
@@ -3220,6 +3090,7 @@ impl Plugin for StreamTownGamePlugin {
                     apply_authored_ui_fonts,
                 ),
             )
+            .add_systems(PostUpdate, sync_cursor_visibility)
             .add_systems(
                 Update,
                 (
@@ -3422,12 +3293,14 @@ impl Plugin for StreamTownGamePlugin {
                         .after(move_agents)
                         .in_set(GameplaySimulationSet),
                     sync_active_pets.after(move_agents),
-                    camera_controls
+                    camera_zoom_and_commands
                         .after(follow_animation_closeup_camera)
                         .after(follow_pet_closeup_camera)
                         .in_set(GameplaySimulationSet),
-                    select_grid_cell.in_set(GameplaySimulationSet),
-                    game_input.in_set(GameplaySimulationSet),
+                    select_grid_cell
+                        .run_if(resource_exists::<PointerObjectSelectionEnabled>)
+                        .in_set(GameplaySimulationSet),
+                    inject_environment_commands.in_set(GameplaySimulationSet),
                     save_input
                         .after(apply_agent_commands)
                         .after(apply_building_commands)
@@ -3487,7 +3360,7 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 (
                     capture_foliage_acceptance
-                        .after(camera_controls)
+                        .after(camera_zoom_and_commands)
                         .after(finish_world_reveal),
                     sync_world_render_lod.after(capture_foliage_acceptance),
                 )
@@ -3507,38 +3380,12 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
-                    recruit_group_selection_input
-                        .after(select_grid_cell)
-                        .before(move_agents),
                     sync_selection_outline.after(select_grid_cell),
-                    sync_group_selection_outlines
-                        .after(recruit_group_selection_input)
-                        .after(move_agents),
-                    update_group_selection_panel.after(recruit_group_selection_input),
-                    group_selection_action_buttons
-                        .after(update_group_selection_panel)
-                        .in_set(AccessibilityActionDispatch),
                     update_selection_panel.after(select_grid_cell),
                     update_vote_panels.after(move_agents),
                     update_town_goal_panel.after(move_agents),
                     update_current_event_panel.after(update_enemy_encounters),
                 )
-                    .in_set(GameplaySimulationSet)
-                    .run_if(in_state(GameState::InGame)),
-            )
-            .add_systems(
-                Update,
-                (
-                    bottom_bar_input,
-                    bottom_bar_main_buttons.in_set(AccessibilityActionDispatch),
-                    bottom_bar_scroll_buttons.in_set(AccessibilityActionDispatch),
-                    bottom_bar_action_buttons.in_set(AccessibilityActionDispatch),
-                    technology_vote_cast_button.in_set(AccessibilityActionDispatch),
-                    rebuild_bottom_bar_context,
-                    update_bottom_bar_main_visuals,
-                )
-                    .chain()
-                    .after(game_input)
                     .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3586,7 +3433,7 @@ impl Plugin for StreamTownGamePlugin {
                         .run_if(world_loading_cover_requested),
                 )
                     .chain()
-                    .after(game_input)
+                    .after(inject_environment_commands)
                     .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3617,7 +3464,7 @@ impl Plugin for StreamTownGamePlugin {
             .add_systems(
                 Update,
                 (
-                    process_injected_commands.after(game_input),
+                    process_injected_commands.after(inject_environment_commands),
                     apply_agent_commands.after(process_injected_commands),
                     animate_ping_pointers
                         .after(move_agents)
@@ -4137,13 +3984,6 @@ fn setup_rendering(
                 .map(|handle| ((*source_path).to_owned(), handle))
         })
         .collect();
-    let bottom_bar_textures = BOTTOM_BAR_TEXTURE_PATHS
-        .iter()
-        .filter_map(|source_path| {
-            presentation_texture_handle(&presentation.0, asset_server.as_deref(), source_path)
-                .map(|handle| ((*source_path).to_owned(), handle))
-        })
-        .collect();
     let vote_textures = VOTE_TEXTURE_PATHS
         .iter()
         .copied()
@@ -4239,7 +4079,7 @@ fn setup_rendering(
                 base_color: Color::srgb(1.0, 0.983_102, 0.0),
                 emissive: LinearRgba::new(0.877_358_5, 0.836_833_4, 0.0, 1.0),
                 alpha_mode: AlphaMode::Mask(0.5),
-                depth_bias: GROUP_SELECTION_OUTLINE_DEPTH_BIAS,
+                depth_bias: SELECTION_OUTLINE_DEPTH_BIAS,
                 ..default()
             })
         });
@@ -4489,7 +4329,6 @@ fn setup_rendering(
         main_menu_textures,
         top_bar_textures,
         selection_panel_textures,
-        bottom_bar_textures,
         vote_textures,
         objective_textures,
         current_event_textures,
@@ -5331,7 +5170,7 @@ fn standard_material(
 }
 
 fn selection_outline_material(mut material: StandardMaterial) -> StandardMaterial {
-    material.depth_bias = GROUP_SELECTION_OUTLINE_DEPTH_BIAS;
+    material.depth_bias = SELECTION_OUTLINE_DEPTH_BIAS;
     material
 }
 
@@ -7515,7 +7354,6 @@ fn world_render_preload_handles(
     for map in [
         &render.top_bar_textures,
         &render.selection_panel_textures,
-        &render.bottom_bar_textures,
         &render.vote_textures,
         &render.objective_textures,
         &render.current_event_textures,
@@ -9252,14 +9090,6 @@ fn main_menu_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> 
         .unwrap_or_default()
 }
 
-fn bottom_bar_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
-    render
-        .bottom_bar_textures
-        .get(source_path)
-        .cloned()
-        .unwrap_or_default()
-}
-
 fn vote_texture(render: &RenderAssets, source_path: &str) -> Handle<Image> {
     render
         .vote_textures
@@ -9337,30 +9167,6 @@ fn authored_ui_image_with_corner_scale(
             NodeImageMode::Sliced(slicer)
         });
     ImageNode::new(image).with_mode(mode)
-}
-
-fn presentation_ui_image(
-    presentation: &PresentationCatalog,
-    asset_server: Option<&AssetServer>,
-    source_path: &str,
-) -> ImageNode {
-    let Some(handle) = presentation_texture_handle(presentation, asset_server, source_path) else {
-        return ImageNode::default();
-    };
-    let Some(border) = presentation
-        .textures
-        .values()
-        .find(|texture| texture.source_path == source_path)
-        .and_then(|texture| texture.sprite_border)
-    else {
-        return ImageNode::new(handle).with_mode(NodeImageMode::Stretch);
-    };
-    ImageNode::new(handle).with_mode(NodeImageMode::Sliced(TextureSlicer {
-        border: BorderRect::from(border),
-        center_scale_mode: default(),
-        sides_scale_mode: default(),
-        max_corner_scale: 1.0,
-    }))
 }
 
 fn spawn_vote_track(
@@ -9516,48 +9322,23 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     ..default()
                 },
             ));
-            panel
-                .spawn((
-                    TechnologyVoteCastButton,
-                    TechnologyVoteCastEnabled(true),
-                    Button,
-                    authored_ui_image(
-                        render,
-                        BOTTOM_BAR_TEXTURE_PATHS[0],
-                        bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]),
-                    ),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(82),
-                        right: px(82),
-                        bottom: px(16),
-                        height: px(49),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                ))
-                .with_children(|button| {
-                    button.spawn((
-                        ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[4])),
-                        Pickable::IGNORE,
-                        Node {
-                            width: px(27),
-                            height: px(27),
-                            margin: UiRect::right(px(8)),
-                            ..default()
-                        },
-                    ));
-                    button.spawn((
-                        Text::new("VOTE YES"),
-                        TextFont {
-                            font_size: FontSize::Px(18.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        Pickable::IGNORE,
-                    ));
-                });
+            panel.spawn((
+                Text::new("Vote through chat: !vote <technology>"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.97, 0.88, 0.58)),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(24),
+                    right: px(24),
+                    bottom: px(25),
+                    ..default()
+                },
+            ));
         });
 
     commands
@@ -9840,72 +9621,6 @@ fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
                         },
                     ));
                 });
-        });
-}
-
-fn spawn_bottom_bar_button(
-    parent: &mut ChildSpawnerCommands,
-    render: &RenderAssets,
-    context: BottomBarContext,
-    icon_path: &str,
-    key: &str,
-) {
-    parent
-        .spawn((
-            BottomBarMainButton(context),
-            Button,
-            authored_ui_image(
-                render,
-                BOTTOM_BAR_TEXTURE_PATHS[0],
-                bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[0]),
-            ),
-            Node {
-                width: px(88),
-                height: px(88),
-                margin: UiRect::horizontal(px(5)),
-                ..default()
-            },
-        ))
-        .with_children(|button| {
-            button.spawn((
-                ImageNode::new(bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[10])),
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(10),
-                    top: px(10),
-                    width: px(68),
-                    height: px(68),
-                    ..default()
-                },
-            ));
-            button.spawn((
-                ImageNode::new(bottom_bar_texture(render, icon_path)),
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(14),
-                    top: px(14),
-                    width: px(60),
-                    height: px(60),
-                    ..default()
-                },
-            ));
-            button.spawn((
-                Text::new(key),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.98, 0.88, 0.42)),
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(7),
-                    top: px(4),
-                    ..default()
-                },
-            ));
         });
 }
 
@@ -10197,113 +9912,6 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         }
     });
 
-    commands.spawn((
-        WorldEntity,
-        GroupSelectionRect,
-        Name::new("Recruit group selection rectangle"),
-        GlobalZIndex(35),
-        Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            border: UiRect::all(px(2)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.95, 0.82, 0.08, 0.12)),
-        BorderColor::all(Color::srgba(1.0, 0.92, 0.18, 0.9)),
-    ));
-
-    commands.spawn((
-        WorldEntity,
-        GroupSelectionPanel,
-        Name::new("Recruit group actions"),
-        GlobalZIndex(24),
-        Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            right: px(20),
-            bottom: px(232),
-            width: px(460),
-            min_height: px(112),
-            padding: UiRect::all(px(12)),
-            border: UiRect::all(px(2)),
-            flex_direction: FlexDirection::Row,
-            flex_wrap: FlexWrap::Wrap,
-            row_gap: px(6),
-            column_gap: px(6),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.035, 0.075, 0.05, 0.96)),
-        BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
-    ));
-
-    commands
-        .spawn((
-            WorldEntity,
-            BottomBarMain,
-            Name::new("Shipping bottom bar"),
-            GlobalZIndex(22),
-            Node {
-                position_type: PositionType::Absolute,
-                left: percent(50.0),
-                bottom: px(8),
-                width: px(294),
-                height: px(98),
-                margin: UiRect::left(px(-147)),
-                flex_direction: FlexDirection::Row,
-                ..default()
-            },
-        ))
-        .with_children(|parent| {
-            spawn_bottom_bar_button(
-                parent,
-                render,
-                BottomBarContext::Build,
-                BOTTOM_BAR_TEXTURE_PATHS[5],
-                "B",
-            );
-            spawn_bottom_bar_button(
-                parent,
-                render,
-                BottomBarContext::Recruit,
-                BOTTOM_BAR_TEXTURE_PATHS[6],
-                "R",
-            );
-            spawn_bottom_bar_button(
-                parent,
-                render,
-                BottomBarContext::Technology,
-                BOTTOM_BAR_TEXTURE_PATHS[7],
-                "T",
-            );
-        });
-    commands.spawn((
-        WorldEntity,
-        BottomBarContextPanel,
-        Name::new("Bottom bar context"),
-        authored_ui_image(
-            render,
-            BOTTOM_BAR_TEXTURE_PATHS[8],
-            bottom_bar_texture(render, BOTTOM_BAR_TEXTURE_PATHS[8]),
-        ),
-        GlobalZIndex(21),
-        Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            left: percent(50.0),
-            bottom: px(108),
-            width: px(920),
-            height: px(112),
-            margin: UiRect::left(px(-460)),
-            padding: UiRect::all(px(10)),
-            border: UiRect::all(px(2)),
-            flex_direction: FlexDirection::Row,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.035, 0.065, 0.045, 0.35)),
-        BorderColor::all(Color::srgb(0.78, 0.68, 0.24)),
-    ));
     spawn_vote_panels(commands, render);
     spawn_town_goal_panel(commands, render);
     spawn_current_event_panel(commands, render);
@@ -10509,26 +10117,28 @@ fn tag_accessible_buttons(
 ) {
     for (entity, main, game, idle, tab, value, settings, credits) in &buttons {
         let scope = if main.is_some() {
-            AccessibleButtonScope::MainMenu
+            Some(AccessibleButtonScope::MainMenu)
         } else if game.is_some() || idle.is_some() {
-            AccessibleButtonScope::GameMenu
+            Some(AccessibleButtonScope::GameMenu)
         } else if settings.is_some_and(|action| {
             matches!(
                 action,
                 SettingsAction::ConfirmApply | SettingsAction::ConfirmDiscard
             )
         }) {
-            AccessibleButtonScope::SettingsConfirm
+            Some(AccessibleButtonScope::SettingsConfirm)
         } else if tab.is_some() || value.is_some() || settings.is_some() {
-            AccessibleButtonScope::Settings
+            Some(AccessibleButtonScope::Settings)
         } else if credits.is_some() {
-            AccessibleButtonScope::Credits
+            Some(AccessibleButtonScope::Credits)
         } else {
-            AccessibleButtonScope::InGame
+            None
         };
-        commands
-            .entity(entity)
-            .insert((scope, Outline::new(px(0), px(0), Color::NONE)));
+        if let Some(scope) = scope {
+            commands
+                .entity(entity)
+                .insert((scope, Outline::new(px(0), px(0), Color::NONE)));
+        }
     }
 }
 
@@ -10587,29 +10197,17 @@ fn accessibility_scope_active(
         AccessibleButtonScope::SettingsConfirm => {
             menu.page == MenuPage::Settings && menu.confirm_settings_close
         }
-        AccessibleButtonScope::InGame => {
-            state == GameState::InGame && menu.page == MenuPage::Closed
-        }
         AccessibleButtonScope::Credits => state == GameState::Credits,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn accessibility_button_enabled(
     main: Option<&MainMenuAction>,
     game: Option<&GameMenuAction>,
-    scroll: Option<&BottomBarScrollButton>,
-    bottom_action: Option<&BottomBarActionEnabled>,
-    technology_vote: Option<&TechnologyVoteCastEnabled>,
-    building_level: Option<&BuildingLevelEnabled>,
     has_save: bool,
 ) -> bool {
     main.is_none_or(|action| main_menu_action_enabled(*action, has_save))
         && game.is_none_or(|action| game_menu_action_enabled(*action, has_save))
-        && scroll.is_none_or(|button| button.enabled)
-        && bottom_action.is_none_or(|button| button.0)
-        && technology_vote.is_none_or(|button| button.0)
-        && building_level.is_none_or(|button| button.0)
 }
 
 fn set_accessibility_label(node: &mut AccessibleNode, label: impl Into<String>) {
@@ -10629,11 +10227,6 @@ struct AccessibleButtonNodeQuery {
     settings_tab: Option<&'static SettingsTabButton>,
     settings_value: Option<&'static SettingsValueButton>,
     settings_action: Option<&'static SettingsAction>,
-    bottom_main: Option<&'static BottomBarMainButton>,
-    bottom_scroll: Option<&'static BottomBarScrollButton>,
-    bottom_enabled: Option<&'static BottomBarActionEnabled>,
-    vote_enabled: Option<&'static TechnologyVoteCastEnabled>,
-    level_enabled: Option<&'static BuildingLevelEnabled>,
     credits: Option<&'static CreditsSkipButton>,
 }
 
@@ -10661,15 +10254,7 @@ fn enhance_accessible_buttons(
         } else {
             node.set_hidden();
         }
-        let enabled = accessibility_button_enabled(
-            button.main,
-            button.game,
-            button.bottom_scroll,
-            button.bottom_enabled,
-            button.vote_enabled,
-            button.level_enabled,
-            has_save,
-        );
+        let enabled = accessibility_button_enabled(button.main, button.game, has_save);
         if enabled {
             node.clear_disabled();
         } else {
@@ -10711,23 +10296,6 @@ fn enhance_accessible_buttons(
                     SettingsAction::ConfirmDiscard => "Discard unsaved changes",
                 },
             );
-        } else if let Some(main_button) = button.bottom_main {
-            let (label, shortcut) = match main_button.0 {
-                BottomBarContext::Build => ("Open building menu", "B"),
-                BottomBarContext::Recruit => ("Open recruitment menu", "R"),
-                BottomBarContext::Technology => ("Open technology menu", "T"),
-            };
-            set_accessibility_label(node, label);
-            node.set_keyboard_shortcut(shortcut);
-        } else if let Some(scroll_button) = button.bottom_scroll {
-            set_accessibility_label(
-                node,
-                if scroll_button.direction < 0 {
-                    "Previous action page"
-                } else {
-                    "Next action page"
-                },
-            );
         } else if button.credits.is_some() {
             set_accessibility_label(node, "Skip credits");
         }
@@ -10759,10 +10327,6 @@ fn accessibility_input(
         Option<&UiGlobalTransform>,
         Option<&MainMenuAction>,
         Option<&GameMenuAction>,
-        Option<&BottomBarScrollButton>,
-        Option<&BottomBarActionEnabled>,
-        Option<&TechnologyVoteCastEnabled>,
-        Option<&BuildingLevelEnabled>,
     )>,
 ) {
     if let Some(previous) = runtime.synthetic_pressed.take()
@@ -10784,23 +10348,11 @@ fn accessibility_input(
                 transform,
                 main,
                 game,
-                scroll,
-                bottom_enabled,
-                vote_enabled,
-                level_enabled,
             )| {
                 let visible = !matches!(visibility, Some(Visibility::Hidden))
                     && inherited_visibility.is_none_or(|visibility| visibility.get())
                     && accessibility_scope_active(*scope, *state.get(), &menu);
-                let enabled = accessibility_button_enabled(
-                    main,
-                    game,
-                    scroll,
-                    bottom_enabled,
-                    vote_enabled,
-                    level_enabled,
-                    has_save,
-                );
+                let enabled = accessibility_button_enabled(main, game, has_save);
                 (visible && enabled).then(|| {
                     let position = transform.map_or(Vec2::ZERO, |transform| {
                         transform.to_scale_angle_translation().2
@@ -11076,7 +10628,9 @@ fn announce_accessibility_state(
             "Game menu. Use arrow keys and Enter.".to_owned()
         }
         GameState::InGame if !command_feedback.0.is_empty() => command_feedback.0.clone(),
-        GameState::InGame => "Town ready. Press Tab to move between interface actions.".to_owned(),
+        GameState::InGame => {
+            "Town ready. Text commands are active; press Escape for the game menu.".to_owned()
+        }
         GameState::Credits => {
             "Credits. Press Escape or activate Skip credits to return.".to_owned()
         }
@@ -11163,8 +10717,8 @@ fn settings_tab_indices(tab: SettingsTab) -> &'static [usize] {
     match tab {
         SettingsTab::Video => &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         SettingsTab::Audio => &[11, 12, 13, 14],
-        SettingsTab::Gameplay => &[15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
-        SettingsTab::Accessibility => &[26, 27, 28],
+        SettingsTab::Gameplay => &[15, 16, 17, 18, 19],
+        SettingsTab::Accessibility => &[20, 21, 22],
         SettingsTab::Connection => &[],
     }
 }
@@ -11173,8 +10727,8 @@ const fn settings_tab_for_index(index: usize) -> Option<SettingsTab> {
     match index {
         0..=10 => Some(SettingsTab::Video),
         11..=14 => Some(SettingsTab::Audio),
-        15..=25 => Some(SettingsTab::Gameplay),
-        26..=28 => Some(SettingsTab::Accessibility),
+        15..=19 => Some(SettingsTab::Gameplay),
+        20..=22 => Some(SettingsTab::Accessibility),
         _ => None,
     }
 }
@@ -11233,31 +10787,16 @@ fn settings_value_label(settings: &PlayerSettings, index: usize) -> (&'static st
             format!("{}%", volume_percent(settings.audio.ambience)),
         ),
         15 => (
-            "Keyboard (WASD)",
-            on_off(camera.keyboard_movement).to_owned(),
-        ),
-        16 => ("Mouse Controls", on_off(camera.mouse_controls).to_owned()),
-        17 => ("Edge Scrolling", on_off(camera.edge_scrolling).to_owned()),
-        18 => ("Pan Sensitivity", format!("{:.0}", camera.pan_sensitivity)),
-        19 => (
             "Zoom Sensitivity",
             format!("{:.0}", camera.zoom_sensitivity),
         ),
-        20 => (
-            "Keyboard Sensitivity",
-            format!("{:.0}", camera.keyboard_pan_sensitivity),
-        ),
-        21 => (
-            "Edge Sensitivity",
-            format!("{:.0}", camera.edge_scroll_sensitivity),
-        ),
-        22 => ("Field of View", camera.field_of_view_degrees.to_string()),
-        23 => ("Username Display", format!("{:?}", interface.display_names)),
-        24 => (
+        16 => ("Field of View", camera.field_of_view_degrees.to_string()),
+        17 => ("Username Display", format!("{:?}", interface.display_names)),
+        18 => (
             "Building Health Display",
             format!("{:?}", interface.display_building_health),
         ),
-        25 => (
+        19 => (
             "Autosave Time",
             if settings.autosave_minutes == 0 {
                 "Disabled".to_owned()
@@ -11265,9 +10804,9 @@ fn settings_value_label(settings: &PlayerSettings, index: usize) -> (&'static st
                 format!("{} Minutes", settings.autosave_minutes)
             },
         ),
-        26 => ("UI Scale", format!("{}%", interface.ui_scale_percent)),
-        27 => ("High Contrast", on_off(interface.high_contrast).to_owned()),
-        28 => (
+        20 => ("UI Scale", format!("{}%", interface.ui_scale_percent)),
+        21 => ("High Contrast", on_off(interface.high_contrast).to_owned()),
+        22 => (
             "Reduced Motion",
             on_off(interface.reduced_motion).to_owned(),
         ),
@@ -12160,6 +11699,25 @@ fn update_menu_overlay(
     *visibility = Visibility::Visible;
 }
 
+fn sync_cursor_visibility(
+    state: Res<State<GameState>>,
+    menu: Res<MenuRuntime>,
+    mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    let visible = cursor_visible_for_state(*state.get(), menu.page);
+    for mut cursor in &mut cursors {
+        cursor.visible = visible;
+    }
+}
+
+const fn cursor_visible_for_state(state: GameState, menu_page: MenuPage) -> bool {
+    match state {
+        GameState::MainMenu | GameState::Credits => true,
+        GameState::InGame => !matches!(menu_page, MenuPage::Closed),
+        GameState::Boot | GameState::WorldLoading => false,
+    }
+}
+
 fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
     use std::fmt::Write as _;
 
@@ -12192,7 +11750,7 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
 
 fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str) -> String {
     use std::fmt::Write as _;
-    const COLUMN_BREAK: usize = 16;
+    const COLUMN_BREAK: usize = 13;
 
     let video = &settings.video;
     let camera = &settings.camera;
@@ -12224,19 +11782,7 @@ fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str
             "Ambience volume: {}%",
             volume_percent(settings.audio.ambience)
         ),
-        format!("Keyboard movement: {}", on_off(camera.keyboard_movement)),
-        format!("Mouse controls: {}", on_off(camera.mouse_controls)),
-        format!("Edge scrolling: {}", on_off(camera.edge_scrolling)),
-        format!("Mouse pan sensitivity: {:.0}", camera.pan_sensitivity),
         format!("Zoom sensitivity: {:.0}", camera.zoom_sensitivity),
-        format!(
-            "Keyboard pan sensitivity: {:.0}",
-            camera.keyboard_pan_sensitivity
-        ),
-        format!(
-            "Edge scroll sensitivity: {:.0}",
-            camera.edge_scroll_sensitivity
-        ),
         format!("Camera field of view: {}", camera.field_of_view_degrees),
         format!("Name display: {:?}", interface.display_names),
         format!("Building health: {:?}", interface.display_building_health),
@@ -12547,40 +12093,15 @@ fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, directio
         14 => {
             settings.audio.ambience = step_f32(settings.audio.ambience, direction, 0.0, 1.0, 0.05);
         }
-        15 => settings.camera.keyboard_movement = !settings.camera.keyboard_movement,
-        16 => settings.camera.mouse_controls = !settings.camera.mouse_controls,
-        17 => settings.camera.edge_scrolling = !settings.camera.edge_scrolling,
-        18 => {
-            settings.camera.pan_sensitivity =
-                step_f32(settings.camera.pan_sensitivity, direction, 0.0, 100.0, 1.0);
-        }
-        19 => {
+        15 => {
             settings.camera.zoom_sensitivity =
                 step_f32(settings.camera.zoom_sensitivity, direction, 0.0, 100.0, 1.0);
         }
-        20 => {
-            settings.camera.keyboard_pan_sensitivity = step_f32(
-                settings.camera.keyboard_pan_sensitivity,
-                direction,
-                0.0,
-                100.0,
-                1.0,
-            );
-        }
-        21 => {
-            settings.camera.edge_scroll_sensitivity = step_f32(
-                settings.camera.edge_scroll_sensitivity,
-                direction,
-                0.0,
-                100.0,
-                1.0,
-            );
-        }
-        22 => {
+        16 => {
             settings.camera.field_of_view_degrees =
                 step_u16(settings.camera.field_of_view_degrees, direction, 30, 120, 5);
         }
-        23 => {
+        17 => {
             const MODES: [NameDisplayMode; 3] = [
                 NameDisplayMode::None,
                 NameDisplayMode::StaffAndSubscribers,
@@ -12589,7 +12110,7 @@ fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, directio
             settings.interface.display_names =
                 cycle_choice(&MODES, settings.interface.display_names, increase);
         }
-        24 => {
+        18 => {
             const MODES: [BuildingHealthDisplayMode; 3] = [
                 BuildingHealthDisplayMode::None,
                 BuildingHealthDisplayMode::DamagedOnly,
@@ -12598,17 +12119,17 @@ fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, directio
             settings.interface.display_building_health =
                 cycle_choice(&MODES, settings.interface.display_building_health, increase);
         }
-        25 => {
+        19 => {
             const MINUTES: [u16; 5] = [0, 5, 10, 30, 60];
             settings.autosave_minutes = cycle_choice(&MINUTES, settings.autosave_minutes, increase);
         }
-        26 => {
+        20 => {
             const SCALES: [u16; 6] = [75, 90, 100, 110, 125, 150];
             settings.interface.ui_scale_percent =
                 cycle_choice(&SCALES, settings.interface.ui_scale_percent, increase);
         }
-        27 => settings.interface.high_contrast = !settings.interface.high_contrast,
-        28 => settings.interface.reduced_motion = !settings.interface.reduced_motion,
+        21 => settings.interface.high_contrast = !settings.interface.high_contrast,
+        22 => settings.interface.reduced_motion = !settings.interface.reduced_motion,
         _ => {}
     }
 }
@@ -12736,8 +12257,6 @@ fn generate_and_spawn_world(
     asset_server: Option<Res<AssetServer>>,
     asset_root: Res<RuntimeAssetRoot>,
     mut selected: ResMut<SelectedCell>,
-    mut selected_group: ResMut<SelectedRecruitGroup>,
-    mut bottom_bar: ResMut<BottomBarRuntime>,
     mut placers: ResMut<BuildingPlacers>,
     mut agent_commands: ResMut<AgentCommandQueue>,
     mut render_stats: ResMut<WorldRenderStats>,
@@ -12753,8 +12272,6 @@ fn generate_and_spawn_world(
             .map_or(0, PresentedRenderFrames::current);
         selected.0 = None;
         commands.insert_resource(SelectedActor::default());
-        selected_group.actors.clear();
-        selected_group.drag_start = None;
         *render_stats = WorldRenderStats::default();
         let Some(prepared) = loading.prepared_world.as_mut() else {
             loading.phase = WorldLoadingPhase::Loading;
@@ -13630,16 +13147,6 @@ fn generate_and_spawn_world(
         spawned,
         &generated.deterministic_hash,
     );
-    if let Some(value) = std::env::var_os("STREAM_TOWN_SMOKE_BOTTOM_BAR") {
-        bottom_bar.context = match value.to_string_lossy().to_ascii_lowercase().as_str() {
-            "build" => Some(BottomBarContext::Build),
-            "recruit" => Some(BottomBarContext::Recruit),
-            "technology" | "tech" => Some(BottomBarContext::Technology),
-            _ => None,
-        };
-        bottom_bar.scroll_index = 0;
-        bottom_bar.rebuild = true;
-    }
     if std::env::var_os("STREAM_TOWN_SMOKE_HEALING_VFX").is_some() {
         let focus = grid_to_world_on_surface(centre, &config.0, &generated);
         let spacing = config.0.world.cell_size * 3.2;
@@ -13730,15 +13237,6 @@ fn generate_and_spawn_world(
     );
     if std::env::var_os("STREAM_TOWN_SMOKE_SELECTION").is_some() {
         selected.0 = Some(town_hall_placement);
-    }
-    if std::env::var_os("STREAM_TOWN_SMOKE_GROUP_SELECTION").is_some() {
-        selected.0 = None;
-        selected_group.actors = simulation
-            .actors
-            .keys()
-            .filter(|actor| is_recruited_actor(actor))
-            .cloned()
-            .collect();
     }
     let resource_entity_count = if isolate_animation {
         0
@@ -24187,7 +23685,6 @@ fn capture_foliage_acceptance(
     *camera = sampled_camera;
     controller.move_target = sampled_camera.translation;
     controller.zoom_target_height = sampled_camera.translation.y;
-    controller.pan_velocity = Vec3::ZERO;
 
     let Some(&capture_time) = FOLIAGE_CAPTURE_TIMES_SECONDS.get(capture.next_capture) else {
         return;
@@ -24253,18 +23750,15 @@ fn capture_foliage_acceptance(
     }
 }
 
-fn camera_controls(
+fn camera_zoom_and_commands(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
     menu: Res<MenuRuntime>,
     idle: Res<CameraIdleMode>,
     settings: Res<RuntimePlayerSettings>,
     mut requests: ResMut<CameraCommandQueue>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<
         (
             &mut Transform,
@@ -24281,130 +23775,17 @@ fn camera_controls(
         return;
     };
     // Keep deterministic close-up diagnostics pinned to their authored focus.
-    // An unfocused automated window can leave its cursor at an edge and would
-    // otherwise pan away before the delayed animation capture is written.
     if std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some()
         || std::env::var_os("STREAM_TOWN_FOLIAGE_CAPTURE_DIR").is_some()
     {
         controller.move_target = transform.translation;
-        controller.pan_velocity = Vec3::ZERO;
         return;
     }
+
     let delta_seconds = time.delta_secs();
     if let Projection::Perspective(perspective) = &mut *projection {
         perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
     }
-
-    let is_panning =
-        !idle.0 && settings.0.camera.mouse_controls && mouse_buttons.pressed(MouseButton::Middle);
-    if is_panning {
-        if mouse_buttons.just_pressed(MouseButton::Middle) {
-            // AccumulatedMouseMotion can still contain movement from before the
-            // button edge. Unity starts from the press position, so discard it.
-            controller.pan_velocity = Vec3::ZERO;
-            controller.move_target = transform.translation;
-            return;
-        }
-        // AccumulatedMouseMotion already reports the screen-space drag delta.
-        // Negating Y made vertical drags run opposite to Unity's camera.
-        let unity_delta = mouse_motion.delta;
-        let movement =
-            Vec3::new(unity_delta.y, 0.0, -unity_delta.x) * settings.0.camera.pan_sensitivity;
-        controller.move_target =
-            constrain_town_camera_position(transform.translation + movement, &config.0.world);
-        transform.translation = unity_smooth_damp_vec3(
-            transform.translation,
-            controller.move_target,
-            &mut controller.pan_velocity,
-            UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
-            delta_seconds,
-        );
-        transform.translation =
-            constrain_town_camera_position(transform.translation, &config.0.world);
-    } else if !idle.0 {
-        let edge_direction = if settings.0.camera.mouse_controls
-            && settings.0.camera.edge_scrolling
-            && let Ok(window) = windows.single()
-            && let Some(cursor) = window.cursor_position()
-        {
-            let mut screen = Vec2::ZERO;
-            if cursor.x >= window.width() - UNITY_TOWN_CAMERA_EDGE_SIZE {
-                screen.x = 1.0;
-            } else if cursor.x <= UNITY_TOWN_CAMERA_EDGE_SIZE {
-                screen.x = -1.0;
-            }
-            if cursor.y <= UNITY_TOWN_CAMERA_EDGE_SIZE {
-                screen.y = 1.0;
-            } else if cursor.y >= window.height() - UNITY_TOWN_CAMERA_EDGE_SIZE {
-                screen.y = -1.0;
-            }
-            (screen != Vec2::ZERO).then_some(screen)
-        } else {
-            None
-        };
-
-        let movement_per_second = if let Some(screen) = edge_direction {
-            let direction = unity_camera_world_direction(screen).normalize_or_zero();
-            direction * settings.0.camera.edge_scroll_sensitivity
-        } else if settings.0.camera.keyboard_movement {
-            let mut screen = Vec2::ZERO;
-            if keyboard.pressed(KeyCode::KeyA) {
-                screen.x -= 1.0;
-            }
-            if keyboard.pressed(KeyCode::KeyD) {
-                screen.x += 1.0;
-            }
-            if keyboard.pressed(KeyCode::KeyS) {
-                screen.y -= 1.0;
-            }
-            if keyboard.pressed(KeyCode::KeyW) {
-                screen.y += 1.0;
-            }
-            let zoom_ratio = controller.zoom_target_height
-                / (UNITY_TOWN_CAMERA_MAX_HEIGHT - UNITY_TOWN_CAMERA_MIN_HEIGHT);
-            let zoom_out_boost = (zoom_ratio + 1.0).powf(zoom_ratio + 1.0);
-            unity_camera_world_direction(screen)
-                * (zoom_out_boost * settings.0.camera.keyboard_pan_sensitivity)
-        } else {
-            Vec2::ZERO
-        };
-        controller.move_target +=
-            Vec3::new(movement_per_second.x, 0.0, movement_per_second.y) * delta_seconds;
-        controller.move_target =
-            constrain_town_camera_position(controller.move_target, &config.0.world);
-        let current_height = transform.translation.y;
-        transform.translation = transform.translation.lerp(
-            controller.move_target,
-            (delta_seconds * UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS).clamp(0.0, 1.0),
-        );
-        transform.translation.y = current_height;
-    }
-
-    if !idle.0 && settings.0.camera.mouse_controls {
-        let scroll = unity_mouse_scroll_delta(&mouse_scroll);
-        if scroll.abs() > f32::EPSILON {
-            controller.zoom_target_height = (controller.zoom_target_height
-                - scroll * settings.0.camera.zoom_sensitivity * 0.004)
-                .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
-        }
-    }
-    if !idle.0 {
-        let keyboard_zoom = if keyboard.pressed(KeyCode::KeyQ) {
-            1.0
-        } else if keyboard.pressed(KeyCode::KeyE) {
-            -1.0
-        } else {
-            0.0
-        };
-        controller.zoom_target_height = (controller.zoom_target_height
-            + keyboard_zoom * settings.0.camera.zoom_sensitivity * delta_seconds)
-            .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
-    }
-    transform.translation.y = transform.translation.y.lerp(
-        controller.zoom_target_height,
-        (delta_seconds * UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS).clamp(0.0, 1.0),
-    );
-    controller.move_target.y = transform.translation.y;
 
     if idle.0
         && let Some(request) = requests.0.pop_front()
@@ -24443,8 +23824,35 @@ fn camera_controls(
                     }
                 }
             }
+            transform.translation.x = controller.move_target.x;
+            transform.translation.z = controller.move_target.z;
         }
     }
+
+    if !idle.0 {
+        let scroll = unity_mouse_scroll_delta(&mouse_scroll);
+        if scroll.abs() > f32::EPSILON {
+            controller.zoom_target_height = (controller.zoom_target_height
+                - scroll * settings.0.camera.zoom_sensitivity * 0.004)
+                .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+        }
+        let keyboard_zoom = if keyboard.pressed(KeyCode::KeyQ) {
+            1.0
+        } else if keyboard.pressed(KeyCode::KeyE) {
+            -1.0
+        } else {
+            0.0
+        };
+        controller.zoom_target_height = (controller.zoom_target_height
+            + keyboard_zoom * settings.0.camera.zoom_sensitivity * delta_seconds)
+            .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
+    }
+
+    transform.translation.y = transform.translation.y.lerp(
+        controller.zoom_target_height,
+        (delta_seconds * UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS).clamp(0.0, 1.0),
+    );
+    controller.move_target.y = transform.translation.y;
 }
 
 #[allow(clippy::type_complexity)]
@@ -24502,32 +23910,6 @@ fn follow_pet_closeup_camera(
         .looking_at(focus + Vec3::Y * 1.8, Vec3::Y);
     *camera = transform;
     controller.set_home(transform);
-}
-
-fn unity_smooth_damp_vec3(
-    current: Vec3,
-    target: Vec3,
-    velocity: &mut Vec3,
-    smooth_time: f32,
-    delta_seconds: f32,
-) -> Vec3 {
-    if delta_seconds <= f32::EPSILON {
-        return current;
-    }
-    // UnityEngine.Vector3.SmoothDamp's critically damped approximation with
-    // an unbounded maximum speed, matching CameraController.cs.
-    let omega = 2.0 / smooth_time.max(0.0001);
-    let x = omega * delta_seconds;
-    let decay = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x);
-    let change = current - target;
-    let temporary = (*velocity + change * omega) * delta_seconds;
-    *velocity = (*velocity - temporary * omega) * decay;
-    let mut output = target + (change + temporary) * decay;
-    if (target - current).dot(output - target) > 0.0 {
-        output = target;
-        *velocity = Vec3::ZERO;
-    }
-    output
 }
 
 fn unity_camera_world_direction(screen_direction: Vec2) -> Vec2 {
@@ -24950,18 +24332,6 @@ fn apply_agent_commands(
                     transform.translation = world_position;
                 }
             }
-            AgentCommand::Retarget(actor) => {
-                if let Some((_, mut agent, _, _, _)) = agents
-                    .iter_mut()
-                    .find(|(_, agent, _, _, _)| agent.id == actor)
-                {
-                    agent.goal = AgentGoal::Wander;
-                    agent.path.clear();
-                    agent.path_index = 0;
-                    agent.action_cooldown_seconds = 0.0;
-                    agent.action_started = false;
-                }
-            }
             AgentCommand::Ping(actor) => {
                 if !pointed_actors.insert(actor.clone()) {
                     continue;
@@ -25234,370 +24604,6 @@ fn ray_sphere_distance(origin: Vec3, direction: Vec3, centre: Vec3, radius: f32)
     Some((projected - (radius_squared - closest_squared).sqrt()).max(0.0))
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum RecruitGroupOrder {
-    Station(StableId),
-    Target(StableId),
-}
-
-fn recruit_group_selection_input(
-    mouse: Res<ButtonInput<MouseButton>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
-    ui_buttons: Query<&Interaction, With<Button>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
-    spatial: Option<SpatialQuery>,
-    config: Res<RuntimeConfig>,
-    world: Res<WorldRuntime>,
-    content: Res<RuntimeContent>,
-    station_targets: Res<StationTargetRuntime>,
-    mut simulation: ResMut<SimulationRuntime>,
-    mut selected: ResMut<SelectedCell>,
-    mut selected_actor: ResMut<SelectedActor>,
-    mut group: ResMut<SelectedRecruitGroup>,
-    mut rects: Query<(&mut Node, &mut Visibility), With<GroupSelectionRect>>,
-    mut agents: Query<(&mut Agent, &Transform)>,
-) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        group.actors.clear();
-        group.drag_start = None;
-        selected.0 = None;
-        selected_actor.0 = None;
-    }
-    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
-        return;
-    };
-    let cursor = window.cursor_position();
-    let pointer_over_ui = pointer_is_over_button(ui_buttons.iter());
-    if mouse.just_pressed(MouseButton::Left) && !pointer_over_ui {
-        group.drag_start = cursor;
-    }
-    if let Ok((mut node, mut visibility)) = rects.single_mut() {
-        if let (Some(start), Some(current)) = (group.drag_start, cursor)
-            && mouse.pressed(MouseButton::Left)
-            && start.distance_squared(current) >= 36.0
-        {
-            node.left = px(start.x.min(current.x));
-            node.top = px(start.y.min(current.y));
-            node.width = px((current.x - start.x).abs());
-            node.height = px((current.y - start.y).abs());
-            *visibility = Visibility::Visible;
-        } else {
-            *visibility = Visibility::Hidden;
-        }
-    }
-    if mouse.just_released(MouseButton::Left) {
-        let start = group.drag_start.take();
-        if let (Some(start), Some(end)) = (start, cursor)
-            && start.distance_squared(end) >= 36.0
-            && let (Some(start_world), Some(end_world)) = (
-                viewport_ground_position(camera, camera_transform, start),
-                viewport_ground_position(camera, camera_transform, end),
-            )
-        {
-            let minimum = start_world.min(end_world);
-            let maximum = start_world.max(end_world);
-            let mut recruits = agents
-                .iter()
-                .filter(|(agent, _)| is_recruited_actor(&agent.id))
-                .filter(|(_, transform)| {
-                    world_selection_contains(transform.translation, minimum, maximum)
-                })
-                .map(|(agent, _)| agent.id.clone())
-                .collect::<BTreeSet<_>>();
-            if recruits.len() > 1 {
-                group.actors = recruits;
-                selected.0 = None;
-                selected_actor.0 = None;
-            } else if let Some(actor) = recruits.pop_first() {
-                group.actors.clear();
-                selected.0 = simulation.0.actors.get(&actor).map(|actor| actor.position);
-                selected_actor.0 = Some(actor);
-            } else {
-                group.actors.clear();
-                selected.0 = None;
-                selected_actor.0 = None;
-            }
-        } else {
-            let single_recruit = selected_actor.0.as_ref().filter(|actor_id| {
-                simulation.0.actors.get(*actor_id).is_some_and(|actor| {
-                    is_recruited_actor(&actor.id) || actor.user_type == StreamUserType::Broadcaster
-                })
-            });
-            group.actors = single_recruit.cloned().into_iter().collect();
-        }
-    }
-    if !mouse.just_pressed(MouseButton::Right) || pointer_over_ui || group.actors.is_empty() {
-        return;
-    }
-    let (Some(cursor), Some(spatial)) = (cursor, spatial) else {
-        return;
-    };
-    let Ok(ray) = camera.viewport_to_world(camera_transform, cursor) else {
-        return;
-    };
-    let Some(hit) = spatial.cast_ray(
-        ray.origin,
-        ray.direction,
-        2_000.0,
-        true,
-        &SpatialQueryFilter::default(),
-    ) else {
-        return;
-    };
-    let Some(cell) = world_to_grid(ray.get_point(hit.distance), &config.0) else {
-        return;
-    };
-    let Some(order) =
-        recruit_group_order_at_cell(cell, &content.0, &world.generated, &simulation.0)
-    else {
-        return;
-    };
-    let ordered = apply_recruit_group_order(
-        &group.actors,
-        &order,
-        &content.0,
-        &config.0,
-        &world.generated,
-        &station_targets,
-        &mut simulation.0,
-    );
-    if ordered == 0 {
-        return;
-    }
-    for (mut agent, _) in &mut agents {
-        if group.actors.contains(&agent.id) {
-            agent.goal = AgentGoal::Wander;
-            agent.path.clear();
-            agent.path_index = 0;
-            agent.action_started = false;
-            agent.action_cooldown_seconds = 0.0;
-        }
-    }
-}
-
-fn viewport_ground_position(
-    camera: &Camera,
-    camera_transform: &GlobalTransform,
-    viewport: Vec2,
-) -> Option<Vec3> {
-    let ray = camera.viewport_to_world(camera_transform, viewport).ok()?;
-    let distance = -ray.origin.y / ray.direction.y;
-    (distance.is_finite() && distance >= 0.0).then(|| ray.get_point(distance))
-}
-
-fn world_selection_contains(position: Vec3, minimum: Vec3, maximum: Vec3) -> bool {
-    position.x >= minimum.x
-        && position.x <= maximum.x
-        && position.z >= minimum.z
-        && position.z <= maximum.z
-}
-
-fn is_recruited_actor(actor: &StableId) -> bool {
-    actor.as_str().starts_with("npc:recruit_") || actor.as_str().starts_with("npc:starting_")
-}
-
-fn recruit_group_order_at_cell(
-    cell: GridPos,
-    content: &ContentCatalog,
-    world: &GeneratedWorld,
-    simulation: &WorldSimulation,
-) -> Option<RecruitGroupOrder> {
-    if let Some((building, _)) = selected_building_footprint(cell, content, simulation) {
-        let building = simulation
-            .buildings
-            .values()
-            .find(|state| state.position == building)?;
-        return Some(RecruitGroupOrder::Station(building.id.clone()));
-    }
-    if let Some(enemy) = simulation
-        .actors
-        .values()
-        .find(|actor| actor.position == cell && actor.alive && actor.role.as_str() == "role:enemy")
-    {
-        return Some(RecruitGroupOrder::Target(enemy.id.clone()));
-    }
-    world
-        .resources
-        .iter()
-        .find(|resource| resource.position == cell && resource.amount > 0)
-        .map(|resource| RecruitGroupOrder::Target(resource.id.clone()))
-}
-
-fn apply_recruit_group_order(
-    selected: &BTreeSet<StableId>,
-    order: &RecruitGroupOrder,
-    content: &ContentCatalog,
-    config: &GameConfig,
-    world: &GeneratedWorld,
-    station_targets: &StationTargetRuntime,
-    simulation: &mut WorldSimulation,
-) -> usize {
-    let mut applied = 0;
-    for actor_id in selected {
-        let valid = simulation
-            .actors
-            .get(actor_id)
-            .is_some_and(|actor| match order {
-                RecruitGroupOrder::Station(station) => {
-                    compatible_station_ids(content, simulation, config, actor).contains(station)
-                }
-                RecruitGroupOrder::Target(target) => compatible_target_ids_with_station_runtime(
-                    content,
-                    simulation,
-                    world,
-                    config,
-                    station_targets,
-                    actor,
-                )
-                .contains(target),
-            });
-        if !valid {
-            continue;
-        }
-        let actor = simulation
-            .actors
-            .get_mut(actor_id)
-            .expect("group actor was validated");
-        match order {
-            RecruitGroupOrder::Station(station) => actor.station = Some(station.clone()),
-            RecruitGroupOrder::Target(target) => actor.preferred_target = Some(target.clone()),
-        }
-        applied += 1;
-    }
-    applied
-}
-
-fn sync_group_selection_outlines(
-    mut commands: Commands,
-    group: Res<SelectedRecruitGroup>,
-    config: Res<RuntimeConfig>,
-    world: Res<WorldRuntime>,
-    render: Res<RenderAssets>,
-    agents: Query<(&Agent, &GridLocation, &Transform), Without<GroupSelectionOutline>>,
-    mut outlines: Query<(Entity, &GroupSelectionOutline, &mut Transform), Without<Agent>>,
-) {
-    let mut existing = BTreeMap::new();
-    for (entity, outline, mut transform) in &mut outlines {
-        if group.actors.len() < 2 || !group.actors.contains(&outline.0) {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        if let Some((_, location, agent_transform)) =
-            agents.iter().find(|(agent, _, _)| agent.id == outline.0)
-        {
-            transform.translation = Vec3::new(
-                agent_transform.translation.x,
-                terrain_height(&world.generated, location.0) + SELECTION_OUTLINE_SURFACE_OFFSET,
-                agent_transform.translation.z,
-            );
-            transform.rotation =
-                Quat::from_rotation_y(agent_transform.rotation.to_euler(EulerRot::YXZ).0);
-        }
-        existing.insert(outline.0.clone(), entity);
-    }
-    for (agent, location, transform) in &agents {
-        if group.actors.len() < 2
-            || !group.actors.contains(&agent.id)
-            || existing.contains_key(&agent.id)
-        {
-            continue;
-        }
-        commands.spawn((
-            WorldEntity,
-            GroupSelectionOutline(agent.id.clone()),
-            Mesh3d(render.cloud_plane.clone()),
-            MeshMaterial3d(render.selection.clone()),
-            Transform::from_xyz(
-                transform.translation.x,
-                terrain_height(&world.generated, location.0) + SELECTION_OUTLINE_SURFACE_OFFSET,
-                transform.translation.z,
-            )
-            .with_rotation(Quat::from_rotation_y(
-                transform.rotation.to_euler(EulerRot::YXZ).0,
-            ))
-            .with_scale(Vec3::new(
-                config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
-                1.0,
-                config.0.world.cell_size * PLAYER_SELECTION_OUTLINE_SCALE_CELLS,
-            )),
-            bevy::light::NotShadowCaster,
-            bevy::light::NotShadowReceiver,
-        ));
-    }
-}
-
-fn role_slot_is_available(
-    content: &ContentCatalog,
-    simulation: &WorldSimulation,
-    role: &StableId,
-) -> bool {
-    role_capacity(content, simulation, role).is_none_or(|capacity| {
-        let used = simulation
-            .actors
-            .values()
-            .filter(|actor| actor.role == *role)
-            .count();
-        used < usize::try_from(capacity).unwrap_or(usize::MAX)
-    })
-}
-
-fn group_role_ids(content: &ContentCatalog, simulation: &WorldSimulation) -> Vec<StableId> {
-    content
-        .roles
-        .keys()
-        .filter(|id| !matches!(id.as_str(), "role:ruler" | "role:enemy"))
-        .filter(|id| role_slot_is_available(content, simulation, id))
-        .cloned()
-        .collect()
-}
-
-fn assign_group_role(
-    selected: &BTreeSet<StableId>,
-    role: &StableId,
-    content: &ContentCatalog,
-    simulation: &mut WorldSimulation,
-) -> usize {
-    if !group_role_ids(content, simulation).contains(role) {
-        return 0;
-    }
-    let mut changed = 0;
-    for actor in selected {
-        if simulation.actors.contains_key(actor)
-            && role_is_available(content, simulation, role, Some(actor))
-            && simulation.assign_role(actor, role.clone()).is_ok()
-        {
-            changed += 1;
-        }
-    }
-    changed
-}
-
-fn dismiss_group_recruits(
-    selected: &BTreeSet<StableId>,
-    simulation: &mut WorldSimulation,
-) -> Vec<StableId> {
-    let dismissed = selected
-        .iter()
-        .filter(|actor| is_recruited_actor(actor) && simulation.actors.contains_key(*actor))
-        .cloned()
-        .collect::<Vec<_>>();
-    for actor in &dismissed {
-        simulation.actors.remove(actor);
-    }
-    let resource = StableId::new("resource:recruit").expect("static ID");
-    let current = simulation
-        .town_resources
-        .get(&resource)
-        .copied()
-        .unwrap_or_default();
-    simulation.town_resources.insert(
-        resource,
-        current.saturating_sub(u32::try_from(dismissed.len()).unwrap_or(u32::MAX)),
-    );
-    dismissed
-}
-
 fn remove_selected_building(
     runtime_id: &StableId,
     content: &ContentCatalog,
@@ -25651,423 +24657,6 @@ fn passive_resource_rate_milli_per_second(
             rates
         },
     )
-}
-
-fn format_passive_resource_rates(definition: &BuildingDef, level: u16) -> Option<String> {
-    let rates = passive_resource_rate_milli_per_second(definition, level)
-        .into_iter()
-        .map(|(resource, rate)| {
-            let per_hour = rate.saturating_mul(3_600) / 1_000;
-            format!(
-                "+{per_hour} {}/hr",
-                title_case(resource.as_str().trim_start_matches("resource:"))
-            )
-        })
-        .collect::<Vec<_>>();
-    (!rates.is_empty()).then(|| format!("Rate {}", rates.join(", ")))
-}
-
-fn building_upgrade_affordability(
-    content: &ContentCatalog,
-    simulation: &WorldSimulation,
-    building_id: &StableId,
-    definition: &BuildingDef,
-    state: &BuildingState,
-) -> Option<(bool, BTreeMap<StableId, u32>)> {
-    if !definition.can_level
-        || !state.complete
-        || state.level >= maximum_building_level(content, simulation, building_id)
-    {
-        return None;
-    }
-    let cost = if simulation.building_costs_enabled {
-        building_upgrade_cost(content, simulation, building_id, definition, state.level)
-    } else {
-        BTreeMap::new()
-    };
-    Some((can_afford(simulation, &cost), cost))
-}
-
-fn format_resource_cost(cost: &BTreeMap<StableId, u32>) -> String {
-    cost.iter()
-        .map(|(resource, amount)| {
-            format!(
-                "{amount} {}",
-                title_case(resource.as_str().trim_start_matches("resource:"))
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn group_selection_panel_signature(
-    group: &SelectedRecruitGroup,
-    selected: &SelectedCell,
-    content: &ContentCatalog,
-    simulation: &WorldSimulation,
-) -> String {
-    if !group.actors.is_empty() {
-        let selected = group
-            .actors
-            .iter()
-            .filter_map(|id| {
-                simulation
-                    .actors
-                    .get(id)
-                    .map(|actor| format!("{}={}", id, actor.role))
-            })
-            .collect::<Vec<_>>()
-            .join("|");
-        let roles = group_role_ids(content, simulation)
-            .iter()
-            .map(StableId::as_str)
-            .collect::<Vec<_>>()
-            .join("|");
-        return format!("{selected}#{roles}");
-    }
-    let Some(runtime_id) = selected
-        .0
-        .and_then(|cell| selected_building_id_at_cell(cell, content, simulation))
-    else {
-        return String::new();
-    };
-    let state = &simulation.buildings[&runtime_id];
-    let Some((building_id, definition)) = content
-        .buildings
-        .iter()
-        .find(|(_, definition)| definition.archetype == state.archetype)
-    else {
-        return runtime_id.to_string();
-    };
-    let affordability =
-        building_upgrade_affordability(content, simulation, building_id, definition, state);
-    format!(
-        "{}:{}:{}:{:?}:{}:{}",
-        runtime_id,
-        state.level,
-        state.complete,
-        affordability,
-        simulation.building_costs_enabled,
-        format_passive_resource_rates(definition, state.level).unwrap_or_default(),
-    )
-}
-
-fn update_group_selection_panel(
-    mut commands: Commands,
-    group: Res<SelectedRecruitGroup>,
-    selected: Res<SelectedCell>,
-    content: Res<RuntimeContent>,
-    simulation: Res<SimulationRuntime>,
-    mut actions: ResMut<GroupSelectionActions>,
-    panels: Query<Entity, With<GroupSelectionPanel>>,
-) {
-    let signature = group_selection_panel_signature(&group, &selected, &content.0, &simulation.0);
-    if actions.panel_signature.as_deref() == Some(&signature) {
-        return;
-    }
-    let Ok(panel) = panels.single() else {
-        return;
-    };
-    actions.dismiss_armed = false;
-    actions.remove_armed = None;
-    actions.panel_signature = Some(signature);
-    commands.entity(panel).despawn_children();
-    let selected_building = selected
-        .0
-        .and_then(|cell| selected_building_id_at_cell(cell, &content.0, &simulation.0));
-    if group.actors.is_empty() && selected_building.is_none() {
-        commands.entity(panel).insert(Visibility::Hidden);
-        return;
-    }
-    commands
-        .entity(panel)
-        .insert(Visibility::Visible)
-        .with_children(|parent| {
-            if !group.actors.is_empty() {
-                let label = if group.actors.len() == 1 {
-                    "Recruit Selection".to_owned()
-                } else {
-                    format!("Mass Selection: {}", group.actors.len())
-                };
-                parent.spawn((
-                    Text::new(label),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    Node {
-                        width: percent(100.0),
-                        ..default()
-                    },
-                ));
-                for role in group_role_ids(&content.0, &simulation.0) {
-                    parent
-                        .spawn((
-                            GroupSelectionAction::AssignRole(role.clone()),
-                            Button,
-                            Node {
-                                padding: UiRect::axes(px(9), px(5)),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgb(0.19, 0.34, 0.22)),
-                        ))
-                        .with_child((
-                            Text::new(&content.0.roles[&role].display_name),
-                            TextFont {
-                                font_size: FontSize::Px(14.0),
-                                ..default()
-                            },
-                            TextColor(Color::WHITE),
-                            Pickable::IGNORE,
-                        ));
-                }
-                let dismissible = group.actors.iter().all(is_recruited_actor);
-                if dismissible {
-                    let label = if group.actors.len() == 1 {
-                        "Dismiss"
-                    } else {
-                        "Mass Dismiss"
-                    };
-                    parent
-                        .spawn((
-                            GroupSelectionAction::Dismiss,
-                            Button,
-                            Node {
-                                padding: UiRect::axes(px(9), px(5)),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgb(0.48, 0.12, 0.1)),
-                        ))
-                        .with_child((
-                            GroupDismissLabel,
-                            Text::new(label),
-                            TextFont {
-                                font_size: FontSize::Px(14.0),
-                                ..default()
-                            },
-                            TextColor(Color::WHITE),
-                            Pickable::IGNORE,
-                        ));
-                }
-            } else if let Some(runtime_id) = selected_building {
-                let state = &simulation.0.buildings[&runtime_id];
-                let (building_id, definition) = content
-                    .0
-                    .buildings
-                    .iter()
-                    .find(|(_, definition)| definition.archetype == state.archetype)
-                    .expect("selected building definition was resolved");
-                parent.spawn((
-                    Text::new(format!(
-                        "{}  |  Level {}",
-                        definition.display_name, state.level
-                    )),
-                    TextFont {
-                        font_size: FontSize::Px(18.0),
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    Node {
-                        width: percent(100.0),
-                        ..default()
-                    },
-                ));
-                if let Some(rate) = format_passive_resource_rates(definition, state.level) {
-                    parent.spawn((
-                        Text::new(rate),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.93, 0.78, 0.22)),
-                        Node {
-                            width: percent(100.0),
-                            ..default()
-                        },
-                    ));
-                }
-                if let Some((affordable, cost)) = building_upgrade_affordability(
-                    &content.0,
-                    &simulation.0,
-                    building_id,
-                    definition,
-                    state,
-                ) {
-                    let label = if affordable || cost.is_empty() {
-                        "Level Up".to_owned()
-                    } else {
-                        format!("Needs {}", format_resource_cost(&cost))
-                    };
-                    parent
-                        .spawn((
-                            GroupSelectionAction::LevelBuilding(runtime_id.clone()),
-                            BuildingLevelEnabled(affordable),
-                            Button,
-                            Node {
-                                padding: UiRect::axes(px(9), px(5)),
-                                ..default()
-                            },
-                            BackgroundColor(if affordable {
-                                Color::srgb(0.19, 0.34, 0.22)
-                            } else {
-                                Color::srgb(0.18, 0.18, 0.18)
-                            }),
-                        ))
-                        .with_child((
-                            Text::new(label),
-                            TextFont {
-                                font_size: FontSize::Px(14.0),
-                                ..default()
-                            },
-                            TextColor(if affordable {
-                                Color::WHITE
-                            } else {
-                                Color::srgb(0.55, 0.55, 0.55)
-                            }),
-                            Pickable::IGNORE,
-                        ));
-                } else if definition.can_level {
-                    let label = if state.complete {
-                        "Max Level"
-                    } else {
-                        "Finish Construction"
-                    };
-                    parent.spawn((
-                        Text::new(label),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb(0.55, 0.55, 0.55)),
-                        Node {
-                            padding: UiRect::axes(px(9), px(5)),
-                            ..default()
-                        },
-                    ));
-                }
-                if runtime_id.as_str() != "building:townhall" {
-                    parent
-                        .spawn((
-                            GroupSelectionAction::RemoveBuilding(runtime_id),
-                            Button,
-                            Node {
-                                padding: UiRect::axes(px(9), px(5)),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgb(0.48, 0.12, 0.1)),
-                        ))
-                        .with_child((
-                            BuildingRemoveLabel,
-                            Text::new("Remove"),
-                            TextFont {
-                                font_size: FontSize::Px(14.0),
-                                ..default()
-                            },
-                            TextColor(Color::WHITE),
-                            Pickable::IGNORE,
-                        ));
-                }
-            }
-        });
-}
-
-fn group_selection_action_buttons(
-    content: Res<RuntimeContent>,
-    mut world: ResMut<WorldRuntime>,
-    mut simulation: ResMut<SimulationRuntime>,
-    mut selected: ResMut<SelectedCell>,
-    mut selected_actor: ResMut<SelectedActor>,
-    mut group: ResMut<SelectedRecruitGroup>,
-    mut actions: ResMut<GroupSelectionActions>,
-    mut agent_commands: ResMut<AgentCommandQueue>,
-    mut building_commands: ResMut<BuildingCommandQueue>,
-    buttons: Query<
-        (
-            &Interaction,
-            &GroupSelectionAction,
-            Option<&BuildingLevelEnabled>,
-        ),
-        Changed<Interaction>,
-    >,
-    mut dismiss_labels: Query<&mut Text, (With<GroupDismissLabel>, Without<BuildingRemoveLabel>)>,
-    mut remove_labels: Query<&mut Text, (With<BuildingRemoveLabel>, Without<GroupDismissLabel>)>,
-) {
-    for (interaction, action, level_enabled) in &buttons {
-        if *interaction != Interaction::Pressed || level_enabled.is_some_and(|enabled| !enabled.0) {
-            continue;
-        }
-        match action {
-            GroupSelectionAction::AssignRole(role) => {
-                assign_group_role(&group.actors, role, &content.0, &mut simulation.0);
-                for actor in &group.actors {
-                    agent_commands
-                        .0
-                        .push_back(AgentCommand::Retarget(actor.clone()));
-                }
-                actions.dismiss_armed = false;
-                for mut label in &mut dismiss_labels {
-                    "Mass Dismiss".clone_into(&mut label.0);
-                }
-            }
-            GroupSelectionAction::Dismiss if !actions.dismiss_armed => {
-                actions.dismiss_armed = true;
-                for mut label in &mut dismiss_labels {
-                    "Confirm Dismiss".clone_into(&mut label.0);
-                }
-            }
-            GroupSelectionAction::Dismiss => {
-                for actor in dismiss_group_recruits(&group.actors, &mut simulation.0) {
-                    agent_commands.0.push_back(AgentCommand::Despawn(actor));
-                }
-                group.actors.clear();
-                actions.dismiss_armed = false;
-            }
-            GroupSelectionAction::LevelBuilding(runtime_id) => {
-                let Some(building_id) = simulation.0.buildings.get(runtime_id).and_then(|state| {
-                    content.0.buildings.iter().find_map(|(id, definition)| {
-                        (definition.archetype == state.archetype).then(|| id.clone())
-                    })
-                }) else {
-                    continue;
-                };
-                let _ = upgrade_building_instance(
-                    &content.0,
-                    &mut simulation.0,
-                    &building_id,
-                    runtime_id,
-                );
-                selected.set_changed();
-                actions.remove_armed = None;
-                actions.panel_signature = None;
-            }
-            GroupSelectionAction::RemoveBuilding(runtime_id)
-                if actions.remove_armed.as_ref() != Some(runtime_id) =>
-            {
-                actions.remove_armed = Some(runtime_id.clone());
-                for mut label in &mut remove_labels {
-                    "Confirm Remove".clone_into(&mut label.0);
-                }
-            }
-            GroupSelectionAction::RemoveBuilding(runtime_id) => {
-                if remove_selected_building(
-                    runtime_id,
-                    &content.0,
-                    &mut world.generated,
-                    &mut simulation.0,
-                )
-                .is_ok()
-                {
-                    building_commands
-                        .0
-                        .push_back(BuildingRuntimeCommand::Despawn(runtime_id.clone()));
-                    selected.0 = None;
-                    selected_actor.0 = None;
-                }
-                actions.remove_armed = None;
-            }
-        }
-    }
 }
 
 fn sync_selection_outline(
@@ -26136,6 +24725,7 @@ fn selected_building_footprint(
     })
 }
 
+#[allow(dead_code)] // Retained for programmatic object selection and future automatic camera focus.
 fn selected_building_id_at_cell(
     cell: GridPos,
     content: &ContentCatalog,
@@ -26363,7 +24953,6 @@ fn update_vote_panels(
     mut texts: Query<(&VoteTextKind, &mut Text)>,
     mut fills: Query<(&VoteFillKind, &mut Node)>,
     mut technology_icons: TechnologyVoteIconQuery,
-    mut cast_buttons: TechnologyVoteCastQuery,
     ruler_options: Query<(Entity, Option<&Children>), With<RulerOptionsContainer>>,
 ) {
     if !simulation.is_changed() {
@@ -26417,26 +25006,6 @@ fn update_vote_panels(
             for mut icon in &mut technology_icons {
                 icon.image = handle.clone();
             }
-        }
-        let local_actor = local_ui_voter(&simulation.0);
-        let enabled = local_actor
-            .as_ref()
-            .is_some_and(|actor| !vote.votes.contains_key(actor));
-        for (mut state, mut image) in &mut cast_buttons {
-            state.0 = enabled;
-            image.image = bottom_bar_texture(
-                &render,
-                if enabled {
-                    BOTTOM_BAR_TEXTURE_PATHS[0]
-                } else {
-                    BOTTOM_BAR_TEXTURE_PATHS[2]
-                },
-            );
-            image.color = if enabled {
-                Color::WHITE
-            } else {
-                Color::srgb(0.5, 0.5, 0.5)
-            };
         }
     }
 
@@ -26512,39 +25081,6 @@ fn update_vote_panels(
             if *kind == VoteFillKind::RulerTimer {
                 node.width = percent((vote.remaining_seconds / 120.0 * 100.0).clamp(0.0, 100.0));
             }
-        }
-    }
-}
-
-fn technology_vote_cast_button(
-    simulation: Option<Res<SimulationRuntime>>,
-    mut injected: ResMut<InjectedCommands>,
-    mut buttons: TechnologyVoteCastInteractionQuery,
-) {
-    let technology = simulation.as_deref().and_then(|simulation| {
-        simulation
-            .0
-            .active_vote
-            .as_ref()
-            .map(|vote| vote.technology.clone())
-    });
-    for (interaction, enabled, mut image) in &mut buttons {
-        image.color = if enabled.0 && *interaction == Interaction::Hovered {
-            Color::srgb(1.0, 0.93, 0.72)
-        } else if enabled.0 {
-            Color::WHITE
-        } else {
-            Color::srgb(0.5, 0.5, 0.5)
-        };
-        if *interaction == Interaction::Pressed
-            && enabled.0
-            && let Some(technology) = &technology
-            && let Some(simulation) = simulation.as_deref()
-        {
-            injected.0.push_back(local_ui_vote_command(
-                &simulation.0,
-                ChatCommand::Vote(technology.clone()),
-            ));
         }
     }
 }
@@ -26984,204 +25520,6 @@ fn pointer_is_over_button<'a>(mut interactions: impl Iterator<Item = &'a Interac
     interactions.any(|interaction| *interaction != Interaction::None)
 }
 
-fn bottom_bar_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    menu: Res<MenuRuntime>,
-    mut bottom_bar: ResMut<BottomBarRuntime>,
-) {
-    if menu.page != MenuPage::Closed {
-        return;
-    }
-    let requested = if keyboard.just_pressed(KeyCode::KeyB) {
-        Some(BottomBarContext::Build)
-    } else if keyboard.just_pressed(KeyCode::KeyR) {
-        Some(BottomBarContext::Recruit)
-    } else if keyboard.just_pressed(KeyCode::KeyT) {
-        Some(BottomBarContext::Technology)
-    } else {
-        None
-    };
-    if let Some(requested) = requested {
-        toggle_bottom_bar_context(&mut bottom_bar, requested);
-    }
-}
-
-fn toggle_bottom_bar_context(bottom_bar: &mut BottomBarRuntime, requested: BottomBarContext) {
-    bottom_bar.context = (bottom_bar.context != Some(requested)).then_some(requested);
-    bottom_bar.scroll_index = 0;
-    bottom_bar.rebuild = true;
-}
-
-fn bottom_bar_main_buttons(
-    mut bottom_bar: ResMut<BottomBarRuntime>,
-    buttons: Query<(&Interaction, &BottomBarMainButton), Changed<Interaction>>,
-) {
-    for (interaction, button) in &buttons {
-        if *interaction == Interaction::Pressed {
-            toggle_bottom_bar_context(&mut bottom_bar, button.0);
-        }
-    }
-}
-
-fn update_bottom_bar_main_visuals(
-    bottom_bar: Res<BottomBarRuntime>,
-    render: Res<RenderAssets>,
-    mut buttons: Query<(&Interaction, &BottomBarMainButton, &mut ImageNode)>,
-) {
-    for (interaction, button, mut image) in &mut buttons {
-        let active = bottom_bar.context == Some(button.0);
-        let source_path = if active || *interaction == Interaction::Pressed {
-            BOTTOM_BAR_TEXTURE_PATHS[1]
-        } else {
-            BOTTOM_BAR_TEXTURE_PATHS[0]
-        };
-        image.image = bottom_bar_texture(&render, source_path);
-        image.color = if *interaction == Interaction::Hovered {
-            Color::srgb(1.0, 0.92, 0.64)
-        } else {
-            Color::WHITE
-        };
-    }
-}
-
-fn bottom_bar_scroll_buttons(
-    mut bottom_bar: ResMut<BottomBarRuntime>,
-    buttons: Query<(&Interaction, &BottomBarScrollButton), Changed<Interaction>>,
-) {
-    for (interaction, button) in &buttons {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        if !button.enabled {
-            continue;
-        }
-        bottom_bar.scroll_index = if button.direction < 0 {
-            bottom_bar.scroll_index.saturating_sub(1)
-        } else {
-            bottom_bar.scroll_index.saturating_add(1)
-        };
-        bottom_bar.rebuild = true;
-    }
-}
-
-fn bottom_bar_action_buttons(
-    mut bottom_bar: ResMut<BottomBarRuntime>,
-    mut injected: ResMut<InjectedCommands>,
-    buttons: Query<(&Interaction, &BottomBarAction, &BottomBarActionEnabled), Changed<Interaction>>,
-) {
-    for (interaction, action, enabled) in &buttons {
-        if *interaction != Interaction::Pressed || !enabled.0 {
-            continue;
-        }
-        let command = match action {
-            BottomBarAction::Build(building) => ChatCommand::Build(building.clone()),
-            BottomBarAction::Recruit(role) => ChatCommand::Recruit {
-                role: role.clone(),
-                amount: 1,
-            },
-            BottomBarAction::Technology(technology) => ChatCommand::Vote(technology.clone()),
-        };
-        injected.0.push_back(local_ui_command(command));
-        bottom_bar.context = None;
-        bottom_bar.rebuild = true;
-    }
-}
-
-fn local_ui_command(command: ChatCommand) -> PendingChatCommand {
-    PendingChatCommand {
-        actor_id: StableId::new("npc:starting_builder").expect("static local UI actor ID"),
-        login_name: "local_ui".to_owned(),
-        display_name: "Local UI".to_owned(),
-        command,
-        is_broadcaster: true,
-        is_moderator: true,
-        is_subscriber: false,
-        origin: CommandOrigin::LocalUi,
-    }
-}
-
-fn local_ui_voter(simulation: &WorldSimulation) -> Option<StableId> {
-    let starting_builder = StableId::new("npc:starting_builder").expect("static local UI actor ID");
-    simulation
-        .actors
-        .contains_key(&starting_builder)
-        .then_some(starting_builder)
-        .or_else(|| {
-            simulation
-                .actors
-                .values()
-                .filter(|actor| actor.role.as_str() != "role:enemy" && actor.alive)
-                .map(|actor| actor.id.clone())
-                .min()
-        })
-}
-
-fn local_ui_vote_command(simulation: &WorldSimulation, command: ChatCommand) -> PendingChatCommand {
-    let mut pending = local_ui_command(command);
-    if let Some(voter) = local_ui_voter(simulation) {
-        pending.actor_id = voter;
-    }
-    pending
-}
-
-fn bottom_bar_entries(
-    active_context: BottomBarContext,
-    config: &GameConfig,
-    content: &ContentCatalog,
-    simulation: &WorldSimulation,
-) -> Vec<(BottomBarAction, String, String, bool)> {
-    let mut entries: Vec<_> = match active_context {
-        BottomBarContext::Build => content
-            .buildings
-            .iter()
-            .filter(|(id, building)| {
-                building.placeable && building_is_unlocked(content, simulation, id)
-            })
-            .map(|(id, building)| {
-                let cost = building_construction_cost(content, simulation, id, building);
-                (
-                    BottomBarAction::Build(id.clone()),
-                    building.display_name.clone(),
-                    building_icon_path(id),
-                    !simulation.building_costs_enabled || can_afford(simulation, &cost),
-                )
-            })
-            .collect(),
-        BottomBarContext::Recruit => content
-            .roles
-            .iter()
-            .filter(|(id, _)| {
-                !matches!(id.as_str(), "role:ruler" | "role:blacksmith" | "role:enemy")
-                    && role_capacity(content, simulation, id).is_none_or(|capacity| capacity > 0)
-            })
-            .map(|(id, role)| {
-                (
-                    BottomBarAction::Recruit(id.clone()),
-                    role.display_name.clone(),
-                    role_icon_path(id),
-                    role_is_available(content, simulation, id, None)
-                        && recruit_capacity_remaining(config, content, simulation) > 0,
-                )
-            })
-            .collect(),
-        BottomBarContext::Technology => eligible_technology_ids(content, simulation)
-            .into_iter()
-            .map(|id| {
-                let technology = &content.technology.nodes[&id];
-                (
-                    BottomBarAction::Technology(id),
-                    compact_technology_label(&technology.display_name),
-                    technology.icon_path.clone(),
-                    simulation.active_goals.len() < MAX_TOWN_GOALS
-                        && simulation.active_vote.is_none(),
-                )
-            })
-            .collect(),
-    };
-    entries.sort_by_key(|(action, _, _, _)| bottom_bar_authored_order(action));
-    entries
-}
-
 fn compact_technology_label(display_name: &str) -> String {
     for (prefix, suffix) in [("Unlock", "Unlock"), ("Level", "Lv"), ("Upgrade", "Up")] {
         let Some(remainder) = display_name.strip_prefix(prefix) else {
@@ -27219,322 +25557,10 @@ fn format_camel_words(value: &str) -> String {
     output
 }
 
-fn bottom_bar_authored_order(action: &BottomBarAction) -> usize {
-    const BUILDINGS: [&str; 24] = [
-        "building:house",
-        "building:fishinghut",
-        "building:windmill",
-        "building:woodstorage",
-        "building:orestorage",
-        "building:farm",
-        "building:lumbermill",
-        "building:stonemason",
-        "building:foodstorage",
-        "building:tower",
-        "building:barracks",
-        "building:bowyard",
-        "building:wall",
-        "building:gate",
-        "building:fountain",
-        "building:statue_1",
-        "building:statue_2",
-        "building:forge",
-        "building:marketplace",
-        "building:monastery",
-        "building:necrotower",
-        "building:wizardtower",
-        "building:castle",
-        "building:statue_3",
-    ];
-    const ROLES: [&str; 13] = [
-        "role:logger",
-        "role:builder",
-        "role:defender",
-        "role:fisher",
-        "role:miner",
-        "role:ranger",
-        "role:farmer",
-        "role:soldier",
-        "role:gatherer",
-        "role:priest",
-        "role:wizard",
-        "role:necromancer",
-        "role:paladin",
-    ];
-    let (values, id) = match action {
-        BottomBarAction::Build(id) => (&BUILDINGS[..], id),
-        BottomBarAction::Recruit(id) => (&ROLES[..], id),
-        BottomBarAction::Technology(_) => return usize::MAX,
-    };
-    values
-        .iter()
-        .position(|value| *value == id.as_str())
-        .unwrap_or(usize::MAX)
-}
-
-fn recruit_capacity_remaining(
-    config: &GameConfig,
-    content: &ContentCatalog,
-    simulation: &WorldSimulation,
-) -> u32 {
-    let resource = StableId::new("resource:recruit").expect("static ID");
-    let current = simulation
-        .town_resources
-        .get(&resource)
-        .copied()
-        .unwrap_or_default();
-    resource_storage_capacity(config, content, simulation, &resource).saturating_sub(current)
-}
-
-fn building_icon_path(id: &StableId) -> String {
-    let raw_name = id.as_str().trim_start_matches("building:");
-    let name = match raw_name {
-        "fishinghut" => "FishingHut",
-        "foodstorage" => "FoodStorage",
-        "lumbermill" => "LumberMill",
-        "orestorage" => "OreStorage",
-        "statue_1" => "Statue01",
-        "statue_2" => "Statue02",
-        "statue_3" => "Statue03",
-        "stonemason" => "Stonemason",
-        "townhall" => "TownHall",
-        "wizardtower" => "WizardTower",
-        "woodstorage" => "WoodStorage",
-        "necrotower" => "NecroTower",
-        value => {
-            return format!(
-                "Assets/Resources/Icons/Buildings/UI_Icon_Building_Age02_{}.png",
-                title_case(value)
-            );
-        }
-    };
-    let age = if matches!(
-        raw_name,
-        "house"
-            | "windmill"
-            | "wall"
-            | "gate"
-            | "tower"
-            | "foodstorage"
-            | "orestorage"
-            | "woodstorage"
-            | "lumbermill"
-            | "stonemason"
-            | "townhall"
-    ) {
-        "Age01"
-    } else {
-        "Age02"
-    };
-    format!("Assets/Resources/Icons/Buildings/UI_Icon_Building_{age}_{name}.png")
-}
-
-fn role_icon_path(id: &StableId) -> String {
-    format!(
-        "Assets/Resources/Icons/Characters/UI_Icon_Character_{}.png",
-        title_case(id.as_str().trim_start_matches("role:"))
-    )
-}
-
-fn rebuild_bottom_bar_context(
-    mut commands: Commands,
-    mut bottom_bar: ResMut<BottomBarRuntime>,
-    config: Res<RuntimeConfig>,
-    content: Res<RuntimeContent>,
-    presentation: Res<RuntimePresentation>,
-    simulation: Res<SimulationRuntime>,
-    asset_server: Option<Res<AssetServer>>,
-    panels: Query<Entity, With<BottomBarContextPanel>>,
-) {
-    if !bottom_bar.rebuild && !simulation.is_changed() {
-        return;
-    }
-    let Ok(panel) = panels.single() else {
-        return;
-    };
-    let Some(active_context) = bottom_bar.context else {
-        if !bottom_bar.rebuild && bottom_bar.signature == "closed" {
-            return;
-        }
-        bottom_bar.rebuild = false;
-        "closed".clone_into(&mut bottom_bar.signature);
-        commands.entity(panel).despawn_children();
-        commands.entity(panel).insert(Visibility::Hidden);
-        return;
-    };
-    let entries = bottom_bar_entries(active_context, &config.0, &content.0, &simulation.0);
-    let maximum_start = entries.len().saturating_sub(10);
-    bottom_bar.scroll_index = bottom_bar.scroll_index.min(maximum_start);
-    let start = bottom_bar.scroll_index;
-    let signature = format!(
-        "{active_context:?}:{start}:{}",
-        entries
-            .iter()
-            .map(|(action, _, _, enabled)| format!("{action:?}={enabled}"))
-            .collect::<Vec<_>>()
-            .join("|")
-    );
-    if !bottom_bar.rebuild && bottom_bar.signature == signature {
-        return;
-    }
-    bottom_bar.rebuild = false;
-    bottom_bar.signature = signature;
-    commands.entity(panel).despawn_children();
-    commands
-        .entity(panel)
-        .insert(Visibility::Visible)
-        .with_children(|parent| {
-            spawn_bottom_bar_scroll(
-                parent,
-                &presentation.0,
-                asset_server.as_deref(),
-                -1,
-                start > 0,
-            );
-            for (action, label, icon_path, enabled) in entries.iter().skip(start).take(10) {
-                spawn_bottom_bar_action(
-                    parent,
-                    &presentation.0,
-                    asset_server.as_deref(),
-                    action.clone(),
-                    label,
-                    icon_path,
-                    *enabled,
-                );
-            }
-            spawn_bottom_bar_scroll(
-                parent,
-                &presentation.0,
-                asset_server.as_deref(),
-                1,
-                start + 10 < entries.len(),
-            );
-        });
-}
-
-fn spawn_bottom_bar_scroll(
-    parent: &mut ChildSpawnerCommands,
-    presentation: &PresentationCatalog,
-    asset_server: Option<&AssetServer>,
-    direction: i8,
-    enabled: bool,
-) {
-    let mut image =
-        presentation_texture_handle(presentation, asset_server, BOTTOM_BAR_TEXTURE_PATHS[9])
-            .map_or_else(ImageNode::default, ImageNode::new)
-            .with_color(if enabled {
-                Color::WHITE
-            } else {
-                Color::srgb(0.25, 0.25, 0.25)
-            });
-    image.flip_x = direction > 0;
-    parent.spawn((
-        BottomBarScrollButton { direction, enabled },
-        Button,
-        image,
-        Node {
-            width: px(44),
-            height: px(60),
-            margin: UiRect::horizontal(px(6)),
-            ..default()
-        },
-    ));
-}
-
-fn spawn_bottom_bar_action(
-    parent: &mut ChildSpawnerCommands,
-    presentation: &PresentationCatalog,
-    asset_server: Option<&AssetServer>,
-    action: BottomBarAction,
-    label: &str,
-    icon_path: &str,
-    enabled: bool,
-) {
-    let background_path = if enabled {
-        BOTTOM_BAR_TEXTURE_PATHS[0]
-    } else {
-        BOTTOM_BAR_TEXTURE_PATHS[2]
-    };
-    let background = presentation_ui_image(presentation, asset_server, background_path);
-    parent
-        .spawn((
-            action,
-            BottomBarActionEnabled(enabled),
-            Button,
-            background,
-            Node {
-                width: px(72),
-                height: px(86),
-                margin: UiRect::horizontal(px(3)),
-                overflow: Overflow::clip(),
-                ..default()
-            },
-        ))
-        .with_children(|button| {
-            let icon = presentation_texture_handle(presentation, asset_server, icon_path)
-                .map_or_else(ImageNode::default, ImageNode::new)
-                .with_color(if enabled {
-                    Color::WHITE
-                } else {
-                    Color::srgb(0.4, 0.4, 0.4)
-                });
-            button.spawn((
-                icon,
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(11),
-                    top: px(7),
-                    width: px(50),
-                    height: px(50),
-                    ..default()
-                },
-            ));
-            button.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(9.0),
-                    ..default()
-                },
-                TextLayout::justify(Justify::Center),
-                TextColor(if enabled {
-                    Color::WHITE
-                } else {
-                    Color::srgb(0.48, 0.48, 0.48)
-                }),
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(2),
-                    right: px(2),
-                    bottom: px(5),
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn game_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    menu: Res<MenuRuntime>,
+fn inject_environment_commands(
     mut injected: ResMut<InjectedCommands>,
     mut injected_debug_commands: Local<bool>,
 ) {
-    if menu.page != MenuPage::Closed {
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::KeyJ) {
-        injected.0.push_back(PendingChatCommand {
-            actor_id: StableId::new("twitch:debug_viewer").expect("static ID"),
-            login_name: "debug_viewer".to_owned(),
-            display_name: "debug_viewer".to_owned(),
-            command: "!join".parse().expect("static chat command"),
-            is_broadcaster: true,
-            is_moderator: true,
-            is_subscriber: true,
-            origin: CommandOrigin::LocalDebug,
-        });
-    }
     if !*injected_debug_commands {
         *injected_debug_commands = true;
         if let Some(commands) = std::env::var_os("STREAM_TOWN_DEBUG_COMMANDS") {
@@ -27583,8 +25609,13 @@ fn start_twitch_transport(config: Res<RuntimeConfig>, mut connection: ResMut<Twi
 fn twitch_connection_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     config: Res<RuntimeConfig>,
+    state: Res<State<GameState>>,
     mut connection: ResMut<TwitchConnection>,
 ) {
+    // Once the town is active, gameplay input is exclusively text-command driven.
+    if *state.get() == GameState::InGame {
+        return;
+    }
     if keyboard.just_pressed(KeyCode::F1) {
         if let Some(transport) = connection.transport.take() {
             let _ = transport.send(TwitchControl::Disconnect);
@@ -27868,7 +25899,6 @@ fn publish_runtime_console_status(
 }
 
 fn save_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
     mut io: ResMut<MenuIoRequest>,
     save: Res<SaveRuntime>,
     world: Res<WorldRuntime>,
@@ -27877,7 +25907,7 @@ fn save_input(
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     let requested = std::mem::take(&mut io.save);
-    if !keyboard.just_pressed(KeyCode::F5) && !requested {
+    if !requested {
         return;
     }
     let snapshot = snapshot_world(&world, &stats, &simulation);
@@ -27921,7 +25951,6 @@ fn autosave_game(
 
 fn load_input(
     mut ecs: Commands,
-    keyboard: Res<ButtonInput<KeyCode>>,
     mut io: ResMut<MenuIoRequest>,
     save: Res<SaveRuntime>,
     mut world: ResMut<WorldRuntime>,
@@ -27932,14 +25961,13 @@ fn load_input(
     mut stats: ResMut<SessionStats>,
     mut simulation: ResMut<SimulationRuntime>,
     mut selected: ResMut<SelectedCell>,
-    mut selected_group: ResMut<SelectedRecruitGroup>,
     mut entities: LoadWorldEntities,
     mut automatic_complete: Local<bool>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
     let automatic = !*automatic_complete && std::env::var_os("STREAM_TOWN_AUTO_LOAD").is_some();
     let requested = std::mem::take(&mut io.load);
-    if !keyboard.just_pressed(KeyCode::F9) && !automatic && !requested {
+    if !automatic && !requested {
         return;
     }
     *automatic_complete = true;
@@ -27953,8 +25981,6 @@ fn load_input(
     };
     selected.0 = None;
     ecs.insert_resource(SelectedActor::default());
-    selected_group.actors.clear();
-    selected_group.drag_start = None;
     let mut restored_config = config.0.clone();
     restored_config.world.seed = snapshot.world_seed;
     let mut restored_world = generate_world_with_content(&restored_config.world, &content.0);
@@ -29549,10 +27575,6 @@ fn pending_stream_user_type(config: &GameConfig, pending: &PendingChatCommand) -
     }
 }
 
-fn should_apply_pending_identity(pending: &PendingChatCommand) -> bool {
-    pending.origin != CommandOrigin::LocalUi
-}
-
 fn require_ruler_or_staff(
     simulation: &WorldSimulation,
     pending: &PendingChatCommand,
@@ -30357,9 +28379,7 @@ fn process_injected_commands(
         let actor_id = pending.actor_id.clone();
         let command = pending.command.clone();
         let user_type = pending_stream_user_type(&config.0, &pending);
-        if should_apply_pending_identity(&pending)
-            && let Some(actor) = simulation.0.actors.get_mut(&actor_id)
-        {
+        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
             actor.display_name = Some(pending.display_name.clone());
             actor.login_name = Some(pending.login_name.clone());
             actor.user_type = user_type;
@@ -30402,9 +28422,7 @@ fn process_injected_commands(
                         .unwrap_or_else(|| {
                             StableId::new("archetype:viewer").expect("static ID")
                         });
-                        if should_apply_pending_identity(&pending)
-                            && let Some(actor) = simulation.0.actors.get_mut(&actor_id)
-                        {
+                        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
                             actor.archetype = Some(player_archetype.clone());
                             actor.display_name = Some(pending.display_name.clone());
                             actor.login_name = Some(pending.login_name.clone());
@@ -31763,9 +29781,8 @@ fn process_injected_commands(
             Err(error) => format!("command rejected: {error}"),
         };
         feedback.0 = format!("{}: {message}", pending.display_name);
-        if pending.origin != CommandOrigin::LocalUi
-            && let Some(outbound) =
-                unity_outbound_reply(&command, succeeded, &message, &pending.display_name)
+        if let Some(outbound) =
+            unity_outbound_reply(&command, succeeded, &message, &pending.display_name)
         {
             send_command_feedback(&connection, outbound);
         }
@@ -31862,7 +29879,7 @@ fn update_hud(
         meter.left = percent(season_progress);
     }
     hud.0 = format!(
-        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nF1/F2 Twitch | F5 Save | F9 Load | F12 Capture | J Join | WASD Pan | Q/E Zoom | Click/Drag Select | Right-click Order | ESC Menu | first {first_id}",
+        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nText commands active | Q/E or wheel zoom | ESC menu | F12 capture | first {first_id}",
         simulation.0.day,
         stats.paths_completed,
         stats.commands_processed,
@@ -34175,31 +32192,6 @@ mod tests {
     }
 
     #[test]
-    fn middle_drag_uses_unity_smooth_damp_without_overshoot() {
-        let mut velocity = Vec3::ZERO;
-        let current = Vec3::ZERO;
-        // A positive raw vertical drag maps to Unity's positive world-X pan.
-        let target = Vec3::new(8.0, 0.0, 0.0);
-        let first = unity_smooth_damp_vec3(
-            current,
-            target,
-            &mut velocity,
-            UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
-            1.0 / 60.0,
-        );
-        assert!(first.x > current.x && first.x < target.x);
-        let second = unity_smooth_damp_vec3(
-            first,
-            target,
-            &mut velocity,
-            UNITY_TOWN_CAMERA_PAN_SMOOTH_TIME_SECONDS,
-            1.0 / 60.0,
-        );
-        assert!(second.x > first.x && second.x < target.x);
-        assert!(first.y.abs() < f32::EPSILON && first.z.abs() < f32::EPSILON);
-    }
-
-    #[test]
     fn town_camera_matches_the_shipping_unity_prefab() {
         let config = GameConfig::default();
         let focus = Vec3::new(7.0, 2.5, -11.0);
@@ -34560,6 +32552,32 @@ mod tests {
         app.update();
 
         assert!(app.world().resource::<CameraIdleMode>().0);
+    }
+
+    #[test]
+    fn cursor_is_hidden_in_the_town_and_visible_for_escape_menu_children() {
+        assert!(!cursor_visible_for_state(GameState::Boot, MenuPage::Closed));
+        assert!(!cursor_visible_for_state(
+            GameState::WorldLoading,
+            MenuPage::Closed
+        ));
+        assert!(!cursor_visible_for_state(
+            GameState::InGame,
+            MenuPage::Closed
+        ));
+        assert!(cursor_visible_for_state(GameState::InGame, MenuPage::Game));
+        assert!(cursor_visible_for_state(
+            GameState::InGame,
+            MenuPage::Settings
+        ));
+        assert!(cursor_visible_for_state(
+            GameState::MainMenu,
+            MenuPage::Closed
+        ));
+        assert!(cursor_visible_for_state(
+            GameState::Credits,
+            MenuPage::Closed
+        ));
     }
 
     #[test]
@@ -34951,13 +32969,13 @@ mod tests {
         adjust_settings_menu(&mut draft, 5, -1);
         adjust_settings_menu(&mut draft, 8, 1);
         adjust_settings_menu(&mut draft, 11, -1);
-        adjust_settings_menu(&mut draft, 18, 1);
+        adjust_settings_menu(&mut draft, 15, 1);
+        adjust_settings_menu(&mut draft, 16, 1);
+        adjust_settings_menu(&mut draft, 17, 1);
+        adjust_settings_menu(&mut draft, 19, 1);
+        adjust_settings_menu(&mut draft, 20, 1);
+        adjust_settings_menu(&mut draft, 21, 1);
         adjust_settings_menu(&mut draft, 22, 1);
-        adjust_settings_menu(&mut draft, 23, 1);
-        adjust_settings_menu(&mut draft, 25, 1);
-        adjust_settings_menu(&mut draft, 26, 1);
-        adjust_settings_menu(&mut draft, 27, 1);
-        adjust_settings_menu(&mut draft, 28, 1);
 
         assert_ne!(draft, original);
         assert_eq!(draft.video.display_mode, DisplayMode::Windowed);
@@ -34965,7 +32983,7 @@ mod tests {
         assert_eq!(draft.video.shadow_map_resolution, 2_048);
         assert_eq!(draft.video.post_process_aa, PostProcessAntiAliasing::None);
         assert!((draft.audio.master - 0.95).abs() < f32::EPSILON);
-        assert!((draft.camera.pan_sensitivity - 11.0).abs() < f32::EPSILON);
+        assert!((draft.camera.zoom_sensitivity - 11.0).abs() < f32::EPSILON);
         assert_eq!(draft.camera.field_of_view_degrees, 65);
         assert_eq!(
             draft.interface.display_names,
@@ -34984,7 +33002,7 @@ mod tests {
     }
 
     #[test]
-    fn shipping_settings_menu_preserves_art_tabs_and_all_runtime_fields() {
+    fn shipping_settings_menu_preserves_art_tabs_and_supported_runtime_fields() {
         let presentation = embedded_presentation();
         assert!(
             presentation
@@ -35002,7 +33020,7 @@ mod tests {
             .flat_map(settings_tab_indices)
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(editable, (0..29).collect::<Vec<_>>());
+        assert_eq!(editable, (0..23).collect::<Vec<_>>());
         for index in editable {
             let (label, value) = settings_value_label(&PlayerSettings::default(), index);
             assert!(!label.is_empty());
@@ -35012,7 +33030,7 @@ mod tests {
                 match index {
                     0..=10 => SettingsTab::Video,
                     11..=14 => SettingsTab::Audio,
-                    15..=25 => SettingsTab::Gameplay,
+                    15..=19 => SettingsTab::Gameplay,
                     _ => SettingsTab::Accessibility,
                 }
             );
@@ -35077,7 +33095,7 @@ mod tests {
             &menu
         ));
         assert!(!accessibility_scope_active(
-            AccessibleButtonScope::InGame,
+            AccessibleButtonScope::GameMenu,
             GameState::MainMenu,
             &menu
         ));
@@ -35120,7 +33138,6 @@ mod tests {
         assert_eq!(border(SETTINGS_BACKGROUND_TEXTURE_PATH), Some([82.0; 4]));
         assert_eq!(border(VOTE_TEXTURE_PATHS[0]), Some([158.0; 4]));
         assert_eq!(border(VOTE_TEXTURE_PATHS[4]), Some([39.0; 4]));
-        assert_eq!(border(BOTTOM_BAR_TEXTURE_PATHS[8]), Some([72.0; 4]));
         assert_eq!(border(CURRENT_EVENT_TEXTURE_PATHS[0]), Some([64.0; 4]));
         assert_eq!(border(OBJECTIVE_TEXTURE_PATHS[1]), Some([31.0; 4]));
         let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
@@ -38736,9 +36753,9 @@ mod tests {
     }
 
     #[test]
-    fn group_selection_outline_keeps_its_positive_depth_bias() {
+    fn object_selection_outline_keeps_its_positive_depth_bias() {
         let material = selection_outline_material(StandardMaterial::default());
-        assert!((material.depth_bias - GROUP_SELECTION_OUTLINE_DEPTH_BIAS).abs() < f32::EPSILON);
+        assert!((material.depth_bias - SELECTION_OUTLINE_DEPTH_BIAS).abs() < f32::EPSILON);
         assert!(material.depth_bias > 0.0);
     }
 
@@ -39700,7 +37717,7 @@ mod tests {
     }
 
     #[test]
-    fn world_labels_stay_below_the_header_and_above_the_bottom_bar() {
+    fn world_labels_stay_below_the_header_and_inside_the_viewport() {
         let viewport = Vec2::new(1_920.0, 1_080.0);
         assert!(!overlay_position_clears_hud(
             viewport,
@@ -39992,182 +38009,6 @@ mod tests {
     }
 
     #[test]
-    fn recruit_group_orders_roles_and_dismissal_match_unity_contracts() {
-        assert!(world_selection_contains(
-            Vec3::new(2.0, 99.0, -3.0),
-            Vec3::new(-1.0, 0.0, -4.0),
-            Vec3::new(3.0, 0.0, 2.0)
-        ));
-        assert!(!world_selection_contains(
-            Vec3::new(4.0, 0.0, -3.0),
-            Vec3::new(-1.0, 0.0, -4.0),
-            Vec3::new(3.0, 0.0, 2.0)
-        ));
-        let config = GameConfig::default();
-        let content = embedded_content();
-        let world = generate_world_with_content(&config.world, &content);
-        let mut simulation = WorldSimulation::new(world.seed);
-        ensure_town_hall_state(&content, &config, &mut simulation);
-        simulation
-            .town_resources
-            .insert(StableId::new("resource:recruit").unwrap(), 2);
-        for (id, role, position) in [
-            (
-                "npc:starting_builder",
-                "role:builder",
-                GridPos { x: 30, z: 30 },
-            ),
-            (
-                "npc:starting_defender",
-                "role:defender",
-                GridPos { x: 31, z: 30 },
-            ),
-        ] {
-            let id = StableId::new(id).unwrap();
-            assert!(simulation.join_player(id.clone(), position));
-            simulation
-                .assign_role(&id, StableId::new(role).unwrap())
-                .unwrap();
-        }
-        let selected = recruited_actor_ids(&simulation)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(selected.len(), 2);
-
-        let blacksmith = StableId::new("role:blacksmith").unwrap();
-        assert!(!group_role_ids(&content, &simulation).contains(&blacksmith));
-        let forge = &content.buildings[&StableId::new("building:forge").unwrap()];
-        let mut role_simulation = simulation.clone();
-        role_simulation.buildings.insert(
-            StableId::new("building:selection_forge").unwrap(),
-            BuildingState {
-                id: StableId::new("building:selection_forge").unwrap(),
-                archetype: forge.archetype.clone(),
-                position: GridPos { x: 35, z: 35 },
-                rotation_quarter_turns: 0,
-                level: 1,
-                health: building_base_max_health(&content, forge)
-                    .try_into()
-                    .unwrap(),
-                complete: true,
-            },
-        );
-        assert!(group_role_ids(&content, &role_simulation).contains(&blacksmith));
-        let signature_before = group_selection_panel_signature(
-            &SelectedRecruitGroup {
-                actors: selected.clone(),
-                drag_start: None,
-            },
-            &SelectedCell::default(),
-            &content,
-            &role_simulation,
-        );
-        assert_eq!(
-            assign_group_role(&selected, &blacksmith, &content, &mut role_simulation),
-            1,
-            "Unity applies mass changes in order until the role becomes full"
-        );
-        assert!(!group_role_ids(&content, &role_simulation).contains(&blacksmith));
-        assert_ne!(
-            group_selection_panel_signature(
-                &SelectedRecruitGroup {
-                    actors: selected.clone(),
-                    drag_start: None,
-                },
-                &SelectedCell::default(),
-                &content,
-                &role_simulation,
-            ),
-            signature_before,
-            "role occupancy must rebuild the live selection controls"
-        );
-
-        let town_hall = StableId::new("building:townhall").unwrap();
-        let town_hall_cell = simulation.buildings[&town_hall].position;
-        let station_targets =
-            immediate_station_target_runtime(&content, &simulation, &world, &config);
-        assert_eq!(
-            recruit_group_order_at_cell(town_hall_cell, &content, &world, &simulation),
-            Some(RecruitGroupOrder::Station(town_hall.clone()))
-        );
-        assert_eq!(
-            apply_recruit_group_order(
-                &selected,
-                &RecruitGroupOrder::Station(town_hall.clone()),
-                &content,
-                &config,
-                &world,
-                &station_targets,
-                &mut simulation,
-            ),
-            2
-        );
-        assert!(
-            selected
-                .iter()
-                .all(|actor| simulation.actors[actor].station.as_ref() == Some(&town_hall))
-        );
-
-        let resource = world
-            .resources
-            .iter()
-            .find(|resource| resource.amount > 0)
-            .unwrap();
-        let compatible = selected
-            .iter()
-            .filter(|actor| {
-                compatible_target_ids(
-                    &content,
-                    &simulation,
-                    &world,
-                    &config,
-                    &simulation.actors[*actor],
-                )
-                .contains(&resource.id)
-            })
-            .count();
-        assert_eq!(
-            {
-                let station_targets =
-                    immediate_station_target_runtime(&content, &simulation, &world, &config);
-                apply_recruit_group_order(
-                    &selected,
-                    &RecruitGroupOrder::Target(resource.id.clone()),
-                    &content,
-                    &config,
-                    &world,
-                    &station_targets,
-                    &mut simulation,
-                )
-            },
-            compatible
-        );
-
-        let builder = StableId::new("role:builder").unwrap();
-        assert_eq!(
-            assign_group_role(&selected, &builder, &content, &mut simulation),
-            2
-        );
-        assert!(
-            selected
-                .iter()
-                .all(|actor| simulation.actors[actor].role == builder)
-        );
-        let before = simulation.town_resources[&StableId::new("resource:recruit").unwrap()];
-        let dismissed = dismiss_group_recruits(&selected, &mut simulation);
-        assert_eq!(dismissed.len(), 2);
-        assert!(
-            selected
-                .iter()
-                .all(|actor| !simulation.actors.contains_key(actor))
-        );
-        assert_eq!(
-            simulation.town_resources[&StableId::new("resource:recruit").unwrap()],
-            before.saturating_sub(2)
-        );
-    }
-
-    #[test]
     fn selected_building_actions_share_authoritative_upgrade_and_removal_rules() {
         let config = GameConfig::default();
         let content = embedded_content();
@@ -40230,7 +38071,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_building_panel_uses_authoritative_costs_and_passive_rates() {
+    fn passive_buildings_use_authoritative_income_rates() {
         let content = embedded_content();
         let marketplace_id = StableId::new("building:marketplace").unwrap();
         let marketplace = &content.buildings[&marketplace_id];
@@ -40239,61 +38080,8 @@ mod tests {
             BTreeMap::from([(StableId::new("resource:gold").unwrap(), 500)])
         );
         assert_eq!(
-            format_passive_resource_rates(marketplace, 2).as_deref(),
-            Some("Rate +3600 Gold/hr")
-        );
-
-        let runtime_id = StableId::new("building:selected_marketplace").unwrap();
-        let mut simulation = WorldSimulation::new(7);
-        simulation.unlocked_technology.insert(
-            content
-                .technology
-                .nodes
-                .iter()
-                .find(|(_, technology)| {
-                    technology
-                        .building_level_caps
-                        .get(&marketplace_id)
-                        .is_some_and(|level| *level >= 2)
-                })
-                .map(|(id, _)| id.clone())
-                .expect("marketplace level technology"),
-        );
-        simulation.buildings.insert(
-            runtime_id.clone(),
-            BuildingState {
-                id: runtime_id,
-                archetype: marketplace.archetype.clone(),
-                position: GridPos { x: 8, z: 8 },
-                rotation_quarter_turns: 0,
-                level: 1,
-                health: BUILDING_MAX_HEALTH,
-                complete: true,
-            },
-        );
-        let state = &simulation.buildings.values().next().unwrap().clone();
-        let (affordable, cost) = building_upgrade_affordability(
-            &content,
-            &simulation,
-            &marketplace_id,
-            marketplace,
-            state,
-        )
-        .expect("level two should be unlocked");
-        assert!(!affordable);
-        assert!(!format_resource_cost(&cost).is_empty());
-        for (resource, amount) in &cost {
-            simulation.town_resources.insert(resource.clone(), *amount);
-        }
-        assert!(
-            building_upgrade_affordability(
-                &content,
-                &simulation,
-                &marketplace_id,
-                marketplace,
-                state,
-            )
-            .is_some_and(|(affordable, _)| affordable)
+            passive_resource_rate_milli_per_second(marketplace, 2),
+            BTreeMap::from([(StableId::new("resource:gold").unwrap(), 1_000)])
         );
     }
 
@@ -40647,132 +38435,29 @@ mod tests {
     }
 
     #[test]
-    fn shipping_bottom_bar_preserves_authored_assets_order_and_live_availability() {
-        let config = GameConfig::default();
-        let content = embedded_content();
-        let presentation = embedded_presentation();
-        for source_path in BOTTOM_BAR_TEXTURE_PATHS {
-            assert!(
-                presentation
-                    .textures
-                    .values()
-                    .any(|texture| texture.source_path == source_path),
-                "missing bottom-bar texture {source_path}"
-            );
-        }
-        let mut simulation = WorldSimulation::new(17);
-        simulation.town_resources = config.gameplay.starting_town_resources.clone();
-        simulation.unlocked_technology.extend(
-            content
-                .technology
-                .nodes
-                .iter()
-                .filter(|(_, technology)| technology.initially_unlocked)
-                .map(|(id, _)| id.clone()),
-        );
-        let builds = bottom_bar_entries(BottomBarContext::Build, &config, &content, &simulation);
-        let first_build = builds.first().expect("an initial building is unlocked");
-        assert!(matches!(first_build.0, BottomBarAction::Build(_)));
-        assert!(bottom_bar_authored_order(&first_build.0) < usize::MAX);
-        assert!(
-            Path::new(&first_build.2)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
-        );
-        assert!(first_build.3);
-        for (action, _, icon_path, _) in &builds {
-            let BottomBarAction::Build(id) = action else {
-                unreachable!("build context only emits build actions");
-            };
-            assert!(
-                presentation
-                    .textures
-                    .values()
-                    .any(|texture| texture.source_path == *icon_path),
-                "missing resolved building icon for {id}: {icon_path}"
+    fn shipping_hud_has_no_clickable_gameplay_controls() {
+        fn spawn_test_hud(mut commands: Commands, render: Res<RenderAssets>) {
+            spawn_hud(
+                &mut commands,
+                &render,
+                3,
+                "0123456789abcdef0123456789abcdef",
             );
         }
 
-        let recruits =
-            bottom_bar_entries(BottomBarContext::Recruit, &config, &content, &simulation);
-        let recruit_ids = recruits
-            .iter()
-            .filter_map(|(action, _, _, _)| match action {
-                BottomBarAction::Recruit(role) => Some(role.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(recruit_ids.first(), Some(&"role:logger"));
-        assert!(!recruit_ids.contains(&"role:ruler"));
-        assert!(!recruit_ids.contains(&"role:blacksmith"));
-        assert!(recruits.iter().all(|(_, _, _, enabled)| *enabled));
-        for (action, _, icon_path, _) in &recruits {
-            let BottomBarAction::Recruit(id) = action else {
-                unreachable!("recruit context only emits recruit actions");
-            };
-            assert!(
-                presentation
-                    .textures
-                    .values()
-                    .any(|texture| texture.source_path == *icon_path),
-                "missing resolved role icon for {id}: {icon_path}"
-            );
-        }
-
-        let active_vote = eligible_technology_ids(&content, &simulation)
-            .into_iter()
-            .next()
-            .expect("an initial technology is eligible");
-        simulation
-            .start_technology_vote(active_vote, 30.0)
-            .expect("test vote starts");
-        let technologies =
-            bottom_bar_entries(BottomBarContext::Technology, &config, &content, &simulation);
-        assert!(
-            technologies
-                .iter()
-                .all(|(_, _, icon, enabled)| { !icon.is_empty() && !enabled })
-        );
-        assert_eq!(
-            compact_technology_label("UnlockWallsAndGates"),
-            "Walls And Gates\nUnlock"
-        );
-        assert_eq!(
-            compact_technology_label("Level13Marketplace"),
-            "Marketplace\nLv 13"
-        );
-        assert_eq!(compact_technology_label("Upgrade5Ranger"), "Ranger\nUp 5");
-        let local = local_ui_command(ChatCommand::Build(
-            StableId::new("building:house").expect("test ID"),
-        ));
-        assert_eq!(local.actor_id.as_str(), "npc:starting_builder");
-        assert_eq!(local.origin, CommandOrigin::LocalUi);
-        assert!(!should_apply_pending_identity(&local));
-    }
-
-    #[test]
-    fn bottom_bar_button_dispatches_through_the_typed_command_queue() {
-        let building = StableId::new("building:house").expect("test ID");
         let mut app = App::new();
-        app.init_resource::<BottomBarRuntime>()
-            .init_resource::<InjectedCommands>()
-            .add_systems(Update, bottom_bar_action_buttons);
-        app.world_mut().spawn((
-            Interaction::Pressed,
-            BottomBarAction::Build(building.clone()),
-            BottomBarActionEnabled(true),
-        ));
-
+        app.insert_resource(RenderAssets::default())
+            .add_systems(Startup, spawn_test_hud);
         app.update();
 
-        let queue = app.world().resource::<InjectedCommands>();
-        let command = queue.0.front().expect("button dispatches one command");
-        assert_eq!(command.actor_id.as_str(), "npc:starting_builder");
-        assert_eq!(command.command, ChatCommand::Build(building));
-        assert!(app.world().resource::<BottomBarRuntime>().context.is_none());
-        assert!(!pointer_is_over_button([Interaction::None].iter()));
-        assert!(pointer_is_over_button([Interaction::Hovered].iter()));
-        assert!(pointer_is_over_button([Interaction::Pressed].iter()));
+        let mut buttons = app
+            .world_mut()
+            .query_filtered::<Entity, (With<Button>, With<WorldEntity>)>();
+        assert_eq!(buttons.iter(app.world()).count(), 0);
+        assert!(
+            !app.world()
+                .contains_resource::<PointerObjectSelectionEnabled>()
+        );
     }
 
     #[test]
@@ -40817,49 +38502,6 @@ mod tests {
             ruler_vote_option_text(&simulation),
             "!vote Second Viewer  (1)"
         );
-    }
-
-    #[test]
-    fn technology_vote_button_dispatches_through_the_typed_command_queue() {
-        let technology = StableId::new("tech:test_vote").unwrap();
-        let mut simulation = WorldSimulation::new(17);
-        simulation
-            .start_technology_vote(technology.clone(), 30.0)
-            .unwrap();
-        let mut app = App::new();
-        app.insert_resource(SimulationRuntime(simulation))
-            .init_resource::<InjectedCommands>()
-            .add_systems(Update, technology_vote_cast_button);
-        app.world_mut().spawn((
-            Interaction::Pressed,
-            TechnologyVoteCastButton,
-            TechnologyVoteCastEnabled(true),
-            ImageNode::default(),
-        ));
-
-        app.update();
-
-        let queue = app.world().resource::<InjectedCommands>();
-        let command = queue.0.front().expect("vote button dispatches one command");
-        assert_eq!(command.actor_id.as_str(), "npc:starting_builder");
-        assert_eq!(command.command, ChatCommand::Vote(technology));
-    }
-
-    #[test]
-    fn local_vote_falls_back_to_a_live_non_enemy_actor() {
-        let mut simulation = WorldSimulation::new(17);
-        let enemy = StableId::new("actor:enemy").unwrap();
-        let viewer = StableId::new("actor:viewer").unwrap();
-        simulation.join_player(enemy.clone(), GridPos { x: 1, z: 1 });
-        simulation.join_player(viewer.clone(), GridPos { x: 2, z: 2 });
-        simulation.actors.get_mut(&enemy).unwrap().role = StableId::new("role:enemy").unwrap();
-        assert_eq!(local_ui_voter(&simulation), Some(viewer.clone()));
-        let pending = local_ui_vote_command(
-            &simulation,
-            ChatCommand::Vote(StableId::new("tech:test_vote").unwrap()),
-        );
-        assert_eq!(pending.actor_id, viewer);
-        assert_eq!(pending.origin, CommandOrigin::LocalUi);
     }
 
     #[test]
