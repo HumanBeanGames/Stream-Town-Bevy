@@ -1,16 +1,16 @@
 # Graph Report - Stream-Town-Bevy  (2026-08-26)
 
 ## Corpus Check
-- 670 files · ~1,755,831 words
+- 670 files · ~1,755,839 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 8705 nodes · 25096 edges · 312 communities (287 shown, 25 thin omitted)
+- 8705 nodes · 25096 edges · 312 communities (288 shown, 24 thin omitted)
 - Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 1034 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `82f59c75`
+- Built from commit: `e5d97576`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -26,7 +26,7 @@
 - BottomBarInterface
 - .new
 - SettingsProcessor
-- HealthModifier
+- Target
 - advance_world_loading_cover
 - stream_town_migrate/src/content.rs
 - TechTreeIOUtility
@@ -151,7 +151,7 @@
 - Goal
 - TechTree.Elements
 - SelectedResource
-- Vec
+- String
 - BuildingResourceModelHandler
 - MainMenuSceneReference
 - Easings
@@ -167,7 +167,7 @@
 - ConfirmCheck
 - MainMenuReferenceExporter
 - Stream Town Reloaded - Architecture Documentation
-- TownGoal.Data
+- TechTree_SO
 - TechnologyGraphLayout
 - stream_town_migrate/src/presentation.rs
 - .CreateEnumField
@@ -203,7 +203,7 @@
 - WorldGenerationReferenceExporter
 - ScriptableObject
 - Access_Dropdown
-- BevyMigrationExporter
+- string
 - UserInterface_TownGoal
 - stream_town_migrate/src/menu_scene.rs
 - UserInterface_BuildingHealthBar
@@ -232,7 +232,7 @@
 - UIGameObjectAccessor
 - RuntimeData Template
 - Character Animation Regression Checklist
-- Projectile
+- BevyMigrationExporter
 - ScriptKeywordProcessor
 - FPSDisplay
 - .new
@@ -291,11 +291,12 @@
 - Q: The characters are STILL not animated, and the trees are STILL flickering. Make individual checklists for each thing already tried that did not work and what did work, so future work does not repeat failed approaches and can narrow the successful ones.
 - Q: How does Bevy new-town population now match Unity shipping startup?
 - Q: Unity station TargetSensor distance range generated resource targeting parity Bevy
-- BuildCostModifier.cs
+- SimpleDisableAfterTime
 - Q: role level experience progression station equipment inventory skill upgrade
 - music/README.md
 - Stream Town external authoring suite
 - stream_town_tools/src/main.rs
+- TL_API
 - StreamTown.Migration
 - PlayerSaveData
 - BuildingScriptablesEditor.cs
@@ -310,7 +311,6 @@
 - ObjectSelectionProcessor.Editor.cs
 - Q: Characters are still not animated. Trees still have the flickering shadows.
 - Player
-- IntWrapper
 - UnityGraphics
 - VfxAnimationController
 - Q: Why did the converted player run animation fail to loop cleanly after visible animation started working?
@@ -350,11 +350,11 @@
 ## Import Cycles
 - None detected.
 
-## Communities (312 total, 25 thin omitted)
+## Communities (312 total, 24 thin omitted)
 
 ### Community 0 - "Utils"
 Cohesion: 0.04
-Nodes (35): STStateMachine.States, UserInterface.MainMenu, PlayerControls.ObjectSelection, Units, Utils, Processors, Pets.Enumerations, TownGoal (+27 more)
+Nodes (23): BuildCostModifier, PlayerControls.ObjectSelection, TownGoal.Data, Utils, Processors, Pets.Enumerations, TownGoal, Character.Enumerations (+15 more)
 
 ### Community 1 - "BuildingProcessor"
 Cohesion: 0.04
@@ -370,7 +370,7 @@ Nodes (6): CancellationToken, Func, int, UTF8Encoding, BinarySaveCodec, BinaryRe
 
 ### Community 4 - "ScriptablesProcessorInfrastructure"
 Cohesion: 0.02
-Nodes (81): ContainerBuilder, InstantiationBarrier, ContainerBuilder, AllBuildingDataSettingsInstaller, ContainerBuilder, AllRoleDataSettingsInstaller, ContainerBuilder, AllSeasonsSettingsInstaller (+73 more)
+Nodes (83): ContainerBuilder, InstantiationBarrier, ContainerBuilder, AllBuildingDataSettingsInstaller, ContainerBuilder, AllRoleDataSettingsInstaller, ContainerBuilder, AllSeasonsSettingsInstaller (+75 more)
 
 ### Community 5 - "GlobalAudioController"
 Cohesion: 0.19
@@ -382,7 +382,7 @@ Nodes (23): bool, float, Func, int, PlayerExistsByIDDelegate, PlayerExistsByName
 
 ### Community 7 - "ResMut"
 Cohesion: 0.04
-Nodes (122): AccessibilityActionRequest, AccessibilityFocusVisualQuery, AccumulatedMouseScroll, AppExit, PlayerSettings, Default, accessibility_button_enabled(), accessibility_input() (+114 more)
+Nodes (127): AccessibilityActionRequest, AccessibilityFocusVisualQuery, AccumulatedMouseScroll, AppExit, PlayerSettings, Default, accessibility_button_enabled(), accessibility_input() (+119 more)
 
 ### Community 8 - "BottomBarInterface"
 Cohesion: 0.06
@@ -390,19 +390,19 @@ Nodes (21): bool, IEnumerator, Image, BottomBarButton, BottomBarContext, Action,
 
 ### Community 9 - ".new"
 Cohesion: 0.03
-Nodes (168): ArchetypeKind, ActiveMaterialHandles, agent_facing_matches_unity_rotation_and_action_targets(), animated_pets_resolve_their_own_unity_controllers_and_rigs(), apply_material_overrides(), archetype_by_source(), audio_acceptance_manifest(), audio_acceptance_wavs() (+160 more)
+Nodes (168): ArchetypeKind, ActiveMaterialHandles, agent_facing_matches_unity_rotation_and_action_targets(), animated_pets_resolve_their_own_unity_controllers_and_rigs(), archetype_by_source(), audio_acceptance_manifest(), audio_acceptance_wavs(), authored_level_curves_drive_effective_role_stats() (+160 more)
 
 ### Community 10 - "SettingsProcessor"
 Cohesion: 0.07
 Nodes (11): AudioMixer, bool, Container, ContainerBuilder, UniversalRendererData, UniversalRenderPipelineAsset, Preset, SettingsProcessor (+3 more)
 
-### Community 11 - "HealthModifier"
-Cohesion: 0.22
-Nodes (6): AttackUnit, HealthModifier, bool, float, GameObject, HealUnit
+### Community 11 - "Target"
+Cohesion: 0.06
+Nodes (22): AttackUnit, HealthModifier, bool, float, GameObject, HealUnit, STStateMachine.States, Units (+14 more)
 
 ### Community 12 - "advance_world_loading_cover"
 Cohesion: 0.04
-Nodes (77): AccessibilityNode, AssetId, advance_loading_phase(), advance_loading_runtime(), advance_world_loading_cover(), asset_root_collection_ready(), begin_world_loading_cover(), boot_loading_display_progress() (+69 more)
+Nodes (74): AccessibilityNode, AssetId, advance_loading_phase(), advance_loading_runtime(), advance_world_loading_cover(), asset_root_collection_ready(), begin_world_loading_cover(), begin_world_reveal() (+66 more)
 
 ### Community 13 - "stream_town_migrate/src/content.rs"
 Cohesion: 0.11
@@ -429,8 +429,8 @@ Cohesion: 0.06
 Nodes (100): GameConfig, GameplayConfig, BTreeMap, BuildingDef, BuildingModelDef, ContentCatalog, LoadingScreenDef, RoleDef (+92 more)
 
 ### Community 19 - "update_environment_presentation"
-Cohesion: 0.12
-Nodes (28): AmbientLight, Assets, building_damage_intensity(), building_damage_value(), building_snow_strength(), BuildingMaterialInstance, BuildingMaterialInstanced, BuildingMaterialInstances (+20 more)
+Cohesion: 0.10
+Nodes (31): AmbientLight, Assets, building_damage_intensity(), building_damage_value(), building_snow_strength(), BuildingMaterialInstance, BuildingMaterialInstanced, BuildingMaterialInstances (+23 more)
 
 ### Community 20 - "twitch.rs"
 Cohesion: 0.07
@@ -446,7 +446,7 @@ Nodes (11): STSM_HelperDeposit, float, STSM_Action_DepositResource, bool, float,
 
 ### Community 23 - "Option"
 Cohesion: 0.05
-Nodes (144): ArchetypeDef, ArchetypeScene, PresentationCatalog, actor_detail_budget(), actor_material(), actor_scene_budget(), animate_chimney_smoke_particles(), animate_healing_effects() (+136 more)
+Nodes (137): ArchetypeDef, ArchetypeScene, PresentationCatalog, actor_material(), advance_falling_fish(), animate_healing_effects(), animation_property_value(), apply_authored_main_menu_camera() (+129 more)
 
 ### Community 24 - "UnitHealthBar"
 Cohesion: 0.15
@@ -473,8 +473,8 @@ Cohesion: 0.11
 Nodes (14): Action, float, Enemy, uint, GUIDComponent, SaveableBuilding, SaveableEnemy, SaveableEnemyCamp (+6 more)
 
 ### Community 30 - "Res"
-Cohesion: 0.03
-Nodes (222): Aabb, Added, AnimatedBy, AnimationGraphHandle, AnimationPlayer, AnimationTransitions, AudioSink, BackgroundColor (+214 more)
+Cohesion: 0.04
+Nodes (200): Aabb, Added, AnimatedBy, AnimationGraphHandle, AnimationPlayer, AnimationTransitions, AudioSink, BackgroundColor (+192 more)
 
 ### Community 31 - "WorldGenProcessor"
 Cohesion: 0.06
@@ -686,7 +686,7 @@ Nodes (10): Action, bool, Dictionary, IEnumerable, List, TechnologyTree, List, N
 
 ### Community 83 - "Handle"
 Cohesion: 0.04
-Nodes (66): AccessibilityMotionDefaults, apply_authored_ui_fonts(), authored_main_ui_image_with_ppu(), authored_ui_image(), authored_ui_image_with_corner_scale(), BoundsMaterialExtension, BoundsMaterialUniform, BuildingMaterialExtension (+58 more)
+Nodes (75): AccessibilityMotionDefaults, apply_authored_ui_fonts(), authored_main_ui_image_with_ppu(), authored_ui_image(), authored_ui_image_with_corner_scale(), BoundsMaterialExtension, BoundsMaterialUniform, BuildingMaterialExtension (+67 more)
 
 ### Community 84 - "Access_Text"
 Cohesion: 0.09
@@ -698,7 +698,7 @@ Nodes (45): actor_specific_exception_opens_only_the_requested_blocked_cell(), ca
 
 ### Community 86 - "stream_town_game/src/lib.rs"
 Cohesion: 0.01
-Nodes (258): AccessibleNode, AnyResult, accessibility_motion_preferences_preserve_authored_parameters(), accessibility_scope_keeps_modal_navigation_inside_the_open_surface(), accessibility_settings_selection(), AccessibilityActionDispatch, AccessibilityCandidate, action_ranges_and_tower_acquisition_are_euclidean() (+250 more)
+Nodes (237): AnyResult, accessibility_motion_preferences_preserve_authored_parameters(), accessibility_scope_keeps_modal_navigation_inside_the_open_surface(), AccessibilityActionDispatch, AccessibilityCandidate, AccessibilityHighContrastText, action_ranges_and_tower_acquisition_are_euclidean(), ActionPresentation (+229 more)
 
 ### Community 87 - "TechTreeNode"
 Cohesion: 0.14
@@ -726,7 +726,7 @@ Nodes (25): ConfigError, default_configuration_is_valid_and_round_trips_ron(), d
 
 ### Community 93 - "MonoBehaviour"
 Cohesion: 0.01
-Nodes (86): Api, CellSpacePartitioningInstaller, ContainerBuilder, PersistentScoped, Camera, GameObject, ProjectCameraInstaller, AudioMixerInstaller (+78 more)
+Nodes (85): CellSpacePartitioningInstaller, ContainerBuilder, PersistentScoped, Camera, GameObject, ProjectCameraInstaller, AudioMixerInstaller, AudioMixer (+77 more)
 
 ### Community 94 - "convert_fbx_to_glb.py"
 Cohesion: 0.14
@@ -805,8 +805,8 @@ Cohesion: 0.19
 Nodes (9): AudioClip, AudioSource, float, GameObject, int, Vector3, SpawnArea, VfxSeagullSpawner (+1 more)
 
 ### Community 114 - "IRuntimeDataScriptable"
-Cohesion: 0.05
-Nodes (28): float, int, Material, AllSeasonSettings, CreditsRuntimeData, UnityEvent, DebugRuntimeData, bool (+20 more)
+Cohesion: 0.06
+Nodes (22): float, int, Material, AllSeasonSettings, CreditsRuntimeData, UnityEvent, DebugRuntimeData, bool (+14 more)
 
 ### Community 115 - "SelectedPlayer"
 Cohesion: 0.09
@@ -884,9 +884,9 @@ Nodes (9): bool, Dictionary, float, int, TechTreeRuntimeData, EventType, Action,
 Cohesion: 0.07
 Nodes (23): Color, ErrorData, List, GroupErrorData, List, NodeErrorData, ChildrenSaveData, Vector2 (+15 more)
 
-### Community 137 - "Vec"
-Cohesion: 0.05
-Nodes (83): AnimationClip, AnimationGraph, AnimationNodeIndex, AnimationTargetId, add_animation_composition(), add_animation_layer_branch(), add_rotation_curve(), add_scale_curve() (+75 more)
+### Community 137 - "String"
+Cohesion: 0.03
+Nodes (119): AccessibleNode, AnimationClip, AnimationGraph, AnimationNodeIndex, AnimationTargetId, accessibility_settings_selection(), active_event_text(), ActivePetVisual (+111 more)
 
 ### Community 138 - "BuildingResourceModelHandler"
 Cohesion: 0.11
@@ -944,9 +944,9 @@ Nodes (17): bool, Color, float, GameObject, int, Quaternion, string, Vector2 (+9
 Cohesion: 0.12
 Nodes (15): Architecture Compliance Checklist, Benefits, Data Layer (ScriptableObjects), Exemptions, General Checks, Implementation Layer, Layer 1: Data Layer (ScriptableObjects), Layer 2: Processor Layer (+7 more)
 
-### Community 153 - "TownGoal.Data"
-Cohesion: 0.06
-Nodes (16): int, TechTreeSettings, InputButton, SharedTypes, int, ChangeTimeStamp, NodeGroup_SO, List (+8 more)
+### Community 153 - "TechTree_SO"
+Cohesion: 0.09
+Nodes (13): int, TechTreeSettings, InputButton, SharedTypes, int, ChangeTimeStamp, NodeGroup_SO, List (+5 more)
 
 ### Community 154 - "TechnologyGraphLayout"
 Cohesion: 0.20
@@ -1013,8 +1013,8 @@ Cohesion: 0.13
 Nodes (36): AudioBaselineManifest, Cli, Command, glb_animation_count(), glb_document_from_bytes(), glb_node_names(), glb_node_names_from_bytes(), glb_node_validation_preserves_exact_names() (+28 more)
 
 ### Community 170 - "List"
-Cohesion: 0.19
-Nodes (8): GameObject, List, MenuItem, NeutralAsset, NeutralScene, NeutralAsset, NeutralGameObject, NeutralScene
+Cohesion: 0.31
+Nodes (6): GameObject, List, NeutralAsset, NeutralScene, NeutralGameObject, NeutralScene
 
 ### Community 171 - "EventProcessor"
 Cohesion: 0.25
@@ -1025,8 +1025,8 @@ Cohesion: 0.33
 Nodes (4): float, GameObject, IEnumerator, RandomEnabler
 
 ### Community 173 - "PlayerControls"
-Cohesion: 0.14
-Nodes (8): CameraProcessor, ContainerBuilder, MetaDataInstaller, InputButton, SettingsInstaller, MetaData, Settings, PlayerControls
+Cohesion: 0.08
+Nodes (15): CameraProcessor, ContainerBuilder, MetaDataInstaller, InputButton, bool, Dictionary, InputButton, PlayerInput (+7 more)
 
 ### Community 174 - "Q: Which reachable gameplay parity gaps remain between Unity roles, stations, enemies, events, technology, and the Bevy runtime?"
 Cohesion: 0.40
@@ -1082,15 +1082,15 @@ Nodes (13): float, IEnumerable, int, string, Vector2, GenerationReference, Layer
 
 ### Community 187 - "ScriptableObject"
 Cohesion: 0.02
-Nodes (84): List, CampGenSettings, float, Material, Volume, DayAndNightSettings, List, FoliageGenSettings (+76 more)
+Nodes (85): List, CampGenSettings, float, Material, Volume, DayAndNightSettings, List, FoliageGenSettings (+77 more)
 
 ### Community 188 - "Access_Dropdown"
 Cohesion: 0.05
 Nodes (24): Camera, Quaternion, Vector3, ProjectCamera, ChannelData, string, Container, PSAccess (+16 more)
 
-### Community 189 - "BevyMigrationExporter"
+### Community 189 - "string"
 Cohesion: 0.22
-Nodes (13): bool, HashSet, int, long, string, BevyMigrationExporter, NeutralComponent, NeutralExport (+5 more)
+Nodes (11): bool, int, long, string, NeutralComponent, NeutralExport, NeutralField, NeutralGameObject (+3 more)
 
 ### Community 190 - "UserInterface_TownGoal"
 Cohesion: 0.15
@@ -1195,6 +1195,10 @@ Nodes (3): Checklist for New RuntimeData, RuntimeData Structure, RuntimeData Tem
 ### Community 217 - "Character Animation Regression Checklist"
 Cohesion: 0.25
 Nodes (8): Acceptance gate, Attempt record template, Character Animation Regression Checklist, Current attempt, Do not retry unchanged, Next narrow diagnostic pass, What did not fix visible animation, What did work
+
+### Community 218 - "BevyMigrationExporter"
+Cohesion: 0.29
+Nodes (4): HashSet, MenuItem, BevyMigrationExporter, NeutralAsset
 
 ### Community 219 - "ScriptKeywordProcessor"
 Cohesion: 0.33
@@ -1341,8 +1345,8 @@ Cohesion: 0.40
 Nodes (4): Answer, Outcome, Q: If there is more to do, keep going., Source Nodes
 
 ### Community 267 - "LabelDisplayProcessor"
-Cohesion: 0.06
-Nodes (20): Container, ContainerBuilder, LabelDisplayProcessor, bool, List, ObjectPoolingSettings, Dictionary, GameObject (+12 more)
+Cohesion: 0.07
+Nodes (17): Container, ContainerBuilder, LabelDisplayProcessor, Dictionary, GameObject, UtilDisplayRuntimeData, bool, Color (+9 more)
 
 ### Community 268 - "DirectTwitchBroadcastPlugin"
 Cohesion: 0.50
@@ -1383,6 +1387,10 @@ Nodes (3): Answer, Q: How does Bevy new-town population now match Unity shipping
 ### Community 279 - "Q: Unity station TargetSensor distance range generated resource targeting parity Bevy"
 Cohesion: 0.50
 Nodes (3): Answer, Q: Unity station TargetSensor distance range generated resource targeting parity Bevy, Source Nodes
+
+### Community 280 - "SimpleDisableAfterTime"
+Cohesion: 0.25
+Nodes (3): float, GameObject, SimpleDisableAfterTime
 
 ### Community 281 - "Q: role level experience progression station equipment inventory skill upgrade"
 Cohesion: 0.40
@@ -1440,10 +1448,6 @@ Nodes (4): Answer, Outcome, Q: Characters are still not animated. Trees still ha
 Cohesion: 0.06
 Nodes (13): Player, Dictionary, GameObject, Vector3, Vector3, BuildingCommands, GameMasterCommands, OnChatCommandReceivedArgs (+5 more)
 
-### Community 308 - "IntWrapper"
-Cohesion: 0.33
-Nodes (3): Access_Preset, ContainerBuilder, IntWrapper
-
 ### Community 309 - "UnityGraphics"
 Cohesion: 0.33
 Nodes (5): Vector3, UnityGraphics, URP, FieldInfo, ShadowResolution
@@ -1483,7 +1487,7 @@ Nodes (3): AutosaveIntervalsInstaller, ContainerBuilder, List
 ## Knowledge Gaps
 - **361 isolated node(s):** `StreamTown.EditorTools`, `Attributes`, `BuildCostModifier`, `StartupState`, `InputButton` (+356 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **25 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **24 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Work-memory lessons
 
@@ -1502,16 +1506,16 @@ Nodes (3): AutosaveIntervalsInstaller, ContainerBuilder, List
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Utils` connect `Utils` to `ScriptablesProcessorInfrastructure`, `EnemySpawner`, `StringUtils`, `TechTree.Elements`, `LabelDisplayProcessor`, `Easings`, `TownGoal.Data`, `.CreateEnumField`, `BuildingScriptablesEditor.cs`, `GenerationSettings`, `UpdateGraphBounds`, `RandomEnabler`, `AudioHandler`, `SimpleScreenShot`, `ScriptableObject`, `CommonEnums.cs`, `BuildingPlacer`, `TargetProcessor`, `FPSDisplay`, `MonoBehaviour`, `IRuntimeDataScriptable`, `SnapToGridMouseMovement`?**
+- **Why does `Utils` connect `Utils` to `ScriptablesProcessorInfrastructure`, `EnemySpawner`, `StringUtils`, `TechTree.Elements`, `Target`, `Easings`, `LabelDisplayProcessor`, `SimpleDisableAfterTime`, `TechTree_SO`, `.CreateEnumField`, `BuildingScriptablesEditor.cs`, `GenerationSettings`, `UpdateGraphBounds`, `RandomEnabler`, `PlayerControls`, `AudioHandler`, `SimpleScreenShot`, `ScriptableObject`, `CommonEnums.cs`, `BuildingPlacer`, `TargetProcessor`, `FPSDisplay`, `MonoBehaviour`, `IRuntimeDataScriptable`, `SnapToGridMouseMovement`?**
   _High betweenness centrality (0.054) - this node is a cross-community bridge._
-- **Why does `PlayerProcessor` connect `PlayerProcessor` to `Utils`, `BuildingProcessor`, `PlayerRole`, `ScriptablesProcessorInfrastructure`, `EnemySpawner`, `TwitchChatProcessor`, `BottomBarInterface`, `TimeProcessor`, `Enemy`, `WorldGenProcessor`, `UserInterface_Debug`, `RoleData`, `TechTreeProcessor`, `RoleHandler`, `Player`, `StreamTownSessionBridge`, `TwitchClientProcessor`, `UIProcessor`, `GameEventProcessor`, `PoolableObject`, `UserInterface_TownVote`, `BuildingPlacer`, `IProcessor`, `RaidEvent`, `MonoBehaviour`, `Resource`, `SaveProcessor`, `SelectedPlayer`, `VoteEvent`, `.Log`?**
+- **Why does `PlayerProcessor` connect `PlayerProcessor` to `PlayerRole`, `BuildingProcessor`, `ScriptablesProcessorInfrastructure`, `EnemySpawner`, `TwitchChatProcessor`, `BottomBarInterface`, `Target`, `TimeProcessor`, `Enemy`, `WorldGenProcessor`, `UserInterface_Debug`, `RoleData`, `TechTreeProcessor`, `RoleHandler`, `Player`, `StreamTownSessionBridge`, `TwitchClientProcessor`, `UIProcessor`, `GameEventProcessor`, `PoolableObject`, `UserInterface_TownVote`, `BuildingPlacer`, `IProcessor`, `RaidEvent`, `MonoBehaviour`, `Resource`, `SaveProcessor`, `SelectedPlayer`, `VoteEvent`, `.Log`?**
   _High betweenness centrality (0.033) - this node is a cross-community bridge._
-- **Why does `StableId` connect `StableId` to `GeneratedWorld`, `ToolState`, `Vec`, `.new`, `MainMenuSceneReference`, `advance_world_loading_cover`, `stream_town_migrate/src/content.rs`, `String`, `save.rs`, `ContentCatalog`, `update_environment_presentation`, `twitch.rs`, `Option`, `command.rs`, `TechnologyGraphLayout`, `stream_town_migrate/src/presentation.rs`, `String`, `Res`, `stream_town_domain/src/content.rs`, `String`, `TechnologyGraphViewState`, `component_field_value`, `AnimationControllerDef`, `runtime_console.rs`, `Vec`, `tools_ui`, `complete_agent_goal`, `UnityAsset`, `GridPos`, `stream_town_game/src/lib.rs`, `process_injected_commands`, `config.rs`, `stream_town_domain/src/presentation.rs`, `Option`?**
+- **Why does `StableId` connect `StableId` to `GeneratedWorld`, `ToolState`, `String`, `.new`, `MainMenuSceneReference`, `stream_town_migrate/src/content.rs`, `String`, `save.rs`, `ContentCatalog`, `update_environment_presentation`, `twitch.rs`, `Option`, `command.rs`, `TechnologyGraphLayout`, `stream_town_migrate/src/presentation.rs`, `String`, `Res`, `stream_town_domain/src/content.rs`, `String`, `TechnologyGraphViewState`, `component_field_value`, `AnimationControllerDef`, `runtime_console.rs`, `Vec`, `tools_ui`, `complete_agent_goal`, `UnityAsset`, `GridPos`, `stream_town_game/src/lib.rs`, `process_injected_commands`, `config.rs`, `stream_town_domain/src/presentation.rs`, `Option`?**
   _High betweenness centrality (0.032) - this node is a cross-community bridge._
 - **What connects `StreamTown.EditorTools`, `Attributes`, `BuildCostModifier` to the rest of the system?**
   _361 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Utils` be split into smaller, more focused modules?**
-  _Cohesion score 0.03584377913601989 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.03879389593675308 - nodes in this community are weakly interconnected._
 - **Should `BuildingProcessor` be split into smaller, more focused modules?**
   _Cohesion score 0.03569641367806505 - nodes in this community are weakly interconnected._
 - **Should `GeneratedWorld` be split into smaller, more focused modules?**
