@@ -511,7 +511,12 @@ half-cell candidates and same-cell clusters are not collapsed, while subsequent
 foliage layers still reject occupied source keys. Raw glTF primitive loads restore
 Blender's omitted 0.01 centimetre-to-metre scene-node conversion before applying
 authored scale; this prevents tree, ore, bush, grass, and coral primitives from
-becoming roughly one hundred times too large and overlapping. The converted
+becoming roughly one hundred times too large and overlapping. Runtime resource
+and foliage presentation derives a second deterministic offset from the world
+seed, stable generated identity, source location, and source sub-cell position.
+Each axis is constrained to the central 50% of its navigation cell, so the
+result is visibly distributed without drifting into neighboring gameplay cells,
+using entity IDs, or reading legacy-save coordinates. The converted
 grass, flower, seaweed, and coral primitives use Bevy's native mesh/material
 instancing: the 16,581 shipping records collapse to 12 maximum GPU mesh batches
 and 281 deterministic 32-cell spatial audit groups without duplicating geometry.
@@ -913,6 +918,11 @@ attachment, lighting receivers, GPU image/mesh/material uploads, pipeline and
 selection-draw readiness, and stable presented frames. There are no fixed
 percentage bands or synthetic 99% cap. The exact aggregate reaches 100% only
 when every leaf is complete, then presents that completed frame before removal.
+Simulation, gameplay input, Twitch command application, autosave,
+ambience, seagull calls, and Tidal music share a `GameplayReady` system gate.
+That marker is absent throughout reveal validation and is inserted only after
+both loading runtimes and every loading overlay/camera entity have left the ECS
+world, so no town time or sound can advance behind the cover.
 Diagnostic logs report boot
 asset time and menu-scene reveal time separately; on the recorded DX12 debug
 machine asset I/O is about 0.4s while first-use scene/material GPU preparation is

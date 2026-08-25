@@ -381,6 +381,15 @@ pub enum GameState {
     Credits,
 }
 
+/// Present only after the recursive loading overlay and its dedicated camera
+/// have actually left the ECS world. Systems in this set must not advance
+/// gameplay, presentation clocks, or world audio without this marker.
+#[derive(Resource)]
+struct GameplayReady;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, SystemSet)]
+struct GameplaySimulationSet;
+
 #[derive(Resource)]
 pub struct RuntimeConfig(pub GameConfig);
 
@@ -1727,6 +1736,8 @@ struct WorldRevealRuntime {
     completion_starting_render_frame: Option<u64>,
     fallback_updates: u16,
     ready_frames: u8,
+    simulation_elapsed_seconds: f64,
+    session_elapsed_seconds: f64,
 }
 
 impl Default for WorldRevealRuntime {
@@ -1738,6 +1749,8 @@ impl Default for WorldRevealRuntime {
             completion_starting_render_frame: None,
             fallback_updates: 0,
             ready_frames: 0,
+            simulation_elapsed_seconds: 0.0,
+            session_elapsed_seconds: 0.0,
         }
     }
 }
@@ -2379,6 +2392,8 @@ type LoadingCoverEntityQuery<'w, 's> = Query<
     (Entity, Option<&'static mut Visibility>),
     Or<(With<LoadingScreenEntity>, With<LoadingUiCamera>)>,
 >;
+type LoadingRetirementQuery<'w, 's> =
+    Query<'w, 's, (), Or<(With<LoadingScreenEntity>, With<LoadingUiCamera>)>>;
 #[derive(SystemParam)]
 struct WorldRevealReadinessQueries<'w, 's> {
     material_specs: Query<'w, 's, (), With<MaterialOverrideSpec>>,
@@ -3104,6 +3119,12 @@ impl Plugin for StreamTownGamePlugin {
         }
         app.add_message::<AccessibilityActionRequest>();
         app.init_state::<GameState>()
+            .configure_sets(
+                Update,
+                GameplaySimulationSet
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(resource_exists::<GameplayReady>),
+            )
             .init_resource::<SessionStats>()
             .init_resource::<WorldRenderStats>()
             .init_resource::<CrowdSeparationRuntime>()
@@ -3304,6 +3325,7 @@ impl Plugin for StreamTownGamePlugin {
                         .after(finish_world_reveal)
                         .run_if(resource_exists::<WorldLoadingRuntime>),
                     enforce_loading_overlay_retired.after(finish_world_reveal),
+                    confirm_gameplay_ready.after(enforce_loading_overlay_retired),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3331,7 +3353,8 @@ impl Plugin for StreamTownGamePlugin {
                     tag_authored_rotating_nodes.after(tag_building_model_nodes),
                     rotate_authored_building_nodes
                         .after(tag_authored_rotating_nodes)
-                        .after(sync_building_model_nodes),
+                        .after(sync_building_model_nodes)
+                        .in_set(GameplaySimulationSet),
                     sync_tiled_building_rotation.after(sync_building_presentation),
                     sync_chimney_smoke_emitters.after(sync_building_presentation),
                 )
@@ -3359,6 +3382,7 @@ impl Plugin for StreamTownGamePlugin {
                         .after(sync_fish_god_presentation)
                         .before(drive_converted_animations),
                 )
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3371,10 +3395,11 @@ impl Plugin for StreamTownGamePlugin {
                         apply_crowd_separation,
                         update_agent_locomotion,
                     )
-                        .chain(),
+                        .chain()
+                        .in_set(GameplaySimulationSet),
                     sync_resource_nodes.after(move_agents),
                     sync_building_presentation.after(move_agents),
-                    animate_agents,
+                    animate_agents.in_set(GameplaySimulationSet),
                     resolve_native_animation_requests.after(upgrade_actor_placeholders),
                     attach_native_animations,
                     attach_converted_animations
@@ -3382,26 +3407,38 @@ impl Plugin for StreamTownGamePlugin {
                         .after(sync_active_pets)
                         .after(sync_fish_god_presentation)
                         .after(correct_player_rig_axis),
-                    drive_native_animations.after(update_agent_locomotion),
+                    drive_native_animations
+                        .after(update_agent_locomotion)
+                        .in_set(GameplaySimulationSet),
                     drive_converted_animations
                         .after(update_agent_locomotion)
-                        .after(attach_converted_animations),
+                        .after(attach_converted_animations)
+                        .in_set(GameplaySimulationSet),
                     update_environment_presentation.after(move_agents),
-                    animate_weather_particles.after(update_environment_presentation),
-                    follow_animation_closeup_camera.after(move_agents),
+                    animate_weather_particles
+                        .after(update_environment_presentation)
+                        .in_set(GameplaySimulationSet),
+                    follow_animation_closeup_camera
+                        .after(move_agents)
+                        .in_set(GameplaySimulationSet),
                     sync_active_pets.after(move_agents),
                     camera_controls
                         .after(follow_animation_closeup_camera)
-                        .after(follow_pet_closeup_camera),
-                    select_grid_cell,
-                    game_input,
+                        .after(follow_pet_closeup_camera)
+                        .in_set(GameplaySimulationSet),
+                    select_grid_cell.in_set(GameplaySimulationSet),
+                    game_input.in_set(GameplaySimulationSet),
                     save_input
                         .after(apply_agent_commands)
-                        .after(apply_building_commands),
+                        .after(apply_building_commands)
+                        .in_set(GameplaySimulationSet),
                     load_input
                         .after(apply_agent_commands)
-                        .after(apply_building_commands),
-                    drive_level_up_presentation.after(move_agents),
+                        .after(apply_building_commands)
+                        .in_set(GameplaySimulationSet),
+                    drive_level_up_presentation
+                        .after(move_agents)
+                        .in_set(GameplaySimulationSet),
                     update_hud,
                 )
                     .run_if(in_state(GameState::InGame)),
@@ -3411,6 +3448,7 @@ impl Plugin for StreamTownGamePlugin {
                 follow_pet_closeup_camera
                     .after(move_agents)
                     .after(sync_active_pets)
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3441,7 +3479,9 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 Update,
-                animate_fish_school.run_if(in_state(GameState::InGame)),
+                animate_fish_school
+                    .in_set(GameplaySimulationSet)
+                    .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
                 Update,
@@ -3459,7 +3499,8 @@ impl Plugin for StreamTownGamePlugin {
                     attach_gate_animations.after(sync_building_presentation),
                     drive_gate_animations
                         .after(move_agents)
-                        .after(attach_gate_animations),
+                        .after(attach_gate_animations)
+                        .in_set(GameplaySimulationSet),
                 )
                     .run_if(in_state(GameState::InGame)),
             )
@@ -3482,6 +3523,7 @@ impl Plugin for StreamTownGamePlugin {
                     update_town_goal_panel.after(move_agents),
                     update_current_event_panel.after(update_enemy_encounters),
                 )
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3497,6 +3539,7 @@ impl Plugin for StreamTownGamePlugin {
                 )
                     .chain()
                     .after(game_input)
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3506,6 +3549,7 @@ impl Plugin for StreamTownGamePlugin {
                     tidal_music::drive_tidal_music.after(drive_world_audio),
                     drive_seagull_flight.after(tidal_music::drive_tidal_music),
                 )
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3543,12 +3587,14 @@ impl Plugin for StreamTownGamePlugin {
                 )
                     .chain()
                     .after(game_input)
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
                 Update,
                 animate_healing_effects
                     .after(move_agents)
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3557,6 +3603,7 @@ impl Plugin for StreamTownGamePlugin {
                     .after(move_agents)
                     .after(apply_agent_commands)
                     .after(apply_building_commands)
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -3582,6 +3629,7 @@ impl Plugin for StreamTownGamePlugin {
                         .after(load_input)
                         .after(move_agents),
                 )
+                    .in_set(GameplaySimulationSet)
                     .run_if(in_state(GameState::InGame)),
             )
             .add_systems(
@@ -8022,7 +8070,13 @@ fn finish_menu_reveal(
     commands.remove_resource::<MenuRevealRuntime>();
 }
 
-fn begin_world_reveal(mut commands: Commands, presented_frames: Res<PresentedRenderFrames>) {
+fn begin_world_reveal(
+    mut commands: Commands,
+    presented_frames: Res<PresentedRenderFrames>,
+    simulation: Res<SimulationRuntime>,
+    session_stats: Res<SessionStats>,
+) {
+    commands.remove_resource::<GameplayReady>();
     commands.insert_resource(WorldRevealRuntime {
         started_at: Instant::now(),
         starting_render_frame: presented_frames.current(),
@@ -8030,6 +8084,8 @@ fn begin_world_reveal(mut commands: Commands, presented_frames: Res<PresentedRen
         completion_starting_render_frame: None,
         fallback_updates: 0,
         ready_frames: 0,
+        simulation_elapsed_seconds: simulation.0.elapsed_seconds,
+        session_elapsed_seconds: session_stats.elapsed_seconds,
     });
 }
 
@@ -8046,6 +8102,8 @@ fn finish_world_reveal(
     readiness: WorldRevealReadinessQueries,
     active_meshes: Query<&Mesh3d>,
     active_materials: ActiveMaterialHandles,
+    simulation: Res<SimulationRuntime>,
+    session_stats: Res<SessionStats>,
 ) {
     let Some(reveal) = reveal.as_deref_mut() else {
         return;
@@ -8263,6 +8321,14 @@ fn finish_world_reveal(
     if presented_render_frame.saturating_sub(completion_starting_render_frame) < 1 {
         return;
     }
+    debug_assert!(
+        (simulation.0.elapsed_seconds - reveal.simulation_elapsed_seconds).abs() < f64::EPSILON,
+        "simulation time advanced behind the loading overlay"
+    );
+    debug_assert!(
+        (session_stats.elapsed_seconds - reveal.session_elapsed_seconds).abs() < f64::EPSILON,
+        "session time advanced behind the loading overlay"
+    );
     for (entity, visibility) in &mut loading_entities {
         if let Some(mut visibility) = visibility {
             *visibility = Visibility::Hidden;
@@ -8320,6 +8386,28 @@ fn enforce_loading_overlay_retired(
         *retirement_verified = true;
         info!("Stream Town loading overlay retirement verified");
     }
+}
+
+fn confirm_gameplay_ready(
+    mut commands: Commands,
+    ready: Option<Res<GameplayReady>>,
+    reveal: Option<Res<WorldRevealRuntime>>,
+    loading: Option<Res<WorldLoadingRuntime>>,
+    loading_entities: LoadingRetirementQuery,
+    simulation: Option<Res<SimulationRuntime>>,
+    stats: Option<Res<SessionStats>>,
+) {
+    if ready.is_some() || reveal.is_some() || loading.is_some() || !loading_entities.is_empty() {
+        return;
+    }
+    commands.insert_resource(GameplayReady);
+    info!(
+        simulation_elapsed_seconds = simulation
+            .as_ref()
+            .map_or(0.0, |runtime| runtime.0.elapsed_seconds),
+        session_elapsed_seconds = stats.as_ref().map_or(0.0, |stats| stats.elapsed_seconds),
+        "Stream Town gameplay and world audio unpaused after loading overlay retirement"
+    );
 }
 
 fn animate_loading_icon(
@@ -13745,17 +13833,51 @@ fn generated_resource_world_position(
     world: &GeneratedWorld,
 ) -> Vec3 {
     let mut position = grid_to_world_on_surface(resource.position, config, world);
-    let offset = authored_visual_offset(resource.offset_milli_cells, config.world.cell_size);
+    let offset = locational_visual_offset(
+        world.seed,
+        &resource.id,
+        resource.position,
+        resource.offset_milli_cells,
+        config.world.cell_size,
+    );
     position.x += offset.x;
     position.z += offset.y;
     position
 }
 
-fn authored_visual_offset(offset_milli_cells: [i16; 2], cell_size: f32) -> Vec2 {
-    Vec2::new(
-        f32::from(offset_milli_cells[0]) * cell_size / 1_000.0,
-        f32::from(offset_milli_cells[1]) * cell_size / 1_000.0,
-    )
+fn locational_visual_offset(
+    world_seed: u64,
+    id: &StableId,
+    position: GridPos,
+    source_offset_milli_cells: [i16; 2],
+    cell_size: f32,
+) -> Vec2 {
+    const CENTRAL_HALF_MIN_MILLI_CELLS: i16 = -250;
+    const CENTRAL_HALF_BUCKETS: u64 = 501;
+    const X_SALT: u64 = 0x4C4F_4341_5449_4F4E;
+    const Z_SALT: u64 = 0x4F46_4653_4554_5F5A;
+
+    let source_x = u64::from(u16::from_le_bytes(
+        source_offset_milli_cells[0].to_le_bytes(),
+    ));
+    let source_z = u64::from(u16::from_le_bytes(
+        source_offset_milli_cells[1].to_le_bytes(),
+    ));
+    let serial =
+        u64::from(position.x) | (u64::from(position.z) << 16) | (source_x << 32) | (source_z << 48);
+    let id_hash = id
+        .as_str()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        });
+    let axis = |salt| {
+        let bucket =
+            i16::try_from(seagull_hash(world_seed ^ id_hash, serial, salt) % CENTRAL_HALF_BUCKETS)
+                .expect("central-half location bucket fits i16");
+        f32::from(CENTRAL_HALF_MIN_MILLI_CELLS + bucket) * cell_size / 1_000.0
+    };
+    Vec2::new(axis(X_SALT), axis(Z_SALT))
 }
 
 fn resource_mesh_index(resource: &stream_town_domain::GeneratedResource) -> usize {
@@ -13963,8 +14085,13 @@ fn resolve_foliage_visual(
         .from_asset(variant.asset_path.clone()),
     );
     let centre = grid_to_world_on_surface(foliage.position, config, world);
-    let horizontal_offset =
-        authored_visual_offset(foliage.offset_milli_cells, config.world.cell_size);
+    let horizontal_offset = locational_visual_offset(
+        world.seed,
+        &foliage.id,
+        foliage.position,
+        foliage.offset_milli_cells,
+        config.world.cell_size,
+    );
     let offset = Vec3::new(horizontal_offset.x, 0.0, horizontal_offset.y);
     // This is also a primitive-label load, so `resource_visual_scale` restores
     // the glTF scene node's centimetre conversion before authored BaseScale.
@@ -32620,6 +32747,7 @@ fn cleanup_loading_runtime(mut commands: Commands) {
 }
 
 fn clear_loading_runtime(commands: &mut Commands) {
+    commands.remove_resource::<GameplayReady>();
     commands.remove_resource::<WorldLoadingRuntime>();
     commands.remove_resource::<WorldGenerationTask>();
     commands.remove_resource::<WorldLoadingCoverRuntime>();
@@ -32640,6 +32768,7 @@ fn cleanup_world(
     commands.remove_resource::<WorldRuntime>();
     commands.remove_resource::<SimulationRuntime>();
     commands.remove_resource::<WorldRevealRuntime>();
+    commands.remove_resource::<GameplayReady>();
     commands.insert_resource(BuildingPlacers::default());
     commands.insert_resource(BuildingCommandQueue::default());
     *station_targets = StationTargetRuntime::default();
@@ -34142,12 +34271,116 @@ mod tests {
     }
 
     #[test]
-    fn authored_visual_offsets_preserve_source_generated_positions() {
-        assert_eq!(
-            authored_visual_offset([250, -250], 2.0),
-            Vec2::new(0.5, -0.5)
+    fn generated_visual_offsets_are_deterministic_and_fill_each_cells_central_half() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world_with_content(&config.world, &content);
+        let max_axis_offset = config.world.cell_size * 0.25;
+        let offsets = world
+            .resources
+            .iter()
+            .filter(|resource| resource.target_kind.as_str() != "target:fish")
+            .take(512)
+            .map(|resource| {
+                let offset = locational_visual_offset(
+                    world.seed,
+                    &resource.id,
+                    resource.position,
+                    resource.offset_milli_cells,
+                    config.world.cell_size,
+                );
+                assert_eq!(
+                    offset,
+                    locational_visual_offset(
+                        world.seed,
+                        &resource.id,
+                        resource.position,
+                        resource.offset_milli_cells,
+                        config.world.cell_size,
+                    )
+                );
+                assert!(offset.x.abs() <= max_axis_offset + f32::EPSILON);
+                assert!(offset.y.abs() <= max_axis_offset + f32::EPSILON);
+                (offset.x.to_bits(), offset.y.to_bits())
+            })
+            .collect::<HashSet<_>>();
+        assert!(
+            offsets.len() > 480,
+            "resource offsets must visibly distribute instead of returning to cell centres"
         );
-        assert_eq!(authored_visual_offset([0, 0], 2.0), Vec2::ZERO);
+
+        let foliage_offsets = world
+            .foliage
+            .iter()
+            .take(512)
+            .map(|foliage| {
+                let offset = locational_visual_offset(
+                    world.seed,
+                    &foliage.id,
+                    foliage.position,
+                    foliage.offset_milli_cells,
+                    config.world.cell_size,
+                );
+                assert!(offset.x.abs() <= max_axis_offset + f32::EPSILON);
+                assert!(offset.y.abs() <= max_axis_offset + f32::EPSILON);
+                (offset.x.to_bits(), offset.y.to_bits())
+            })
+            .collect::<HashSet<_>>();
+        assert!(
+            foliage_offsets.len() > 480,
+            "foliage offsets must visibly distribute instead of returning to cell centres"
+        );
+    }
+
+    #[test]
+    fn gameplay_gate_remains_closed_until_loading_entities_and_runtimes_are_gone() {
+        let mut app = App::new();
+        app.add_systems(Update, confirm_gameplay_ready);
+        let loading_entity = app.world_mut().spawn(LoadingScreenEntity).id();
+        app.update();
+        assert!(!app.world().contains_resource::<GameplayReady>());
+
+        app.world_mut().despawn(loading_entity);
+        app.world_mut()
+            .insert_resource(WorldLoadingRuntime::default());
+        app.update();
+        assert!(!app.world().contains_resource::<GameplayReady>());
+
+        app.world_mut().remove_resource::<WorldLoadingRuntime>();
+        app.world_mut()
+            .insert_resource(WorldRevealRuntime::default());
+        app.update();
+        assert!(!app.world().contains_resource::<GameplayReady>());
+
+        app.world_mut().remove_resource::<WorldRevealRuntime>();
+        app.update();
+        assert!(app.world().contains_resource::<GameplayReady>());
+    }
+
+    #[test]
+    fn gameplay_simulation_set_is_paused_without_the_ready_marker() {
+        #[derive(Resource, Default)]
+        struct Counter(u32);
+
+        fn count_update(mut counter: ResMut<Counter>) {
+            counter.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Counter>()
+            .configure_sets(
+                Update,
+                GameplaySimulationSet.run_if(resource_exists::<GameplayReady>),
+            )
+            .add_systems(Update, count_update.in_set(GameplaySimulationSet));
+        app.update();
+        assert_eq!(app.world().resource::<Counter>().0, 0);
+        app.world_mut().insert_resource(GameplayReady);
+        app.update();
+        assert_eq!(app.world().resource::<Counter>().0, 1);
+        app.world_mut().remove_resource::<GameplayReady>();
+        app.update();
+        assert_eq!(app.world().resource::<Counter>().0, 1);
     }
 
     #[test]
@@ -42438,9 +42671,11 @@ mod tests {
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             Duration::from_millis(250),
         ));
-        for _ in 0..48 {
+        for _ in 0..128 {
             app.update();
-            if *app.world().resource::<State<GameState>>().get() == GameState::InGame {
+            if *app.world().resource::<State<GameState>>().get() == GameState::InGame
+                && app.world().contains_resource::<GameplayReady>()
+            {
                 break;
             }
         }
@@ -42450,6 +42685,10 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<GameState>>().get(),
             GameState::InGame
+        );
+        assert!(
+            app.world().contains_resource::<GameplayReady>(),
+            "headless world entry must wait for the same overlay-retirement gate as production"
         );
     }
 

@@ -28,6 +28,7 @@ Do not mark this regression fixed until all of the following are true:
 - [x] **Visible and shadow tree vertices now share one deformation implementation (current candidate).** Both shaders import the same bind-group-free `stream_town_tree_deformed_position` function with the serialized `Env_Tree.mat` constants. The fixed foliage smoke view changed from large black canopy facets to a coherent lit surface while keeping ground shadows. Unlike the failed approximate prepass, there is no separately maintained shadow wind equation. User confirmation and a moving capture are still required.
 - [x] **The imported leaf-card two-sided contract is preserved (current candidate).** `Env_Tree.glb` explicitly declares `doubleSided: true`, but the typed gameplay and menu material overrides previously fell back to Bevy's back-face culling. Both overrides now set `double_sided = true` and `cull_mode = None`. Bevy's standard PBR input flips the back-face normal under this flag, so card backs receive outward-facing lighting instead of merely being exposed with inside-out normals.
 - [x] **Runtime placement now consumes the generator's exact source-space offsets.** Generator version 6 already derived each resource and foliage position from the Unity loop and retained its sub-cell offset. The renderer incorrectly replaced that value with a hash of the coarser two-metre navigation cell, collapsing distinct Unity positions onto the same transform. The renderer now uses `offset_milli_cells` directly; this changes presentation only and does not read a legacy save or modify the source-derived generation algorithm.
+- [x] **The requested central-half locational spread now preserves the lesson from the failed coarse hash.** The later explicit parity request requires visible resources and foliage to vary within the central 50% of each navigation cell. The renderer therefore hashes the world seed, stable generated ID, grid location, and retained source sub-cell offset together. Unlike the former grid-only hash, distinct source instances in one coarse cell cannot collapse onto the same transform. Counts, occupancy, stable gameplay positions, generator hashes, and saves remain untouched; no Unity-save coordinate is read.
 
 ## What did not fix the flicker
 
@@ -112,6 +113,17 @@ Use the same fixed seed, camera, day, season, and tree for every toggle. Change 
   - Shadows still cast: yes; the manifest reports 19,901/19,901 casters and 19,901/19,901 receivers.
   - User result: `accepted before the presentation-only offset correction`; the correction was then verified by the complete structural and moving-camera sweep.
   - Reuse rule: rerun `scripts/capture-foliage-acceptance.ps1`; do not change tree shading unless its structural manifest passes and the new capture identifies a material/pass-specific regression.
+
+- [ ] **`current candidate` — add the explicitly requested locational PRNG spread without restoring the coarse-hash collision**
+  - Object/spawn path: all in-game generated resource and foliage renderers.
+  - Fixed seed/camera/day/season: default deterministic world; structural sampling over 512 resource and 512 foliage records.
+  - Single changed variable: presentation offset now hashes world seed plus the complete generated spatial identity into ±250 milli-cells per axis.
+  - Duplicate renderer count: zero duplicate mesh/quantized-global-transform groups across 19,901 renderers; regression samples also contain more than 480 distinct offsets per 512 resource/foliage records.
+  - Stationary-camera result: frames 00–01 in `.stream-town/diagnostics/foliage-locational-offset-final` are stable and show visibly off-centre ground cover.
+  - Moving-camera result: all twelve frames and the assembled `foliage-sweep.mp4` pass the scripted orbit/zoom/return sweep.
+  - Shadows still cast: yes; the manifest reports 19,901/19,901 casters and 19,901/19,901 receivers.
+  - User result: not checked.
+  - Reuse rule: never fall back to hashing only the coarse grid position; retain stable ID and source offset as collision discriminants.
 
 The recorded local acceptance set is `.stream-town/diagnostics/foliage-moving-final-2026-08-25-v2`. It is intentionally ignored because twelve full-resolution PNGs are machine evidence, not shipping assets. Reproduce it from `bevy-port` with:
 
