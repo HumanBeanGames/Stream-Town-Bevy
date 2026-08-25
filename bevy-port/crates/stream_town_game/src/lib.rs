@@ -6,11 +6,15 @@ mod unity_color_filter;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
+        mpsc,
     },
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -39,7 +43,10 @@ use bevy::{
     ecs::{query::QueryData, system::SystemParam},
     gltf::{GltfMaterialName, GltfMeshName},
     input::mouse::AccumulatedMouseScroll,
-    input_focus::{FocusCause, InputFocus, InputFocusVisible},
+    input_focus::{
+        FocusCause, InputFocus, InputFocusVisible,
+        tab_navigation::{TabGroup, TabIndex, TabNavigationPlugin},
+    },
     light::DirectionalLightShadowMap,
     math::Affine2,
     mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
@@ -66,7 +73,9 @@ use bevy::{
     shader::ShaderRef,
     sprite::{BorderRect, TextureSlicer},
     tasks::{AsyncComputeTaskPool, Task, block_on, poll_once},
+    text::{EditableText, TextCursorStyle},
     transform::TransformSystems,
+    ui_widgets::SelectAllOnFocus,
     window::{
         CursorOptions, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode,
         WindowResolution,
@@ -226,6 +235,10 @@ const GAME_MENU_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/Miscellaneous/UI_Checkmark.png",
 ];
 const SETTINGS_BACKGROUND_TEXTURE_PATH: &str = "Assets/Sprites/Settings/UI_Settings_Background.png";
+const SECRETS_DISCLAIMER: &str = "By choosing Yes, you confirm that you are not presently streaming or recording this screen through OBS, Streamlabs, XSplit, browser capture, a capture card, or any other third-party application. The next screen contains sensitive Twitch account setup information. You accept any and all responsibility for keeping that information private and absolve Stream Town, Human Bean Games, contributors, and all other parties of liability arising from violating this agreement.";
+const SECRETS_PRIVACY_NOTICE: &str = "INTERNAL TWITCH VIDEO IS BLACKED OUT WHILE THIS SCREEN IS OPEN. Third-party capture software cannot be controlled by Stream Town. Never paste a Client Secret or stream key here.";
+const SECRETS_INITIAL_FEEDBACK: &str =
+    "Enter the public Client ID and both account logins, then authorize each account separately.";
 const SETTINGS_PANEL_CORNER_SCALE: f32 = 1.5;
 const TOP_BAR_TEXTURE_PATHS: [&str; 10] = [
     "Assets/Sprites/TopBar/UI_TopBar_Background.png",
@@ -354,7 +367,10 @@ const EYE_COLORS: [[f32; 3]; 5] = [
     [0.743_859, 0.792_452_8, 0.790_356_93],
     [0.801_886_8, 0.693_535_1, 0.086_997_17],
 ];
-use twitch::{TwitchControl, TwitchEvent, TwitchStatus, TwitchTransport};
+use twitch::{
+    CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
+    TwitchStatus, TwitchTransport,
+};
 use unity_color_filter::{UnityColorFilter, UnityColorFilterPlugin};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, States)]
@@ -520,6 +536,52 @@ enum MenuPage {
     Closed,
     Game,
     Settings,
+    SecretsDisclaimer,
+    Secrets,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct SensitiveScreenActive(pub bool);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, SystemSet)]
+pub(crate) struct SensitiveScreenUpdateSet;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SecretsAuthorizationKind {
+    Bot,
+    Broadcaster,
+}
+
+impl SecretsAuthorizationKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Bot => "bot",
+            Self::Broadcaster => "broadcaster",
+        }
+    }
+}
+
+enum SecretsAuthorizationEvent {
+    Device {
+        kind: SecretsAuthorizationKind,
+        authorization: DeviceAuthorization,
+    },
+    Authorized {
+        kind: SecretsAuthorizationKind,
+        validation: TokenValidation,
+    },
+    Error {
+        kind: SecretsAuthorizationKind,
+        message: String,
+    },
+}
+
+#[derive(Resource, Default)]
+struct SecretsRuntime {
+    authorization_events: Option<Arc<Mutex<mpsc::Receiver<SecretsAuthorizationEvent>>>>,
+    active_authorization: Option<SecretsAuthorizationKind>,
+    device: Option<DeviceAuthorization>,
+    feedback: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1324,6 +1386,7 @@ enum MainMenuAction {
     NewGame,
     LoadGame,
     Settings,
+    Secrets,
     Credits,
     Quit,
 }
@@ -1354,6 +1417,41 @@ struct SettingsValueButton {
     index: usize,
     direction: i8,
 }
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum SecretsAction {
+    DisclaimerYes,
+    DisclaimerNo,
+    ToggleBot,
+    ToggleBroadcast,
+    ToggleBandwidthTest,
+    Save,
+    AuthorizeBot,
+    AuthorizeBroadcaster,
+    Back,
+}
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum SecretsField {
+    ClientId,
+    BotLogin,
+    ChannelLogin,
+}
+
+#[derive(Component)]
+struct SecretsDynamicLabel(SecretsAction);
+
+#[derive(Component)]
+struct SecretsDisclaimerRoot;
+
+#[derive(Component)]
+struct SecretsRoot;
+
+#[derive(Component)]
+struct SecretsStatusText;
+
+#[derive(Component)]
+struct SecretsDeviceText;
 
 #[derive(Component)]
 struct SettingsRoot;
@@ -2960,7 +3058,7 @@ pub struct StreamTownGamePlugin;
 
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(UnityColorFilterPlugin);
+        app.add_plugins((UnityColorFilterPlugin, TabNavigationPlugin));
         #[cfg(target_os = "windows")]
         app.add_plugins(direct_broadcast::DirectTwitchBroadcastPlugin);
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
@@ -3010,6 +3108,8 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
             .init_resource::<SettingsUiCache>()
+            .init_resource::<SecretsRuntime>()
+            .init_resource::<SensitiveScreenActive>()
             .init_resource::<AccessibilityRuntime>()
             .init_resource::<InputFocus>()
             .init_resource::<InputFocusVisible>()
@@ -3117,6 +3217,13 @@ impl Plugin for StreamTownGamePlugin {
                     main_menu_buttons.in_set(AccessibilityActionDispatch),
                     update_main_menu_buttons,
                     menu_input,
+                    (
+                        secrets_buttons.in_set(AccessibilityActionDispatch),
+                        poll_secrets_authorization,
+                        update_secrets_ui,
+                        sync_sensitive_screen_active.in_set(SensitiveScreenUpdateSet),
+                    )
+                        .chain(),
                     settings_tab_buttons.in_set(AccessibilityActionDispatch),
                     settings_value_buttons.in_set(AccessibilityActionDispatch),
                     settings_action_buttons.in_set(AccessibilityActionDispatch),
@@ -3686,14 +3793,14 @@ fn startup_window_mode(mode: stream_town_domain::DisplayMode, benchmarking: bool
 }
 
 pub fn load_runtime_config() -> AnyResult<GameConfig> {
-    let configured = std::env::var_os("STREAM_TOWN_CONFIG").map(PathBuf::from);
-    let user_config = PathBuf::from(".stream-town").join("config.ron");
-    let encoded = if let Some(path) = configured {
+    let configured = std::env::var_os("STREAM_TOWN_CONFIG").is_some();
+    let path = runtime_config_path();
+    let encoded = if configured {
         std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read runtime config {}", path.display()))?
-    } else if user_config.is_file() {
-        std::fs::read_to_string(&user_config)
-            .with_context(|| format!("failed to read runtime config {}", user_config.display()))?
+    } else if path.is_file() {
+        std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read runtime config {}", path.display()))?
     } else {
         include_str!("../../../assets/config/game.ron").to_owned()
     };
@@ -3701,6 +3808,67 @@ pub fn load_runtime_config() -> AnyResult<GameConfig> {
         .context("runtime config is invalid RON")?
         .upgrade()
         .context("runtime config failed validation")
+}
+
+#[must_use]
+pub fn runtime_config_path() -> PathBuf {
+    std::env::var_os("STREAM_TOWN_CONFIG").map_or_else(
+        || PathBuf::from(".stream-town").join("config.ron"),
+        PathBuf::from,
+    )
+}
+
+pub fn save_runtime_config(config: &GameConfig) -> AnyResult<PathBuf> {
+    config
+        .validate()
+        .context("runtime config failed validation")?;
+    let path = runtime_config_path();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create runtime config directory {}",
+            parent.display()
+        )
+    })?;
+    let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+    let encoded =
+        ron::ser::to_string_pretty(config, ron::ser::PrettyConfig::new().struct_names(true))
+            .context("failed to encode runtime config")?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)
+        .with_context(|| format!("failed to create {}", temporary.display()))?;
+    file.write_all(encoded.as_bytes())
+        .with_context(|| format!("failed to write {}", temporary.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to flush {}", temporary.display()))?;
+    if path.is_file() {
+        std::fs::copy(&path, &backup)
+            .with_context(|| format!("failed to back up runtime config to {}", backup.display()))?;
+        std::fs::remove_file(&path)
+            .with_context(|| format!("failed to replace runtime config {}", path.display()))?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, &path) {
+        if backup.is_file() && !path.exists() {
+            let _ = std::fs::copy(&backup, &path);
+        }
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error)
+            .with_context(|| format!("failed to install runtime config {}", path.display()));
+    }
+    let reloaded = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to verify runtime config {}", path.display()))?;
+    let reloaded = ron::from_str::<GameConfig>(&reloaded)
+        .context("saved runtime config is invalid RON")?
+        .upgrade()
+        .context("saved runtime config failed validation")?;
+    if reloaded != *config {
+        anyhow::bail!("reloaded runtime config does not match the saved configuration");
+    }
+    Ok(path)
 }
 
 fn locate_asset_root() -> PathBuf {
@@ -7000,6 +7168,7 @@ fn spawn_main_menu(
                 MainMenuAction::NewGame,
                 MainMenuAction::LoadGame,
                 MainMenuAction::Settings,
+                MainMenuAction::Secrets,
                 MainMenuAction::Credits,
                 MainMenuAction::Quit,
             ] {
@@ -7059,6 +7228,7 @@ const fn main_menu_action_label(action: MainMenuAction) -> &'static str {
         MainMenuAction::NewGame => "New Game",
         MainMenuAction::LoadGame => "Load Game",
         MainMenuAction::Settings => "Settings",
+        MainMenuAction::Secrets => "Secrets",
         MainMenuAction::Credits => "Credits",
         MainMenuAction::Quit => "Quit",
     }
@@ -9978,6 +10148,12 @@ fn main_menu_buttons(
             MainMenuAction::Settings => {
                 open_settings_menu(&mut menu, MenuPage::Closed, &settings.0);
             }
+            MainMenuAction::Secrets => {
+                menu.page = MenuPage::SecretsDisclaimer;
+                menu.return_page = MenuPage::Closed;
+                menu.selected = 0;
+                menu.feedback.clear();
+            }
             MainMenuAction::Credits => next_state.set(GameState::Credits),
             MainMenuAction::Quit => {
                 exit.write(AppExit::Success);
@@ -10623,6 +10799,12 @@ fn announce_accessibility_state(
             settings_tab_label(menu.settings_tab),
             accessibility_settings_selection(&menu)
         ),
+        GameState::MainMenu if menu.page == MenuPage::SecretsDisclaimer => {
+            "Sensitive Twitch setup disclaimer. Choose Yes to continue or No to return.".to_owned()
+        }
+        GameState::MainMenu if menu.page == MenuPage::Secrets => {
+            "Twitch secrets setup. Internal Twitch video is blacked out. Bot and broadcaster accounts are authorized separately.".to_owned()
+        }
         GameState::MainMenu => "Main menu. Press Tab to move between actions.".to_owned(),
         GameState::WorldLoading => loading.as_ref().map_or_else(
             || "Loading town".to_owned(),
@@ -11215,6 +11397,7 @@ fn spawn_menu_overlay(
     mut commands: Commands,
     state: Res<State<GameState>>,
     mut menu: ResMut<MenuRuntime>,
+    config: Res<RuntimeConfig>,
     settings: Res<RuntimePlayerSettings>,
     mut idle: ResMut<CameraIdleMode>,
     render: Res<RenderAssets>,
@@ -11231,6 +11414,11 @@ fn spawn_menu_overlay(
         menu.feedback.clear();
     } else if std::env::var_os("STREAM_TOWN_AUTOSTART_SETTINGS").is_some() {
         open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
+    } else if std::env::var_os("STREAM_TOWN_AUTOSTART_SECRETS_DISCLAIMER").is_some() {
+        menu.page = MenuPage::SecretsDisclaimer;
+        menu.return_page = MenuPage::Closed;
+        menu.selected = 0;
+        menu.feedback.clear();
     }
     commands.spawn((
         StateEntity,
@@ -11671,6 +11859,926 @@ fn spawn_menu_overlay(
                 });
                 });
         });
+    spawn_secrets_overlays(&mut commands, &render, &config.0);
+}
+
+fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config: &GameConfig) {
+    commands
+        .spawn((
+            StateEntity,
+            SecretsDisclaimerRoot,
+            Name::new("Twitch secrets disclaimer"),
+            Visibility::Hidden,
+            GlobalZIndex(200),
+            BackgroundColor(Color::srgba(0.004, 0.006, 0.012, 0.96)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100.0),
+                height: percent(100.0),
+                padding: UiRect::all(px(24)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn((
+                    Name::new("Twitch secrets disclaimer panel"),
+                    TabGroup::default(),
+                    BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
+                    Node {
+                        width: percent(66.0),
+                        max_width: px(1_050),
+                        min_height: percent(52.0),
+                        border: UiRect::all(px(3)),
+                        border_radius: BorderRadius::all(px(34)),
+                        padding: UiRect::all(px(48)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(22),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        Name::new("Twitch secrets disclaimer nine-slice surface"),
+                        settings_panel_ui_image(
+                            render,
+                            SETTINGS_BACKGROUND_TEXTURE_PATH,
+                            main_menu_texture(render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                        ),
+                        Pickable::IGNORE,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(3),
+                            top: px(3),
+                            right: px(3),
+                            bottom: px(3),
+                            ..default()
+                        },
+                    ));
+                    panel.spawn((
+                        Text::new("SENSITIVE TWITCH SETUP"),
+                        TextFont {
+                            font_size: FontSize::Px(34.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                    panel.spawn((
+                        Text::new(SECRETS_DISCLAIMER),
+                        TextFont {
+                            font_size: FontSize::Px(20.0),
+                            ..default()
+                        },
+                        TextLayout {
+                            justify: Justify::Center,
+                            linebreak: LineBreak::WordBoundary,
+                        },
+                        TextColor(Color::srgb(0.94, 0.94, 0.91)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(92.0),
+                            ..default()
+                        },
+                    ));
+                    panel.spawn((
+                        Text::new("Do you agree and want to continue?"),
+                        TextFont {
+                            font_size: FontSize::Px(22.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(0.94, 0.80, 0.43)),
+                        Pickable::IGNORE,
+                    ));
+                    panel
+                        .spawn(Node {
+                            width: percent(72.0),
+                            height: px(54),
+                            column_gap: px(24),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            spawn_secrets_button(
+                                buttons,
+                                SecretsAction::DisclaimerNo,
+                                config,
+                                render,
+                                0,
+                            );
+                            spawn_secrets_button(
+                                buttons,
+                                SecretsAction::DisclaimerYes,
+                                config,
+                                render,
+                                1,
+                            );
+                        });
+                });
+        });
+
+    commands
+        .spawn((
+            StateEntity,
+            SecretsRoot,
+            Name::new("Twitch secrets setup"),
+            Visibility::Hidden,
+            GlobalZIndex(210),
+            BackgroundColor(Color::srgb(0.004, 0.006, 0.012)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100.0),
+                height: percent(100.0),
+                padding: UiRect::all(px(22)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn((
+                    Name::new("Twitch secrets setup panel"),
+                    TabGroup::default(),
+                    BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
+                    Node {
+                        width: percent(88.0),
+                        height: percent(92.0),
+                        max_width: px(1_520),
+                        max_height: px(940),
+                        border: UiRect::all(px(3)),
+                        border_radius: BorderRadius::all(px(36)),
+                        padding: UiRect::all(px(38)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(14),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        Name::new("Twitch secrets setup nine-slice surface"),
+                        settings_panel_ui_image(
+                            render,
+                            SETTINGS_BACKGROUND_TEXTURE_PATH,
+                            main_menu_texture(render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                        ),
+                        Pickable::IGNORE,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(3),
+                            top: px(3),
+                            right: px(3),
+                            bottom: px(3),
+                            ..default()
+                        },
+                    ));
+                    panel.spawn((
+                        Text::new("TWITCH SECRETS"),
+                        TextFont {
+                            font_size: FontSize::Px(32.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                    panel.spawn((
+                        Text::new(SECRETS_PRIVACY_NOTICE),
+                        TextFont {
+                            font_size: FontSize::Px(17.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(1.0, 0.72, 0.28)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(100.0),
+                            ..default()
+                        },
+                    ));
+                    panel
+                        .spawn(Node {
+                            width: percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(10),
+                            ..default()
+                        })
+                        .with_children(|fields| {
+                            spawn_secrets_field(
+                                fields,
+                                SecretsField::ClientId,
+                                "Twitch application Client ID",
+                                &config.twitch.client_id,
+                                0,
+                            );
+                            spawn_secrets_field(
+                                fields,
+                                SecretsField::BotLogin,
+                                "Bot account login",
+                                &config.twitch.bot_login,
+                                1,
+                            );
+                            spawn_secrets_field(
+                                fields,
+                                SecretsField::ChannelLogin,
+                                "Broadcaster/channel login",
+                                &config.twitch.channel_login,
+                                2,
+                            );
+                        });
+                    panel
+                        .spawn(Node {
+                            width: percent(100.0),
+                            flex_grow: 1.0,
+                            column_gap: px(20),
+                            ..default()
+                        })
+                        .with_children(|columns| {
+                            spawn_secrets_account_column(
+                                columns,
+                                "CHAT BOT ACCOUNT",
+                                "Authorizes chat:read and chat:edit for the bot login above. The token is stored only in the operating-system credential vault.",
+                                SecretsAction::ToggleBot,
+                                SecretsAction::AuthorizeBot,
+                                config,
+                                render,
+                                3,
+                            );
+                            spawn_secrets_account_column(
+                                columns,
+                                "BROADCASTER / STREAM ACCOUNT",
+                                "Separately authorizes channel:read:stream_key for the broadcaster login above. The stream key is fetched at launch and never saved.",
+                                SecretsAction::ToggleBroadcast,
+                                SecretsAction::AuthorizeBroadcaster,
+                                config,
+                                render,
+                                5,
+                            );
+                        });
+                    panel
+                        .spawn(Node {
+                            width: percent(100.0),
+                            min_height: px(46),
+                            column_gap: px(14),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            spawn_secrets_button(
+                                buttons,
+                                SecretsAction::ToggleBandwidthTest,
+                                config,
+                                render,
+                                7,
+                            );
+                            spawn_secrets_button(
+                                buttons,
+                                SecretsAction::Save,
+                                config,
+                                render,
+                                8,
+                            );
+                            spawn_secrets_button(
+                                buttons,
+                                SecretsAction::Back,
+                                config,
+                                render,
+                                9,
+                            );
+                        });
+                    panel.spawn((
+                        SecretsDeviceText,
+                        Text::new("No Twitch authorization is in progress."),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(0.66, 0.86, 1.0)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(100.0),
+                            min_height: px(48),
+                            ..default()
+                        },
+                    ));
+                    panel.spawn((
+                        SecretsStatusText,
+                        Text::new(SECRETS_INITIAL_FEEDBACK),
+                        TextFont {
+                            font_size: FontSize::Px(16.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(0.86, 0.92, 0.88)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(100.0),
+                            min_height: px(34),
+                            ..default()
+                        },
+                    ));
+                });
+        });
+}
+
+fn spawn_secrets_field(
+    parent: &mut ChildSpawnerCommands,
+    field: SecretsField,
+    label: &'static str,
+    value: &str,
+    tab_index: i32,
+) {
+    parent
+        .spawn(Node {
+            width: percent(100.0),
+            height: px(48),
+            column_gap: px(18),
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|row| {
+            row.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: FontSize::Px(17.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                Pickable::IGNORE,
+                Node {
+                    width: percent(31.0),
+                    ..default()
+                },
+            ));
+            row.spawn((
+                field,
+                EditableText {
+                    max_characters: Some(128),
+                    ..EditableText::new(value)
+                },
+                SelectAllOnFocus,
+                TabIndex(tab_index),
+                TextCursorStyle {
+                    color: Color::WHITE,
+                    selected_text_color: Some(Color::BLACK),
+                    ..default()
+                },
+                TextFont {
+                    font_size: FontSize::Px(18.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                BackgroundColor(Color::srgb(0.018, 0.026, 0.055)),
+                BorderColor::all(Color::srgb(0.40, 0.49, 0.67)),
+                Node {
+                    width: percent(69.0),
+                    height: px(44),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(8)),
+                    padding: UiRect::axes(px(12), px(8)),
+                    overflow: Overflow::clip_x(),
+                    ..default()
+                },
+            ));
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_secrets_account_column(
+    parent: &mut ChildSpawnerCommands,
+    heading: &'static str,
+    description: &'static str,
+    toggle: SecretsAction,
+    authorize: SecretsAction,
+    config: &GameConfig,
+    render: &RenderAssets,
+    tab_index: i32,
+) {
+    parent
+        .spawn((
+            BackgroundColor(Color::srgba(0.018, 0.026, 0.055, 0.88)),
+            BorderColor::all(Color::srgb(0.32, 0.39, 0.56)),
+            Node {
+                width: percent(50.0),
+                border: UiRect::all(px(2)),
+                border_radius: BorderRadius::all(px(14)),
+                padding: UiRect::all(px(18)),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                justify_content: JustifyContent::SpaceBetween,
+                ..default()
+            },
+        ))
+        .with_children(|column| {
+            column.spawn((
+                Text::new(heading),
+                TextFont {
+                    font_size: FontSize::Px(21.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+            column.spawn((
+                Text::new(description),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextLayout {
+                    justify: Justify::Center,
+                    linebreak: LineBreak::WordBoundary,
+                },
+                TextColor(Color::srgb(0.82, 0.86, 0.91)),
+                Pickable::IGNORE,
+            ));
+            spawn_secrets_button(column, toggle, config, render, tab_index);
+            spawn_secrets_button(column, authorize, config, render, tab_index + 1);
+        });
+}
+
+fn spawn_secrets_button(
+    parent: &mut ChildSpawnerCommands,
+    action: SecretsAction,
+    config: &GameConfig,
+    render: &RenderAssets,
+    tab_index: i32,
+) {
+    parent
+        .spawn((
+            action,
+            Button,
+            TabIndex(tab_index),
+            authored_ui_image(
+                render,
+                MAIN_MENU_TEXTURE_PATHS[0],
+                main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
+            ),
+            Node {
+                min_width: px(150),
+                flex_grow: 1.0,
+                height: px(48),
+                padding: UiRect::axes(px(16), px(9)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|button| {
+            button.spawn((
+                SecretsDynamicLabel(action),
+                Text::new(secrets_action_label(action, config)),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
+                Pickable::IGNORE,
+            ));
+        });
+}
+
+fn secrets_action_label(action: SecretsAction, config: &GameConfig) -> String {
+    match action {
+        SecretsAction::DisclaimerYes => "Yes — continue".to_owned(),
+        SecretsAction::DisclaimerNo => "No — go back".to_owned(),
+        SecretsAction::ToggleBot => format!(
+            "Chat bot: {}",
+            if config.twitch.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        ),
+        SecretsAction::ToggleBroadcast => format!(
+            "Direct stream: {}",
+            if config.twitch.broadcast.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        ),
+        SecretsAction::ToggleBandwidthTest => format!(
+            "Bandwidth test: {}",
+            if config.twitch.broadcast.bandwidth_test {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        ),
+        SecretsAction::Save => "Save and apply".to_owned(),
+        SecretsAction::AuthorizeBot => "Authorize bot account".to_owned(),
+        SecretsAction::AuthorizeBroadcaster => "Authorize stream account".to_owned(),
+        SecretsAction::Back => "Back".to_owned(),
+    }
+}
+
+fn secrets_buttons(
+    buttons: Query<(&Interaction, &SecretsAction), Changed<Interaction>>,
+    fields: Query<(&SecretsField, &EditableText)>,
+    mut menu: ResMut<MenuRuntime>,
+    mut secrets: ResMut<SecretsRuntime>,
+    mut config: ResMut<RuntimeConfig>,
+    mut connection: ResMut<TwitchConnection>,
+    mut focus: ResMut<InputFocus>,
+    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
+) {
+    for (interaction, action) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            SecretsAction::DisclaimerNo if menu.page == MenuPage::SecretsDisclaimer => {
+                menu.page = MenuPage::Closed;
+                focus.clear();
+            }
+            SecretsAction::DisclaimerYes if menu.page == MenuPage::SecretsDisclaimer => {
+                menu.page = MenuPage::Secrets;
+                "Internal Twitch video is now blacked out.".clone_into(&mut secrets.feedback);
+                focus.clear();
+            }
+            _ if menu.page != MenuPage::Secrets => {}
+            SecretsAction::ToggleBot => {
+                let enabled = !config.0.twitch.enabled;
+                let outcome = save_secrets_fields(&fields, &mut config, |draft| {
+                    draft.twitch.enabled = enabled;
+                });
+                if outcome.is_ok() {
+                    restart_twitch_connection(&config.0, &mut connection);
+                }
+                set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
+            }
+            SecretsAction::ToggleBroadcast => {
+                let enabled = !config.0.twitch.broadcast.enabled;
+                let outcome = save_secrets_fields(&fields, &mut config, |draft| {
+                    draft.twitch.broadcast.enabled = enabled;
+                    draft.twitch.broadcast.start_on_launch = true;
+                });
+                if outcome.is_ok() {
+                    #[cfg(target_os = "windows")]
+                    broadcast.request_restart();
+                }
+                set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
+            }
+            SecretsAction::ToggleBandwidthTest => {
+                let enabled = !config.0.twitch.broadcast.bandwidth_test;
+                let outcome = save_secrets_fields(&fields, &mut config, |draft| {
+                    draft.twitch.broadcast.bandwidth_test = enabled;
+                });
+                if outcome.is_ok() {
+                    #[cfg(target_os = "windows")]
+                    broadcast.request_restart();
+                }
+                set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
+            }
+            SecretsAction::Save => {
+                let outcome = save_secrets_fields(&fields, &mut config, |_| {});
+                if outcome.is_ok() {
+                    restart_twitch_connection(&config.0, &mut connection);
+                    #[cfg(target_os = "windows")]
+                    broadcast.request_restart();
+                }
+                set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
+            }
+            SecretsAction::AuthorizeBot | SecretsAction::AuthorizeBroadcaster => {
+                if let Some(kind) = secrets.active_authorization {
+                    secrets.feedback = format!(
+                        "Finish the current {} authorization before starting another.",
+                        kind.label()
+                    );
+                    continue;
+                }
+                let kind = if *action == SecretsAction::AuthorizeBot {
+                    SecretsAuthorizationKind::Bot
+                } else {
+                    SecretsAuthorizationKind::Broadcaster
+                };
+                match save_secrets_fields(&fields, &mut config, |_| {}) {
+                    Ok(path) => {
+                        secrets.feedback = format!(
+                            "Saved {}. Requesting a Twitch {} device code...",
+                            path.display(),
+                            kind.label()
+                        );
+                        start_secrets_authorization(kind, config.0.twitch.clone(), &mut secrets);
+                    }
+                    Err(error) => {
+                        secrets.feedback = format!("Cannot authorize: {error:#}");
+                    }
+                }
+            }
+            SecretsAction::Back => {
+                menu.page = MenuPage::Closed;
+                focus.clear();
+            }
+            SecretsAction::DisclaimerNo | SecretsAction::DisclaimerYes => {}
+        }
+    }
+}
+
+fn save_secrets_fields(
+    fields: &Query<(&SecretsField, &EditableText)>,
+    config: &mut RuntimeConfig,
+    mutate: impl FnOnce(&mut GameConfig),
+) -> AnyResult<PathBuf> {
+    let mut draft = config.0.clone();
+    for (field, editable) in fields {
+        let value = editable.value().to_string();
+        match field {
+            SecretsField::ClientId => value.trim().clone_into(&mut draft.twitch.client_id),
+            SecretsField::BotLogin => {
+                draft.twitch.bot_login = value.trim().to_ascii_lowercase();
+            }
+            SecretsField::ChannelLogin => {
+                draft.twitch.channel_login = value.trim().to_ascii_lowercase();
+            }
+        }
+    }
+    mutate(&mut draft);
+    let path = save_runtime_config(&draft)?;
+    config.0 = draft;
+    Ok(path)
+}
+
+fn set_secrets_save_feedback(
+    outcome: AnyResult<PathBuf>,
+    secrets: &mut SecretsRuntime,
+    connection: &mut TwitchConnection,
+) {
+    match outcome {
+        Ok(path) => {
+            secrets.feedback = format!("Saved and applied {}", path.display());
+        }
+        Err(error) => {
+            secrets.feedback = format!("Twitch setup was not saved: {error:#}");
+            if matches!(connection.status, TwitchStatus::Authorizing) {
+                connection.status = TwitchStatus::Disabled;
+            }
+        }
+    }
+}
+
+fn restart_twitch_connection(config: &GameConfig, connection: &mut TwitchConnection) {
+    if let Some(transport) = connection.transport.take() {
+        let _ = transport.send(TwitchControl::Disconnect);
+    }
+    if !config.twitch.enabled {
+        connection.status = TwitchStatus::Disabled;
+        connection.broadcaster_authorized = false;
+        return;
+    }
+    connection.broadcaster_authorized = !config.twitch.require_broadcaster_connect;
+    connection
+        .fish_god_reward_id
+        .clone_from(&config.twitch.fish_god_reward_id);
+    connection.connect_code = generate_connect_code();
+    connection.status = TwitchStatus::Authorizing;
+    match TwitchTransport::start(config.twitch.clone()) {
+        Ok(transport) => connection.transport = Some(transport),
+        Err(error) => connection.status = TwitchStatus::Error(error.to_string()),
+    }
+}
+
+fn start_secrets_authorization(
+    kind: SecretsAuthorizationKind,
+    config: stream_town_domain::TwitchConfig,
+    secrets: &mut SecretsRuntime,
+) {
+    let (sender, receiver) = mpsc::channel();
+    secrets.authorization_events = Some(Arc::new(Mutex::new(receiver)));
+    secrets.active_authorization = Some(kind);
+    secrets.device = None;
+    let spawn = thread::Builder::new()
+        .name(format!("stream-town-menu-{}-oauth", kind.label()))
+        .spawn(move || {
+            let outcome = (|| -> AnyResult<()> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .context("failed to construct Twitch authorization runtime")?;
+                runtime.block_on(async {
+                    let oauth = match kind {
+                        SecretsAuthorizationKind::Bot => {
+                            OAuthClient::new(config.client_id.clone())?
+                        }
+                        SecretsAuthorizationKind::Broadcaster => {
+                            OAuthClient::broadcaster(config.client_id.clone())?
+                        }
+                    };
+                    let authorization = oauth.begin_device_authorization().await?;
+                    sender
+                        .send(SecretsAuthorizationEvent::Device {
+                            kind,
+                            authorization: authorization.clone(),
+                        })
+                        .context("Twitch secrets screen closed")?;
+                    let token = oauth.complete_device_authorization(&authorization).await?;
+                    let validation = oauth.validate(&token).await?;
+                    let expected_login = match kind {
+                        SecretsAuthorizationKind::Bot => &config.bot_login,
+                        SecretsAuthorizationKind::Broadcaster => &config.channel_login,
+                    };
+                    anyhow::ensure!(
+                        validation.login == *expected_login,
+                        "authorized account '{}' does not match configured {} '{}'",
+                        validation.login,
+                        kind.label(),
+                        expected_login
+                    );
+                    match kind {
+                        SecretsAuthorizationKind::Bot => {
+                            CredentialVault::new(&config.client_id, &config.bot_login)
+                                .save(&token)?;
+                        }
+                        SecretsAuthorizationKind::Broadcaster => {
+                            CredentialVault::broadcaster(&config.client_id, &config.channel_login)
+                                .save(&token)?;
+                        }
+                    }
+                    sender
+                        .send(SecretsAuthorizationEvent::Authorized { kind, validation })
+                        .context("Twitch secrets screen closed")?;
+                    Ok(())
+                })
+            })();
+            if let Err(error) = outcome {
+                let _ = sender.send(SecretsAuthorizationEvent::Error {
+                    kind,
+                    message: format!("{error:#}"),
+                });
+            }
+        });
+    if let Err(error) = spawn {
+        secrets.authorization_events = None;
+        secrets.active_authorization = None;
+        secrets.feedback = format!(
+            "Could not start Twitch {} authorization: {error}",
+            kind.label()
+        );
+    }
+}
+
+fn poll_secrets_authorization(
+    mut secrets: ResMut<SecretsRuntime>,
+    config: Res<RuntimeConfig>,
+    mut connection: ResMut<TwitchConnection>,
+    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
+) {
+    let events = secrets
+        .authorization_events
+        .as_ref()
+        .and_then(|receiver| receiver.lock().ok())
+        .map(|receiver| receiver.try_iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for event in events {
+        match event {
+            SecretsAuthorizationEvent::Device {
+                kind,
+                authorization,
+            } => {
+                secrets.feedback = format!(
+                    "Twitch {} authorization is waiting for approval in your browser.",
+                    kind.label()
+                );
+                secrets.device = Some(authorization);
+            }
+            SecretsAuthorizationEvent::Authorized { kind, validation } => {
+                secrets.feedback = format!(
+                    "Authorized Twitch {} account '{}'. The token is stored in the OS credential vault.",
+                    kind.label(),
+                    validation.login
+                );
+                secrets.device = None;
+                secrets.active_authorization = None;
+                secrets.authorization_events = None;
+                match kind {
+                    SecretsAuthorizationKind::Bot => {
+                        restart_twitch_connection(&config.0, &mut connection);
+                    }
+                    SecretsAuthorizationKind::Broadcaster => {
+                        #[cfg(target_os = "windows")]
+                        broadcast.request_restart();
+                    }
+                }
+            }
+            SecretsAuthorizationEvent::Error { kind, message } => {
+                secrets.feedback =
+                    format!("Twitch {} authorization failed: {message}", kind.label());
+                secrets.device = None;
+                secrets.active_authorization = None;
+                secrets.authorization_events = None;
+            }
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn update_secrets_ui(
+    menu: Res<MenuRuntime>,
+    config: Res<RuntimeConfig>,
+    secrets: Res<SecretsRuntime>,
+    render: Res<RenderAssets>,
+    mut disclaimer: Query<&mut Visibility, With<SecretsDisclaimerRoot>>,
+    mut root: Query<&mut Visibility, (With<SecretsRoot>, Without<SecretsDisclaimerRoot>)>,
+    mut status: Query<
+        &mut Text,
+        (
+            With<SecretsStatusText>,
+            Without<SecretsDeviceText>,
+            Without<SecretsDynamicLabel>,
+        ),
+    >,
+    mut device_text: Query<
+        &mut Text,
+        (
+            With<SecretsDeviceText>,
+            Without<SecretsStatusText>,
+            Without<SecretsDynamicLabel>,
+        ),
+    >,
+    mut labels: Query<(&SecretsDynamicLabel, &mut Text)>,
+    mut buttons: Query<(&Interaction, &SecretsAction, &mut ImageNode)>,
+) {
+    if let Ok(mut visibility) = disclaimer.single_mut() {
+        *visibility = if menu.page == MenuPage::SecretsDisclaimer {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut visibility) = root.single_mut() {
+        *visibility = if menu.page == MenuPage::Secrets {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut text) = status.single_mut() {
+        if secrets.feedback.is_empty() {
+            SECRETS_INITIAL_FEEDBACK.clone_into(&mut **text);
+        } else {
+            (**text).clone_from(&secrets.feedback);
+        }
+    }
+    if let Ok(mut text) = device_text.single_mut() {
+        **text = secrets.device.as_ref().map_or_else(
+            || "No Twitch authorization is in progress.".to_owned(),
+            |device| {
+                format!(
+                    "Open {} and enter code {} (expires in {} minutes).",
+                    device.verification_uri,
+                    device.user_code,
+                    (device.expires_in / 60).max(1)
+                )
+            },
+        );
+    }
+    for (label, mut text) in &mut labels {
+        **text = secrets_action_label(label.0, &config.0);
+    }
+    for (interaction, action, mut image) in &mut buttons {
+        let available = secrets.active_authorization.is_none()
+            || !matches!(
+                action,
+                SecretsAction::AuthorizeBot | SecretsAction::AuthorizeBroadcaster
+            );
+        let source_path = if !available {
+            MAIN_MENU_TEXTURE_PATHS[2]
+        } else if *interaction == Interaction::Hovered || *interaction == Interaction::Pressed {
+            MAIN_MENU_TEXTURE_PATHS[1]
+        } else {
+            MAIN_MENU_TEXTURE_PATHS[0]
+        };
+        image.image = main_menu_texture(&render, source_path);
+        image.color = if available {
+            Color::WHITE
+        } else {
+            Color::srgba(0.78, 0.78, 0.78, 0.5)
+        };
+    }
+}
+
+fn sync_sensitive_screen_active(menu: Res<MenuRuntime>, mut active: ResMut<SensitiveScreenActive>) {
+    active.0 = menu_page_is_sensitive(menu.page);
+}
+
+const fn menu_page_is_sensitive(page: MenuPage) -> bool {
+    matches!(page, MenuPage::SecretsDisclaimer | MenuPage::Secrets)
 }
 
 fn update_menu_overlay(
@@ -11691,14 +12799,18 @@ fn update_menu_overlay(
             Visibility::Hidden
         };
     }
-    if menu.page == MenuPage::Closed || menu.page == MenuPage::Settings || image_game_menu_visible {
+    if matches!(
+        menu.page,
+        MenuPage::Closed | MenuPage::Settings | MenuPage::SecretsDisclaimer | MenuPage::Secrets
+    ) || image_game_menu_visible
+    {
         *visibility = Visibility::Hidden;
         return;
     }
     **text = match menu.page {
-        MenuPage::Closed => String::new(),
         MenuPage::Game => game_menu_text(*state.get(), menu.selected, save.store.path().is_file()),
         MenuPage::Settings => settings_menu_text(&menu.draft, menu.selected, &menu.feedback),
+        MenuPage::Closed | MenuPage::SecretsDisclaimer | MenuPage::Secrets => String::new(),
     };
     *visibility = Visibility::Visible;
 }
@@ -11860,6 +12972,9 @@ fn menu_input(
             menu.selected = 0;
             menu.feedback.clear();
         }
+        return;
+    }
+    if matches!(menu.page, MenuPage::SecretsDisclaimer | MenuPage::Secrets) {
         return;
     }
     if keyboard.just_pressed(KeyCode::Escape) {
@@ -32623,12 +33738,20 @@ mod tests {
             MainMenuAction::NewGame,
             MainMenuAction::LoadGame,
             MainMenuAction::Settings,
+            MainMenuAction::Secrets,
             MainMenuAction::Credits,
             MainMenuAction::Quit,
         ];
         assert_eq!(
             actions.map(main_menu_action_label),
-            ["New Game", "Load Game", "Settings", "Credits", "Quit"]
+            [
+                "New Game",
+                "Load Game",
+                "Settings",
+                "Secrets",
+                "Credits",
+                "Quit"
+            ]
         );
         assert!(!main_menu_action_enabled(MainMenuAction::LoadGame, false));
         assert!(main_menu_action_enabled(MainMenuAction::LoadGame, true));
@@ -32711,6 +33834,24 @@ mod tests {
                 scene.asset_path
             );
         }
+    }
+
+    #[test]
+    fn secrets_flow_is_sensitive_and_requires_an_explicit_answer() {
+        assert!(menu_page_is_sensitive(MenuPage::SecretsDisclaimer));
+        assert!(menu_page_is_sensitive(MenuPage::Secrets));
+        assert!(!menu_page_is_sensitive(MenuPage::Closed));
+        assert!(SECRETS_DISCLAIMER.contains("not presently streaming"));
+        assert!(SECRETS_DISCLAIMER.contains("any and all responsibility"));
+        assert!(SECRETS_DISCLAIMER.contains("liability"));
+        assert_eq!(
+            secrets_action_label(SecretsAction::DisclaimerNo, &GameConfig::default()),
+            "No — go back"
+        );
+        assert_eq!(
+            secrets_action_label(SecretsAction::DisclaimerYes, &GameConfig::default()),
+            "Yes — continue"
+        );
     }
 
     #[test]
@@ -40473,8 +41614,9 @@ mod tests {
             .iter(app.world())
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(main_menu_actions.len(), 5);
+        assert_eq!(main_menu_actions.len(), 6);
         assert!(main_menu_actions.contains(&MainMenuAction::LoadGame));
+        assert!(main_menu_actions.contains(&MainMenuAction::Secrets));
 
         enter_headless_world(&mut app);
         for _ in 0..16 {

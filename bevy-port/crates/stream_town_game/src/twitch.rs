@@ -754,6 +754,15 @@ mod tests {
     }
 
     #[test]
+    fn bot_and_broadcaster_tokens_use_distinct_vault_entries() {
+        let bot = CredentialVault::new("public-client-id", "humanbeanbot");
+        let broadcaster = CredentialVault::broadcaster("public-client-id", "humanbeangames");
+        assert_ne!(bot.username, broadcaster.username);
+        assert!(!bot.username.contains("broadcast:"));
+        assert!(broadcaster.username.starts_with("broadcast:"));
+    }
+
+    #[test]
     fn token_response_keeps_rotated_refresh_token() {
         let token = token_from_response(
             TokenResponse {

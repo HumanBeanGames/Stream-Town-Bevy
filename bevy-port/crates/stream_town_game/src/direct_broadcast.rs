@@ -33,7 +33,7 @@ use stream_town_domain::{BroadcastConfig, BroadcastEncoderPreference};
 use wasapi::{AudioClient, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
 
 use crate::{
-    RuntimeConfig,
+    RuntimeConfig, SensitiveScreenActive, SensitiveScreenUpdateSet,
     twitch::{CredentialVault, OAuthClient, TwitchIngest},
 };
 
@@ -115,18 +115,31 @@ impl DirectBroadcastRuntime {
     }
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct DirectBroadcastControl {
+    restart_requested: bool,
+}
+
+impl DirectBroadcastControl {
+    pub(crate) fn request_restart(&mut self) {
+        self.restart_requested = true;
+    }
+}
+
 pub struct DirectTwitchBroadcastPlugin;
 
 impl Plugin for DirectTwitchBroadcastPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DirectBroadcastRuntime>()
+            .init_resource::<DirectBroadcastControl>()
             .add_systems(Startup, begin_direct_broadcast)
             .add_systems(
                 Update,
                 (
+                    restart_direct_broadcast,
                     poll_direct_broadcast_authorization,
                     poll_direct_broadcast_worker,
-                    capture_direct_broadcast_frame,
+                    capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
                 )
                     .chain(),
             );
@@ -134,7 +147,26 @@ impl Plugin for DirectTwitchBroadcastPlugin {
 }
 
 fn begin_direct_broadcast(config: Res<RuntimeConfig>, mut runtime: ResMut<DirectBroadcastRuntime>) {
-    let twitch = &config.0.twitch;
+    configure_direct_broadcast(&config.0, &mut runtime);
+}
+
+fn restart_direct_broadcast(
+    config: Res<RuntimeConfig>,
+    mut control: ResMut<DirectBroadcastControl>,
+    mut runtime: ResMut<DirectBroadcastRuntime>,
+) {
+    if !std::mem::take(&mut control.restart_requested) {
+        return;
+    }
+    *runtime = DirectBroadcastRuntime::default();
+    configure_direct_broadcast(&config.0, &mut runtime);
+}
+
+fn configure_direct_broadcast(
+    config: &stream_town_domain::GameConfig,
+    runtime: &mut DirectBroadcastRuntime,
+) {
+    let twitch = &config.twitch;
     if !twitch.broadcast.enabled || !twitch.broadcast.start_on_launch {
         runtime.phase = DirectBroadcastPhase::Disabled;
         return;
@@ -268,6 +300,7 @@ fn capture_direct_broadcast_frame(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<RuntimeConfig>,
+    sensitive_screen: Res<SensitiveScreenActive>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     if runtime.phase != DirectBroadcastPhase::Broadcasting {
@@ -281,6 +314,23 @@ fn capture_direct_broadcast_frame(
     runtime.capture_elapsed = runtime.capture_elapsed.rem_euclid(frame_period);
     let pts = runtime.next_video_pts;
     runtime.next_video_pts = runtime.next_video_pts.saturating_add(1);
+    if sensitive_screen.0 {
+        let width = u32::from(config.0.twitch.broadcast.width);
+        let height = u32::from(config.0.twitch.broadcast.height);
+        let rgba = black_rgba_frame(width, height);
+        let sent = runtime.controller.as_ref().is_some_and(|controller| {
+            controller.send_video(VideoFrame {
+                width,
+                height,
+                pts,
+                rgba,
+            })
+        });
+        if sent {
+            runtime.captured_video_frames = runtime.captured_video_frames.saturating_add(1);
+        }
+        return;
+    }
     if runtime.capture_in_flight {
         if let Some(controller) = &runtime.controller {
             controller.drop_video_frame();
@@ -289,11 +339,26 @@ fn capture_direct_broadcast_frame(
     }
     runtime.capture_in_flight = true;
     commands.spawn(Screenshot::primary_window()).observe(
-        move |captured: On<ScreenshotCaptured>, mut runtime: ResMut<DirectBroadcastRuntime>| {
+        move |captured: On<ScreenshotCaptured>,
+              sensitive_screen: Res<SensitiveScreenActive>,
+              mut runtime: ResMut<DirectBroadcastRuntime>| {
             runtime.capture_in_flight = false;
             let Some(controller) = runtime.controller.as_ref() else {
                 return;
             };
+            if sensitive_screen.0 {
+                let width = captured.image.texture_descriptor.size.width;
+                let height = captured.image.texture_descriptor.size.height;
+                if controller.send_video(VideoFrame {
+                    width,
+                    height,
+                    pts,
+                    rgba: black_rgba_frame(width, height),
+                }) {
+                    runtime.captured_video_frames = runtime.captured_video_frames.saturating_add(1);
+                }
+                return;
+            }
             match screenshot_rgba(&captured.image) {
                 Ok((width, height, rgba)) => {
                     if controller.send_video(VideoFrame {
@@ -310,6 +375,18 @@ fn capture_direct_broadcast_frame(
             }
         },
     );
+}
+
+fn black_rgba_frame(width: u32, height: u32) -> Vec<u8> {
+    let bytes = usize::try_from(width)
+        .unwrap_or(0)
+        .saturating_mul(usize::try_from(height).unwrap_or(0))
+        .saturating_mul(4);
+    let mut rgba = vec![0; bytes];
+    for alpha in rgba.iter_mut().skip(3).step_by(4) {
+        *alpha = 255;
+    }
+    rgba
 }
 
 fn screenshot_rgba(image: &Image) -> Result<(u32, u32, Vec<u8>)> {
@@ -1131,6 +1208,15 @@ mod tests {
             url,
         };
         assert!(!format!("{target:?}").contains(key));
+    }
+
+    #[test]
+    fn sensitive_screen_frame_is_fully_opaque_black() {
+        let frame = black_rgba_frame(2, 3);
+        assert_eq!(frame.len(), 24);
+        for pixel in frame.chunks_exact(4) {
+            assert_eq!(pixel, [0, 0, 0, 255]);
+        }
     }
 
     #[test]

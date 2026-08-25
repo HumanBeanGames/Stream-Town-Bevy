@@ -11,6 +11,16 @@ broadcaster for stream-key lookup. The game captures, encodes, and publishes its
 own output; OBS is not required. Never authorize the bot grant while signed in
 as the broadcaster, or the broadcaster grant while signed in as the bot.
 
+The shipping setup path is **Main Menu > Secrets**. Opening it requires an
+explicit Yes/No privacy confirmation. From the instant the confirmation appears
+until the Secrets screen closes, Stream Town's own Twitch video output is
+replaced with opaque black frames. Stream Town cannot stop OBS, Streamlabs,
+screen sharing, a capture card, or another third-party recorder, so close all of
+those applications before choosing Yes. The public Client ID and account logins
+are saved to `.stream-town/config.ron`; OAuth access and refresh tokens stay in
+the operating-system credential vault. The stream key is fetched only in memory
+and is never displayed or saved.
+
 ## 1. Secure the old credentials
 
 The former `Assets/StreamingAssets/twitch_secrets.json` contained credential material and was tracked in Git. It has been removed, but removal does not erase older commits.
@@ -33,23 +43,46 @@ Do not add Twitch tokens, refresh tokens, client secrets, or OBS stream keys any
 6. Set the client type to **Public**. Stream Town runs on an end user's PC and must not embed a client secret.
 7. Copy the **Client ID**. A Client ID is public; a Client Secret is not needed and must not be pasted into Stream Town.
 
-## 3. Authorize `HumanBeanBot`
+## 3. Configure and authorize `HumanBeanBot`
 
-1. From the repository root, run `.\bevy-port\scripts\launch-tools.ps1`, then open the **Twitch** tab. Equivalently, run `cargo run -p stream_town_tools` from `bevy-port`.
-2. Paste the app's Client ID.
-3. Set the bot account to `HumanBeanBot`.
-4. Click **Authorize bot**.
-5. On the Twitch activation page, verify that the signed-in account is `HumanBeanBot`. Use a private browser window if the browser keeps selecting `HumanBeanGames`.
-6. Approve the two requested scopes: `chat:read` and `chat:edit`.
+1. Close OBS and every other screen-capture or streaming application.
+2. Launch Stream Town and choose **Secrets** on the main menu.
+3. Read the confirmation. Choose **No** to return safely, or **Yes** to enter the
+   protected screen and black out Stream Town's internal stream.
+4. Paste the application's public **Client ID** and set **Bot login** to
+   `humanbeanbot`.
+5. Set **Stream account login** to `humanbeangames`. Keeping both names visible
+   makes it harder to authorize the wrong identity.
+6. Choose **Save and apply**, then **Authorize bot account**.
+7. Open the shown Twitch activation URL and enter the displayed device code.
+8. Verify that the signed-in account is `HumanBeanBot`. Use a private browser
+   window if the browser keeps selecting `HumanBeanGames`.
+9. Approve only `chat:read` and `chat:edit`. Stream Town rejects the grant if
+   Twitch returns a different account, Client ID, or scope set.
+10. Turn **Chat bot** to **Enabled**. The connection restarts immediately; a game
+    restart is not required.
 
-The setup tool validates the returned token, refuses a token for the wrong account or app, and writes it to the operating-system credential vault (Windows Credential Manager on the initial supported platform). No token file is created. Stream Town validates the token at startup and hourly, refreshes it before the last 90 minutes of its lifetime, securely replaces Twitch's rotated refresh token, and rebuilds the IRC connection with the new access token.
+The Secrets screen validates the returned token, refuses a token for the wrong
+account or app, and writes it to the operating-system credential vault (Windows
+Credential Manager on the initial supported platform). No token file is created.
+Stream Town validates the token at startup and hourly, refreshes it before the
+last 90 minutes of its lifetime, securely replaces Twitch's rotated refresh
+token, and rebuilds the IRC connection with the new access token. The tools app
+remains available as a diagnostic and advanced-configuration alternative.
 
 ## 4. Prepare the channel
 
 1. In `HumanBeanGames` chat, run `/mod HumanBeanBot`. This is recommended for normal bot rate limits and moderation visibility.
-2. In the tools application's **Twitch** tab, set the channel to `humanbeangames` and click **Run end-to-end diagnostic**. Do not continue until it reports the validated bot, resolved channel, and an authenticated IRC channel join.
+2. The main-menu Secrets screen has already saved the channel as
+   `humanbeangames`. For a full diagnostic, run
+   `.\bevy-port\scripts\launch-tools.ps1`, open **Twitch**, and click
+   **Run end-to-end diagnostic**. Do not continue until it reports the validated
+   bot, resolved channel, and an authenticated IRC channel join.
 3. For each trusted operator, enter their login beside **Resolve GM login** and click **Resolve and add ID**. The tool resolves the mutable login to Twitch's stable numeric user ID. Only add people who should receive Unity-compatible game-master/cheat commands.
-4. Enable Twitch and click **Save runtime config**. When launched through the supplied script this writes public settings to `bevy-port/.stream-town/config.ron`; credentials remain in Windows Credential Manager.
+4. **Chat bot** should already read **Enabled** in Main Menu > Secrets. When
+   launched from `bevy-port`, its public settings are in
+   `bevy-port/.stream-town/config.ron`; credentials remain in Windows Credential
+   Manager.
 5. Start or load the world.
 6. When Stream Town displays its six-digit broadcaster connection code, send `!connect 123456` from the `HumanBeanGames` account, replacing `123456` with the displayed code.
 7. From a separate viewer account, send `!join`, then `!help`. The viewer should receive a stable actor and the bot should return command help in chat.
@@ -76,12 +109,15 @@ The checked-in default retains the reward ID recovered from the Unity project, b
 1. Install/run a packaged Windows build, which already contains the required
    shared FFmpeg/OpenH264 DLLs. Developers building from source must complete
    `bevy-port/third_party/ffmpeg/README.md` first.
-2. Open Stream Town Tools > **Twitch** and confirm the Client ID and channel
-   login are correct.
-3. Click **Authorize broadcaster**. On Twitch's activation page, sign in as
-   `HumanBeanGames`, not `HumanBeanBot`, and approve only
-   `channel:read:stream_key`.
-4. Click **Test broadcast prerequisites**. Do not continue until the tool
+2. Close every third-party capture application, then open **Main Menu > Secrets**
+   and choose **Yes**. Confirm that the public Client ID and stream account login
+   are correct.
+3. Click **Authorize stream account**. Open the shown activation URL, enter its
+   device code, sign in as `HumanBeanGames` (not `HumanBeanBot`), and approve
+   only `channel:read:stream_key`. Stream Town rejects a grant for a different
+   account.
+4. Run `.\bevy-port\scripts\launch-tools.ps1`, open **Twitch**, and click
+   **Test broadcast prerequisites**. Do not continue until the tool
    confirms the broadcaster, Twitch ingest list, at least one H.264 encoder, and
    process-scoped Windows audio capture.
 
@@ -92,22 +128,28 @@ the runtime console.
 
 ## 7. Choose broadcast quality and test bandwidth
 
-In Stream Town Tools > **Twitch**:
+Start in Main Menu > **Secrets**:
 
-1. Enable **Direct broadcast** and **Start when the game launches**.
-2. Start with **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Automatic
+1. Set **Direct stream** to **Enabled**. This also enables start-on-launch. Keep
+   **Bandwidth test** enabled for the first test. The broadcaster starts or
+   restarts immediately but continues emitting only black video while the
+   disclaimer or Secrets screen is open.
+2. Exit the Secrets screen. For advanced quality settings, open Stream Town
+   Tools > **Twitch**. Start with **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Automatic
    encoder selection tries hardware paths first, Windows Media Foundation next,
    and the OpenH264 CPU encoder last. Select a specific encoder only when
    diagnosing hardware support.
 3. Leave **Preferred ingest** empty for Twitch's default, or enter a region name
    substring such as `Sydney`.
-4. Enable **Bandwidth-test mode**, click **Save runtime config**, and launch the
-   game. The game will send the full configured bitrate but Twitch will not put
+4. With **Bandwidth test** enabled, launch or continue the game. It will send
+   the full configured bitrate but Twitch will not put
    the channel live. Let it run through the loading screen and gameplay for at
    least five minutes. The external tool's Runtime tab reports the selected
    encoder, ingest, captured/encoded/dropped frames, and audio frames when it
    launches or attaches to the game with the runtime console enabled.
-5. Exit the game, turn **Bandwidth-test mode** off, and save again.
+5. Return to Main Menu > **Secrets**, accept the warning, turn **Bandwidth test**
+   off, then choose **Back**. Internal video remains black throughout that flow
+   and resumes only after the Secrets screen closes.
 
 Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
 keyframe interval; the game sets those details internally. Higher presets may
