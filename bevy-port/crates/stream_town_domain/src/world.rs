@@ -38,9 +38,33 @@ pub struct GeneratedWorld {
     pub deterministic_hash: String,
 }
 
+/// Observable, engine-independent milestones in deterministic world generation.
+///
+/// These are deliberately semantic stages rather than elapsed-time estimates:
+/// a loading frontend can report which real generator work has completed
+/// without changing the deterministic algorithm or guessing a percentage.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum WorldGenerationStage {
+    Terrain,
+    LandResources,
+    NavigationAndFish,
+    Foliage,
+    Fingerprint,
+}
+
+impl WorldGenerationStage {
+    pub const ALL: [Self; 5] = [
+        Self::Terrain,
+        Self::LandResources,
+        Self::NavigationAndFish,
+        Self::Foliage,
+        Self::Fingerprint,
+    ];
+}
+
 #[must_use]
 pub fn generate_world(config: &WorldGenConfig) -> GeneratedWorld {
-    generate_world_from_layers(config, &[])
+    generate_world_from_layers(config, &[], &mut |_| {})
 }
 
 #[must_use]
@@ -48,12 +72,25 @@ pub fn generate_world_with_content(
     config: &WorldGenConfig,
     content: &crate::ContentCatalog,
 ) -> GeneratedWorld {
-    generate_world_from_layers(config, &content.foliage)
+    generate_world_from_layers(config, &content.foliage, &mut |_| {})
+}
+
+/// Generates the same deterministic world while reporting completed stages.
+///
+/// The observer is diagnostic only: it cannot provide inputs to generation and
+/// therefore cannot affect the resulting terrain, resources, foliage, or hash.
+pub fn generate_world_with_content_observed(
+    config: &WorldGenConfig,
+    content: &crate::ContentCatalog,
+    mut completed: impl FnMut(WorldGenerationStage),
+) -> GeneratedWorld {
+    generate_world_from_layers(config, &content.foliage, &mut completed)
 }
 
 fn generate_world_from_layers(
     config: &WorldGenConfig,
     foliage_layers: &[FoliageLayerDef],
+    completed: &mut impl FnMut(WorldGenerationStage),
 ) -> GeneratedWorld {
     const GENERATOR_VERSION: u32 = 6;
     let cell_count = usize::from(config.width) * usize::from(config.height);
@@ -103,8 +140,10 @@ fn generate_world_from_layers(
             blocked.push(is_blocked);
         }
     }
+    completed(WorldGenerationStage::Terrain);
 
     let mut resources = generate_authored_resources(config, &heights);
+    completed(WorldGenerationStage::LandResources);
 
     // Keep the town centre navigable and suitable for deterministic actor spawning.
     let spawn = GridPos {
@@ -125,11 +164,14 @@ fn generate_world_from_layers(
     let navigation = NavGrid::new(config.width, config.height, blocked, heights)
         .expect("validated world configuration produces a valid grid");
     generate_shoreline_fish(config, &navigation, &mut resources);
+    completed(WorldGenerationStage::NavigationAndFish);
     let foliage = generate_foliage(config, &navigation, &resources, foliage_layers);
+    completed(WorldGenerationStage::Foliage);
     // Decorative foliage is regenerated from authored content and deliberately
     // excluded from native-save compatibility. The saved world fingerprint
     // continues to describe terrain, navigation, and gameplay resources only.
     let deterministic_hash = hash_world(config.seed, GENERATOR_VERSION, &navigation, &resources);
+    completed(WorldGenerationStage::Fingerprint);
     GeneratedWorld {
         seed: config.seed,
         generator_version: GENERATOR_VERSION,
@@ -1144,6 +1186,20 @@ mod tests {
         let second = generate_world(&config);
         assert_eq!(first.deterministic_hash, second.deterministic_hash);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn observed_generation_reports_every_real_stage_without_changing_output() {
+        let config = GameConfig::default().world;
+        let content: ContentCatalog =
+            ron::from_str(include_str!("../../../assets/content/catalog.ron")).unwrap();
+        let expected = generate_world_with_content(&config, &content);
+        let mut completed = Vec::new();
+        let observed =
+            generate_world_with_content_observed(&config, &content, |stage| completed.push(stage));
+
+        assert_eq!(observed, expected);
+        assert_eq!(completed, WorldGenerationStage::ALL);
     }
 
     #[test]

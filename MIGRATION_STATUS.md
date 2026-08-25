@@ -691,10 +691,12 @@ mistaken for production-ready systems.
   deterministic authored tip; it renders the loading screen for a frame before
   synchronous generation. The cold Main Menu -> New Game handoff retains one
   cover on a dedicated UI camera while the HDR world pipeline initializes, then
-  retires that camera atomically with the cover. Progress includes terrain,
-  scene construction, materials, animation, GPU resources, pipelines, and
-  presented-frame stability; it cannot display 100% until those gates pass, and
-  the completed state is presented before gameplay is revealed. The focused
+  retires that camera atomically with the cover. Progress recursively aggregates
+  observed loading-cover, asset, generator, scene-construction, scene-root,
+  material, attached-animation, lighting, GPU-resource, pipeline, selection-draw,
+  and presented-frame work. It uses neither fixed percentage bands nor a
+  synthetic 99% cap; 100% is the natural result of every leaf completing, and
+  that completed state is presented before gameplay is revealed. The focused
   tool exposes the authored values and repository validation locks them to the
   verified Unity baseline.
 - The `!rid`, parameterless `!station`, and parameterless `!target` command

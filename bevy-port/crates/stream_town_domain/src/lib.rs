@@ -87,7 +87,7 @@ pub use technology_layout::{
     TechnologyGroupLayout, TechnologyLayoutError, TechnologyNodeLayout,
 };
 pub use world::{
-    GeneratedFoliage, GeneratedResource, GeneratedWorld, generate_world,
-    generate_world_with_content, legacy_v1_world_hash, legacy_v2_world_hash, legacy_v3_world_hash,
-    shoreline_approaches,
+    GeneratedFoliage, GeneratedResource, GeneratedWorld, WorldGenerationStage, generate_world,
+    generate_world_with_content, generate_world_with_content_observed, legacy_v1_world_hash,
+    legacy_v2_world_hash, legacy_v3_world_hash, shoreline_approaches,
 };

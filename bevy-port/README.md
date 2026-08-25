@@ -905,11 +905,15 @@ rendered cover on a dedicated SDR UI camera while the town camera changes from
 the menu projection to the HDR gameplay pipeline. The camera and cover survive
 the `MainMenu` -> `WorldLoading` -> `InGame` boundary as one operation, then
 retire together after a fully prepared gameplay frame; leaving the no-clear UI
-camera alive would retain its last loading frame over the world. Progress now
-reserves explicit ranges for asset I/O, terrain generation, ECS scene
-construction, material and animation setup, GPU uploads, pipeline compilation,
-and stable presented frames. It is capped at 99% until all reveal gates pass,
-then presents one truthful 100% frame before removal. Diagnostic logs report boot
+camera alive would retain its last loading frame over the world. Progress is now
+the recursive aggregate of observable work leaves: loading-cover entities and
+artwork, asset I/O, five deterministic generator stages, ECS construction,
+scene-root instantiation, material overrides, actual animation-controller
+attachment, lighting receivers, GPU image/mesh/material uploads, pipeline and
+selection-draw readiness, and stable presented frames. There are no fixed
+percentage bands or synthetic 99% cap. The exact aggregate reaches 100% only
+when every leaf is complete, then presents that completed frame before removal.
+Diagnostic logs report boot
 asset time and menu-scene reveal time separately; on the recorded DX12 debug
 machine asset I/O is about 0.4s while first-use scene/material GPU preparation is
 still about 12s and is the dominant remaining startup cost.

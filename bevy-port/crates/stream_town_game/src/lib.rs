@@ -87,8 +87,8 @@ use stream_town_domain::{
     PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
     RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
     StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
-    VfxGradientDef, Weather, WorldSimulation, WorldSnapshot, generate_world_with_content,
-    unity_command_usage,
+    VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
+    generate_world_with_content, generate_world_with_content_observed, unity_command_usage,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -1437,6 +1437,160 @@ enum WorldLoadingPhase {
     Complete,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum LoadingWork {
+    #[default]
+    Pending,
+    Count {
+        completed: u64,
+        total: u64,
+    },
+}
+
+impl LoadingWork {
+    fn count(completed: usize, total: usize) -> Self {
+        Self::Count {
+            completed: u64::try_from(completed).expect("loading work count fits u64"),
+            total: u64::try_from(total).expect("loading work total fits u64"),
+        }
+    }
+
+    fn boolean(completed: bool) -> Self {
+        Self::Count {
+            completed: u64::from(completed),
+            total: 1,
+        }
+    }
+
+    fn fraction(self) -> f32 {
+        match self {
+            Self::Pending => 0.0,
+            Self::Count { total: 0, .. } => 1.0,
+            Self::Count { completed, total } => {
+                let completed =
+                    u16::try_from(completed.min(total)).expect("loading leaf count fits u16");
+                let total = u16::try_from(total).expect("loading leaf total fits u16");
+                f32::from(completed) / f32::from(total)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum LoadingWorkNode {
+    Leaf(LoadingWork),
+    Group(Vec<Self>),
+}
+
+impl LoadingWorkNode {
+    fn leaf(work: LoadingWork) -> Self {
+        Self::Leaf(work)
+    }
+
+    fn group(children: impl IntoIterator<Item = Self>) -> Self {
+        Self::Group(children.into_iter().collect())
+    }
+
+    fn fraction(&self) -> f32 {
+        match self {
+            Self::Leaf(work) => work.fraction(),
+            Self::Group(children) if children.is_empty() => 1.0,
+            Self::Group(children) => {
+                let child_count =
+                    u16::try_from(children.len()).expect("loading group size fits u16");
+                children.iter().map(Self::fraction).sum::<f32>() / f32::from(child_count)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct WorldLoadingWork {
+    cover_entities: LoadingWork,
+    cover_artwork: LoadingWork,
+    cover_gpu_images: LoadingWork,
+    cover_pipelines: LoadingWork,
+    cover_presented_frames: LoadingWork,
+    world_assets: LoadingWork,
+    generation_completed: BTreeSet<WorldGenerationStage>,
+    terrain_entities: LoadingWork,
+    resource_entities: LoadingWork,
+    foliage_entities: LoadingWork,
+    actor_entities: LoadingWork,
+    gameplay_setup: LoadingWork,
+    scene_roots: LoadingWork,
+    scene_stable_frames: LoadingWork,
+    material_overrides: LoadingWork,
+    animation_receivers: LoadingWork,
+    lighting_receivers: LoadingWork,
+    gpu_images: LoadingWork,
+    gpu_meshes: LoadingWork,
+    gpu_materials: LoadingWork,
+    gpu_pipelines: LoadingWork,
+    selection_draw: LoadingWork,
+    gpu_stable_frames: LoadingWork,
+}
+
+impl WorldLoadingWork {
+    fn mark_cover_complete(&mut self) {
+        self.cover_entities = LoadingWork::boolean(true);
+        self.cover_artwork = LoadingWork::boolean(true);
+        self.cover_gpu_images = LoadingWork::boolean(true);
+        self.cover_pipelines = LoadingWork::boolean(true);
+        self.cover_presented_frames = LoadingWork::boolean(true);
+    }
+
+    fn generation_node(&self) -> LoadingWorkNode {
+        LoadingWorkNode::group(WorldGenerationStage::ALL.into_iter().map(|stage| {
+            LoadingWorkNode::leaf(LoadingWork::boolean(
+                self.generation_completed.contains(&stage),
+            ))
+        }))
+    }
+
+    fn root(&self) -> LoadingWorkNode {
+        let leaf = LoadingWorkNode::leaf;
+        LoadingWorkNode::group([
+            LoadingWorkNode::group([
+                leaf(self.cover_entities),
+                leaf(self.cover_artwork),
+                leaf(self.cover_gpu_images),
+                leaf(self.cover_pipelines),
+                leaf(self.cover_presented_frames),
+            ]),
+            LoadingWorkNode::group([leaf(self.world_assets), self.generation_node()]),
+            LoadingWorkNode::group([
+                LoadingWorkNode::group([
+                    leaf(self.terrain_entities),
+                    leaf(self.resource_entities),
+                    leaf(self.foliage_entities),
+                    leaf(self.actor_entities),
+                    leaf(self.gameplay_setup),
+                ]),
+                leaf(self.scene_roots),
+                leaf(self.scene_stable_frames),
+            ]),
+            LoadingWorkNode::group([
+                leaf(self.material_overrides),
+                leaf(self.animation_receivers),
+                leaf(self.lighting_receivers),
+            ]),
+            LoadingWorkNode::group([
+                leaf(self.gpu_images),
+                leaf(self.gpu_meshes),
+                leaf(self.gpu_materials),
+                leaf(self.gpu_pipelines),
+                leaf(self.selection_draw),
+                leaf(self.gpu_stable_frames),
+            ]),
+        ])
+    }
+
+    fn progress(&self) -> f32 {
+        self.root().fraction().clamp(0.0, 1.0)
+    }
+}
+
 #[derive(Resource, Default)]
 struct WorldLoadingRuntime {
     phase: WorldLoadingPhase,
@@ -1449,6 +1603,7 @@ struct WorldLoadingRuntime {
     prepared_world: Option<GeneratedWorld>,
     scene_ready_frames: u8,
     completion_remaining_seconds: f32,
+    work: WorldLoadingWork,
 }
 
 #[derive(Resource)]
@@ -1475,7 +1630,10 @@ impl Default for WorldLoadingCoverRuntime {
 }
 
 #[derive(Resource)]
-struct WorldGenerationTask(Task<GeneratedWorld>);
+struct WorldGenerationTask {
+    task: Task<GeneratedWorld>,
+    completed: Arc<Mutex<BTreeSet<WorldGenerationStage>>>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BootDestination {
@@ -2166,6 +2324,19 @@ type LoadingCoverEntityQuery<'w, 's> = Query<
     (Entity, Option<&'static mut Visibility>),
     Or<(With<LoadingScreenEntity>, With<LoadingUiCamera>)>,
 >;
+#[derive(SystemParam)]
+struct WorldRevealReadinessQueries<'w, 's> {
+    material_specs: Query<'w, 's, (), With<MaterialOverrideSpec>>,
+    mesh_overrides: Query<'w, 's, (Entity, Option<&'static MaterialOverrideApplied>), With<Mesh3d>>,
+    animated_player_rigs: Query<'w, 's, (), With<PlayerAnimatedRig>>,
+    character_receivers: Query<'w, 's, (), With<AnimatedCharacterShadowReceiver>>,
+    suppressed_receivers: Query<'w, 's, (), With<bevy::light::NotShadowReceiver>>,
+    converted_animation_roots:
+        Query<'w, 's, Option<&'static ConvertedAnimationApplied>, With<ConvertedAnimationSpec>>,
+    native_animation_roots: Query<'w, 's, Entity, With<NativeAnimationSpec>>,
+    native_animation_drivers: Query<'w, 's, &'static ActorAnimationDriver>,
+    parents: Query<'w, 's, &'static ChildOf>,
+}
 type MenuWorldAssetRootQuery<'w, 's> = Query<
     'w,
     's,
@@ -3067,7 +3238,9 @@ impl Plugin for StreamTownGamePlugin {
                     animate_loading_icon,
                     finish_world_reveal
                         .after(apply_material_overrides)
-                        .after(tag_cosmetic_renderers),
+                        .after(tag_cosmetic_renderers)
+                        .after(attach_native_animations)
+                        .after(attach_converted_animations),
                     sync_loading_screen_status
                         .after(finish_world_reveal)
                         .run_if(resource_exists::<WorldLoadingRuntime>),
@@ -6064,13 +6237,48 @@ fn loading_fraction(completed: usize, total: usize) -> f32 {
     f32::from(completed) / f32::from(total)
 }
 
-fn loading_display_percent(progress: f32) -> f32 {
-    let progress = progress.clamp(0.0, 1.0);
-    if progress >= 1.0 {
-        100.0
-    } else {
-        (progress * 100.0).floor().min(99.0)
+fn world_generation_stage_label(stage: WorldGenerationStage) -> &'static str {
+    match stage {
+        WorldGenerationStage::Terrain => "terrain",
+        WorldGenerationStage::LandResources => "land resources",
+        WorldGenerationStage::NavigationAndFish => "navigation and shoreline fish",
+        WorldGenerationStage::Foliage => "foliage",
+        WorldGenerationStage::Fingerprint => "world fingerprint",
     }
+}
+
+fn loading_display_percent(progress: f32) -> f32 {
+    // Truncate only the textual precision. The fill itself uses the exact
+    // recursive fraction, and there is no synthetic ceiling or reserved band.
+    // Because every unfinished leaf is below one, 100.00 can only be produced
+    // when the complete work tree is actually complete.
+    (progress.clamp(0.0, 1.0) * 10_000.0).floor() / 100.0
+}
+
+fn loading_percent_text(progress_percent: f32) -> String {
+    if progress_percent >= 100.0 {
+        "100%".to_owned()
+    } else {
+        format!("{progress_percent:.2}%")
+    }
+}
+
+fn main_menu_loading_progress(
+    loaded_assets: usize,
+    total_assets: usize,
+    ready_roots: LoadingWork,
+    rendered_frames: LoadingWork,
+    stable_updates: LoadingWork,
+) -> f32 {
+    LoadingWorkNode::group([
+        LoadingWorkNode::leaf(LoadingWork::count(loaded_assets, total_assets)),
+        LoadingWorkNode::leaf(ready_roots),
+        LoadingWorkNode::group([
+            LoadingWorkNode::leaf(rendered_frames),
+            LoadingWorkNode::leaf(stable_updates),
+        ]),
+    ])
+    .fraction()
 }
 
 fn poll_menu_loading(
@@ -6088,7 +6296,18 @@ fn poll_menu_loading(
     loading.loaded_assets = loaded;
     loading.failed_assets = failed;
     let total = loading.asset_handles.len();
-    loading.progress = loading_fraction(loaded, total);
+    let progress = match loading.destination {
+        BootDestination::MainMenu => main_menu_loading_progress(
+            loaded,
+            total,
+            LoadingWork::Pending,
+            LoadingWork::Pending,
+            LoadingWork::Pending,
+        ),
+        BootDestination::WorldLoading => boot_loading_display_progress(&loading),
+        BootDestination::Credits => loading_fraction(loaded, total),
+    };
+    loading.progress = progress;
     let ready = loaded == total && failed == 0;
     match (loading.destination, ready) {
         (BootDestination::MainMenu, false) => "Loading main menu",
@@ -6271,7 +6490,27 @@ fn advance_world_loading_cover(
         0
     };
 
-    let display_progress = if ready { 5.0 } else { 3.0 };
+    let mut work = WorldLoadingWork {
+        cover_entities: LoadingWork::boolean(!loading_entities.is_empty()),
+        cover_artwork: LoadingWork::count(loaded, handles.len()),
+        cover_presented_frames: LoadingWork::count(
+            usize::try_from(rendered_frames.min(3)).expect("cover frame count fits usize"),
+            3,
+        ),
+        ..default()
+    };
+    if presented_frames.render_schedule_available {
+        if gpu.epoch != 0 {
+            work.cover_gpu_images = LoadingWork::count(gpu.ready_images, gpu.expected_images);
+            work.cover_pipelines =
+                LoadingWork::boolean(gpu.pending_pipelines == 0 && gpu.failed_pipelines == 0);
+        }
+    } else {
+        work.cover_gpu_images = LoadingWork::boolean(true);
+        work.cover_pipelines = LoadingWork::boolean(true);
+    }
+    let recursive_progress = work.progress();
+    let display_progress = loading_display_percent(recursive_progress);
     if let Ok(mut text) = status.single_mut() {
         **text = if ready {
             "Loading screen ready".to_owned()
@@ -6289,10 +6528,10 @@ fn advance_world_loading_cover(
         );
     }
     if let Ok(mut text) = percent_text.single_mut() {
-        **text = format!("{display_progress:.0}%");
+        **text = loading_percent_text(display_progress);
     }
     if let Ok((mut fill, mut accessible)) = fills.single_mut() {
-        set_loading_progress(&mut fill, &mut accessible, display_progress);
+        set_loading_progress(&mut fill, &mut accessible, recursive_progress * 100.0);
     }
 
     if cover.ready_updates < 3 {
@@ -7275,21 +7514,49 @@ fn begin_world_loading(
     let asset_count = asset_handles.len();
     let world_config = config.0.world.clone();
     let content = content.0.clone();
+    let completed_generation = Arc::new(Mutex::new(BTreeSet::new()));
     let prepared_world = if asset_server.is_some()
         && let Some(pool) = AsyncComputeTaskPool::try_get()
     {
-        commands.insert_resource(WorldGenerationTask(
-            pool.spawn(async move { generate_world_with_content(&world_config, &content) }),
-        ));
+        let task_progress = Arc::clone(&completed_generation);
+        commands.insert_resource(WorldGenerationTask {
+            task: pool.spawn(async move {
+                generate_world_with_content_observed(&world_config, &content, |stage| {
+                    task_progress
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(stage);
+                })
+            }),
+            completed: Arc::clone(&completed_generation),
+        });
         None
     } else {
         // Headless tests and reduced apps have no asset pipeline to overlap,
         // so keep their deterministic generation synchronous and immediate.
-        Some(generate_world_with_content(&world_config, &content))
+        Some(generate_world_with_content_observed(
+            &world_config,
+            &content,
+            |stage| {
+                completed_generation
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(stage);
+            },
+        ))
     };
+    let mut work = WorldLoadingWork::default();
+    work.mark_cover_complete();
+    work.world_assets = LoadingWork::count(0, asset_count);
+    work.generation_completed.clone_from(
+        &completed_generation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+    );
+    let progress = work.progress();
     commands.insert_resource(WorldLoadingRuntime {
         phase: WorldLoadingPhase::Presenting,
-        progress: 0.0,
+        progress,
         status: "Preparing new town".to_owned(),
         substatus: format!(
             "0 / {asset_count} presentation assets; terrain {}",
@@ -7305,6 +7572,7 @@ fn begin_world_loading(
         prepared_world,
         scene_ready_frames: 0,
         completion_remaining_seconds: 0.0,
+        work,
     });
 }
 
@@ -7320,12 +7588,24 @@ fn poll_world_loading(
     if loading.phase != WorldLoadingPhase::Loading {
         return;
     }
-    if loading.prepared_world.is_none()
-        && let Some(task) = task.as_deref_mut()
-        && let Some(generated) = block_on(poll_once(&mut task.0))
-    {
-        loading.prepared_world = Some(generated);
-        commands.remove_resource::<WorldGenerationTask>();
+    if let Some(task) = task.as_deref_mut() {
+        loading.work.generation_completed.extend(
+            task.completed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .copied(),
+        );
+        if loading.prepared_world.is_none()
+            && let Some(generated) = block_on(poll_once(&mut task.task))
+        {
+            loading.prepared_world = Some(generated);
+            loading
+                .work
+                .generation_completed
+                .extend(WorldGenerationStage::ALL);
+            commands.remove_resource::<WorldGenerationTask>();
+        }
     }
 
     let (loaded, failed) = loaded_asset_counts(asset_server.as_deref(), &loading.asset_handles);
@@ -7338,31 +7618,40 @@ fn poll_world_loading(
     loading.loaded_assets = loaded;
     loading.failed_assets = failed;
     let total_assets = loading.asset_handles.len();
-    let asset_progress = loading_fraction(loaded, total_assets);
     let terrain_ready = loading.prepared_world.is_some();
-    // Reserve the final 40% for ECS scene construction, material/animation
-    // setup, GPU uploads, pipeline compilation, and presented-frame proof.
-    // Those stages were previously hidden behind a false 100% display.
-    loading.progress = 0.05 + asset_progress * 0.35 + if terrain_ready { 0.20 } else { 0.0 };
-    loading.status = if terrain_ready {
-        "Loading town presentation".to_owned()
-    } else {
-        "Generating deterministic terrain".to_owned()
-    };
+    loading.work.world_assets = LoadingWork::count(loaded, total_assets);
+    if terrain_ready {
+        loading
+            .work
+            .generation_completed
+            .extend(WorldGenerationStage::ALL);
+    }
+    loading.progress = loading.work.progress();
+    let generation_completed = loading.work.generation_completed.len();
+    let generation_total = WorldGenerationStage::ALL.len();
+    loading.status = WorldGenerationStage::ALL
+        .into_iter()
+        .find(|stage| !loading.work.generation_completed.contains(stage))
+        .map_or_else(
+            || "Loading town presentation".to_owned(),
+            |stage| {
+                format!(
+                    "Generating deterministic {}",
+                    world_generation_stage_label(stage)
+                )
+            },
+        );
     loading.substatus = if failed == 0 {
         format!(
-            "{loaded} / {total_assets} presentation assets; terrain {}",
-            if terrain_ready { "ready" } else { "generating" }
+            "{loaded} / {total_assets} presentation assets; generation {generation_completed}/{generation_total} stages"
         )
     } else {
         format!(
-            "{loaded} loaded, {failed} unavailable; terrain {}",
-            if terrain_ready { "ready" } else { "generating" }
+            "{loaded} loaded, {failed} unavailable; generation {generation_completed}/{generation_total} stages"
         )
     };
     if loaded == total_assets && failed == 0 && terrain_ready {
         loading.phase = WorldLoadingPhase::Spawning;
-        loading.progress = 0.62;
         "Building the town scene".clone_into(&mut loading.status);
         "Terrain and presentation assets are ready".clone_into(&mut loading.substatus);
     }
@@ -7401,15 +7690,19 @@ fn advance_loading_phase(
         } else {
             loading.scene_ready_frames = 0;
         }
-        let root_fraction = loading_fraction(ready_count, root_count);
-        let stable_fraction = f32::from(loading.scene_ready_frames.min(5)) / 5.0;
-        loading.progress = 0.78 + root_fraction * 0.04 + stable_fraction * 0.02;
+        loading.work.scene_roots = if root_count == 0 && world_instance_spawner.is_some() {
+            LoadingWork::Pending
+        } else {
+            LoadingWork::count(ready_count, root_count)
+        };
+        loading.work.scene_stable_frames =
+            LoadingWork::count(usize::from(loading.scene_ready_frames.min(5)), 5);
+        loading.progress = loading.work.progress();
         if loading.scene_ready_frames < 5 {
             "Finalizing town presentation".clone_into(&mut loading.status);
             loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
             return;
         }
-        loading.progress = 0.84;
         "Scene graph ready".clone_into(&mut loading.status);
         "Preparing materials, animation, and GPU resources".clone_into(&mut loading.substatus);
     }
@@ -7439,7 +7732,8 @@ fn sync_loading_screen_status(
     mut percent_text: LoadingPercentQuery,
     mut fills: Query<(&mut Node, &mut AccessibilityNode), With<LoadingProgressFill>>,
 ) {
-    let progress_percent = loading_display_percent(loading.progress);
+    let progress_percent = loading.progress.clamp(0.0, 1.0) * 100.0;
+    let display_percent = loading_display_percent(loading.progress);
     if let Ok(mut text) = status.single_mut() {
         (**text).clone_from(&loading.status);
     }
@@ -7447,7 +7741,7 @@ fn sync_loading_screen_status(
         (**text).clone_from(&loading.substatus);
     }
     if let Ok(mut text) = percent_text.single_mut() {
-        **text = format!("{progress_percent:.0}%");
+        **text = loading_percent_text(display_percent);
     }
     if let Ok((mut fill, mut accessible)) = fills.single_mut() {
         set_loading_progress(&mut fill, &mut accessible, progress_percent);
@@ -7468,7 +7762,9 @@ fn sync_boot_loading_screen(
     let Some(loading) = loading else {
         return;
     };
-    let progress_percent = loading_display_percent(boot_loading_display_progress(&loading));
+    let progress = boot_loading_display_progress(&loading);
+    let progress_percent = progress.clamp(0.0, 1.0) * 100.0;
+    let display_percent = loading_display_percent(progress);
     if let Ok(mut text) = status.single_mut() {
         (**text).clone_from(&loading.status);
     }
@@ -7476,7 +7772,7 @@ fn sync_boot_loading_screen(
         (**text).clone_from(&loading.substatus);
     }
     if let Ok(mut text) = percent_text.single_mut() {
-        **text = format!("{progress_percent:.0}%");
+        **text = loading_percent_text(display_percent);
     }
     if let Ok((mut fill, mut accessible)) = fills.single_mut() {
         set_loading_progress(&mut fill, &mut accessible, progress_percent);
@@ -7501,19 +7797,31 @@ fn set_loading_progress(
     let progress_percent = progress_percent.clamp(0.0, 100.0);
     fill.width = percent(progress_percent);
     accessible.set_numeric_value(f64::from(progress_percent));
-    accessible.set_value(format!("{progress_percent:.0}%").into_boxed_str());
+    accessible.set_value(
+        loading_percent_text(loading_display_percent(progress_percent / 100.0)).into_boxed_str(),
+    );
 }
 
 fn boot_loading_display_progress(loading: &MenuLoadingRuntime) -> f32 {
-    // Autostart's Boot phase only prepares the renderer and the loading-screen
-    // artwork. It hands the same live overlay to WorldLoading, whose authored
-    // progress range begins at five percent. Showing Boot as 100% made this
-    // continuous operation look like two unrelated loading screens.
-    if loading.destination == BootDestination::WorldLoading {
-        loading.progress * 0.05
-    } else {
-        loading.progress
+    if loading.destination != BootDestination::WorldLoading {
+        return loading.progress;
     }
+    let mut work = WorldLoadingWork {
+        cover_entities: LoadingWork::boolean(true),
+        cover_artwork: LoadingWork::count(loading.loaded_assets, loading.asset_handles.len()),
+        cover_presented_frames: LoadingWork::count(
+            usize::from(loading.ready_presented_frames.min(3)),
+            3,
+        ),
+        ..default()
+    };
+    // Boot has no render-world probe. The same assets are included again in the
+    // authoritative world GPU leaves after the state handoff.
+    if loading.asset_handles.is_empty() {
+        work.cover_gpu_images = LoadingWork::boolean(true);
+        work.cover_pipelines = LoadingWork::boolean(true);
+    }
+    work.progress()
 }
 
 fn world_asset_root_ready(
@@ -7595,7 +7903,21 @@ fn finish_menu_reveal(
         presented_render_frame,
     );
     if let Some(loading) = loading.as_deref_mut() {
-        loading.progress = 0.98;
+        loading.progress = main_menu_loading_progress(
+            loading.loaded_assets,
+            loading.asset_handles.len(),
+            if root_count == 0 && world_instance_spawner.is_some() {
+                LoadingWork::Pending
+            } else {
+                LoadingWork::count(ready_count, root_count)
+            },
+            LoadingWork::count(
+                usize::try_from(ready_rendered_frames.min(12))
+                    .expect("menu reveal frame count fits usize"),
+                12,
+            ),
+            LoadingWork::count(usize::from(reveal.scene_ready_frames.min(8)), 8),
+        );
         "Building main menu scene".clone_into(&mut loading.status);
         loading.substatus = format!("{ready_count} / {root_count} scene roots instantiated");
     }
@@ -7631,35 +7953,6 @@ fn begin_world_reveal(mut commands: Commands, presented_frames: Res<PresentedRen
 }
 
 #[allow(clippy::too_many_arguments)]
-fn world_reveal_progress(
-    ready_roots: usize,
-    root_count: usize,
-    applied_meshes: usize,
-    authored_meshes: usize,
-    ready_character_receivers: usize,
-    animated_player_meshes: usize,
-    gpu: GpuReadinessSnapshot,
-    stable_frames: u64,
-) -> f32 {
-    let pipeline_ready = f32::from(gpu.pending_pipelines == 0 && gpu.failed_pipelines == 0);
-    let stable_frames = u16::try_from(stable_frames.min(WORLD_REVEAL_GPU_STABLE_FRAMES))
-        .expect("the reveal frame gate fits u16");
-    let required_stable_frames =
-        u16::try_from(WORLD_REVEAL_GPU_STABLE_FRAMES).expect("the reveal frame gate fits u16");
-    let stable_fraction = f32::from(stable_frames) / f32::from(required_stable_frames);
-    (0.84
-        + loading_fraction(ready_roots, root_count) * 0.02
-        + loading_fraction(applied_meshes, authored_meshes) * 0.03
-        + loading_fraction(ready_character_receivers, animated_player_meshes) * 0.03
-        + loading_fraction(gpu.ready_images, gpu.expected_images) * 0.02
-        + loading_fraction(gpu.ready_meshes, gpu.expected_meshes) * 0.03
-        + loading_fraction(gpu.ready_materials, gpu.expected_materials) * 0.02
-        + pipeline_ready * 0.005
-        + stable_fraction * 0.005)
-        .clamp(0.84, 0.999)
-}
-
-#[allow(clippy::too_many_arguments)]
 fn finish_world_reveal(
     mut commands: Commands,
     presented_frames: Res<PresentedRenderFrames>,
@@ -7669,14 +7962,9 @@ fn finish_world_reveal(
     mut loading: Option<ResMut<WorldLoadingRuntime>>,
     mut loading_entities: LoadingCoverEntityQuery,
     scene_roots: WorldAssetRootQuery,
-    material_specs: Query<(), With<MaterialOverrideSpec>>,
-    mesh_overrides: Query<(Entity, Option<&MaterialOverrideApplied>), With<Mesh3d>>,
-    animated_player_rigs: Query<(), With<PlayerAnimatedRig>>,
-    character_receivers: Query<(), With<AnimatedCharacterShadowReceiver>>,
-    suppressed_receivers: Query<(), With<bevy::light::NotShadowReceiver>>,
+    readiness: WorldRevealReadinessQueries,
     active_meshes: Query<&Mesh3d>,
     active_materials: ActiveMaterialHandles,
-    parents: Query<&ChildOf>,
 ) {
     let Some(reveal) = reveal.as_deref_mut() else {
         return;
@@ -7702,17 +7990,17 @@ fn finish_world_reveal(
     let mut applied_meshes = 0;
     let mut animated_player_meshes = 0;
     let mut ready_character_receivers = 0;
-    for (entity, applied) in &mesh_overrides {
+    for (entity, applied) in &readiness.mesh_overrides {
         let mut ancestor = entity;
         let mut has_authored_spec = false;
         let mut has_animated_player_rig = false;
         for _ in 0..64 {
-            has_animated_player_rig |= animated_player_rigs.contains(ancestor);
-            if material_specs.contains(ancestor) {
+            has_animated_player_rig |= readiness.animated_player_rigs.contains(ancestor);
+            if readiness.material_specs.contains(ancestor) {
                 has_authored_spec = true;
                 break;
             }
-            let Ok(parent) = parents.get(ancestor) else {
+            let Ok(parent) = readiness.parents.get(ancestor) else {
                 break;
             };
             ancestor = parent.parent();
@@ -7725,11 +8013,29 @@ fn finish_world_reveal(
         }
         if has_animated_player_rig {
             animated_player_meshes += 1;
-            if character_receivers.contains(entity) && !suppressed_receivers.contains(entity) {
+            if readiness.character_receivers.contains(entity)
+                && !readiness.suppressed_receivers.contains(entity)
+            {
                 ready_character_receivers += 1;
             }
         }
     }
+
+    let converted_animation_count = readiness.converted_animation_roots.iter().count();
+    let converted_animation_ready = readiness.converted_animation_roots.iter().flatten().count();
+    let native_animation_count = readiness.native_animation_roots.iter().count();
+    let native_animation_ready = readiness
+        .native_animation_roots
+        .iter()
+        .filter(|root| {
+            readiness
+                .native_animation_drivers
+                .iter()
+                .any(|driver| driver.actor_root == *root)
+        })
+        .count();
+    let animation_count = converted_animation_count + native_animation_count;
+    let ready_animation_count = converted_animation_ready + native_animation_ready;
 
     gpu_readiness.merge_world_content(
         active_meshes.iter().map(|mesh| mesh.0.id()),
@@ -7742,7 +8048,12 @@ fn finish_world_reveal(
         asset_root_collection_ready(root_count, ready_roots, world_instance_spawner.is_some());
     let materials_ready = authored_meshes == applied_meshes;
     let character_receivers_ready = animated_player_meshes == ready_character_receivers;
-    let world_ready = roots_ready && materials_ready && character_receivers_ready && gpu_ready;
+    let animation_setup_ready = animation_count == ready_animation_count;
+    let world_ready = roots_ready
+        && materials_ready
+        && animation_setup_ready
+        && character_receivers_ready
+        && gpu_ready;
     if world_ready {
         reveal.ready_frames = reveal.ready_frames.saturating_add(1);
     } else {
@@ -7755,19 +8066,69 @@ fn finish_world_reveal(
     );
     let stable_frames = ready_rendered_frames.min(u64::from(reveal.ready_frames));
     if let Some(loading) = loading.as_deref_mut() {
-        loading.progress = world_reveal_progress(
-            ready_roots,
-            root_count,
-            applied_meshes,
-            authored_meshes,
-            ready_character_receivers,
-            animated_player_meshes,
-            gpu,
-            stable_frames,
-        );
+        loading.work.scene_roots = if root_count == 0 && world_instance_spawner.is_some() {
+            LoadingWork::Pending
+        } else {
+            LoadingWork::count(ready_roots, root_count)
+        };
+        if roots_ready {
+            loading.work.material_overrides = LoadingWork::count(applied_meshes, authored_meshes);
+            loading.work.animation_receivers =
+                LoadingWork::count(ready_animation_count, animation_count);
+            loading.work.lighting_receivers =
+                LoadingWork::count(ready_character_receivers, animated_player_meshes);
+        } else {
+            loading.work.material_overrides = LoadingWork::Pending;
+            loading.work.animation_receivers = LoadingWork::Pending;
+            loading.work.lighting_receivers = LoadingWork::Pending;
+        }
+        if roots_ready
+            && materials_ready
+            && animation_setup_ready
+            && character_receivers_ready
+            && presented_frames.render_schedule_available
+            && gpu.epoch != 0
+        {
+            loading.work.gpu_images = LoadingWork::count(gpu.ready_images, gpu.expected_images);
+            loading.work.gpu_meshes = LoadingWork::count(gpu.ready_meshes, gpu.expected_meshes);
+            loading.work.gpu_materials =
+                LoadingWork::count(gpu.ready_materials, gpu.expected_materials);
+            loading.work.gpu_pipelines =
+                LoadingWork::boolean(gpu.pending_pipelines == 0 && gpu.failed_pipelines == 0);
+            loading.work.selection_draw =
+                LoadingWork::boolean(!gpu.selection_expected || gpu.selection_draw_ready);
+        } else if roots_ready
+            && materials_ready
+            && animation_setup_ready
+            && character_receivers_ready
+            && !presented_frames.render_schedule_available
+        {
+            loading.work.gpu_images = LoadingWork::boolean(true);
+            loading.work.gpu_meshes = LoadingWork::boolean(true);
+            loading.work.gpu_materials = LoadingWork::boolean(true);
+            loading.work.gpu_pipelines = LoadingWork::boolean(true);
+            loading.work.selection_draw = LoadingWork::boolean(true);
+        } else {
+            loading.work.gpu_images = LoadingWork::Pending;
+            loading.work.gpu_meshes = LoadingWork::Pending;
+            loading.work.gpu_materials = LoadingWork::Pending;
+            loading.work.gpu_pipelines = LoadingWork::Pending;
+            loading.work.selection_draw = LoadingWork::Pending;
+        }
+        loading.work.gpu_stable_frames = if world_ready {
+            LoadingWork::count(
+                usize::try_from(stable_frames.min(WORLD_REVEAL_GPU_STABLE_FRAMES))
+                    .expect("GPU stable frame count fits usize"),
+                usize::try_from(WORLD_REVEAL_GPU_STABLE_FRAMES)
+                    .expect("GPU stable frame total fits usize"),
+            )
+        } else {
+            LoadingWork::Pending
+        };
+        loading.progress = loading.work.progress();
         let status = if !roots_ready {
             "Instantiating town scenes"
-        } else if !materials_ready || !character_receivers_ready {
+        } else if !materials_ready || !animation_setup_ready || !character_receivers_ready {
             "Finalizing models and animation"
         } else if gpu.ready_images != gpu.expected_images
             || gpu.ready_meshes != gpu.expected_meshes
@@ -7781,7 +8142,7 @@ fn finish_world_reveal(
         };
         status.clone_into(&mut loading.status);
         loading.substatus = format!(
-            "{ready_roots}/{root_count} scenes; characters {ready_character_receivers}/{animated_player_meshes}; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines",
+            "{ready_roots}/{root_count} scenes; animations {ready_animation_count}/{animation_count}; lighting {ready_character_receivers}/{animated_player_meshes}; GPU images {}/{}, meshes {}/{}, materials {}/{}; {} pipelines",
             gpu.ready_images,
             gpu.expected_images,
             gpu.ready_meshes,
@@ -7807,7 +8168,11 @@ fn finish_world_reveal(
         .completion_starting_render_frame
         .get_or_insert(presented_render_frame);
     if let Some(loading) = loading.as_deref_mut() {
-        loading.progress = 1.0;
+        debug_assert!(
+            (loading.work.progress() - 1.0).abs() < f32::EPSILON,
+            "the reveal gate and recursive loading tree must agree"
+        );
+        loading.progress = loading.work.progress();
         "Town ready".clone_into(&mut loading.status);
         "All scenes, materials, animation, and GPU pipelines are ready"
             .clone_into(&mut loading.substatus);
@@ -7826,6 +8191,8 @@ fn finish_world_reveal(
     info!(
         scene_roots = root_count,
         authored_meshes,
+        animations = animation_count,
+        ready_animations = ready_animation_count,
         animated_player_meshes,
         ready_character_receivers,
         gpu_images = gpu.ready_images,
@@ -12896,6 +13263,12 @@ fn generate_and_spawn_world(
             .cloned()
             .collect();
     }
+    let resource_entity_count = if isolate_animation {
+        0
+    } else {
+        generated.resources.len()
+    };
+    let foliage_entity_count = render_stats.foliage_instances;
     commands.insert_resource(WorldRuntime {
         generated,
         legacy_terrain_mesh: None,
@@ -12904,7 +13277,13 @@ fn generate_and_spawn_world(
     commands.insert_resource(SimulationRuntime(simulation));
     commands.insert_resource(EnvironmentPresentation::default());
     loading.phase = WorldLoadingPhase::Complete;
-    loading.progress = 0.78;
+    loading.work.terrain_entities = LoadingWork::count(2, 2);
+    loading.work.resource_entities =
+        LoadingWork::count(resource_entity_count, resource_entity_count);
+    loading.work.foliage_entities = LoadingWork::count(foliage_entity_count, foliage_entity_count);
+    loading.work.actor_entities = LoadingWork::count(usize::from(spawned), usize::from(spawned));
+    loading.work.gameplay_setup = LoadingWork::boolean(true);
+    loading.progress = loading.work.progress();
     "Finalizing town presentation".clone_into(&mut loading.status);
     "Waiting for initial scene roots to instantiate".clone_into(&mut loading.substatus);
     loading.completion_remaining_seconds = Duration::from_millis(u64::from(
@@ -34041,7 +34420,7 @@ mod tests {
 
         assert_eq!(node.width, percent(47.6));
         assert!((accessible.numeric_value().expect("progress value") - 47.6).abs() < 1e-5);
-        assert_eq!(accessible.value(), Some("48%"));
+        assert_eq!(accessible.value(), Some("47.60%"));
     }
 
     #[test]
@@ -37565,43 +37944,52 @@ mod tests {
     }
 
     #[test]
-    fn loading_progress_only_reports_one_hundred_after_the_gpu_reveal_gate() {
+    fn loading_progress_is_recursively_derived_from_real_work() {
         assert!(loading_display_percent(0.0).abs() < f32::EPSILON);
-        assert!((loading_display_percent(0.999) - 99.0).abs() < f32::EPSILON);
+        assert!((loading_display_percent(0.999) - 99.9).abs() < f32::EPSILON);
         assert!((loading_display_percent(1.0) - 100.0).abs() < f32::EPSILON);
 
-        let incomplete_gpu = GpuReadinessSnapshot {
-            epoch: 1,
-            expected_images: 10,
-            ready_images: 5,
-            expected_meshes: 20,
-            ready_meshes: 10,
-            expected_materials: 8,
-            ready_materials: 4,
-            pending_pipelines: 2,
-            ..default()
-        };
-        let incomplete = world_reveal_progress(5, 6, 300, 600, 300, 600, incomplete_gpu, 0);
-        assert!(incomplete < 0.95);
-        assert!(loading_display_percent(incomplete) < 95.0);
+        let mut work = WorldLoadingWork::default();
+        assert!(work.progress().abs() < f32::EPSILON);
+        work.mark_cover_complete();
+        assert!((work.progress() - 0.2).abs() < f32::EPSILON);
 
-        let ready_gpu = GpuReadinessSnapshot {
-            epoch: 1,
-            expected_images: 10,
-            ready_images: 10,
-            expected_meshes: 20,
-            ready_meshes: 20,
-            expected_materials: 8,
-            ready_materials: 8,
-            ..default()
-        };
-        let validating = world_reveal_progress(6, 6, 600, 600, 600, 600, ready_gpu, 5);
-        assert!(validating < 1.0);
-        assert!((loading_display_percent(validating) - 99.0).abs() < f32::EPSILON);
-        let stable = world_reveal_progress(6, 6, 600, 600, 600, 600, ready_gpu, 6);
-        assert!(stable < 1.0);
-        assert!((loading_display_percent(stable) - 99.0).abs() < f32::EPSILON);
-        assert!((loading_display_percent(1.0) - 100.0).abs() < f32::EPSILON);
+        work.world_assets = LoadingWork::count(5, 10);
+        work.generation_completed
+            .extend(WorldGenerationStage::ALL.into_iter().take(2));
+        let expected_world_input = (0.5 + 0.4) * 0.5;
+        let expected_root = (1.0 + expected_world_input) / 5.0;
+        assert!((work.progress() - expected_root).abs() < 1e-6);
+
+        work.world_assets = LoadingWork::count(10, 10);
+        work.generation_completed.extend(WorldGenerationStage::ALL);
+        work.terrain_entities = LoadingWork::count(2, 2);
+        work.resource_entities = LoadingWork::count(300, 300);
+        work.foliage_entities = LoadingWork::count(900, 900);
+        work.actor_entities = LoadingWork::count(5, 5);
+        work.gameplay_setup = LoadingWork::boolean(true);
+        work.scene_roots = LoadingWork::count(205, 205);
+        work.scene_stable_frames = LoadingWork::count(5, 5);
+        work.material_overrides = LoadingWork::count(420, 420);
+        work.animation_receivers = LoadingWork::count(5, 5);
+        work.lighting_receivers = LoadingWork::count(5, 5);
+        work.gpu_images = LoadingWork::count(132, 133);
+        work.gpu_meshes = LoadingWork::count(252, 253);
+        work.gpu_materials = LoadingWork::count(32, 33);
+        work.gpu_pipelines = LoadingWork::boolean(false);
+        work.selection_draw = LoadingWork::boolean(true);
+        work.gpu_stable_frames = LoadingWork::count(5, 6);
+        let incomplete = work.progress();
+        assert!(incomplete < 1.0);
+        assert!(loading_display_percent(incomplete) < 100.0);
+
+        work.gpu_images = LoadingWork::count(133, 133);
+        work.gpu_meshes = LoadingWork::count(253, 253);
+        work.gpu_materials = LoadingWork::count(33, 33);
+        work.gpu_pipelines = LoadingWork::boolean(true);
+        work.gpu_stable_frames = LoadingWork::count(6, 6);
+        assert!((work.progress() - 1.0).abs() < f32::EPSILON);
+        assert!((loading_display_percent(work.progress()) - 100.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -37617,7 +38005,7 @@ mod tests {
             failed_assets: 0,
             ready_presented_frames: 3,
         };
-        assert!((boot_loading_display_progress(&loading) - 0.05).abs() < f32::EPSILON);
+        assert!((boot_loading_display_progress(&loading) - 0.2).abs() < f32::EPSILON);
         assert!(next_state_targets_world_loading(&NextState::Pending(
             GameState::WorldLoading
         )));
