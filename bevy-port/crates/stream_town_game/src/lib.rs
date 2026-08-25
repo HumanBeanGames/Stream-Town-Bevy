@@ -281,6 +281,9 @@ const FOLIAGE_VISIBILITY_FADE: f32 = 18.0;
 const FOLIAGE_BATCH_CHUNK_CELLS: u16 = 32;
 const CROWD_SEPARATION_RADIUS_CELLS: f32 = 0.42;
 const CROWD_SEPARATION_MAX_CELLS: f32 = 0.28;
+const CROWD_PREDICTION_RADIUS_CELLS: f32 = 0.46;
+const CROWD_PREDICTION_HORIZON_SECONDS: f32 = 0.85;
+const CROWD_MINIMUM_YIELD_SPEED: f32 = 0.18;
 const CHARACTER_HIT_SECONDS: f32 = 0.25;
 const TOWER_TRAIL_SECONDS: f32 = 2.0;
 const TOWER_TRAIL_WIDTH: f32 = 0.1;
@@ -464,6 +467,7 @@ struct WorldRenderStats {
     foliage_spatial_groups: usize,
     foliage_unbatched_instances: usize,
     crowd_adjusted_agents: usize,
+    crowd_yielding_agents: usize,
 }
 
 #[derive(Resource, Default)]
@@ -1868,6 +1872,7 @@ struct Agent {
     path_index: usize,
     target: GridPos,
     action_cooldown_seconds: f32,
+    action_started: bool,
     health_regen_accumulator: f64,
 }
 
@@ -1900,6 +1905,7 @@ enum AgentGoal {
     Gather(StableId),
     HarvestFarm(StableId),
     Deposit,
+    WaitForStorage,
     Attack(StableId),
     AttackBuilding(StableId),
     Heal(StableId),
@@ -12425,6 +12431,7 @@ fn generate_and_spawn_world(
                 path_index: 0,
                 target,
                 action_cooldown_seconds: 0.0,
+                action_started: false,
                 health_regen_accumulator: 0.0,
             },
             AgentLocomotion::default(),
@@ -14631,6 +14638,35 @@ fn next_agent_goal_with_reservations(
     )
 }
 
+fn town_hall_wait_target(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    current: GridPos,
+) -> GridPos {
+    let town_hall = StableId::new("building:townhall").expect("static building ID");
+    simulation
+        .buildings
+        .get(&town_hall)
+        .and_then(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            building_approach(
+                world,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                current,
+            )
+        })
+        .or_else(|| {
+            nearest_walkable(
+                world,
+                restored_town_hall_position(content, simulation, config),
+            )
+        })
+        .unwrap_or(current)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn next_agent_goal_with_station_runtime(
     simulation: &WorldSimulation,
@@ -14989,6 +15025,15 @@ fn next_agent_goal_with_station_runtime(
         }
     }
     if !actor_resource_storage_has_room(config, content, simulation, actor) {
+        let carrying_role_resource = resource_for_role(content, &actor.role)
+            .is_some_and(|kind| actor.inventory.get(&kind).copied().unwrap_or_default() > 0);
+        if carrying_role_resource && actor_remaining_carry_capacity(content, simulation, actor) == 0
+        {
+            return (
+                AgentGoal::WaitForStorage,
+                town_hall_wait_target(content, simulation, world, config, current),
+            );
+        }
         return (
             AgentGoal::Wander,
             deterministic_wander_target(world, actor_id, current),
@@ -15506,7 +15551,7 @@ fn complete_agent_goal(
                 }
             }
         }
-        AgentGoal::Wander => false,
+        AgentGoal::WaitForStorage | AgentGoal::Wander => false,
     };
     if action_succeeded
         && let Some(stats) = stats
@@ -17281,7 +17326,7 @@ fn action_cooldown(
         // `PlayerInventory.DepositResources` waits 2.5 seconds before its
         // transfer callback. Keep the complete authored station cadence.
         AgentGoal::Deposit => 2.5,
-        AgentGoal::Wander => 0.0,
+        AgentGoal::WaitForStorage | AgentGoal::Wander => 0.0,
     };
     let Some(actor) = simulation.actors.get(actor) else {
         return fallback;
@@ -17311,6 +17356,30 @@ fn action_cooldown(
         0.0
     } else {
         base.max(0.1)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArrivedActionPhase {
+    NonAction,
+    Started,
+    Waiting,
+    Complete,
+}
+
+fn arrived_action_phase(agent: &mut Agent, authored_delay: f32) -> ArrivedActionPhase {
+    if !agent.action_started {
+        if authored_delay <= f32::EPSILON {
+            return ArrivedActionPhase::NonAction;
+        }
+        agent.action_started = true;
+        agent.action_cooldown_seconds = authored_delay;
+        return ArrivedActionPhase::Started;
+    }
+    if agent.action_cooldown_seconds > f32::EPSILON {
+        ArrivedActionPhase::Waiting
+    } else {
+        ArrivedActionPhase::Complete
     }
 }
 
@@ -17381,7 +17450,7 @@ fn agent_action_facing_grid(
         AgentGoal::Attack(actor) | AgentGoal::Heal(actor) => {
             simulation.actors.get(actor).map(|actor| actor.position)
         }
-        AgentGoal::Deposit | AgentGoal::Wander => None,
+        AgentGoal::Deposit | AgentGoal::WaitForStorage | AgentGoal::Wander => None,
     }
 }
 
@@ -17417,6 +17486,85 @@ fn rotate_agent_toward(
     };
 }
 
+fn actor_movement_speed(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    actor_id: &StableId,
+) -> f32 {
+    simulation
+        .actors
+        .get(actor_id)
+        .map_or(config.gameplay.agent_speed_cells_per_second, |actor| {
+            effective_role_stats(content, simulation, actor)
+                .map_or(config.gameplay.agent_speed_cells_per_second, |stats| {
+                    milli_units_as_f32(stats.movement_speed_milli_cells_per_second)
+                })
+        })
+}
+
+fn predictive_speed_factors(
+    agents: &[(StableId, Vec2, Vec2)],
+    radius: f32,
+    horizon_seconds: f32,
+    minimum_factor: f32,
+) -> BTreeMap<StableId, f32> {
+    let mut factors = agents
+        .iter()
+        .map(|(id, _, _)| (id.clone(), 1.0_f32))
+        .collect::<BTreeMap<_, _>>();
+    if radius <= f32::EPSILON || horizon_seconds <= f32::EPSILON {
+        return factors;
+    }
+    for left_index in 0..agents.len() {
+        let (left_id, left_position, left_velocity) = &agents[left_index];
+        for (right_id, right_position, right_velocity) in &agents[left_index + 1..] {
+            let relative_position = *right_position - *left_position;
+            let relative_velocity = *left_velocity - *right_velocity;
+            let relative_speed_squared = relative_velocity.length_squared();
+            if relative_speed_squared <= f32::EPSILON {
+                continue;
+            }
+            let approach = relative_position.dot(relative_velocity);
+            if approach <= 0.0 {
+                continue;
+            }
+            let closest_seconds = (approach / relative_speed_squared).min(horizon_seconds);
+            let closest_offset = relative_position - relative_velocity * closest_seconds;
+            let closest_distance = closest_offset.length();
+            if closest_distance >= radius {
+                continue;
+            }
+            let time_urgency = 1.0 - closest_seconds / horizon_seconds;
+            let distance_urgency = 1.0 - closest_distance / radius;
+            let factor = (1.0 - time_urgency * distance_urgency * (1.0 - minimum_factor))
+                .clamp(minimum_factor, 1.0);
+
+            // A following agent yields to the one already ahead. At crossings
+            // and head-on encounters, the stable actor ID is the deterministic
+            // right-of-way tie-breaker, preventing reciprocal stop/start.
+            let same_direction = left_velocity.dot(*right_velocity) > 0.0;
+            let left_is_behind =
+                same_direction && relative_position.dot(left_velocity.normalize_or_zero()) > 0.0;
+            let right_is_behind = same_direction
+                && (-relative_position).dot(right_velocity.normalize_or_zero()) > 0.0;
+            let yielding = if left_is_behind && !right_is_behind {
+                left_id
+            } else if right_is_behind && !left_is_behind {
+                right_id
+            } else if left_id > right_id {
+                left_id
+            } else {
+                right_id
+            };
+            factors
+                .entry(yielding.clone())
+                .and_modify(|current| *current = current.min(factor));
+        }
+    }
+    factors
+}
+
 #[allow(clippy::type_complexity)]
 fn move_agents(
     mut commands: Commands,
@@ -17429,6 +17577,7 @@ fn move_agents(
     mut world: ResMut<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
     mut stats: ResMut<SessionStats>,
+    mut render_stats: ResMut<WorldRenderStats>,
     mut agents: Query<(
         Entity,
         &mut Agent,
@@ -17514,6 +17663,32 @@ fn move_agents(
         .map(|(entity, agent, _, _, _, _)| (agent.id.clone(), entity))
         .collect();
     agent_order.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let predictive_agents = agents
+        .iter()
+        .filter_map(|(_, agent, _, _, transform, _)| {
+            let next = agent.path.get(agent.path_index).copied()?;
+            let position = Vec2::new(transform.translation.x, transform.translation.z);
+            let target = grid_to_world_on_surface(next, &config.0, &world.generated);
+            let direction = Vec2::new(target.x - position.x, target.z - position.y);
+            let speed = actor_movement_speed(&config.0, &content.0, &simulation.0, &agent.id)
+                * config.0.world.cell_size;
+            Some((
+                agent.id.clone(),
+                position,
+                direction.normalize_or_zero() * speed,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let predictive_factors = predictive_speed_factors(
+        &predictive_agents,
+        config.0.world.cell_size * CROWD_PREDICTION_RADIUS_CELLS,
+        CROWD_PREDICTION_HORIZON_SECONDS,
+        CROWD_MINIMUM_YIELD_SPEED,
+    );
+    render_stats.crowd_yielding_agents = predictive_factors
+        .values()
+        .filter(|factor| **factor < 1.0 - f32::EPSILON)
+        .count();
     for (_, entity) in agent_order {
         let Ok((_, mut agent, mut location, animation, mut transform, axis_corrected)) =
             agents.get_mut(entity)
@@ -17606,10 +17781,13 @@ fn move_agents(
                 agent.path.clear();
                 agent.path_index = 0;
                 agent.action_cooldown_seconds = 0.0;
+                agent.action_started = false;
             }
         } else {
             agent.path.clear();
             agent.goal = AgentGoal::Wander;
+            agent.action_started = false;
+            agent.action_cooldown_seconds = 0.0;
             agent.health_regen_accumulator = 0.0;
             let remaining = simulation
                 .0
@@ -17646,6 +17824,7 @@ fn move_agents(
             agent.origin = spawn;
             agent.target = deterministic_wander_target(&world.generated, &agent.id, spawn);
             agent.action_cooldown_seconds = 0.0;
+            agent.action_started = false;
             spawn_healing_effect(
                 &mut commands,
                 &authored_presentation.0,
@@ -17667,8 +17846,29 @@ fn move_agents(
         ensure_actor_station(&content.0, &mut simulation.0, &config.0, &agent.id);
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
-                stats.paths_completed += 1;
-                if location.0 == agent.target && agent.action_cooldown_seconds <= f32::EPSILON {
+                let completing_started_action = agent.action_started;
+                if !completing_started_action {
+                    stats.paths_completed += 1;
+                }
+                let action_phase = if location.0 == agent.target {
+                    let delay = if completing_started_action {
+                        0.0
+                    } else {
+                        action_cooldown(&content.0, &simulation.0, &agent.id, &agent.goal)
+                    };
+                    arrived_action_phase(&mut agent, delay)
+                } else {
+                    ArrivedActionPhase::NonAction
+                };
+                if matches!(
+                    action_phase,
+                    ArrivedActionPhase::Started | ArrivedActionPhase::Waiting
+                ) {
+                    // Unity enters the action state, plays its animation, and
+                    // invokes DoAction only after the authored timer.
+                    continue;
+                }
+                if action_phase == ArrivedActionPhase::Complete {
                     if let Some(presentation) = complete_agent_goal(
                         &mut simulation.0,
                         &mut world.generated,
@@ -17747,8 +17947,8 @@ fn move_agents(
                             }
                         }
                     }
-                    agent.action_cooldown_seconds =
-                        action_cooldown(&content.0, &simulation.0, &agent.id, &agent.goal);
+                    agent.action_started = false;
+                    agent.action_cooldown_seconds = 0.0;
                 }
             }
             agent.origin = location.0;
@@ -17777,6 +17977,8 @@ fn move_agents(
                 &target_assignment_counts,
             );
             agent.goal = goal;
+            agent.action_started = false;
+            agent.action_cooldown_seconds = 0.0;
             if let Some(reserved) = goal_reservation(&agent.goal) {
                 resource_reservations.insert(reserved.clone(), agent.id.clone());
             }
@@ -17805,15 +18007,8 @@ fn move_agents(
             target.y += animation.base_scale.y * 0.5;
         }
         let distance = target - transform.translation;
-        let speed = simulation.0.actors.get(&agent.id).map_or(
-            config.0.gameplay.agent_speed_cells_per_second,
-            |actor| {
-                effective_role_stats(&content.0, &simulation.0, actor)
-                    .map_or(config.0.gameplay.agent_speed_cells_per_second, |stats| {
-                        milli_units_as_f32(stats.movement_speed_milli_cells_per_second)
-                    })
-            },
-        );
+        let speed = actor_movement_speed(&config.0, &content.0, &simulation.0, &agent.id)
+            * predictive_factors.get(&agent.id).copied().unwrap_or(1.0);
         let step = speed * config.0.world.cell_size * time.delta_secs();
         if distance.length_squared() <= step * step {
             transform.translation = target;
@@ -21746,7 +21941,7 @@ fn agent_action_animation(
             },
             |contract| Some(contract.action_animation),
         ),
-        AgentGoal::Deposit | AgentGoal::Wander => None,
+        AgentGoal::Deposit | AgentGoal::WaitForStorage | AgentGoal::Wander => None,
     }
 }
 
@@ -23398,6 +23593,8 @@ fn apply_agent_commands(
                     agent.path_index = 0;
                     agent.target = position;
                     agent.goal = AgentGoal::Wander;
+                    agent.action_started = false;
+                    agent.action_cooldown_seconds = 0.0;
                     transform.translation = world_position;
                 }
             }
@@ -23410,6 +23607,7 @@ fn apply_agent_commands(
                     agent.path.clear();
                     agent.path_index = 0;
                     agent.action_cooldown_seconds = 0.0;
+                    agent.action_started = false;
                 }
             }
             AgentCommand::Ping(actor) => {
@@ -23820,6 +24018,8 @@ fn recruit_group_selection_input(
             agent.goal = AgentGoal::Wander;
             agent.path.clear();
             agent.path_index = 0;
+            agent.action_started = false;
+            agent.action_cooldown_seconds = 0.0;
         }
     }
 }
@@ -26295,6 +26495,7 @@ fn publish_runtime_console_status(
         foliage_spatial_groups: render_stats.foliage_spatial_groups,
         foliage_unbatched_instances: render_stats.foliage_unbatched_instances,
         crowd_adjusted_agents: render_stats.crowd_adjusted_agents,
+        crowd_yielding_agents: render_stats.crowd_yielding_agents,
         save_exists: save.store.path().is_file(),
         save_path: save.store.path().display().to_string(),
         twitch_status: format!("{:?}", twitch.status),
@@ -26732,12 +26933,14 @@ fn load_input(
         agent.kind = saved.kind.clone();
         agent.archetype = saved.archetype.clone();
         agent.goal = AgentGoal::Wander;
+        agent.action_started = false;
         agent.spawn = position;
         agent.origin = position;
         agent.path.clear();
         agent.path_index = 0;
         agent.target = deterministic_wander_target(&world.generated, &agent.id, position);
         agent.action_cooldown_seconds = 0.0;
+        agent.action_started = false;
         location.0 = position;
         transform.translation = world_position;
         restored_ids.insert(saved.id.clone());
@@ -26778,6 +26981,7 @@ fn load_input(
                 path_index: 0,
                 target: deterministic_wander_target(&world.generated, &saved.id, position),
                 action_cooldown_seconds: 0.0,
+                action_started: false,
                 health_regen_accumulator: 0.0,
             },
             AgentLocomotion::default(),
@@ -26965,6 +27169,7 @@ fn report_frame_time_gate(
         actor_detail_budget = actor_scene_budget(),
         animation_detail_budget = animation_detail_budget(),
         crowd_adjusted = stats.crowd_adjusted_agents,
+        crowd_yielding = stats.crowd_yielding_agents,
         "steady-state frame-time gate"
     );
     if let Some(path) = std::env::var_os("STREAM_TOWN_PERFORMANCE_REPORT_PATH") {
@@ -26997,6 +27202,7 @@ fn report_frame_time_gate(
                 "actor_detail_budget": actor_scene_budget(),
                 "animation_detail_budget": animation_detail_budget(),
                 "crowd_adjusted_agents": stats.crowd_adjusted_agents,
+                "crowd_yielding_agents": stats.crowd_yielding_agents,
             });
             match serde_json::to_vec_pretty(&report)
                 .map_err(std::io::Error::other)
@@ -27797,6 +28003,7 @@ fn spawn_runtime_enemy(
             path_index: 0,
             target: deterministic_wander_target(world, &id, position),
             action_cooldown_seconds: 0.0,
+            action_started: false,
             health_regen_accumulator: 0.0,
         },
         AgentLocomotion::default(),
@@ -28511,6 +28718,7 @@ fn recruit_npcs(
                 path_index: 0,
                 target,
                 action_cooldown_seconds: 0.0,
+                action_started: false,
                 health_regen_accumulator: 0.0,
             },
             AgentLocomotion::default(),
@@ -28751,6 +28959,7 @@ fn process_injected_commands(
                                 path_index: 0,
                                 target,
                                 action_cooldown_seconds: 0.0,
+                                action_started: false,
                                 health_regen_accumulator: 0.0,
                             },
                             AgentLocomotion::default(),
@@ -33606,6 +33815,38 @@ mod tests {
             (action_cooldown(&content, &simulation, &actor_id, &AgentGoal::Deposit) - 2.5).abs()
                 <= f32::EPSILON
         );
+
+        let position = GridPos { x: 1, z: 1 };
+        let mut agent = Agent {
+            id: actor_id,
+            kind: ActorKind::Player,
+            archetype: StableId::new("archetype:deposit_timing").unwrap(),
+            goal: AgentGoal::Deposit,
+            spawn: position,
+            origin: position,
+            path: vec![position],
+            path_index: 1,
+            target: position,
+            action_cooldown_seconds: 0.0,
+            action_started: false,
+            health_regen_accumulator: 0.0,
+        };
+        assert_eq!(
+            arrived_action_phase(&mut agent, 2.5),
+            ArrivedActionPhase::Started
+        );
+        assert!(agent.action_started);
+        assert!((agent.action_cooldown_seconds - 2.5).abs() <= f32::EPSILON);
+        agent.action_cooldown_seconds = 0.1;
+        assert_eq!(
+            arrived_action_phase(&mut agent, 0.0),
+            ArrivedActionPhase::Waiting
+        );
+        agent.action_cooldown_seconds = 0.0;
+        assert_eq!(
+            arrived_action_phase(&mut agent, 0.0),
+            ArrivedActionPhase::Complete
+        );
     }
 
     #[test]
@@ -34155,6 +34396,7 @@ mod tests {
             path_index: 1,
             target: GridPos { x: 10, z: 10 },
             action_cooldown_seconds: 0.75,
+            action_started: true,
             health_regen_accumulator: 0.0,
         };
 
@@ -35334,7 +35576,7 @@ mod tests {
             .insert(resource.kind.clone(), capacity);
         let resource_amount = resource.amount;
 
-        let (goal, _) = next_agent_goal(
+        let (goal, target) = next_agent_goal(
             &simulation,
             &world,
             &config,
@@ -35342,7 +35584,11 @@ mod tests {
             &actor_id,
             resource.position,
         );
-        assert_eq!(goal, AgentGoal::Wander);
+        assert_eq!(goal, AgentGoal::WaitForStorage);
+        assert_eq!(
+            target,
+            town_hall_wait_target(&content, &simulation, &world, &config, resource.position,)
+        );
         assert!(
             complete_agent_goal(
                 &mut simulation,
@@ -38849,6 +39095,38 @@ mod tests {
         assert!((first[0] + first[1]).length() < 0.001);
         assert_eq!(first[2], Vec2::ZERO);
         assert!(first.iter().all(|offset| offset.length() <= 2.0 + 0.001));
+    }
+
+    #[test]
+    fn predictive_crowd_yielding_is_deterministic_and_preserves_right_of_way() {
+        let alpha = StableId::new("actor:alpha").unwrap();
+        let beta = StableId::new("actor:beta").unwrap();
+        let far = StableId::new("actor:far").unwrap();
+        let agents = vec![
+            (alpha.clone(), Vec2::new(-0.5, 0.0), Vec2::X),
+            (beta.clone(), Vec2::new(0.5, 0.0), Vec2::NEG_X),
+            (far.clone(), Vec2::new(0.0, 8.0), Vec2::X),
+        ];
+        let first = predictive_speed_factors(&agents, 0.5, 1.0, 0.18);
+        let second = predictive_speed_factors(&agents, 0.5, 1.0, 0.18);
+        assert_eq!(first, second);
+        assert!((first[&alpha] - 1.0).abs() <= f32::EPSILON);
+        assert!(first[&beta] < 1.0 && first[&beta] >= 0.18);
+        assert!((first[&far] - 1.0).abs() <= f32::EPSILON);
+
+        let follower = StableId::new("actor:follower").unwrap();
+        let leader = StableId::new("actor:leader").unwrap();
+        let following = predictive_speed_factors(
+            &[
+                (follower.clone(), Vec2::ZERO, Vec2::X),
+                (leader.clone(), Vec2::new(0.3, 0.0), Vec2::X * 0.5),
+            ],
+            0.25,
+            1.0,
+            0.18,
+        );
+        assert!(following[&follower] < 1.0);
+        assert!((following[&leader] - 1.0).abs() <= f32::EPSILON);
     }
 
     #[test]

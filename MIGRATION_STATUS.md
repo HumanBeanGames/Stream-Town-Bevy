@@ -817,6 +817,17 @@ mistaken for production-ready systems.
   station is revalidated on Unity's two-second cadence. Autonomous work,
   Twitch `!target`, and direct recruit orders share the same live cache. The
   authored 2.5-second inventory-deposit delay is also restored.
+- Agent actions now follow Unity's state cadence instead of mutating the world
+  on arrival and cooling down afterward. Each gather, farm, build, attack,
+  heal, and deposit action starts its authored animation/timer first and
+  invokes the simulation effect only when that timer expires. A carrier whose
+  personal inventory and town storage are both full walks to the Town Hall and
+  waits with the resource instead of abandoning its return loop. Movement now
+  adds deterministic predictive yielding for following, crossing, and head-on
+  agents ahead of the existing bounded local separation; stable IDs resolve
+  right-of-way without reciprocal deadlock. Both separation and yielding counts
+  are exposed in the external runtime console, and the 300-agent soak remains
+  below its acceptance budget.
 - Animated players now cast and receive shadows without the previous
   hierarchy-wide `NotShadowReceiver` workaround. Every Standard surface below
   the single shipping armature is promoted through a cached typed character
@@ -843,9 +854,8 @@ mistaken for production-ready systems.
   `PlayRoleActionAudio` emitters. Direct and nested layer/state-machine routing,
   conditioned entries, parent exits, masks, property curves, and the reachable
   emitters are converted and live.
-- Predictive congestion avoidance beyond deterministic local
-  crowd separation, any obscure advanced role/inventory interactions not yet
-  represented by the live worker/combat/healing/construction loops, and final source-diff closure for every
+- Any obscure advanced role/inventory interactions not yet represented by the
+  live worker/combat/healing/construction loops, and final source-diff closure for every
   reachable balance edge case. All nine shipping enemy combat archetypes, the
   weighted night camp spawner, raid waves/boss, retaliation, and prefab-specific
   target acquisition ranges are now live. The source audit

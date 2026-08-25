@@ -2428,10 +2428,12 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                     "{} / {}",
                     status.foliage_batches, status.foliage_spatial_groups
                 ));
-                ui.label("Fallback / separated");
+                ui.label("Fallback / separated / yielding");
                 ui.monospace(format!(
-                    "{} / {}",
-                    status.foliage_unbatched_instances, status.crowd_adjusted_agents
+                    "{} / {} / {}",
+                    status.foliage_unbatched_instances,
+                    status.crowd_adjusted_agents,
+                    status.crowd_yielding_agents
                 ));
                 ui.end_row();
                 ui.label("Twitch");

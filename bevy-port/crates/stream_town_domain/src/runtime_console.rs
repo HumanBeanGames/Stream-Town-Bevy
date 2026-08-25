@@ -108,6 +108,7 @@ pub struct RuntimeConsoleStatus {
     pub foliage_spatial_groups: usize,
     pub foliage_unbatched_instances: usize,
     pub crowd_adjusted_agents: usize,
+    pub crowd_yielding_agents: usize,
     pub save_exists: bool,
     pub save_path: String,
     pub twitch_status: String,
