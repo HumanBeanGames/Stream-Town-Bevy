@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONFIG_SCHEMA: u32 = 7;
+pub const CURRENT_CONFIG_SCHEMA: u32 = 8;
 pub const SHIPPING_FISH_GOD_REWARD_ID: &str = "5a760033-50b5-4e47-911b-d63993d2860c";
 pub const SHIPPING_SECONDS_PER_DAY: u32 = 3_600;
 
@@ -147,6 +147,58 @@ pub struct TwitchConfig {
     /// The ordinary `!praise` command remains available when this is `None`.
     #[serde(default = "shipping_fish_god_reward_id")]
     pub fish_god_reward_id: Option<String>,
+    /// Direct, in-process Twitch broadcast settings. The stream key is fetched
+    /// at runtime with a separately authorized broadcaster token and is never
+    /// serialized into this configuration.
+    #[serde(default)]
+    pub broadcast: BroadcastConfig,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BroadcastEncoderPreference {
+    Auto,
+    Nvidia,
+    Intel,
+    Amd,
+    MediaFoundation,
+    OpenH264,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BroadcastConfig {
+    /// Broadcast remains independently opt-in from chat connectivity.
+    pub enabled: bool,
+    /// Start publishing as soon as the game has a primary render target.
+    pub start_on_launch: bool,
+    pub width: u16,
+    pub height: u16,
+    pub frames_per_second: u8,
+    pub video_bitrate_kbps: u32,
+    pub audio_bitrate_kbps: u16,
+    pub encoder: BroadcastEncoderPreference,
+    /// Optional Twitch ingest name substring. Empty selects Twitch's first
+    /// recommended endpoint.
+    pub ingest: String,
+    /// Appends Twitch's bandwidth-test flag. This never goes live, but still
+    /// consumes network bandwidth and therefore requires an explicit setting.
+    pub bandwidth_test: bool,
+}
+
+impl Default for BroadcastConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start_on_launch: true,
+            width: 1_280,
+            height: 720,
+            frames_per_second: 30,
+            video_bitrate_kbps: 3_000,
+            audio_bitrate_kbps: 160,
+            encoder: BroadcastEncoderPreference::Auto,
+            ingest: String::new(),
+            bandwidth_test: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -173,6 +225,14 @@ pub enum ConfigError {
     TwitchGameMasterId,
     #[error("the Twitch channel-point reward ID must be a UUID or omitted")]
     TwitchRewardId,
+    #[error("direct Twitch broadcast dimensions must be even and between 320x180 and 1920x1080")]
+    TwitchBroadcastDimensions,
+    #[error("direct Twitch broadcast frame rate must be 30 or 60 FPS")]
+    TwitchBroadcastFrameRate,
+    #[error("direct Twitch broadcast video bitrate must be between 500 and 6000 Kbps")]
+    TwitchBroadcastVideoBitrate,
+    #[error("direct Twitch broadcast audio bitrate must be between 64 and 160 Kbps")]
+    TwitchBroadcastAudioBitrate,
     #[error("starting resource {resource} exceeds capacity {capacity}")]
     StartingResourceCapacity { resource: StableId, capacity: u32 },
 }
@@ -227,6 +287,7 @@ impl Default for GameConfig {
                 require_broadcaster_connect: true,
                 game_master_ids: BTreeSet::new(),
                 fish_god_reward_id: shipping_fish_god_reward_id(),
+                broadcast: BroadcastConfig::default(),
             },
         }
     }
@@ -243,7 +304,8 @@ impl GameConfig {
     /// Schema 5 used the Bevy prototype's oversized 12-metre cells; untouched
     /// copies are migrated to the spatial scale authored by the Unity project.
     /// Schema 7 adds a configurable Channel Points reward ID; schema-6 files
-    /// receive the shipping Unity reward ID through the serde default.
+    /// receive the shipping Unity reward ID through the serde default. Schema
+    /// 8 adds direct broadcasting, disabled by default for existing installs.
     pub fn upgrade(mut self) -> Result<Self, ConfigError> {
         if self.schema_version == 4 {
             self.schema_version = 5;
@@ -265,6 +327,9 @@ impl GameConfig {
             self.schema_version = CURRENT_CONFIG_SCHEMA;
         }
         if self.schema_version == 6 {
+            self.schema_version = 7;
+        }
+        if self.schema_version == 7 {
             self.schema_version = CURRENT_CONFIG_SCHEMA;
         }
         self.validate()?;
@@ -316,7 +381,9 @@ impl GameConfig {
                 });
             }
         }
-        if self.twitch.enabled && self.twitch.client_id.trim().is_empty() {
+        if (self.twitch.enabled || self.twitch.broadcast.enabled)
+            && self.twitch.client_id.trim().is_empty()
+        {
             return Err(ConfigError::TwitchClientId);
         }
         if !valid_twitch_login(&self.twitch.bot_login)
@@ -339,6 +406,25 @@ impl GameConfig {
             .is_some_and(|id| !valid_uuid(id))
         {
             return Err(ConfigError::TwitchRewardId);
+        }
+        let broadcast = &self.twitch.broadcast;
+        if broadcast.width < 320
+            || broadcast.width > 1_920
+            || broadcast.height < 180
+            || broadcast.height > 1_080
+            || !broadcast.width.is_multiple_of(2)
+            || !broadcast.height.is_multiple_of(2)
+        {
+            return Err(ConfigError::TwitchBroadcastDimensions);
+        }
+        if !matches!(broadcast.frames_per_second, 30 | 60) {
+            return Err(ConfigError::TwitchBroadcastFrameRate);
+        }
+        if !(500..=6_000).contains(&broadcast.video_bitrate_kbps) {
+            return Err(ConfigError::TwitchBroadcastVideoBitrate);
+        }
+        if !(64..=160).contains(&broadcast.audio_bitrate_kbps) {
+            return Err(ConfigError::TwitchBroadcastAudioBitrate);
         }
         Ok(())
     }
@@ -523,5 +609,74 @@ mod tests {
         assert_eq!(config.validate(), Err(ConfigError::TwitchRewardId));
         config.twitch.fish_god_reward_id = None;
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn schema_seven_config_gains_disabled_direct_broadcast_defaults() {
+        #[derive(Serialize)]
+        struct SchemaSevenTwitch<'a> {
+            enabled: bool,
+            client_id: &'a str,
+            bot_login: &'a str,
+            channel_login: &'a str,
+            require_broadcaster_connect: bool,
+            game_master_ids: &'a BTreeSet<String>,
+            fish_god_reward_id: &'a Option<String>,
+        }
+
+        #[derive(Serialize)]
+        struct SchemaSevenConfig<'a> {
+            schema_version: u32,
+            window: &'a WindowConfig,
+            world: &'a WorldGenConfig,
+            time: &'a TimeCycleConfig,
+            gameplay: &'a GameplayConfig,
+            twitch: SchemaSevenTwitch<'a>,
+        }
+
+        let config = GameConfig::default();
+        let encoded = ron::to_string(&SchemaSevenConfig {
+            schema_version: 7,
+            window: &config.window,
+            world: &config.world,
+            time: &config.time,
+            gameplay: &config.gameplay,
+            twitch: SchemaSevenTwitch {
+                enabled: config.twitch.enabled,
+                client_id: &config.twitch.client_id,
+                bot_login: &config.twitch.bot_login,
+                channel_login: &config.twitch.channel_login,
+                require_broadcaster_connect: config.twitch.require_broadcaster_connect,
+                game_master_ids: &config.twitch.game_master_ids,
+                fish_god_reward_id: &config.twitch.fish_god_reward_id,
+            },
+        })
+        .unwrap();
+        let upgraded = ron::from_str::<GameConfig>(&encoded)
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        assert_eq!(upgraded.schema_version, CURRENT_CONFIG_SCHEMA);
+        assert_eq!(upgraded.twitch.broadcast, BroadcastConfig::default());
+    }
+
+    #[test]
+    fn direct_broadcast_settings_are_strictly_validated() {
+        let mut config = GameConfig::default();
+        config.twitch.broadcast.enabled = true;
+        assert_eq!(config.validate(), Err(ConfigError::TwitchClientId));
+        config.twitch.client_id = "public-client-id".to_owned();
+        assert!(config.validate().is_ok());
+        config.twitch.broadcast.width = 1_279;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::TwitchBroadcastDimensions)
+        );
+        config.twitch.broadcast.width = 1_280;
+        config.twitch.broadcast.frames_per_second = 24;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigError::TwitchBroadcastFrameRate)
+        );
     }
 }

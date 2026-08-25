@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+pub mod direct_broadcast;
 mod tidal_music;
 pub mod twitch;
 mod unity_color_filter;
@@ -2959,6 +2961,8 @@ pub struct StreamTownGamePlugin;
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(UnityColorFilterPlugin);
+        #[cfg(target_os = "windows")]
+        app.add_plugins(direct_broadcast::DirectTwitchBroadcastPlugin);
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
         let presented_frames = PresentedRenderFrames::new(render_schedule_available);
         let gpu_readiness = GpuReadinessProbe::default();
@@ -25812,6 +25816,7 @@ fn publish_runtime_console_status(
     render_stats: Res<WorldRenderStats>,
     save: Res<SaveRuntime>,
     twitch: Res<TwitchConnection>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
     diagnostics: Option<Res<DiagnosticsStore>>,
 ) {
     if !runtime.enabled {
@@ -25890,6 +25895,26 @@ fn publish_runtime_console_status(
         save_exists: save.store.path().is_file(),
         save_path: save.store.path().display().to_string(),
         twitch_status: format!("{:?}", twitch.status),
+        direct_broadcast_status: {
+            #[cfg(target_os = "windows")]
+            {
+                let snapshot = broadcast.snapshot();
+                format!(
+                    "{:?}; encoder={}; ingest={}; video={}/{} dropped={}; audio={}",
+                    snapshot.phase,
+                    snapshot.encoder.as_deref().unwrap_or("pending"),
+                    snapshot.ingest.as_deref().unwrap_or("pending"),
+                    snapshot.encoded_video_frames,
+                    snapshot.captured_video_frames,
+                    snapshot.dropped_video_frames,
+                    snapshot.encoded_audio_frames,
+                )
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                "Unsupported on this platform".to_owned()
+            }
+        },
         last_processed_sequence: runtime.last_processed_sequence,
         last_result: runtime.last_result.clone(),
     };

@@ -103,8 +103,10 @@ status only; Twitch OAuth tokens remain exclusively in the operating-system
 credential vault. Normal game launches do not read or write console files.
 
 The Windows packager builds optimized game and tools executables, bundles the
-validated runtime assets, README, and GPL license, validates safe archive paths
-and required files, and atomically writes
+validated runtime assets, README, GPL license, replaceable LGPL
+FFmpeg/OpenH264 DLLs, exact corresponding source archives, vcpkg
+recipes/patches, SPDX metadata, and relinking instructions, validates safe
+archive paths and required files, and atomically writes
 `dist/stream-town-windows-x86_64.zip`. The tools Validation tab can launch the
 same repository validator and release-packaging jobs. CI publishes the validated
 ZIP as a branch artifact after the full test job passes.
@@ -231,6 +233,15 @@ the IRC connection after token rotation, and keeps the Unity broadcaster
 `!connect` safety gate. The Twitch tab can verify a real channel join, resolve
 operator logins to stable numeric IDs, and capture a live Channel Points reward
 ID. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
+On Windows, the same Twitch tab can separately authorize the configured channel
+with `channel:read:stream_key` and enable direct broadcasting. Bevy render
+readback feeds a bounded in-process H.264 encoder, WASAPI application loopback
+captures only Stream Town's Bevy and Bevy Tidal audio, and FFmpeg's FLV muxer
+publishes directly to Twitch RTMP. No OBS installation, desktop capture, virtual
+audio device, `ffmpeg.exe` subprocess, serialized stream key, or unbounded frame
+queue is involved. Automatic reconnect and runtime-console counters expose the
+encoder, ingest, video drops, and audio progress. The independently stored
+broadcaster token and fetched stream key are always redacted.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.

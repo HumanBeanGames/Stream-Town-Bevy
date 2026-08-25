@@ -24,9 +24,12 @@ const DEVICE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/device";
 const TOKEN_ENDPOINT: &str = "https://id.twitch.tv/oauth2/token";
 const VALIDATE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/validate";
 const USERS_ENDPOINT: &str = "https://api.twitch.tv/helix/users";
+const STREAM_KEY_ENDPOINT: &str = "https://api.twitch.tv/helix/streams/key";
+const INGESTS_ENDPOINT: &str = "https://ingest.twitch.tv/ingests";
 const VAULT_SERVICE: &str = "stream-town-twitch";
 const TOKEN_REFRESH_WINDOW_SECONDS: u64 = 90 * 60;
 pub const REQUIRED_SCOPES: [&str; 2] = ["chat:read", "chat:edit"];
+pub const BROADCAST_SCOPES: [&str; 1] = ["channel:read:stream_key"];
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct StoredOAuthToken {
@@ -106,6 +109,47 @@ struct UsersResponse {
 }
 
 #[derive(Deserialize)]
+struct StreamKeyResponse {
+    data: Vec<StreamKeyData>,
+}
+
+#[derive(Deserialize)]
+struct StreamKeyData {
+    stream_key: String,
+}
+
+#[derive(Clone)]
+pub struct TwitchStreamKey(String);
+
+impl fmt::Debug for TwitchStreamKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TwitchStreamKey([redacted])")
+    }
+}
+
+impl TwitchStreamKey {
+    #[must_use]
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct TwitchIngest {
+    pub name: String,
+    pub url_template: String,
+    pub priority: u32,
+    pub availability: f32,
+    #[serde(rename = "default")]
+    pub is_default: bool,
+}
+
+#[derive(Deserialize)]
+struct IngestsResponse {
+    ingests: Vec<TwitchIngest>,
+}
+
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     #[serde(default)]
@@ -123,17 +167,35 @@ struct OAuthErrorResponse {
 #[derive(Clone)]
 pub struct OAuthClient {
     client_id: String,
+    required_scopes: Vec<String>,
     http: reqwest::Client,
 }
 
 impl OAuthClient {
     pub fn new(client_id: impl Into<String>) -> Result<Self> {
+        Self::new_with_scopes(client_id, REQUIRED_SCOPES)
+    }
+
+    pub fn broadcaster(client_id: impl Into<String>) -> Result<Self> {
+        Self::new_with_scopes(client_id, BROADCAST_SCOPES)
+    }
+
+    pub fn new_with_scopes<I, S>(client_id: impl Into<String>, scopes: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         let client_id = client_id.into();
         if client_id.trim().is_empty() {
             bail!("Twitch public client ID is empty");
         }
+        let required_scopes = scopes.into_iter().map(Into::into).collect::<Vec<_>>();
+        if required_scopes.is_empty() {
+            bail!("Twitch OAuth requires at least one scope");
+        }
         Ok(Self {
             client_id,
+            required_scopes,
             http: reqwest::Client::builder()
                 .user_agent("Stream-Town-Bevy/0.1")
                 .build()
@@ -142,7 +204,7 @@ impl OAuthClient {
     }
 
     pub async fn begin_device_authorization(&self) -> Result<DeviceAuthorization> {
-        let scopes = REQUIRED_SCOPES.join(" ");
+        let scopes = self.required_scopes.join(" ");
         self.http
             .post(DEVICE_ENDPOINT)
             .form(&[("client_id", self.client_id.as_str()), ("scopes", &scopes)])
@@ -167,7 +229,7 @@ impl OAuthClient {
                 bail!("Twitch device authorization expired");
             }
             tokio::time::sleep(interval).await;
-            let scopes = REQUIRED_SCOPES.join(" ");
+            let scopes = self.required_scopes.join(" ");
             let response = self
                 .http
                 .post(TOKEN_ENDPOINT)
@@ -235,7 +297,7 @@ impl OAuthClient {
         if validation.client_id != self.client_id {
             bail!("stored Twitch token belongs to a different application");
         }
-        for required in REQUIRED_SCOPES {
+        for required in &self.required_scopes {
             if !validation.scopes.iter().any(|scope| scope == required) {
                 bail!("stored Twitch token is missing scope {required}");
             }
@@ -291,6 +353,61 @@ impl OAuthClient {
             .next()
             .with_context(|| format!("Twitch user '{login}' does not exist"))
     }
+
+    pub async fn stream_key(
+        &self,
+        token: &StoredOAuthToken,
+        broadcaster_id: &str,
+    ) -> Result<TwitchStreamKey> {
+        if broadcaster_id.is_empty() || !broadcaster_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("Twitch broadcaster ID is invalid");
+        }
+        let response: StreamKeyResponse = self
+            .http
+            .get(STREAM_KEY_ENDPOINT)
+            .query(&[("broadcaster_id", broadcaster_id)])
+            .header("Client-Id", &self.client_id)
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .context("Twitch stream-key lookup failed")?
+            .error_for_status()
+            .context("Twitch rejected the stream-key lookup")?
+            .json()
+            .await
+            .context("Twitch returned an invalid stream-key response")?;
+        let key = response
+            .data
+            .into_iter()
+            .next()
+            .context("Twitch returned no stream key for the authorized broadcaster")?
+            .stream_key;
+        if key.trim().is_empty() {
+            bail!("Twitch returned an empty stream key");
+        }
+        Ok(TwitchStreamKey(key))
+    }
+
+    pub async fn ingests(&self) -> Result<Vec<TwitchIngest>> {
+        let mut ingests = self
+            .http
+            .get(INGESTS_ENDPOINT)
+            .send()
+            .await
+            .context("Twitch ingest lookup failed")?
+            .error_for_status()
+            .context("Twitch rejected the ingest lookup")?
+            .json::<IngestsResponse>()
+            .await
+            .context("Twitch returned an invalid ingest response")?
+            .ingests;
+        ingests.retain(|ingest| ingest.url_template.contains("{stream_key}"));
+        ingests.sort_by_key(|ingest| (!ingest.is_default, ingest.priority));
+        if ingests.is_empty() {
+            bail!("Twitch returned no usable RTMP ingest endpoints");
+        }
+        Ok(ingests)
+    }
 }
 
 fn token_from_response(
@@ -328,6 +445,13 @@ impl CredentialVault {
     pub fn new(client_id: &str, bot_login: &str) -> Self {
         Self {
             username: format!("{client_id}:{bot_login}"),
+        }
+    }
+
+    #[must_use]
+    pub fn broadcaster(client_id: &str, channel_login: &str) -> Self {
+        Self {
+            username: format!("broadcast:{client_id}:{channel_login}"),
         }
     }
 
@@ -616,6 +740,17 @@ mod tests {
         assert!(!debug.contains("secret-access"));
         assert!(!debug.contains("secret-refresh"));
         assert!(debug.contains("[redacted]"));
+        let stream_key = TwitchStreamKey("live_secret_stream_key".to_owned());
+        assert!(!format!("{stream_key:?}").contains("live_secret_stream_key"));
+    }
+
+    #[test]
+    fn broadcaster_oauth_uses_only_the_stream_key_scope() {
+        let client = OAuthClient::broadcaster("public-client-id").unwrap();
+        assert_eq!(
+            client.required_scopes,
+            BROADCAST_SCOPES.map(ToString::to_string)
+        );
     }
 
     #[test]

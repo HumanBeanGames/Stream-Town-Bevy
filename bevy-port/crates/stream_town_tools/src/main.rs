@@ -15,12 +15,15 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
-    BuildingHealthDisplayMode, ChatCommand, ContentCatalog, DisplayMode, FoliageHabitat,
-    FoliageLayerDef, GameConfig, GeneratedWorld, GridPos, NameDisplayMode, PlayerSettings,
-    PlayerSettingsStore, PostProcessAntiAliasing, PresentationCatalog, RoleDef, RoleEquipmentDef,
-    RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus, RuntimeConsoleStore,
-    StableId, TechGroup, TechNode, TechnologyGraphLayout,
+    BroadcastEncoderPreference, BuildingHealthDisplayMode, ChatCommand, ContentCatalog,
+    DisplayMode, FoliageHabitat, FoliageLayerDef, GameConfig, GeneratedWorld, GridPos,
+    NameDisplayMode, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
+    PresentationCatalog, RoleDef, RoleEquipmentDef, RuntimeConsoleAction, RuntimeConsoleRequest,
+    RuntimeConsoleStatus, RuntimeConsoleStore, StableId, TechGroup, TechNode,
+    TechnologyGraphLayout,
 };
+#[cfg(target_os = "windows")]
+use stream_town_game::direct_broadcast::{BroadcastPrerequisites, inspect_broadcast_prerequisites};
 use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
     TwitchStatus, TwitchTransport, TwitchUserIdentity,
@@ -114,6 +117,7 @@ struct ToolState {
     twitch_auth_events: Option<Arc<Mutex<mpsc::Receiver<TwitchToolEvent>>>>,
     twitch_device: Option<DeviceAuthorization>,
     twitch_validation: Option<TokenValidation>,
+    twitch_broadcast_validation: Option<TokenValidation>,
     twitch_channel_identity: Option<TwitchUserIdentity>,
     twitch_irc_verified: bool,
     game_master_ids: String,
@@ -139,14 +143,21 @@ struct AuthoringSnapshot {
 enum TwitchToolEvent {
     Device(DeviceAuthorization),
     Authorized(TokenValidation),
+    BroadcastAuthorized(TokenValidation),
     Progress(String),
     Diagnostic {
         validation: TokenValidation,
         channel: TwitchUserIdentity,
     },
+    BroadcastDiagnostic {
+        validation: TokenValidation,
+        ingest_count: usize,
+        prerequisites: BroadcastPrerequisites,
+    },
     GameMasterResolved(TwitchUserIdentity),
     RewardCaptured(String),
     Cleared,
+    BroadcastCleared,
     Error(String),
 }
 
@@ -303,6 +314,7 @@ impl Default for ToolState {
             twitch_auth_events: None,
             twitch_device: None,
             twitch_validation: None,
+            twitch_broadcast_validation: None,
             twitch_channel_identity: None,
             twitch_irc_verified: false,
             game_master_ids,
@@ -2405,12 +2417,17 @@ fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 ui.end_row();
                 ui.label("Twitch");
                 ui.monospace(&status.twitch_status);
+                ui.label("Direct broadcast");
+                ui.monospace(&status.direct_broadcast_status);
+                ui.end_row();
                 ui.label("Save");
                 ui.monospace(if status.save_exists {
                     "Available"
                 } else {
                     "Missing"
                 });
+                ui.label("");
+                ui.label("");
                 ui.end_row();
             });
         ui.label(format!("Last result: {}", status.last_result));
@@ -2741,10 +2758,157 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             "Authenticated IRC connection and channel join verified.",
         );
     }
+
+    ui.separator();
+    ui.heading("Direct Twitch broadcast (Windows)");
+    ui.label("The game captures its own Bevy render target and process audio, then publishes H.264/AAC through shared LGPL FFmpeg libraries. It does not launch FFmpeg, capture the desktop, or require OBS.");
+    ui.checkbox(
+        &mut state.config.twitch.broadcast.enabled,
+        "Enable direct broadcast",
+    );
+    ui.checkbox(
+        &mut state.config.twitch.broadcast.start_on_launch,
+        "Start when the game launches",
+    );
+    ui.horizontal(|ui| {
+        ui.label("Output");
+        ui.add(
+            egui::DragValue::new(&mut state.config.twitch.broadcast.width)
+                .range(320..=1_920)
+                .suffix(" px"),
+        );
+        ui.label("×");
+        ui.add(
+            egui::DragValue::new(&mut state.config.twitch.broadcast.height)
+                .range(180..=1_080)
+                .suffix(" px"),
+        );
+        egui::ComboBox::from_id_salt("broadcast-fps")
+            .selected_text(format!(
+                "{} FPS",
+                state.config.twitch.broadcast.frames_per_second
+            ))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut state.config.twitch.broadcast.frames_per_second,
+                    30,
+                    "30 FPS",
+                );
+                ui.selectable_value(
+                    &mut state.config.twitch.broadcast.frames_per_second,
+                    60,
+                    "60 FPS",
+                );
+            });
+    });
+    ui.horizontal(|ui| {
+        ui.label("Video bitrate");
+        ui.add(
+            egui::DragValue::new(&mut state.config.twitch.broadcast.video_bitrate_kbps)
+                .range(500..=6_000)
+                .suffix(" Kbps"),
+        );
+        ui.label("Audio bitrate");
+        ui.add(
+            egui::DragValue::new(&mut state.config.twitch.broadcast.audio_bitrate_kbps)
+                .range(64..=160)
+                .suffix(" Kbps"),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("H.264 encoder");
+        egui::ComboBox::from_id_salt("broadcast-encoder")
+            .selected_text(broadcast_encoder_label(
+                state.config.twitch.broadcast.encoder,
+            ))
+            .show_ui(ui, |ui| {
+                for encoder in [
+                    BroadcastEncoderPreference::Auto,
+                    BroadcastEncoderPreference::Nvidia,
+                    BroadcastEncoderPreference::Intel,
+                    BroadcastEncoderPreference::Amd,
+                    BroadcastEncoderPreference::MediaFoundation,
+                    BroadcastEncoderPreference::OpenH264,
+                ] {
+                    ui.selectable_value(
+                        &mut state.config.twitch.broadcast.encoder,
+                        encoder,
+                        broadcast_encoder_label(encoder),
+                    );
+                }
+            });
+        ui.label("Preferred ingest");
+        ui.text_edit_singleline(&mut state.config.twitch.broadcast.ingest)
+            .on_hover_text(
+                "Optional name substring such as Sydney; empty uses Twitch's default ingest",
+            );
+    });
+    ui.checkbox(
+        &mut state.config.twitch.broadcast.bandwidth_test,
+        "Bandwidth-test mode (does not go live)",
+    );
+    if state.config.twitch.broadcast.bandwidth_test {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "Bandwidth-test mode still sends the configured bitrate to Twitch. Turn it off before a real broadcast.",
+        );
+    }
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Authorize broadcaster"),
+            )
+            .on_hover_text(
+                "Requests only channel:read:stream_key for the configured channel account",
+            )
+            .clicked()
+        {
+            start_twitch_broadcast_authorization(state);
+        }
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Test broadcast prerequisites"),
+            )
+            .clicked()
+        {
+            start_twitch_broadcast_diagnostic(state);
+        }
+        if ui
+            .add_enabled(
+                !busy && !state.config.twitch.client_id.trim().is_empty(),
+                egui::Button::new("Forget broadcaster token"),
+            )
+            .clicked()
+        {
+            start_twitch_broadcast_clear(state);
+        }
+    });
+    if let Some(validation) = &state.twitch_broadcast_validation {
+        ui.colored_label(
+            egui::Color32::LIGHT_GREEN,
+            format!(
+                "Broadcaster '{}' is authorized (user {}, token valid for {} seconds).",
+                validation.login, validation.user_id, validation.expires_in
+            ),
+        );
+    }
     ui.colored_label(
         egui::Color32::LIGHT_BLUE,
-        "No client secret or OAuth credential is stored in repository assets.",
+        "No client secret, OAuth credential, or stream key is stored in repository assets.",
     );
+}
+
+const fn broadcast_encoder_label(encoder: BroadcastEncoderPreference) -> &'static str {
+    match encoder {
+        BroadcastEncoderPreference::Auto => "Automatic",
+        BroadcastEncoderPreference::Nvidia => "NVIDIA NVENC",
+        BroadcastEncoderPreference::Intel => "Intel Quick Sync",
+        BroadcastEncoderPreference::Amd => "AMD AMF",
+        BroadcastEncoderPreference::MediaFoundation => "Windows Media Foundation",
+        BroadcastEncoderPreference::OpenH264 => "OpenH264 (CPU)",
+    }
 }
 
 fn poll_twitch_tool_events(state: &mut ToolState) {
@@ -2772,6 +2936,15 @@ fn poll_twitch_tool_events(state: &mut ToolState) {
                 state.twitch_device = None;
                 finished = true;
             }
+            TwitchToolEvent::BroadcastAuthorized(validation) => {
+                state.status = format!(
+                    "Authorized and securely stored Twitch broadcaster '{}'",
+                    validation.login
+                );
+                state.twitch_broadcast_validation = Some(validation);
+                state.twitch_device = None;
+                finished = true;
+            }
             TwitchToolEvent::Progress(message) => {
                 state.status = message;
             }
@@ -2786,6 +2959,26 @@ fn poll_twitch_tool_events(state: &mut ToolState) {
                 state.twitch_validation = Some(validation);
                 state.twitch_channel_identity = Some(channel);
                 state.twitch_irc_verified = true;
+                finished = true;
+            }
+            TwitchToolEvent::BroadcastDiagnostic {
+                validation,
+                ingest_count,
+                prerequisites,
+            } => {
+                state.status = format!(
+                    "Direct broadcast ready for '{}': {ingest_count} Twitch ingests; selected encoder: {}; available: {}; process audio: {}",
+                    validation.login,
+                    prerequisites.selected_encoder,
+                    prerequisites.available_encoders.join(", "),
+                    if prerequisites.process_audio_capture_available {
+                        "ready"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                state.twitch_broadcast_validation = Some(validation);
+                state.twitch_device = None;
                 finished = true;
             }
             TwitchToolEvent::GameMasterResolved(identity) => {
@@ -2816,6 +3009,13 @@ fn poll_twitch_tool_events(state: &mut ToolState) {
                 state.twitch_validation = None;
                 state.twitch_channel_identity = None;
                 state.twitch_irc_verified = false;
+                state.twitch_device = None;
+                finished = true;
+            }
+            TwitchToolEvent::BroadcastCleared => {
+                "Removed the Twitch broadcaster token from the OS credential vault"
+                    .clone_into(&mut state.status);
+                state.twitch_broadcast_validation = None;
                 state.twitch_device = None;
                 finished = true;
             }
@@ -2880,6 +3080,104 @@ fn start_twitch_authorization(state: &mut ToolState) {
         });
     if let Err(error) = worker {
         state.status = format!("Could not start Twitch authorization worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn start_twitch_broadcast_authorization(state: &mut ToolState) {
+    state.twitch_device = None;
+    state.twitch_broadcast_validation = None;
+    "Starting Twitch broadcaster authorization...".clone_into(&mut state.status);
+    let config = state.config.twitch.clone();
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-broadcast-oauth".to_owned())
+        .spawn(move || {
+            let outcome = (|| -> anyhow::Result<()> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(async {
+                    let oauth = OAuthClient::broadcaster(config.client_id.clone())?;
+                    let authorization = oauth.begin_device_authorization().await?;
+                    sender
+                        .send(TwitchToolEvent::Device(authorization.clone()))
+                        .map_err(|_| anyhow::anyhow!("Twitch setup window closed"))?;
+                    let token = oauth.complete_device_authorization(&authorization).await?;
+                    let validation = oauth.validate(&token).await?;
+                    anyhow::ensure!(
+                        validation.login == config.channel_login,
+                        "authorized account '{}' does not match configured channel '{}'",
+                        validation.login,
+                        config.channel_login
+                    );
+                    CredentialVault::broadcaster(&config.client_id, &config.channel_login)
+                        .save(&token)?;
+                    sender
+                        .send(TwitchToolEvent::BroadcastAuthorized(validation))
+                        .map_err(|_| anyhow::anyhow!("Twitch setup window closed"))?;
+                    Ok(())
+                })
+            })();
+            if let Err(error) = outcome {
+                let _ = sender.send(TwitchToolEvent::Error(format!("{error:#}")));
+            }
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start Twitch broadcaster authorization: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn start_twitch_broadcast_diagnostic(state: &mut ToolState) {
+    "Validating broadcaster authorization, Twitch ingest access, shared FFmpeg, and process audio..."
+        .clone_into(&mut state.status);
+    let config = state.config.twitch.clone();
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-broadcast-check".to_owned())
+        .spawn(move || {
+            let outcome =
+                (|| -> anyhow::Result<(TokenValidation, usize, BroadcastPrerequisites)> {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    let (validation, ingest_count) = runtime.block_on(async {
+                        let oauth = OAuthClient::broadcaster(config.client_id.clone())?;
+                        let vault =
+                            CredentialVault::broadcaster(&config.client_id, &config.channel_login);
+                        let (token, validation) = oauth.load_validated_token(&vault).await?;
+                        anyhow::ensure!(
+                            validation.login == config.channel_login,
+                            "stored broadcaster token belongs to '{}', expected '{}'",
+                            validation.login,
+                            config.channel_login
+                        );
+                        // Confirm Helix can return a non-empty key without exposing or persisting it.
+                        let stream_key = oauth.stream_key(&token, &validation.user_id).await?;
+                        drop(stream_key);
+                        let ingests = oauth.ingests().await?;
+                        Ok::<_, anyhow::Error>((validation, ingests.len()))
+                    })?;
+                    let prerequisites = inspect_broadcast_prerequisites(&config.broadcast)?;
+                    anyhow::ensure!(
+                        prerequisites.process_audio_capture_available,
+                        "Windows process-scoped audio capture is unavailable"
+                    );
+                    Ok((validation, ingest_count, prerequisites))
+                })();
+            let event = outcome.map_or_else(
+                |error| TwitchToolEvent::Error(format!("{error:#}")),
+                |(validation, ingest_count, prerequisites)| TwitchToolEvent::BroadcastDiagnostic {
+                    validation,
+                    ingest_count,
+                    prerequisites,
+                },
+            );
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not start direct-broadcast diagnostic: {error}");
         state.twitch_auth_events = None;
     }
 }
@@ -3061,6 +3359,28 @@ fn start_twitch_clear(state: &mut ToolState) {
         });
     if let Err(error) = worker {
         state.status = format!("Could not start Twitch credential cleanup worker: {error}");
+        state.twitch_auth_events = None;
+    }
+}
+
+fn start_twitch_broadcast_clear(state: &mut ToolState) {
+    "Removing Twitch broadcaster token from the OS credential vault..."
+        .clone_into(&mut state.status);
+    let config = state.config.twitch.clone();
+    let sender = twitch_event_channel(state);
+    let worker = thread::Builder::new()
+        .name("stream-town-tools-broadcast-clear".to_owned())
+        .spawn(move || {
+            let event = CredentialVault::broadcaster(&config.client_id, &config.channel_login)
+                .clear()
+                .map_or_else(
+                    |error| TwitchToolEvent::Error(format!("{error:#}")),
+                    |()| TwitchToolEvent::BroadcastCleared,
+                );
+            let _ = sender.send(event);
+        });
+    if let Err(error) = worker {
+        state.status = format!("Could not remove Twitch broadcaster credentials: {error}");
         state.twitch_auth_events = None;
     }
 }

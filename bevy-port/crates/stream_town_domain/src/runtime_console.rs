@@ -112,6 +112,7 @@ pub struct RuntimeConsoleStatus {
     pub save_exists: bool,
     pub save_path: String,
     pub twitch_status: String,
+    pub direct_broadcast_status: String,
     pub last_processed_sequence: u64,
     pub last_result: String,
 }

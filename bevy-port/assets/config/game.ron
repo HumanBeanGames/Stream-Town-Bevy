@@ -1,5 +1,5 @@
 (
-    schema_version: 7,
+    schema_version: 8,
     window: (
         title: "Stream Town — Bevy Migration",
         width: 1920,
@@ -48,5 +48,17 @@
         require_broadcaster_connect: true,
         game_master_ids: [],
         fish_god_reward_id: Some("5a760033-50b5-4e47-911b-d63993d2860c"),
+        broadcast: (
+            enabled: false,
+            start_on_launch: true,
+            width: 1280,
+            height: 720,
+            frames_per_second: 30,
+            video_bitrate_kbps: 3000,
+            audio_bitrate_kbps: 160,
+            encoder: Auto,
+            ingest: "",
+            bandwidth_test: false,
+        ),
     ),
 )

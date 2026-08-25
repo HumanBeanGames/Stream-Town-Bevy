@@ -21,6 +21,10 @@ stream_town_domain = { path = "../stream_town_domain" }
 tokio.workspace = true
 twitch-irc.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+ffmpeg-next.workspace = true
+wasapi.workspace = true
+
 [dev-dependencies]
 sha2.workspace = true
 tempfile.workspace = true

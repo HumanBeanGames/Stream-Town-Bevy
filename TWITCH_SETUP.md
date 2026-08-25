@@ -6,7 +6,10 @@ Stream Town uses three deliberately separate identities:
 - **Chat bot:** `HumanBeanBot`
 - **Twitch application:** the OAuth registration that lets Stream Town act as the bot
 
-OBS signs in as the broadcaster. Stream Town authorizes and signs in as the bot. Never give the bot token to OBS and never authorize the Stream Town bot while signed in as the broadcaster.
+Stream Town authorizes the chat bot for IRC and independently authorizes the
+broadcaster for stream-key lookup. The game captures, encodes, and publishes its
+own output; OBS is not required. Never authorize the bot grant while signed in
+as the broadcaster, or the broadcaster grant while signed in as the bot.
 
 ## 1. Secure the old credentials
 
@@ -68,29 +71,92 @@ debug injection bypasses the list in the same way Unity's session bridge did.
 
 The checked-in default retains the reward ID recovered from the Unity project, but the capture workflow is authoritative for the live channel. If Channel Points are unavailable for the channel, clear the reward ID; `!praise` remains usable.
 
-## 6. Configure OBS
+## 6. Authorize direct broadcasting
 
-1. In OBS, run **Tools > Auto-Configuration Wizard** and choose streaming as the priority.
-2. Open **Settings > Stream**, select **Twitch**, and use **Connect Account**.
-3. Sign in as `HumanBeanGames`, not `HumanBeanBot`.
-4. Create a gameplay scene and add **Game Capture** for the Stream Town game window. Use Window Capture only if Game Capture is incompatible.
-5. Confirm that Desktop Audio contains game audio and Mic/Aux contains the intended microphone. Make a local recording before going live.
-6. Add separate Starting, Gameplay, BRB, and Ending scenes as needed.
-7. Run a Twitch bandwidth test or a short private/test broadcast, watch OBS's dropped-frame and encoder-overload counters, and then disable test mode before the real stream.
+1. Install/run a packaged Windows build, which already contains the required
+   shared FFmpeg/OpenH264 DLLs. Developers building from source must complete
+   `bevy-port/third_party/ffmpeg/README.md` first.
+2. Open Stream Town Tools > **Twitch** and confirm the Client ID and channel
+   login are correct.
+3. Click **Authorize broadcaster**. On Twitch's activation page, sign in as
+   `HumanBeanGames`, not `HumanBeanBot`, and approve only
+   `channel:read:stream_key`.
+4. Click **Test broadcast prerequisites**. Do not continue until the tool
+   confirms the broadcaster, Twitch ingest list, at least one H.264 encoder, and
+   process-scoped Windows audio capture.
 
-OBS's Twitch session, Twitch stream key, and broadcast settings are independent of Stream Town's bot OAuth credentials.
+This second token has a distinct Windows Credential Manager entry. Stream Town
+uses it to fetch the stream key from Twitch Helix when the game launches. The
+key is never written to configuration, the repository, logs, diagnostics, or
+the runtime console.
+
+## 7. Choose broadcast quality and test bandwidth
+
+In Stream Town Tools > **Twitch**:
+
+1. Enable **Direct broadcast** and **Start when the game launches**.
+2. Start with **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Automatic
+   encoder selection tries hardware paths first, Windows Media Foundation next,
+   and the OpenH264 CPU encoder last. Select a specific encoder only when
+   diagnosing hardware support.
+3. Leave **Preferred ingest** empty for Twitch's default, or enter a region name
+   substring such as `Sydney`.
+4. Enable **Bandwidth-test mode**, click **Save runtime config**, and launch the
+   game. The game will send the full configured bitrate but Twitch will not put
+   the channel live. Let it run through the loading screen and gameplay for at
+   least five minutes. The external tool's Runtime tab reports the selected
+   encoder, ingest, captured/encoded/dropped frames, and audio frames when it
+   launches or attaches to the game with the runtime console enabled.
+5. Exit the game, turn **Bandwidth-test mode** off, and save again.
+
+Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
+keyframe interval; the game sets those details internally. Higher presets may
+be selected as follows, subject to Twitch's current guidance and the available
+upload bandwidth:
+
+- 1920×1080 30 FPS: 4500 Kbps
+- 1280×720 60 FPS: 4500 Kbps
+- 1920×1080 60 FPS: 6000 Kbps
+
+## 8. Go live without OBS
+
+1. Verify **Bandwidth-test mode** is off.
+2. Launch `stream_town_game.exe`. Direct publishing begins once the primary
+   render target exists, so Twitch receives Stream Town's loading and menu
+   presentation as well as gameplay.
+3. Check Twitch's Stream Manager/Inspector from another device. To stop the
+   broadcast, exit the game; the encoder flushes the stream trailer and closes
+   RTMP.
+
+WASAPI capture is scoped to the Stream Town process tree, so both the Bevy sound
+engine and Bevy Tidal music are included while unrelated desktop/application
+audio is excluded. A microphone, voice call, browser alert, webcam, composited
+overlay, BRB scene, or capture-card input is intentionally not included. Those
+sources require a future in-game source/mixer feature or an external production
+switcher; they are not silently captured from the desktop.
 
 ## Connection controls and diagnostics
 
 - `F1`: intentionally disconnect the Twitch bot.
 - `F2`: reconnect after credentials or channel settings change.
 - Tools diagnostic success: validated bot identity, resolved target channel, and authenticated IRC join.
+- Direct-broadcast diagnostic success: validated broadcaster identity, non-empty
+  Helix stream-key response, usable ingest list, linked H.264 encoder, and
+  process-scoped WASAPI availability.
 - In-game HUD state: `Twitch: Connected` (or the broadcaster authorization prompt).
 - A wrong-account authorization is rejected before IRC is started.
 - If authorization is revoked, the app registration changes, or the refresh token has expired from inactivity, reopen the Bevy tools **Twitch** tab, click **Forget token**, authorize again, and rerun the end-to-end diagnostic.
 - `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.
 - A channel-join timeout normally means the channel login is wrong or Twitch IRC is unreachable from the machine.
 - No response to `!connect` means it was not sent by the configured channel's broadcaster account or the six-digit code is stale.
+- `WaitingForBroadcasterAuthorization` means the broadcaster grant has not been
+  completed or was revoked. Reauthorize the broadcaster, not the bot.
+- `Reconnecting` means the in-process RTMP worker encountered an ingest/network
+  error. It retries with bounded exponential backoff and never buffers an
+  unbounded number of render frames.
+- Missing `avcodec-62.dll` (or another FFmpeg/OpenH264 DLL) means a development
+  build was launched without the pinned vcpkg runtime on `PATH`; packaged builds
+  put the replaceable DLLs beside the executable.
 
 Official references:
 
@@ -98,4 +164,6 @@ Official references:
 - [Twitch device-code OAuth](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#device-code-grant-flow)
 - [Twitch IRC authentication and scopes](https://dev.twitch.tv/docs/chat/irc/#authenticating-with-the-twitch-irc-server)
 - [Twitch token validation](https://dev.twitch.tv/docs/authentication/validate-tokens/)
-- [OBS quick-start guide](https://obsproject.com/kb/quick-start-guide)
+- [Twitch video broadcast requirements](https://dev.twitch.tv/docs/video-broadcast/)
+- [Twitch Get Stream Key API](https://dev.twitch.tv/docs/api/reference#get-stream-key)
+- [FFmpeg LGPL compliance guidance](https://ffmpeg.org/legal.html)

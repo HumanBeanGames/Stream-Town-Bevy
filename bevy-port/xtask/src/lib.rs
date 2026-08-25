@@ -1,14 +1,17 @@
 use std::{
     fs::{self, File},
-    io::{Seek, Write},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha512};
 use walkdir::WalkDir;
 use zip::{ZipWriter, write::SimpleFileOptions};
 
 pub const WINDOWS_PACKAGE_NAME: &str = "stream-town-windows-x86_64.zip";
+const FFMPEG_SOURCE_SHA512: &str = "e858e92e5eb08d562302cde371af55917df6e1fe53994e18462a3c929a40ede1828c2bd53c2a7d65a2cfd791782ead3cd94efb2def904f49cb5dd8ab5cd4256f";
+const OPENH264_SOURCE_SHA512: &str = "26a03acde7153a6b40b99f00641772433a244c72a3cc4bca6d903cf3b770174d028369a2fb73b2f0774e1124db0e269758eed6d88975347a815e0366c820d247";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackageReport {
@@ -66,6 +69,60 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
     if !readme.is_file() {
         bail!("Bevy README is missing: {}", readme.display());
     }
+    let ffmpeg_notice = workspace.join("third_party/ffmpeg/README.md");
+    if !ffmpeg_notice.is_file() {
+        bail!(
+            "FFmpeg relinking notice is missing: {}",
+            ffmpeg_notice.display()
+        );
+    }
+    let vcpkg_root = std::env::var_os("VCPKG_ROOT")
+        .map(PathBuf::from)
+        .context("VCPKG_ROOT is required to package the shared FFmpeg runtime")?;
+    let installed_root = std::env::var_os("VCPKG_INSTALLED_ROOT").map_or_else(
+        || {
+            let manifest = workspace.join("vcpkg_installed");
+            if manifest.is_dir() {
+                manifest
+            } else {
+                vcpkg_root.join("installed")
+            }
+        },
+        PathBuf::from,
+    );
+    let native_root = installed_root.join("x64-windows");
+    let native_bin = native_root.join("bin");
+    let ffmpeg_dlls = [
+        "avcodec-62.dll",
+        "avformat-62.dll",
+        "avutil-60.dll",
+        "swresample-6.dll",
+        "swscale-9.dll",
+        "openh264-7.dll",
+    ]
+    .map(|name| native_bin.join(name));
+    for dll in &ffmpeg_dlls {
+        if !dll.is_file() {
+            bail!(
+                "shared direct-broadcast dependency is missing: {}; run the pinned vcpkg install",
+                dll.display()
+            );
+        }
+    }
+    let downloads = std::env::var_os("VCPKG_DOWNLOADS")
+        .map_or_else(|| vcpkg_root.join("downloads"), PathBuf::from);
+    let ffmpeg_source = downloads.join("ffmpeg-ffmpeg-n8.1.1.tar.gz");
+    let openh264_source = downloads.join("cisco-openh264-v2.6.0.tar.gz");
+    for source in [&ffmpeg_source, &openh264_source] {
+        if !source.is_file() {
+            bail!(
+                "corresponding native-library source archive is missing: {}",
+                source.display()
+            );
+        }
+    }
+    verify_sha512(&ffmpeg_source, FFMPEG_SOURCE_SHA512)?;
+    verify_sha512(&openh264_source, OPENH264_SOURCE_SHA512)?;
 
     fs::create_dir_all(output)
         .with_context(|| format!("failed to create package directory {}", output.display()))?;
@@ -90,6 +147,70 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
         &mut files,
         &mut bytes,
     )?;
+    add_file(
+        &mut zip,
+        &ffmpeg_notice,
+        "StreamTown/third_party/FFMPEG_RELINKING.md",
+        options,
+        &mut files,
+        &mut bytes,
+    )?;
+    for dll in &ffmpeg_dlls {
+        let name = dll
+            .file_name()
+            .context("native dependency has no filename")?
+            .to_string_lossy();
+        add_file(
+            &mut zip,
+            dll,
+            &format!("StreamTown/{name}"),
+            options,
+            &mut files,
+            &mut bytes,
+        )?;
+    }
+    add_file(
+        &mut zip,
+        &ffmpeg_source,
+        "StreamTown/third_party/source/ffmpeg-ffmpeg-n8.1.1.tar.gz",
+        options,
+        &mut files,
+        &mut bytes,
+    )?;
+    add_file(
+        &mut zip,
+        &openh264_source,
+        "StreamTown/third_party/source/cisco-openh264-v2.6.0.tar.gz",
+        options,
+        &mut files,
+        &mut bytes,
+    )?;
+    for package in ["ffmpeg", "openh264"] {
+        let share = native_root.join("share").join(package);
+        if !share.is_dir() {
+            bail!("vcpkg package metadata is missing: {}", share.display());
+        }
+        add_tree(
+            &mut zip,
+            &share,
+            &format!("StreamTown/third_party/vcpkg-installed/{package}"),
+            options,
+            &mut files,
+            &mut bytes,
+        )?;
+        let port = vcpkg_root.join("ports").join(package);
+        if !port.is_dir() {
+            bail!("vcpkg port recipe is missing: {}", port.display());
+        }
+        add_tree(
+            &mut zip,
+            &port,
+            &format!("StreamTown/third_party/vcpkg-ports/{package}"),
+            options,
+            &mut files,
+            &mut bytes,
+        )?;
+    }
     add_file(
         &mut zip,
         &tools,
@@ -149,6 +270,50 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
     })
 }
 
+fn add_tree<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    source_root: &Path,
+    archive_root: &str,
+    options: SimpleFileOptions,
+    files: &mut usize,
+    bytes: &mut u64,
+) -> Result<()> {
+    for entry in WalkDir::new(source_root).sort_by_file_name() {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(source_root)?;
+        let archive_path = format!("{archive_root}/{}", portable_path(relative));
+        add_file(zip, entry.path(), &archive_path, options, files, bytes)?;
+    }
+    Ok(())
+}
+
+fn verify_sha512(path: &Path, expected: &str) -> Result<()> {
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open source archive {}", path.display()))?;
+    let mut digest = Sha512::new();
+    let mut buffer = vec![0_u8; 64 * 1_024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to hash source archive {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", digest.finalize());
+    if actual != expected {
+        bail!(
+            "source archive {} has SHA-512 {actual}, expected {expected}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn validate_windows_package(archive: &Path) -> Result<()> {
     let mut zip = zip::ZipArchive::new(
         File::open(archive)
@@ -159,6 +324,15 @@ pub fn validate_windows_package(archive: &Path) -> Result<()> {
         "StreamTown/stream_town_tools.exe",
         "StreamTown/LICENSE",
         "StreamTown/README.md",
+        "StreamTown/avcodec-62.dll",
+        "StreamTown/avformat-62.dll",
+        "StreamTown/avutil-60.dll",
+        "StreamTown/swresample-6.dll",
+        "StreamTown/swscale-9.dll",
+        "StreamTown/openh264-7.dll",
+        "StreamTown/third_party/FFMPEG_RELINKING.md",
+        "StreamTown/third_party/source/ffmpeg-ffmpeg-n8.1.1.tar.gz",
+        "StreamTown/third_party/source/cisco-openh264-v2.6.0.tar.gz",
         "StreamTown/assets/config/game.ron",
         "StreamTown/assets/config/player-settings.ron",
         "StreamTown/assets/content/catalog.ron",

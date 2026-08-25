@@ -29,6 +29,7 @@ bevy_egui = "0.41.1"
 bevy_hanabi = { version = "0.19.0", default-features = false, features = ["2d", "3d"] }
 clap = { version = "4.5.54", features = ["derive"] }
 flate2 = "1.1.5"
+ffmpeg-next = { version = "=8.1.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
 hex = "0.4.3"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 indexmap = { version = "2.12.1", features = ["serde"] }
@@ -45,6 +46,7 @@ tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "sync", "
 twitch-irc = { version = "6.1.1", default-features = false, features = ["transport-tcp-rustls-native-roots"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 walkdir = "2.5.0"
+wasapi = "0.24.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
