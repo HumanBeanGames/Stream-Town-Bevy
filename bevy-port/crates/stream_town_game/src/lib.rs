@@ -12643,6 +12643,29 @@ fn start_secrets_authorization(
     }
 }
 
+fn open_twitch_verification_uri(uri: &str) -> AnyResult<()> {
+    open_twitch_verification_uri_with(uri, |uri| {
+        webbrowser::open(uri).context("the operating system rejected the browser request")
+    })
+}
+
+fn open_twitch_verification_uri_with(
+    uri: &str,
+    open: impl FnOnce(&str) -> AnyResult<()>,
+) -> AnyResult<()> {
+    let parsed = reqwest::Url::parse(uri).context("Twitch returned an invalid verification URL")?;
+    anyhow::ensure!(
+        parsed.scheme() == "https",
+        "Twitch returned a non-HTTPS verification URL"
+    );
+    let host = parsed.host_str().unwrap_or_default();
+    anyhow::ensure!(
+        host == "twitch.tv" || host.ends_with(".twitch.tv"),
+        "Twitch returned a verification URL for an unexpected host"
+    );
+    open(parsed.as_str())
+}
+
 fn poll_secrets_authorization(
     mut secrets: ResMut<SecretsRuntime>,
     config: Res<RuntimeConfig>,
@@ -12661,10 +12684,21 @@ fn poll_secrets_authorization(
                 kind,
                 authorization,
             } => {
-                secrets.feedback = format!(
-                    "Twitch {} authorization is waiting for approval in your browser.",
-                    kind.label()
-                );
+                secrets.feedback = match open_twitch_verification_uri(
+                    &authorization.verification_uri,
+                ) {
+                    Ok(()) => format!(
+                        "Opened Twitch {} verification in your browser. Enter code {} to approve it.",
+                        kind.label(),
+                        authorization.user_code
+                    ),
+                    Err(error) => format!(
+                        "Could not open Twitch {} verification automatically: {error:#}. Open {} and enter code {}.",
+                        kind.label(),
+                        authorization.verification_uri,
+                        authorization.user_code
+                    ),
+                };
                 secrets.device = Some(authorization);
             }
             SecretsAuthorizationEvent::Authorized { kind, validation } => {
@@ -33862,6 +33896,30 @@ mod tests {
             secrets_action_label(SecretsAction::DisclaimerYes, &GameConfig::default()),
             "Yes — continue"
         );
+    }
+
+    #[test]
+    fn twitch_verification_opens_only_the_https_url_returned_by_twitch() {
+        let mut opened = String::new();
+        open_twitch_verification_uri_with("https://www.twitch.tv/activate", |uri| {
+            uri.clone_into(&mut opened);
+            Ok(())
+        })
+        .expect("HTTPS Twitch verification URL should open");
+        assert_eq!(opened, "https://www.twitch.tv/activate");
+
+        let mut insecure_opened = false;
+        let error = open_twitch_verification_uri_with("http://www.twitch.tv/activate", |_| {
+            insecure_opened = true;
+            Ok(())
+        })
+        .expect_err("non-HTTPS verification URL should be rejected");
+        assert!(!insecure_opened);
+        assert!(error.to_string().contains("non-HTTPS"));
+
+        let error = open_twitch_verification_uri_with("https://example.com/activate", |_| Ok(()))
+            .expect_err("non-Twitch verification URL should be rejected");
+        assert!(error.to_string().contains("unexpected host"));
     }
 
     #[test]

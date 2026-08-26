@@ -47,6 +47,7 @@ twitch-irc = { version = "6.1.1", default-features = false, features = ["transpo
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 walkdir = "2.5.0"
 wasapi = "0.24.0"
+webbrowser = { version = "1.2.4", features = ["hardened"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
