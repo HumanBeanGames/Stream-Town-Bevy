@@ -53,8 +53,11 @@ Do not add Twitch tokens, refresh tokens, client secrets, or OBS stream keys any
    `humanbeanbot`.
 5. Set **Stream account login** to `humanbeangames`. Keeping both names visible
    makes it harder to authorize the wrong identity.
-6. Choose **Save and apply**, then **Authorize bot account**.
-7. Open the shown Twitch activation URL and enter the displayed device code.
+6. Choose **Save and apply**, then **Authorize bot account**. Stream Town opens
+   Twitch's activation page in the default browser as soon as Twitch returns the
+   device code. If Windows blocks that launch, the same URL remains visible in
+   the Secrets screen as a manual fallback.
+7. Enter the device code displayed by Stream Town into the opened page.
 8. Verify that the signed-in account is `HumanBeanBot`. Use a private browser
    window if the browser keeps selecting `HumanBeanGames`.
 9. Approve only `chat:read` and `chat:edit`. Stream Town rejects the grant if
@@ -112,10 +115,12 @@ The checked-in default retains the reward ID recovered from the Unity project, b
 2. Close every third-party capture application, then open **Main Menu > Secrets**
    and choose **Yes**. Confirm that the public Client ID and stream account login
    are correct.
-3. Click **Authorize stream account**. Open the shown activation URL, enter its
-   device code, sign in as `HumanBeanGames` (not `HumanBeanBot`), and approve
-   only `channel:read:stream_key`. Stream Town rejects a grant for a different
-   account.
+3. Click **Authorize stream account**. Stream Town automatically opens Twitch's
+   activation page; enter the device code, sign in as `HumanBeanGames` (not
+   `HumanBeanBot`), and approve only `channel:read:stream_key`. Stream Town
+   rejects a grant for a different account. The broadcaster status changes to
+   **Broadcaster authorized** when the validated token is in Windows Credential
+   Manager.
 4. Run `.\bevy-port\scripts\launch-tools.ps1`, open **Twitch**, and click
    **Test broadcast prerequisites**. Do not continue until the tool
    confirms the broadcaster, Twitch ingest list, at least one H.264 encoder, and
@@ -131,9 +136,11 @@ the runtime console.
 Start in Main Menu > **Secrets**:
 
 1. Set **Direct stream** to **Enabled**. This also enables start-on-launch. Keep
-   **Bandwidth test** enabled for the first test. The broadcaster starts or
-   restarts immediately but continues emitting only black video while the
-   disclaimer or Secrets screen is open.
+   **Bandwidth test** enabled for the first test, then choose **Restart stream**.
+   The status progresses through authorization, ingest selection, and encoder
+   connection before showing **BANDWIDTH TEST — not live** with advancing video
+   and audio frame counts. The broadcaster continues emitting only black video
+   while the disclaimer or Secrets screen is open.
 2. Exit the Secrets screen. For advanced quality settings, open Stream Town
    Tools > **Twitch**. Start with **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Automatic
    encoder selection tries hardware paths first, Windows Media Foundation next,
@@ -143,13 +150,15 @@ Start in Main Menu > **Secrets**:
    substring such as `Sydney`.
 4. With **Bandwidth test** enabled, launch or continue the game. It will send
    the full configured bitrate but Twitch will not put
-   the channel live. Let it run through the loading screen and gameplay for at
-   least five minutes. The external tool's Runtime tab reports the selected
-   encoder, ingest, captured/encoded/dropped frames, and audio frames when it
-   launches or attaches to the game with the runtime console enabled.
+   the channel live. Open [Twitch Inspector](https://inspector.twitch.tv/) while
+   signed in as the broadcaster and confirm that the test session is stable.
+   Let it run through the loading screen and gameplay for at least five minutes.
+   The Secrets status and the external tool's Runtime tab report the selected
+   encoder, ingest, captured/encoded/dropped frames, and audio frames.
 5. Return to Main Menu > **Secrets**, accept the warning, turn **Bandwidth test**
-   off, then choose **Back**. Internal video remains black throughout that flow
-   and resumes only after the Secrets screen closes.
+   off, choose **Restart stream**, wait for the local status to show **LIVE** with
+   advancing frame counts, then choose **Back**. Internal video remains black
+   throughout that flow and resumes only after the Secrets screen closes.
 
 Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
 keyframe interval; the game sets those details internally. Higher presets may
@@ -185,6 +194,13 @@ switcher; they are not silently captured from the desktop.
 - Direct-broadcast diagnostic success: validated broadcaster identity, non-empty
   Helix stream-key response, usable ingest list, linked H.264 encoder, and
   process-scoped WASAPI availability.
+- Main-menu status success: the bot card says **Connected** and the stream card
+  says either **BANDWIDTH TEST — not live** or **LIVE**, with encoded video and
+  audio frame counts increasing. Yellow is transitional/locked, grey is
+  disabled, green is connected, and red includes the actionable runtime error.
+- **Restart stream** saves the visible public settings, stops the current
+  in-process encoder if one exists, revalidates the broadcaster grant, fetches a
+  fresh stream key and ingest list, and starts a new encoder connection.
 - In-game HUD state: `Twitch: Connected` (or the broadcaster authorization prompt).
 - A wrong-account authorization is rejected before IRC is started.
 - If authorization is revoked, the app registration changes, or the refresh token has expired from inactivity, reopen the Bevy tools **Twitch** tab, click **Forget token**, authorize again, and rerun the end-to-end diagnostic.

@@ -576,12 +576,25 @@ enum SecretsAuthorizationEvent {
     },
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+enum SecretsCredentialState {
+    #[default]
+    Unknown,
+    NotConfigured,
+    Missing,
+    Stored,
+    Error(String),
+}
+
 #[derive(Resource, Default)]
 struct SecretsRuntime {
     authorization_events: Option<Arc<Mutex<mpsc::Receiver<SecretsAuthorizationEvent>>>>,
     active_authorization: Option<SecretsAuthorizationKind>,
     device: Option<DeviceAuthorization>,
     feedback: String,
+    credential_signature: Option<(String, String, String)>,
+    bot_credential: SecretsCredentialState,
+    broadcaster_credential: SecretsCredentialState,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1428,6 +1441,7 @@ enum SecretsAction {
     Save,
     AuthorizeBot,
     AuthorizeBroadcaster,
+    RestartBroadcast,
     Back,
 }
 
@@ -1452,6 +1466,23 @@ struct SecretsStatusText;
 
 #[derive(Component)]
 struct SecretsDeviceText;
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum SecretsConnectionKind {
+    Bot,
+    Broadcast,
+}
+
+#[derive(Component)]
+struct SecretsConnectionText(SecretsConnectionKind);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SecretsStatusTone {
+    Good,
+    Pending,
+    Inactive,
+    Error,
+}
 
 #[derive(Component)]
 struct SettingsRoot;
@@ -12121,6 +12152,7 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                                 columns,
                                 "CHAT BOT ACCOUNT",
                                 "Authorizes chat:read and chat:edit for the bot login above. The token is stored only in the operating-system credential vault.",
+                                SecretsConnectionKind::Bot,
                                 SecretsAction::ToggleBot,
                                 SecretsAction::AuthorizeBot,
                                 config,
@@ -12131,6 +12163,7 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                                 columns,
                                 "BROADCASTER / STREAM ACCOUNT",
                                 "Separately authorizes channel:read:stream_key for the broadcaster login above. The stream key is fetched at launch and never saved.",
+                                SecretsConnectionKind::Broadcast,
                                 SecretsAction::ToggleBroadcast,
                                 SecretsAction::AuthorizeBroadcaster,
                                 config,
@@ -12138,6 +12171,24 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                                 5,
                             );
                         });
+                    panel.spawn((
+                        Text::new("Bandwidth test sends the complete encoded stream to Twitch without making the channel live. Use it to verify bitrate and stability, then disable it before a real stream."),
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextLayout {
+                            justify: Justify::Center,
+                            linebreak: LineBreak::WordBoundary,
+                        },
+                        TextColor(Color::srgb(0.76, 0.82, 0.92)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(100.0),
+                            min_height: px(34),
+                            ..default()
+                        },
+                    ));
                     panel
                         .spawn(Node {
                             width: percent(100.0),
@@ -12155,17 +12206,24 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                             );
                             spawn_secrets_button(
                                 buttons,
-                                SecretsAction::Save,
+                                SecretsAction::RestartBroadcast,
                                 config,
                                 render,
                                 8,
                             );
                             spawn_secrets_button(
                                 buttons,
-                                SecretsAction::Back,
+                                SecretsAction::Save,
                                 config,
                                 render,
                                 9,
+                            );
+                            spawn_secrets_button(
+                                buttons,
+                                SecretsAction::Back,
+                                config,
+                                render,
+                                10,
                             );
                         });
                     panel.spawn((
@@ -12271,6 +12329,7 @@ fn spawn_secrets_account_column(
     parent: &mut ChildSpawnerCommands,
     heading: &'static str,
     description: &'static str,
+    connection: SecretsConnectionKind,
     toggle: SecretsAction,
     authorize: SecretsAction,
     config: &GameConfig,
@@ -12315,6 +12374,24 @@ fn spawn_secrets_account_column(
                 },
                 TextColor(Color::srgb(0.82, 0.86, 0.91)),
                 Pickable::IGNORE,
+            ));
+            column.spawn((
+                SecretsConnectionText(connection),
+                Text::new("● Checking status..."),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextLayout {
+                    justify: Justify::Center,
+                    linebreak: LineBreak::WordBoundary,
+                },
+                TextColor(Color::srgb(0.88, 0.78, 0.46)),
+                Pickable::IGNORE,
+                Node {
+                    min_height: px(38),
+                    ..default()
+                },
             ));
             spawn_secrets_button(column, toggle, config, render, tab_index);
             spawn_secrets_button(column, authorize, config, render, tab_index + 1);
@@ -12394,6 +12471,7 @@ fn secrets_action_label(action: SecretsAction, config: &GameConfig) -> String {
         SecretsAction::Save => "Save and apply".to_owned(),
         SecretsAction::AuthorizeBot => "Authorize bot account".to_owned(),
         SecretsAction::AuthorizeBroadcaster => "Authorize stream account".to_owned(),
+        SecretsAction::RestartBroadcast => "Restart stream".to_owned(),
         SecretsAction::Back => "Back".to_owned(),
     }
 }
@@ -12455,6 +12533,36 @@ fn secrets_buttons(
                     broadcast.request_restart();
                 }
                 set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
+            }
+            SecretsAction::RestartBroadcast => {
+                match save_secrets_fields(&fields, &mut config, |_| {}) {
+                    Ok(path) if !config.0.twitch.broadcast.enabled => {
+                        secrets.feedback = format!(
+                            "Saved {}. Direct stream is disabled; enable it before restarting.",
+                            path.display()
+                        );
+                    }
+                    Ok(path) => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            broadcast.request_restart();
+                            secrets.feedback = format!(
+                                "Saved {}. Restarting the internal Twitch stream now...",
+                                path.display()
+                            );
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            secrets.feedback = format!(
+                                "Saved {}. Direct Twitch streaming is currently available only on Windows.",
+                                path.display()
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        secrets.feedback = format!("Cannot restart the stream: {error:#}");
+                    }
+                }
             }
             SecretsAction::Save => {
                 let outcome = save_secrets_fields(&fields, &mut config, |_| {});
@@ -12712,9 +12820,11 @@ fn poll_secrets_authorization(
                 secrets.authorization_events = None;
                 match kind {
                     SecretsAuthorizationKind::Bot => {
+                        secrets.bot_credential = SecretsCredentialState::Stored;
                         restart_twitch_connection(&config.0, &mut connection);
                     }
                     SecretsAuthorizationKind::Broadcaster => {
+                        secrets.broadcaster_credential = SecretsCredentialState::Stored;
                         #[cfg(target_os = "windows")]
                         broadcast.request_restart();
                     }
@@ -12731,11 +12841,211 @@ fn poll_secrets_authorization(
     }
 }
 
+fn refresh_secrets_credential_state(secrets: &mut SecretsRuntime, config: &GameConfig) {
+    let signature = (
+        config.twitch.client_id.clone(),
+        config.twitch.bot_login.clone(),
+        config.twitch.channel_login.clone(),
+    );
+    if secrets.credential_signature.as_ref() == Some(&signature) {
+        return;
+    }
+    secrets.bot_credential = probe_secrets_credential(
+        !signature.0.trim().is_empty() && !signature.1.trim().is_empty(),
+        CredentialVault::new(&signature.0, &signature.1),
+    );
+    secrets.broadcaster_credential = probe_secrets_credential(
+        !signature.0.trim().is_empty() && !signature.2.trim().is_empty(),
+        CredentialVault::broadcaster(&signature.0, &signature.2),
+    );
+    secrets.credential_signature = Some(signature);
+}
+
+fn probe_secrets_credential(configured: bool, vault: CredentialVault) -> SecretsCredentialState {
+    if !configured {
+        return SecretsCredentialState::NotConfigured;
+    }
+    match vault.load() {
+        Ok(Some(_)) => SecretsCredentialState::Stored,
+        Ok(None) => SecretsCredentialState::Missing,
+        Err(error) => SecretsCredentialState::Error(format!("{error:#}")),
+    }
+}
+
+fn bot_connection_status(
+    config: &GameConfig,
+    connection: &TwitchConnection,
+    credential: &SecretsCredentialState,
+) -> (String, SecretsStatusTone) {
+    if !config.twitch.enabled {
+        return match credential {
+            SecretsCredentialState::Stored => (
+                "● Bot authorized; chat connection is disabled.".to_owned(),
+                SecretsStatusTone::Inactive,
+            ),
+            SecretsCredentialState::Missing => (
+                "● Bot is not authorized and chat is disabled.".to_owned(),
+                SecretsStatusTone::Inactive,
+            ),
+            SecretsCredentialState::NotConfigured => (
+                "● Enter a Client ID and bot login to configure chat.".to_owned(),
+                SecretsStatusTone::Inactive,
+            ),
+            SecretsCredentialState::Error(error) => (
+                format!("● Could not read bot authorization: {error}"),
+                SecretsStatusTone::Error,
+            ),
+            SecretsCredentialState::Unknown => (
+                "● Checking bot authorization...".to_owned(),
+                SecretsStatusTone::Pending,
+            ),
+        };
+    }
+    match &connection.status {
+        TwitchStatus::Connected if connection.broadcaster_authorized => (
+            format!(
+                "● Connected as @{} to #{}; commands are enabled.",
+                config.twitch.bot_login, config.twitch.channel_login
+            ),
+            SecretsStatusTone::Good,
+        ),
+        TwitchStatus::Connected => (
+            format!(
+                "● Chat connected as @{}; send !connect {} from #{} to enable commands.",
+                config.twitch.bot_login, connection.connect_code, config.twitch.channel_login
+            ),
+            SecretsStatusTone::Pending,
+        ),
+        TwitchStatus::Authorizing => (
+            "● Validating the stored bot authorization...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        TwitchStatus::Connecting => (
+            format!(
+                "● Connecting the bot to #{}...",
+                config.twitch.channel_login
+            ),
+            SecretsStatusTone::Pending,
+        ),
+        TwitchStatus::Reconnecting => (
+            "● Bot connection was interrupted; reconnecting...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        TwitchStatus::Disconnected => (
+            "● Bot is disconnected. Use Save and apply to reconnect.".to_owned(),
+            SecretsStatusTone::Error,
+        ),
+        TwitchStatus::Error(error) => (
+            format!("● Bot connection error: {error}"),
+            SecretsStatusTone::Error,
+        ),
+        TwitchStatus::Disabled => (
+            "● Bot is enabled in settings and waiting to start.".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn broadcast_connection_status(
+    config: &GameConfig,
+    credential: &SecretsCredentialState,
+    snapshot: &direct_broadcast::DirectBroadcastSnapshot,
+) -> (String, SecretsStatusTone) {
+    use direct_broadcast::DirectBroadcastPhase;
+
+    if !config.twitch.broadcast.enabled {
+        return match credential {
+            SecretsCredentialState::Stored => (
+                "● Broadcaster authorized; direct stream is disabled.".to_owned(),
+                SecretsStatusTone::Inactive,
+            ),
+            SecretsCredentialState::Missing => (
+                "● Broadcaster is not authorized and direct stream is disabled.".to_owned(),
+                SecretsStatusTone::Inactive,
+            ),
+            SecretsCredentialState::NotConfigured => (
+                "● Enter a Client ID and channel login to configure streaming.".to_owned(),
+                SecretsStatusTone::Inactive,
+            ),
+            SecretsCredentialState::Error(error) => (
+                format!("● Could not read broadcaster authorization: {error}"),
+                SecretsStatusTone::Error,
+            ),
+            SecretsCredentialState::Unknown => (
+                "● Checking broadcaster authorization...".to_owned(),
+                SecretsStatusTone::Pending,
+            ),
+        };
+    }
+    match &snapshot.phase {
+        DirectBroadcastPhase::Disabled => (
+            "● Direct stream is enabled and waiting to start.".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        DirectBroadcastPhase::WaitingForBroadcasterAuthorization => (
+            "● Validating broadcaster authorization and fetching the stream key...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        DirectBroadcastPhase::ResolvingIngest => (
+            "● Selecting a Twitch ingest server...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        DirectBroadcastPhase::Connecting => (
+            "● Connecting the encoder to Twitch...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        DirectBroadcastPhase::Broadcasting => {
+            let mode = if config.twitch.broadcast.bandwidth_test {
+                "BANDWIDTH TEST — not live"
+            } else {
+                "LIVE"
+            };
+            (
+                format!(
+                    "● {mode}; {} video / {} audio frames via {} ({})",
+                    snapshot.encoded_video_frames,
+                    snapshot.encoded_audio_frames,
+                    snapshot.encoder.as_deref().unwrap_or("encoder pending"),
+                    snapshot.ingest.as_deref().unwrap_or("ingest pending")
+                ),
+                SecretsStatusTone::Good,
+            )
+        }
+        DirectBroadcastPhase::Reconnecting => (
+            "● Twitch stream interrupted; reconnecting automatically...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        DirectBroadcastPhase::Stopping => (
+            "● Stopping the previous stream...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
+        DirectBroadcastPhase::Stopped => (
+            "● Stream stopped. Choose Restart stream to start it again.".to_owned(),
+            SecretsStatusTone::Error,
+        ),
+        DirectBroadcastPhase::Error(error) => {
+            (format!("● Stream error: {error}"), SecretsStatusTone::Error)
+        }
+    }
+}
+
+fn secrets_status_color(tone: SecretsStatusTone) -> Color {
+    match tone {
+        SecretsStatusTone::Good => Color::srgb(0.48, 0.94, 0.58),
+        SecretsStatusTone::Pending => Color::srgb(0.96, 0.78, 0.34),
+        SecretsStatusTone::Inactive => Color::srgb(0.68, 0.72, 0.78),
+        SecretsStatusTone::Error => Color::srgb(1.0, 0.46, 0.42),
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn update_secrets_ui(
     menu: Res<MenuRuntime>,
     config: Res<RuntimeConfig>,
-    secrets: Res<SecretsRuntime>,
+    mut secrets: ResMut<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
     render: Res<RenderAssets>,
     mut disclaimer: Query<&mut Visibility, With<SecretsDisclaimerRoot>>,
     mut root: Query<&mut Visibility, (With<SecretsRoot>, Without<SecretsDisclaimerRoot>)>,
@@ -12755,9 +13065,20 @@ fn update_secrets_ui(
             Without<SecretsDynamicLabel>,
         ),
     >,
+    mut connection_texts: Query<
+        (&SecretsConnectionText, &mut Text, &mut TextColor),
+        (
+            Without<SecretsStatusText>,
+            Without<SecretsDeviceText>,
+            Without<SecretsDynamicLabel>,
+        ),
+    >,
     mut labels: Query<(&SecretsDynamicLabel, &mut Text)>,
     mut buttons: Query<(&Interaction, &SecretsAction, &mut ImageNode)>,
 ) {
+    if menu.page == MenuPage::Secrets {
+        refresh_secrets_credential_state(&mut secrets, &config.0);
+    }
     if let Ok(mut visibility) = disclaimer.single_mut() {
         *visibility = if menu.page == MenuPage::SecretsDisclaimer {
             Visibility::Visible
@@ -12791,6 +13112,33 @@ fn update_secrets_ui(
                 )
             },
         );
+    }
+    for (kind, mut text, mut color) in &mut connection_texts {
+        let (status, tone) = match kind.0 {
+            SecretsConnectionKind::Bot => {
+                bot_connection_status(&config.0, &connection, &secrets.bot_credential)
+            }
+            SecretsConnectionKind::Broadcast => {
+                #[cfg(target_os = "windows")]
+                {
+                    broadcast_connection_status(
+                        &config.0,
+                        &secrets.broadcaster_credential,
+                        &broadcast.snapshot(),
+                    )
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    (
+                        "● Direct Twitch streaming is currently available only on Windows."
+                            .to_owned(),
+                        SecretsStatusTone::Inactive,
+                    )
+                }
+            }
+        };
+        **text = status;
+        color.0 = secrets_status_color(tone);
     }
     for (label, mut text) in &mut labels {
         **text = secrets_action_label(label.0, &config.0);
@@ -33896,6 +34244,70 @@ mod tests {
             secrets_action_label(SecretsAction::DisclaimerYes, &GameConfig::default()),
             "Yes — continue"
         );
+        assert_eq!(
+            secrets_action_label(SecretsAction::RestartBroadcast, &GameConfig::default()),
+            "Restart stream"
+        );
+    }
+
+    #[test]
+    fn secrets_bot_status_distinguishes_authorized_connected_and_command_ready() {
+        let mut config = GameConfig::default();
+        config.twitch.enabled = false;
+        let connection = TwitchConnection::default();
+        let (status, tone) =
+            bot_connection_status(&config, &connection, &SecretsCredentialState::Stored);
+        assert!(status.contains("authorized"));
+        assert!(status.contains("disabled"));
+        assert_eq!(tone, SecretsStatusTone::Inactive);
+
+        config.twitch.enabled = true;
+        let mut connection = TwitchConnection {
+            status: TwitchStatus::Connected,
+            broadcaster_authorized: false,
+            connect_code: "482193".to_owned(),
+            ..default()
+        };
+        let (status, tone) =
+            bot_connection_status(&config, &connection, &SecretsCredentialState::Stored);
+        assert!(status.contains("!connect 482193"));
+        assert_eq!(tone, SecretsStatusTone::Pending);
+
+        connection.broadcaster_authorized = true;
+        let (status, tone) =
+            bot_connection_status(&config, &connection, &SecretsCredentialState::Stored);
+        assert!(status.contains("commands are enabled"));
+        assert_eq!(tone, SecretsStatusTone::Good);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn secrets_broadcast_status_distinguishes_test_from_live_output() {
+        use direct_broadcast::{DirectBroadcastPhase, DirectBroadcastSnapshot};
+
+        let mut config = GameConfig::default();
+        config.twitch.broadcast.enabled = true;
+        config.twitch.broadcast.bandwidth_test = true;
+        let snapshot = DirectBroadcastSnapshot {
+            phase: DirectBroadcastPhase::Broadcasting,
+            encoder: Some("h264_mf".to_owned()),
+            ingest: Some("US East".to_owned()),
+            captured_video_frames: 12,
+            encoded_video_frames: 10,
+            dropped_video_frames: 2,
+            encoded_audio_frames: 20,
+        };
+        let (status, tone) =
+            broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
+        assert!(status.contains("BANDWIDTH TEST — not live"));
+        assert!(status.contains("10 video / 20 audio frames"));
+        assert_eq!(tone, SecretsStatusTone::Good);
+
+        config.twitch.broadcast.bandwidth_test = false;
+        let (status, tone) =
+            broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
+        assert!(status.contains("● LIVE"));
+        assert_eq!(tone, SecretsStatusTone::Good);
     }
 
     #[test]

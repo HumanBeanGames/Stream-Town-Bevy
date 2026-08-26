@@ -242,6 +242,10 @@ audio device, `ffmpeg.exe` subprocess, serialized stream key, or unbounded frame
 queue is involved. Automatic reconnect and runtime-console counters expose the
 encoder, ingest, video drops, and audio progress. The independently stored
 broadcaster token and fetched stream key are always redacted.
+The protected Main Menu > Secrets screen also reports credential presence, live
+bot/command-gate state, and the direct encoder phase with advancing media-frame
+counts. Its Restart stream control reapplies the visible settings and rebuilds
+the in-process Twitch connection without restarting the game.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
