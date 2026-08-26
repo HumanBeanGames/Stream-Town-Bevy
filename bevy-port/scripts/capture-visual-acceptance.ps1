@@ -55,6 +55,10 @@ try {
         foreach ($key in $streamTownKeys) {
             $start.Environment.Remove($key) | Out-Null
         }
+        # Acceptance processes must be deterministic and must never inherit a
+        # developer's Twitch-enabled .stream-town/config.ron. The checked-in
+        # configuration keeps both IRC and direct broadcasting disabled.
+        $start.Environment["STREAM_TOWN_CONFIG"] = Join-Path $workspace "assets\config\game.ron"
         $start.Environment["STREAM_TOWN_SCREENSHOT"] = $capturePath
         $start.Environment["STREAM_TOWN_SCREENSHOT_DELAY"] = [string]$case.delay_seconds
         $start.Environment["STREAM_TOWN_EXIT_AFTER_SCREENSHOT"] = "1"

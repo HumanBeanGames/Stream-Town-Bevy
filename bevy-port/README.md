@@ -84,6 +84,8 @@ the results to the checked 320x180 references, verifies their SHA-256 integrity,
 and applies a scenario-specific mean-error budget. Use `-Scenario shoreline`
 for a focused run. Only use `-UpdateBaseline` after manually reviewing a full
 capture matrix; partial baseline replacement is rejected.
+Every capture is forced onto the checked-in Twitch-disabled game configuration;
+the runner never inherits a developer's live `.stream-town/config.ron`.
 
 The audio acceptance gate is part of `cargo test -p stream_town_game`. It
 regenerates all 39 deterministic replacement waveforms, compares their exact
