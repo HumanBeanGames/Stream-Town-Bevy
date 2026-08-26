@@ -14,7 +14,7 @@ use std::{
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -76,7 +76,6 @@ pub struct DirectBroadcastRuntime {
     controller: Option<BroadcastController>,
     capture_elapsed: f32,
     capture_in_flight: bool,
-    next_video_pts: i64,
     captured_video_frames: u64,
 }
 
@@ -90,7 +89,6 @@ impl Default for DirectBroadcastRuntime {
             controller: None,
             capture_elapsed: 0.0,
             capture_in_flight: false,
-            next_video_pts: 0,
             captured_video_frames: 0,
         }
     }
@@ -312,8 +310,6 @@ fn capture_direct_broadcast_frame(
         return;
     }
     runtime.capture_elapsed = runtime.capture_elapsed.rem_euclid(frame_period);
-    let pts = runtime.next_video_pts;
-    runtime.next_video_pts = runtime.next_video_pts.saturating_add(1);
     if sensitive_screen.0 {
         let width = u32::from(config.0.twitch.broadcast.width);
         let height = u32::from(config.0.twitch.broadcast.height);
@@ -322,7 +318,6 @@ fn capture_direct_broadcast_frame(
             controller.send_video(VideoFrame {
                 width,
                 height,
-                pts,
                 rgba,
             })
         });
@@ -352,7 +347,6 @@ fn capture_direct_broadcast_frame(
                 if controller.send_video(VideoFrame {
                     width,
                     height,
-                    pts,
                     rgba: black_rgba_frame(width, height),
                 }) {
                     runtime.captured_video_frames = runtime.captured_video_frames.saturating_add(1);
@@ -364,7 +358,6 @@ fn capture_direct_broadcast_frame(
                     if controller.send_video(VideoFrame {
                         width,
                         height,
-                        pts,
                         rgba,
                     }) {
                         runtime.captured_video_frames =
@@ -498,7 +491,6 @@ fn build_ingest_url(template: &str, stream_key: &str, bandwidth_test: bool) -> R
 struct VideoFrame {
     width: u32,
     height: u32,
-    pts: i64,
     rgba: Vec<u8>,
 }
 
@@ -752,6 +744,45 @@ enum SessionEnd {
     InputClosed,
 }
 
+#[derive(Debug)]
+struct VideoCadence {
+    frame_period: Duration,
+    next_deadline: Option<Instant>,
+    next_pts: i64,
+}
+
+impl VideoCadence {
+    fn new(frames_per_second: u8) -> Self {
+        Self {
+            frame_period: Duration::from_secs_f64(1.0 / f64::from(frames_per_second)),
+            next_deadline: None,
+            next_pts: 0,
+        }
+    }
+
+    fn start(&mut self, now: Instant) {
+        self.next_deadline.get_or_insert(now);
+    }
+
+    fn take_due_pts(&mut self, now: Instant) -> Option<i64> {
+        let deadline = self.next_deadline.as_mut()?;
+        if now < *deadline {
+            return None;
+        }
+        *deadline += self.frame_period;
+        let pts = self.next_pts;
+        self.next_pts = self.next_pts.saturating_add(1);
+        Some(pts)
+    }
+
+    fn receive_timeout(&self, now: Instant) -> Duration {
+        self.next_deadline
+            .map_or(Duration::from_millis(250), |deadline| {
+                deadline.saturating_duration_since(now)
+            })
+    }
+}
+
 struct BroadcastEncoder {
     output: format::context::Output,
     video: encoder::video::Encoder,
@@ -764,7 +795,6 @@ struct BroadcastEncoder {
     resampler: software::resampling::Context,
     width: u32,
     height: u32,
-    video_pts_base: Option<i64>,
     audio_pts_base: Option<i64>,
 }
 
@@ -782,19 +812,34 @@ fn encode_broadcast_session(
     let _ = events.send(WorkerEvent::Broadcasting {
         encoder: encoder_name,
     });
+    let mut cadence = VideoCadence::new(config.frames_per_second);
+    let mut latest_video = None;
     loop {
         if stop.load(Ordering::Relaxed) {
             encoder.finish()?;
             return Ok(SessionEnd::Stopped);
         }
-        match receiver.recv_timeout(Duration::from_millis(250)) {
+        while let Some(video) = latest_video.as_ref() {
+            let Some(pts) = cadence.take_due_pts(Instant::now()) else {
+                break;
+            };
+            encoder.encode_video(video, pts)?;
+            metrics.encoded_video.fetch_add(1, Ordering::Relaxed);
+        }
+        match receiver.recv_timeout(cadence.receive_timeout(Instant::now())) {
             Ok(MediaInput::Video(video)) => {
-                encoder.encode_video(video)?;
-                metrics.encoded_video.fetch_add(1, Ordering::Relaxed);
+                cadence.start(Instant::now());
+                latest_video = Some(video);
             }
             Ok(MediaInput::Audio(audio)) => {
-                encoder.encode_audio(audio)?;
-                metrics.encoded_audio.fetch_add(1, Ordering::Relaxed);
+                // Establish both media timelines at the first video frame. This
+                // avoids publishing an audio lead while the first GPU readback
+                // is still pending, then keeps audio continuous while the
+                // cadence worker repeats the latest image through game stalls.
+                if latest_video.is_some() {
+                    encoder.encode_audio(audio)?;
+                    metrics.encoded_audio.fetch_add(1, Ordering::Relaxed);
+                }
             }
             Ok(MediaInput::Stop) => {
                 encoder.finish()?;
@@ -874,16 +919,13 @@ impl BroadcastEncoder {
                 resampler,
                 width: u32::from(config.width),
                 height: u32::from(config.height),
-                video_pts_base: None,
                 audio_pts_base: None,
             },
             encoder_name,
         ))
     }
 
-    fn encode_video(&mut self, video: VideoFrame) -> Result<()> {
-        let video_pts_base = *self.video_pts_base.get_or_insert(video.pts);
-        let pts = video.pts.saturating_sub(video_pts_base);
+    fn encode_video(&mut self, video: &VideoFrame, pts: i64) -> Result<()> {
         if self
             .scaler
             .as_ref()
@@ -1142,12 +1184,14 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
             .saturating_mul(4)
     ];
     for pts in 0..2_i64 {
-        encoder.encode_video(VideoFrame {
-            width: u32::from(config.width),
-            height: u32::from(config.height),
+        encoder.encode_video(
+            &VideoFrame {
+                width: u32::from(config.width),
+                height: u32::from(config.height),
+                rgba: rgba.clone(),
+            },
             pts,
-            rgba: rgba.clone(),
-        })?;
+        )?;
         encoder.encode_audio(AudioFrame {
             pts: pts * i64::try_from(AUDIO_FRAME_SAMPLES).unwrap_or(i64::MAX),
             samples: vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS],
@@ -1220,6 +1264,25 @@ mod tests {
     }
 
     #[test]
+    fn video_cadence_keeps_advancing_when_the_game_stops_supplying_frames() {
+        let started = Instant::now();
+        let mut cadence = VideoCadence::new(30);
+        cadence.start(started);
+        assert_eq!(cadence.take_due_pts(started), Some(0));
+        assert_eq!(cadence.take_due_pts(started), None);
+
+        let after_three_periods = started + cadence.frame_period * 3;
+        assert_eq!(cadence.take_due_pts(after_three_periods), Some(1));
+        assert_eq!(cadence.take_due_pts(after_three_periods), Some(2));
+        assert_eq!(cadence.take_due_pts(after_three_periods), Some(3));
+        assert_eq!(cadence.take_due_pts(after_three_periods), None);
+        assert_eq!(
+            cadence.receive_timeout(after_three_periods),
+            cadence.frame_period
+        );
+    }
+
+    #[test]
     fn auto_encoder_order_prefers_hardware_and_has_lgpl_fallback() {
         assert_eq!(
             encoder_candidates(BroadcastEncoderPreference::Auto),
@@ -1269,12 +1332,14 @@ mod tests {
         let mut audio_pts = 0_i64;
         for video_pts in 0..15_i64 {
             encoder
-                .encode_video(VideoFrame {
-                    width: u32::from(config.width),
-                    height: u32::from(config.height),
-                    pts: video_pts,
-                    rgba: rgba.clone(),
-                })
+                .encode_video(
+                    &VideoFrame {
+                        width: u32::from(config.width),
+                        height: u32::from(config.height),
+                        rgba: rgba.clone(),
+                    },
+                    video_pts,
+                )
                 .unwrap();
             let samples = vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
             encoder

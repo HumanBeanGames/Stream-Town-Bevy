@@ -170,14 +170,14 @@ const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
 const IN_GAME_BASELINE_EXPOSURE_EV: f32 = 0.5;
-const MAIN_MENU_RESOURCE_RENDER_BUDGET: usize = 900;
-const MAIN_MENU_FOLIAGE_RENDER_BUDGET: usize = 3_200;
 // Entity construction must yield back to Bevy regularly so the loading UI can
 // be extracted and presented. Asset decoding and deterministic generation run
-// on worker pools; these budgets bound the ECS-only portion of each frame.
-const MAIN_MENU_SPAWN_BUDGET_PER_FRAME: usize = 32;
-const WORLD_RESOURCE_SPAWN_BUDGET_PER_FRAME: usize = 96;
-const WORLD_FOLIAGE_SPAWN_BUDGET_PER_FRAME: usize = 192;
+// on worker pools. A time budget handles models with unequal construction cost,
+// while the count ceilings also bound deferred-command application.
+const LOADING_SCENE_TIME_BUDGET_PER_FRAME: Duration = Duration::from_millis(3);
+const MAIN_MENU_SPAWN_BUDGET_PER_FRAME: usize = 48;
+const WORLD_RESOURCE_SPAWN_BUDGET_PER_FRAME: usize = 48;
+const WORLD_FOLIAGE_SPAWN_BUDGET_PER_FRAME: usize = 96;
 const IN_GAME_AMBIENT_LIGHT_MULTIPLIER: f32 = 1.30;
 const IN_GAME_SATURATION_MULTIPLIER: f32 = 1.12;
 const BUILDING_SHADER_ASSET_PATH: &str = "shaders/building_material.wgsl";
@@ -1290,6 +1290,7 @@ struct RenderAssets {
     main_ui_scale: f32,
     settings_ui_scale: f32,
     presentation_materials: BTreeMap<StableId, ResolvedMaterialHandle>,
+    presentation_materials_by_source_path: BTreeMap<String, ResolvedMaterialHandle>,
 }
 
 impl RenderAssets {
@@ -1430,6 +1431,12 @@ struct SettingsValueButton {
     index: usize,
     direction: i8,
 }
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+struct SettingsValueRow(usize);
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+struct SettingsValueText(usize);
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 enum SecretsAction {
@@ -3258,7 +3265,7 @@ impl Plugin for StreamTownGamePlugin {
                     settings_tab_buttons.in_set(AccessibilityActionDispatch),
                     settings_value_buttons.in_set(AccessibilityActionDispatch),
                     settings_action_buttons.in_set(AccessibilityActionDispatch),
-                    rebuild_settings_rows,
+                    (rebuild_settings_rows, update_settings_value_rows).chain(),
                     update_settings_controls,
                     update_menu_overlay,
                     (
@@ -3563,7 +3570,7 @@ impl Plugin for StreamTownGamePlugin {
                     settings_tab_buttons.in_set(AccessibilityActionDispatch),
                     settings_value_buttons.in_set(AccessibilityActionDispatch),
                     settings_action_buttons.in_set(AccessibilityActionDispatch),
-                    rebuild_settings_rows,
+                    (rebuild_settings_rows, update_settings_value_rows).chain(),
                     update_settings_controls,
                     update_menu_overlay,
                     (
@@ -4270,6 +4277,16 @@ fn setup_rendering(
             (id.clone(), resolved)
         })
         .collect();
+    let presentation_materials_by_source_path = presentation
+        .0
+        .materials
+        .iter()
+        .filter_map(|(id, material)| {
+            presentation_materials
+                .get(id)
+                .map(|resolved| (material.source_path.clone(), resolved.clone()))
+        })
+        .collect();
     let selection = StableId::new(SELECTION_MASK_MATERIAL_ID)
         .ok()
         .and_then(|id| presentation_materials.get(&id))
@@ -4539,6 +4556,7 @@ fn setup_rendering(
         main_ui_scale: window_height / UNITY_MAIN_UI_REFERENCE_HEIGHT,
         settings_ui_scale: window_height / UNITY_SETTINGS_UI_REFERENCE_HEIGHT,
         presentation_materials,
+        presentation_materials_by_source_path,
     });
 }
 
@@ -8544,15 +8562,6 @@ fn insert_main_menu_material(
     }
 }
 
-fn main_menu_even_sample(index: usize, total: usize, budget: usize) -> bool {
-    if total <= budget {
-        return true;
-    }
-    let before = index.saturating_mul(budget) / total;
-    let after = index.saturating_add(1).saturating_mul(budget) / total;
-    after > before
-}
-
 fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> bool {
     // Tree geometry has an exact matching shadow deformation and must receive
     // light/shadows. Keep suppression only for the older animated materials
@@ -8563,6 +8572,15 @@ fn material_needs_self_shadow_suppression(material: &ResolvedMaterialHandle) -> 
     )
 }
 
+fn foliage_layer_material<'a>(
+    layer: &stream_town_domain::FoliageLayerDef,
+    render: &'a RenderAssets,
+) -> Option<&'a ResolvedMaterialHandle> {
+    render
+        .presentation_materials_by_source_path
+        .get(&layer.material_source_path)
+}
+
 fn main_menu_baked_decoration_indices(
     reference: &MainMenuSceneReference,
 ) -> (Vec<usize>, Vec<usize>) {
@@ -8570,7 +8588,7 @@ fn main_menu_baked_decoration_indices(
         .corrective_bake
         .as_ref()
         .expect("validated main-menu corrective bake");
-    let visible_resources = bake
+    let resource_indices = bake
         .resources
         .iter()
         .enumerate()
@@ -8579,20 +8597,7 @@ fn main_menu_baked_decoration_indices(
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    let resource_count = visible_resources.len();
-    let resource_indices = visible_resources
-        .into_iter()
-        .enumerate()
-        .filter(|(visible_index, _)| {
-            main_menu_even_sample(
-                *visible_index,
-                resource_count,
-                MAIN_MENU_RESOURCE_RENDER_BUDGET,
-            )
-        })
-        .map(|(_, index)| index)
-        .collect();
-    let visible_foliage = bake
+    let foliage_indices = bake
         .foliage
         .iter()
         .enumerate()
@@ -8601,19 +8606,6 @@ fn main_menu_baked_decoration_indices(
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
-    let foliage_count = visible_foliage.len();
-    let foliage_indices = visible_foliage
-        .into_iter()
-        .enumerate()
-        .filter(|(visible_index, _)| {
-            main_menu_even_sample(
-                *visible_index,
-                foliage_count,
-                MAIN_MENU_FOLIAGE_RENDER_BUDGET,
-            )
-        })
-        .map(|(_, index)| index)
-        .collect();
     (resource_indices, foliage_indices)
 }
 
@@ -8765,11 +8757,13 @@ fn spawn_main_menu_baked_foliage(
     if !converted_asset_exists(asset_root, &variant.asset_path) {
         return;
     }
-    let material = presentation
-        .model_materials
-        .get(&variant.source_model)
-        .and_then(|materials| materials.values().next())
-        .and_then(|id| render.presentation_materials.get(id));
+    let material = foliage_layer_material(layer, render).or_else(|| {
+        presentation
+            .model_materials
+            .get(&variant.source_model)
+            .and_then(|materials| materials.values().next())
+            .and_then(|id| render.presentation_materials.get(id))
+    });
     let mesh = asset_server.load(
         GltfAssetLabel::Primitive {
             mesh: 0,
@@ -8815,8 +8809,13 @@ fn spawn_main_menu_incrementally(
     };
     let reference = embedded_main_menu_scene();
     runtime.update_count = runtime.update_count.saturating_add(1);
-    let mut budget = MAIN_MENU_SPAWN_BUDGET_PER_FRAME;
-    while budget > 0 && runtime.phase != MainMenuSpawnPhase::Complete {
+    let frame_started = Instant::now();
+    let mut spawned_this_frame = 0;
+    while spawned_this_frame < MAIN_MENU_SPAWN_BUDGET_PER_FRAME
+        && runtime.phase != MainMenuSpawnPhase::Complete
+        && (spawned_this_frame == 0
+            || frame_started.elapsed() < LOADING_SCENE_TIME_BUDGET_PER_FRAME)
+    {
         let indices = match runtime.phase {
             MainMenuSpawnPhase::Models => &runtime.model_indices,
             MainMenuSpawnPhase::Resources => &runtime.resource_indices,
@@ -8870,7 +8869,7 @@ fn spawn_main_menu_incrementally(
         }
         runtime.cursor += 1;
         runtime.completed += 1;
-        budget -= 1;
+        spawned_this_frame += 1;
     }
     if runtime.phase == MainMenuSpawnPhase::Complete {
         info!(
@@ -11088,6 +11087,7 @@ fn spawn_settings_value_row(
     let (label, value) = settings_value_label(settings, index);
     parent
         .spawn((
+            SettingsValueRow(index),
             BackgroundColor(if selected == index {
                 Color::srgb(0.211, 0.240, 0.358)
             } else {
@@ -11121,6 +11121,7 @@ fn spawn_settings_value_row(
             for direction in [-1, 1] {
                 if direction == 1 {
                     row.spawn((
+                        SettingsValueText(index),
                         Text::new(value.clone()),
                         TextFont {
                             font_size: FontSize::Px(14.0),
@@ -11288,14 +11289,7 @@ fn rebuild_settings_rows(
     mut cache: ResMut<SettingsUiCache>,
     rows: Query<Entity, With<SettingsRows>>,
 ) {
-    let signature = format!(
-        "{:?}:{:?}:{}:{:?}:{}",
-        menu.page,
-        menu.settings_tab,
-        menu.selected,
-        menu.draft,
-        twitch_status_text(&twitch)
-    );
+    let signature = settings_rows_signature(&menu, &twitch);
     if cache.signature == signature {
         return;
     }
@@ -11350,6 +11344,44 @@ fn rebuild_settings_rows(
                 });
         }
     });
+}
+
+fn settings_rows_signature(menu: &MenuRuntime, twitch: &TwitchConnection) -> String {
+    let connection_status = if menu.settings_tab == SettingsTab::Connection {
+        twitch_status_text(twitch)
+    } else {
+        String::new()
+    };
+    format!(
+        "{:?}:{:?}:{connection_status}",
+        menu.page, menu.settings_tab
+    )
+}
+
+fn update_settings_value_rows(
+    menu: Res<MenuRuntime>,
+    mut rows: Query<(&SettingsValueRow, &mut BackgroundColor)>,
+    mut values: Query<(&SettingsValueText, &mut Text)>,
+) {
+    if menu.page != MenuPage::Settings || menu.settings_tab == SettingsTab::Connection {
+        return;
+    }
+    for (row, mut background) in &mut rows {
+        let desired = BackgroundColor(if menu.selected == row.0 {
+            Color::srgb(0.211, 0.240, 0.358)
+        } else {
+            Color::srgb(0.055, 0.071, 0.141)
+        });
+        if *background != desired {
+            *background = desired;
+        }
+    }
+    for (value_text, mut text) in &mut values {
+        let (_, desired) = settings_value_label(&menu.draft, value_text.0);
+        if text.0 != desired {
+            text.0 = desired;
+        }
+    }
 }
 
 fn update_settings_controls(
@@ -12565,13 +12597,34 @@ fn secrets_buttons(
                 }
             }
             SecretsAction::Save => {
-                let outcome = save_secrets_fields(&fields, &mut config, |_| {});
-                if outcome.is_ok() {
-                    restart_twitch_connection(&config.0, &mut connection);
-                    #[cfg(target_os = "windows")]
-                    broadcast.request_restart();
+                let previous = config.0.twitch.clone();
+                match save_secrets_fields(&fields, &mut config, |_| {}) {
+                    Ok(path) => {
+                        let (restart_chat, restart_broadcast) =
+                            secrets_restart_requirements(&previous, &config.0.twitch);
+                        if restart_chat {
+                            restart_twitch_connection(&config.0, &mut connection);
+                        }
+                        #[cfg(target_os = "windows")]
+                        if restart_broadcast {
+                            broadcast.request_restart();
+                        }
+                        secrets.feedback = if restart_chat || restart_broadcast {
+                            format!(
+                                "Saved and applied {}. Only changed Twitch connections are restarting.",
+                                path.display()
+                            )
+                        } else {
+                            format!(
+                                "Saved and applied {}. Active Twitch connections were preserved.",
+                                path.display()
+                            )
+                        };
+                    }
+                    Err(error) => {
+                        set_secrets_save_feedback(Err(error), &mut secrets, &mut connection);
+                    }
                 }
-                set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
             }
             SecretsAction::AuthorizeBot | SecretsAction::AuthorizeBroadcaster => {
                 if let Some(kind) = secrets.active_authorization {
@@ -12631,6 +12684,17 @@ fn save_secrets_fields(
     let path = save_runtime_config(&draft)?;
     config.0 = draft;
     Ok(path)
+}
+
+fn secrets_restart_requirements(
+    previous: &stream_town_domain::TwitchConfig,
+    current: &stream_town_domain::TwitchConfig,
+) -> (bool, bool) {
+    let client_changed = previous.client_id != current.client_id;
+    let channel_changed = previous.channel_login != current.channel_login;
+    let chat_changed = client_changed || channel_changed || previous.bot_login != current.bot_login;
+    let broadcast_changed = client_changed || channel_changed;
+    (chat_changed, broadcast_changed)
 }
 
 fn set_secrets_save_feedback(
@@ -14091,12 +14155,15 @@ fn generate_and_spawn_world(
     let generated = &prepared.world;
     let isolate_animation = std::env::var_os("STREAM_TOWN_SMOKE_ANIMATION_CLOSEUP").is_some();
     if spawn_runtime.phase == WorldSpawnPhase::Resources {
-        let end = spawn_runtime
-            .resource_cursor
-            .saturating_add(WORLD_RESOURCE_SPAWN_BUDGET_PER_FRAME)
-            .min(spawn_runtime.resource_total);
-        if !isolate_animation {
-            for resource in &generated.resources[spawn_runtime.resource_cursor..end] {
+        let start = spawn_runtime.resource_cursor;
+        let frame_started = Instant::now();
+        let mut end = start;
+        while end < spawn_runtime.resource_total
+            && end.saturating_sub(start) < WORLD_RESOURCE_SPAWN_BUDGET_PER_FRAME
+            && (end == start || frame_started.elapsed() < LOADING_SCENE_TIME_BUDGET_PER_FRAME)
+        {
+            if !isolate_animation {
+                let resource = &generated.resources[end];
                 let position = generated_resource_world_position(resource, &config.0, generated);
                 spawn_resource_visual(
                     &mut commands,
@@ -14110,6 +14177,7 @@ fn generate_and_spawn_world(
                     config.0.world.cell_size,
                 );
             }
+            end += 1;
         }
         spawn_runtime.resource_cursor = end;
         loading.work.resource_entities =
@@ -14127,12 +14195,15 @@ fn generate_and_spawn_world(
         return;
     }
     if spawn_runtime.phase == WorldSpawnPhase::Foliage {
-        let end = spawn_runtime
-            .foliage_cursor
-            .saturating_add(WORLD_FOLIAGE_SPAWN_BUDGET_PER_FRAME)
-            .min(spawn_runtime.foliage_total);
-        if let Some(asset_server) = asset_server.as_deref() {
-            for foliage in &generated.foliage[spawn_runtime.foliage_cursor..end] {
+        let start = spawn_runtime.foliage_cursor;
+        let frame_started = Instant::now();
+        let mut end = start;
+        while end < spawn_runtime.foliage_total
+            && end.saturating_sub(start) < WORLD_FOLIAGE_SPAWN_BUDGET_PER_FRAME
+            && (end == start || frame_started.elapsed() < LOADING_SCENE_TIME_BUDGET_PER_FRAME)
+        {
+            if let Some(asset_server) = asset_server.as_deref() {
+                let foliage = &generated.foliage[end];
                 let Some(visual) = resolve_foliage_visual(
                     &content.0,
                     &presentation.0,
@@ -14143,6 +14214,7 @@ fn generate_and_spawn_world(
                     &config.0,
                     foliage,
                 ) else {
+                    end += 1;
                     continue;
                 };
                 let key = foliage_batch_key(foliage);
@@ -14154,6 +14226,7 @@ fn generate_and_spawn_world(
                 render_stats.foliage_instances += 1;
                 render_stats.foliage_visible_instances += 1;
             }
+            end += 1;
         }
         spawn_runtime.foliage_cursor = end;
         loading.work.foliage_entities =
@@ -15108,11 +15181,13 @@ fn resolve_foliage_visual(
         * resource_visual_scale(config.world.cell_size)
         * (f32::from(foliage.scale_milli) / 1_000.0);
     let visibility_end = foliage_visibility_distance(scale);
-    let mapped_material = presentation
-        .model_materials
-        .get(&variant.source_model)
-        .and_then(|materials| materials.values().next())
-        .and_then(|id| render.presentation_materials.get(id));
+    let mapped_material = foliage_layer_material(layer, render).or_else(|| {
+        presentation
+            .model_materials
+            .get(&variant.source_model)
+            .and_then(|materials| materials.values().next())
+            .and_then(|id| render.presentation_materials.get(id))
+    });
     let suppress_self_shadows = mapped_material.is_some_and(material_needs_self_shadow_suppression);
     let material = match mapped_material {
         Some(
@@ -34251,6 +34326,36 @@ mod tests {
     }
 
     #[test]
+    fn secrets_save_restarts_only_connections_affected_by_visible_fields() {
+        let original = GameConfig::default().twitch;
+        assert_eq!(
+            secrets_restart_requirements(&original, &original),
+            (false, false)
+        );
+
+        let mut bot_changed = original.clone();
+        bot_changed.bot_login = "another_bot".to_owned();
+        assert_eq!(
+            secrets_restart_requirements(&original, &bot_changed),
+            (true, false)
+        );
+
+        let mut channel_changed = original.clone();
+        channel_changed.channel_login = "another_channel".to_owned();
+        assert_eq!(
+            secrets_restart_requirements(&original, &channel_changed),
+            (true, true)
+        );
+
+        let mut client_changed = original.clone();
+        client_changed.client_id = "another-client".to_owned();
+        assert_eq!(
+            secrets_restart_requirements(&original, &client_changed),
+            (true, true)
+        );
+    }
+
+    #[test]
     fn secrets_bot_status_distinguishes_authorized_connected_and_command_ready() {
         let mut config = GameConfig::default();
         config.twitch.enabled = false;
@@ -34414,18 +34519,32 @@ mod tests {
     }
 
     #[test]
-    fn main_menu_decoration_sampling_is_even_and_budgeted() {
-        let selected = (0..12_392)
-            .filter(|index| main_menu_even_sample(*index, 12_392, 3_200))
-            .collect::<Vec<_>>();
-        assert_eq!(selected.len(), 3_200);
-        assert!(selected.windows(2).all(|pair| pair[1] > pair[0]));
-        assert!((0..500).all(|index| main_menu_even_sample(index, 500, 900)));
-
+    fn main_menu_schedules_every_visible_baked_decoration() {
         let reference = embedded_main_menu_scene();
         let (resource_indices, foliage_indices) = main_menu_baked_decoration_indices(reference);
-        assert!(resource_indices.len() <= MAIN_MENU_RESOURCE_RENDER_BUDGET);
-        assert!(foliage_indices.len() <= MAIN_MENU_FOLIAGE_RENDER_BUDGET);
+        let bake = reference.corrective_bake.as_ref().unwrap();
+        let visible_resource_count = bake
+            .resources
+            .iter()
+            .filter(|resource| {
+                menu_baked_position_visible(reference, Vec3::from_array(resource.position))
+            })
+            .count();
+        let visible_foliage_count = bake
+            .foliage
+            .iter()
+            .filter(|foliage| {
+                menu_baked_position_visible(reference, Vec3::from_array(foliage.position))
+            })
+            .count();
+        assert_eq!(resource_indices.len(), visible_resource_count);
+        assert_eq!(foliage_indices.len(), visible_foliage_count);
+        let visible_layers = foliage_indices
+            .iter()
+            .map(|index| bake.foliage[*index].layer.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(visible_layers.contains("foliage:land:0"));
+        assert!(visible_layers.contains("foliage:land:1"));
         let model_count = reference
             .instances
             .iter()
@@ -34639,6 +34758,24 @@ mod tests {
             app.world().resource::<MenuRuntime>().page,
             MenuPage::Settings
         );
+    }
+
+    #[test]
+    fn settings_value_edits_do_not_rebuild_the_other_readouts() {
+        let twitch = TwitchConnection::default();
+        let mut menu = MenuRuntime {
+            page: MenuPage::Settings,
+            settings_tab: SettingsTab::Audio,
+            selected: 12,
+            ..default()
+        };
+        let signature = settings_rows_signature(&menu, &twitch);
+        menu.draft.audio.music = 0.25;
+        menu.selected = 13;
+        assert_eq!(settings_rows_signature(&menu, &twitch), signature);
+
+        menu.settings_tab = SettingsTab::Gameplay;
+        assert_ne!(settings_rows_signature(&menu, &twitch), signature);
     }
 
     #[test]

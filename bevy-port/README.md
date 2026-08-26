@@ -200,7 +200,9 @@ explicit paths. The Settings tab in `stream_town_tools` and the shipping Main
 Menu/in-game Escape panel edit and validate the native file. The runtime panel
 extends Unity's authored Video, Audio, Gameplay, and Connection shell with a
 focused Accessibility tab, pointer controls, Apply, Defaults, Back, and the
-unsaved-draft confirmation.
+unsaved-draft confirmation. Value rows keep stable UI entities while a draft is
+edited, so changing one audio gain updates only that readout instead of rebuilding
+and flashing every row.
 The Connection tab reports runtime Twitch status while OAuth and secret storage
 remain in the focused tools application.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
@@ -242,10 +244,16 @@ audio device, `ffmpeg.exe` subprocess, serialized stream key, or unbounded frame
 queue is involved. Automatic reconnect and runtime-console counters expose the
 encoder, ingest, video drops, and audio progress. The independently stored
 broadcaster token and fetched stream key are always redacted.
+The encoder worker owns the constant-rate video clock and repeats the latest
+completed GPU frame if the game thread stalls. Audio starts against the first
+video frame and continues on its 48 kHz capture clock, preventing loading work
+from advancing audio while leaving video timestamps behind.
 The protected Main Menu > Secrets screen also reports credential presence, live
 bot/command-gate state, and the direct encoder phase with advancing media-frame
 counts. Its Restart stream control reapplies the visible settings and rebuilds
-the in-process Twitch connection without restarting the game.
+the in-process Twitch connection without restarting the game. Save and apply
+restarts only a connection whose client ID or login actually changed; a no-op
+save preserves the live bot gate, `!connect` authorization, and broadcast worker.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
@@ -882,6 +890,11 @@ through its neighbors. It applies a presentation-only 3x vertical multiplier so
 the unchanged generator's half-metre terraces remain visible from the side-on
 menu camera; the seed, generator hash, horizontal positions, 2,565 resources,
 and 12,392 foliage records remain unchanged.
+Runtime frustum filtering now schedules every visible baked decoration instead
+of sampling away most trees and grass. Foliage resolves the layer's authored
+material (including `Env_Grass`), and menu/world construction uses a three
+millisecond plus count ceiling per update so the loading UI keeps presenting
+while the complete scene is assembled.
 The menu uses a -1.5 EV scene baseline at the neutral brightness setting, a
 fixed-depth translucent water material over a uniform ocean floor, and 21
 non-shadowing rectangular-prism clouds. Fully submerged checker-terrain
