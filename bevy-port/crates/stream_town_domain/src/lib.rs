@@ -25,7 +25,7 @@ pub use command::{
     CommandParseError, CustomizationKind, UNITY_CREATE_COMMAND_ALIASES, unity_command_usage,
 };
 pub use config::{
-    BroadcastConfig, BroadcastEncoderPreference, GameConfig, GameplayConfig,
+    BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode, GameConfig, GameplayConfig,
     SHIPPING_FISH_GOD_REWARD_ID, SHIPPING_SECONDS_PER_DAY, TimeCycleConfig, TimeCycleSample,
     TwitchConfig, WindowConfig, WorldGenConfig,
 };

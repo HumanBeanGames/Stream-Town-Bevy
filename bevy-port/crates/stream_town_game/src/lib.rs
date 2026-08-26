@@ -87,18 +87,18 @@ use stream_town_domain::{
     AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
     ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BroadcastConfig,
-    BroadcastEncoderPreference, BuildingAction, BuildingDef, BuildingDirection,
-    BuildingHealthDisplayMode, BuildingModelDef, BuildingState, CURRENT_RUNTIME_CONSOLE_SCHEMA,
-    CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection, ChatCommand, ChimneySmokeDef,
-    ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState, EnemyModelSetDef,
-    EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
-    HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata, MainMenuSceneReference,
-    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
-    ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
-    RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
-    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
-    StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
+    BroadcastEncoderPreference, BroadcastRenderMode, BuildingAction, BuildingDef,
+    BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
+    CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
+    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
+    EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage,
+    GeneratedWorld, GridPos, HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata,
+    MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
+    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings,
+    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
+    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
+    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
+    StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
     generate_world_with_content, generate_world_with_content_observed, unity_command_usage,
 };
@@ -302,7 +302,7 @@ const BUILDING_HIT_SECONDS: f32 = 0.5;
 const BUILDING_HIT_SMOKE_SPEED: f32 = 3.0;
 const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
 const SETTINGS_STREAMING_FIRST_INDEX: usize = 23;
-const SETTINGS_STREAMING_LAST_INDEX: usize = 29;
+const SETTINGS_STREAMING_LAST_INDEX: usize = 30;
 const SETTINGS_APPLY_INDEX: usize = 30;
 const SETTINGS_DEFAULTS_INDEX: usize = 31;
 const SETTINGS_BACK_INDEX: usize = 32;
@@ -3290,6 +3290,9 @@ fn local_broadcast_status_label(
             ("● LIVE", Color::srgb(1.0, 0.28, 0.25))
         }
         DirectBroadcastPhase::Broadcasting => ("● NOT LIVE · TEST", Color::srgb(0.98, 0.78, 0.28)),
+        DirectBroadcastPhase::WaitingForGameplay => {
+            ("● READY · STARTS IN GAME", Color::srgb(0.48, 0.86, 1.0))
+        }
         DirectBroadcastPhase::WaitingForBroadcasterAuthorization
         | DirectBroadcastPhase::ResolvingIngest
         | DirectBroadcastPhase::Connecting
@@ -3349,7 +3352,9 @@ fn local_broadcast_status_button(
     >,
     mut buttons: LocalBroadcastStatusButtonQuery,
 ) {
-    let clickable = *state.get() == GameState::MainMenu && menu.page == MenuPage::Closed;
+    let phase = broadcast.snapshot().phase;
+    let clickable =
+        phase.is_active() || (*state.get() == GameState::MainMenu && menu.page == MenuPage::Closed);
     for mut cursor in &mut windows {
         cursor.visible = clickable;
         cursor.hit_test = clickable;
@@ -3364,7 +3369,6 @@ fn local_broadcast_status_button(
         if !clickable || *interaction != Interaction::Pressed {
             continue;
         }
-        let phase = broadcast.snapshot().phase;
         if phase.is_active() {
             control.request_stop();
         } else if !accounts_ready {
@@ -3380,6 +3384,8 @@ impl Plugin for StreamTownGamePlugin {
         app.add_plugins((UnityColorFilterPlugin, TabNavigationPlugin));
         #[cfg(target_os = "windows")]
         app.add_plugins(direct_broadcast::DirectTwitchBroadcastPlugin);
+        #[cfg(target_os = "windows")]
+        app.add_systems(Update, sync_stream_only_operator_menus);
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
         let presented_frames = PresentedRenderFrames::new(render_schedule_available);
         let gpu_readiness = GpuReadinessProbe::default();
@@ -3955,6 +3961,31 @@ impl Plugin for StreamTownGamePlugin {
                 OnExit(GameState::Credits),
                 (cleanup_state_entities, cleanup_credits),
             );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn sync_stream_only_operator_menus(
+    mut commands: Commands,
+    menu: Res<MenuRuntime>,
+    operator_camera: Query<Entity, With<direct_broadcast::StreamOperatorCamera>>,
+    mut operator_windows: Query<&mut CursorOptions, With<direct_broadcast::StreamOperatorWindow>>,
+    roots: MenuOverlayEntityQuery,
+    mut previous_operator_camera: Local<Option<Entity>>,
+) {
+    if let Ok(camera) = operator_camera.single() {
+        *previous_operator_camera = Some(camera);
+        for mut cursor in &mut operator_windows {
+            cursor.visible = menu.page != MenuPage::Closed;
+            cursor.hit_test = true;
+        }
+        for entity in &roots {
+            commands.entity(entity).insert(UiTargetCamera(camera));
+        }
+    } else if previous_operator_camera.take().is_some() {
+        for entity in &roots {
+            commands.entity(entity).remove::<UiTargetCamera>();
+        }
     }
 }
 
@@ -11417,7 +11448,7 @@ fn settings_tab_indices(tab: SettingsTab) -> &'static [usize] {
         SettingsTab::Audio => &[11, 12, 13, 14],
         SettingsTab::Gameplay => &[15, 16, 17, 18, 19],
         SettingsTab::Accessibility => &[20, 21, 22],
-        SettingsTab::Streaming => &[23, 24, 25, 26, 27, 28, 29],
+        SettingsTab::Streaming => &[23, 24, 25, 26, 27, 28, 29, 30],
         SettingsTab::Connection => &[],
     }
 }
@@ -11543,6 +11574,7 @@ fn settings_value_label(
             "Bandwidth Test",
             on_off(streaming.bandwidth_test).to_owned(),
         ),
+        30 => ("Render Mode", format!("{:?}", streaming.render_mode)),
         _ => ("Unknown", String::new()),
     }
 }
@@ -13735,6 +13767,10 @@ fn broadcast_connection_status(
             "● Validating broadcaster authorization and fetching the stream key...".to_owned(),
             SecretsStatusTone::Pending,
         ),
+        DirectBroadcastPhase::WaitingForGameplay => (
+            "● Stream prepared; it will begin after the in-game loading cover retires.".to_owned(),
+            SecretsStatusTone::Good,
+        ),
         DirectBroadcastPhase::ResolvingIngest => (
             "● Selecting a Twitch ingest server...".to_owned(),
             SecretsStatusTone::Pending,
@@ -13751,9 +13787,12 @@ fn broadcast_connection_status(
             };
             (
                 format!(
-                    "● {mode}; {} video / {} audio frames via {} ({})",
-                    snapshot.encoded_video_frames,
-                    snapshot.encoded_audio_frames,
+                    "● {mode}; {:.1} captured / {:.1} output FPS (target {}), {} video / {} audio drops via {} ({})",
+                    snapshot.captured_video_fps,
+                    snapshot.encoded_video_fps,
+                    config.twitch.broadcast.frames_per_second,
+                    snapshot.dropped_video_frames,
+                    snapshot.dropped_audio_frames,
                     snapshot.encoder.as_deref().unwrap_or("encoder pending"),
                     snapshot.ingest.as_deref().unwrap_or("ingest pending")
                 ),
@@ -14526,6 +14565,11 @@ fn adjust_settings_menu(
             streaming.encoder = cycle_choice(&ENCODERS, streaming.encoder, increase);
         }
         29 => streaming.bandwidth_test = !streaming.bandwidth_test,
+        30 => {
+            const MODES: [BroadcastRenderMode; 2] =
+                [BroadcastRenderMode::StreamOnly, BroadcastRenderMode::Headed];
+            streaming.render_mode = cycle_choice(&MODES, streaming.render_mode, increase);
+        }
         _ => {}
     }
 }
@@ -28439,14 +28483,25 @@ fn publish_runtime_console_status(
             {
                 let snapshot = broadcast.snapshot();
                 format!(
-                    "{:?}; encoder={}; ingest={}; video={}/{} dropped={}; audio={}",
+                    "{:?}; encoder={}; ingest={}; video={}/{} fps={:.1}/{:.1} dropped={} replaced={} skipped={}; audio={} dropped={} queue={}/{}; capture_ms={:.2}/{:.2} encode_ms={:.2}/{:.2}",
                     snapshot.phase,
                     snapshot.encoder.as_deref().unwrap_or("pending"),
                     snapshot.ingest.as_deref().unwrap_or("pending"),
                     snapshot.encoded_video_frames,
                     snapshot.captured_video_frames,
+                    snapshot.captured_video_fps,
+                    snapshot.encoded_video_fps,
                     snapshot.dropped_video_frames,
+                    snapshot.replaced_video_frames,
+                    snapshot.skipped_video_frames,
                     snapshot.encoded_audio_frames,
+                    snapshot.dropped_audio_frames,
+                    snapshot.audio_queue_depth,
+                    snapshot.audio_queue_high_water,
+                    snapshot.average_capture_ms,
+                    snapshot.maximum_capture_ms,
+                    snapshot.average_encode_ms,
+                    snapshot.maximum_encode_ms,
                 )
             }
             #[cfg(not(target_os = "windows"))]
@@ -35554,11 +35609,23 @@ mod tests {
             encoded_video_frames: 10,
             dropped_video_frames: 2,
             encoded_audio_frames: 20,
+            dropped_audio_frames: 1,
+            replaced_video_frames: 1,
+            skipped_video_frames: 0,
+            audio_queue_depth: 0,
+            audio_queue_high_water: 2,
+            captured_video_fps: 29.5,
+            encoded_video_fps: 30.0,
+            average_capture_ms: 8.0,
+            maximum_capture_ms: 12.0,
+            average_encode_ms: 2.0,
+            maximum_encode_ms: 4.0,
         };
         let (status, tone) =
             broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
         assert!(status.contains("BANDWIDTH TEST — not live"));
-        assert!(status.contains("10 video / 20 audio frames"));
+        assert!(status.contains("29.5 captured / 30.0 output FPS"));
+        assert!(status.contains("2 video / 1 audio drops"));
         assert_eq!(tone, SecretsStatusTone::Good);
 
         config.twitch.broadcast.bandwidth_test = false;
@@ -36092,7 +36159,7 @@ mod tests {
             .flat_map(settings_tab_indices)
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(editable, (0..30).collect::<Vec<_>>());
+        assert_eq!(editable, (0..31).collect::<Vec<_>>());
         for index in editable {
             let (label, value) = settings_value_label(
                 &PlayerSettings::default(),

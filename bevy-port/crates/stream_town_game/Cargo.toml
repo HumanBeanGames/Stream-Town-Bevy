@@ -25,6 +25,7 @@ webbrowser.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 ffmpeg-next.workspace = true
 wasapi.workspace = true
+windows-capture.workspace = true
 
 [dev-dependencies]
 sha2.workspace = true

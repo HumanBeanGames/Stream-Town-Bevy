@@ -166,10 +166,20 @@ pub enum BroadcastEncoderPreference {
     OpenH264,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum BroadcastRenderMode {
+    StreamOnly,
+    Headed,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BroadcastConfig {
     /// Broadcast remains independently opt-in from chat connectivity.
     pub enabled: bool,
+    /// Renders directly into an offscreen broadcast target and replaces the
+    /// local game view with a lightweight operator dashboard while live.
+    #[serde(default = "broadcast_render_mode_default")]
+    pub render_mode: BroadcastRenderMode,
     /// Legacy schema field retained for configuration compatibility. The game
     /// always starts offline and requires an explicit operator Go Live action.
     pub start_on_launch: bool,
@@ -191,6 +201,7 @@ impl Default for BroadcastConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            render_mode: BroadcastRenderMode::StreamOnly,
             start_on_launch: false,
             width: 1_280,
             height: 720,
@@ -202,6 +213,10 @@ impl Default for BroadcastConfig {
             bandwidth_test: false,
         }
     }
+}
+
+const fn broadcast_render_mode_default() -> BroadcastRenderMode {
+    BroadcastRenderMode::StreamOnly
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]

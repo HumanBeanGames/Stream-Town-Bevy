@@ -238,23 +238,30 @@ authorized bot has joined the configured channel. The Twitch tab can verify a re
 operator logins to stable numeric IDs, and capture a live Channel Points reward
 ID. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 On Windows, the same Twitch tab can separately authorize the configured channel
-with `channel:read:stream_key` and enable direct broadcasting. Bevy render
-readback feeds a bounded in-process H.264 encoder, WASAPI application loopback
-captures only Stream Town's Bevy and Bevy Tidal audio, and FFmpeg's FLV muxer
-publishes directly to Twitch RTMP. No OBS installation, desktop capture, virtual
-audio device, `ffmpeg.exe` subprocess, serialized stream key, or unbounded frame
-queue is involved. Automatic reconnect and runtime-console counters expose the
-encoder, ingest, video drops, and audio progress. The independently stored
-broadcaster token and fetched stream key are always redacted.
+with `channel:read:stream_key` and enable direct broadcasting. The default
+stream-only mode renders the town once into a full-resolution offscreen target,
+moves that GPU readback allocation directly into a latest-frame mailbox, and
+replaces the local game window with a separate 960x540 operator dashboard and a
+320x180 preview. The optional headed mode uses Windows Graphics Capture instead.
+WASAPI application loopback captures only Stream Town's Bevy and Bevy Tidal
+audio, and FFmpeg's FLV muxer publishes directly to Twitch RTMP. No OBS
+installation, desktop capture, virtual audio device, `ffmpeg.exe` subprocess,
+serialized stream key, or unbounded frame queue is involved. Automatic reconnect
+and five-second health reports expose captured/output FPS, encoder/ingest,
+separate video/audio drops, queue depth, and capture/encode latency. The
+independently stored broadcaster token and fetched stream key are always redacted.
 The encoder worker owns the constant-rate video clock and repeats the latest
 completed GPU frame if the game thread stalls. Audio starts against the first
 video frame and continues on its 48 kHz capture clock, preventing loading work
 from advancing audio while leaving video timestamps behind.
 Every Windows launch also creates a small, always-on-top local status window
 showing `GO LIVE`, `LIVE`, `NOT LIVE`, `NOT SET UP`, test, connecting, or error
-state. On the main menu it is clickable; in-game, the Esc menu provides the Go
-Live / End Stream action while the local badge remains non-interactive. Clicking
-the main-menu `LIVE` badge ends the current stream cleanly. It
+state. Active/prepared states are clickable everywhere so the operator can end a
+session even from the stream-only dashboard. Clicking `GO LIVE` authorizes and
+prepares the destination, but does not open RTMP, start media clocks, or capture
+audio/video until the truthful world-reveal gate has retired the loading cover
+and inserted `GameplayReady`. The Esc menu is rendered only to the operator
+camera in stream-only mode and retains its End Stream and Settings controls. It
 is a separate opaque render surface for broad driver compatibility, follows the
 primary window, and is deliberately absent from the primary-window frames sent
 to Twitch. Automated capture scripts forcibly disable direct broadcasting so a
@@ -265,12 +272,12 @@ counts. Its Restart stream control reapplies the visible settings and rebuilds
 the in-process Twitch connection without restarting the game. Save and apply
 restarts only a connection whose client ID or login actually changed; a no-op
 save preserves the live bot connection and broadcast worker. The application
-always starts offline; broadcasting begins only after an explicit Go Live or
-Restart stream action. New/Load Town opens the protected Secrets setup prompt
+always starts offline; an explicit Go Live or Restart stream action prepares the
+session and gameplay readiness starts it. New/Load Town opens the protected Secrets setup prompt
 until the bot is connected and both account authorizations are stored.
 The ordinary Settings menu includes a Streaming tab for direct-stream enablement,
-output resolution, frame rate, video/audio bitrate, encoder preference, and
-bandwidth-test mode. These controls are visibly locked from authorization through
+output resolution, frame rate, video/audio bitrate, encoder preference,
+bandwidth-test mode, and stream-only/headed rendering. These controls are visibly locked from authorization through
 shutdown while a broadcast session is active; end the stream before changing or
 applying them. Saved values take effect on the next Go Live action.
 Unity-compatible game-master commands use a separate explicit list of numeric

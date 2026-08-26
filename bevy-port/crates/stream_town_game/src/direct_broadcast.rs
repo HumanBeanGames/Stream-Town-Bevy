@@ -1,12 +1,13 @@
 //! In-process Twitch video broadcast for the Windows build.
 //!
-//! Frames are read back from Bevy's primary render target, game-process audio
-//! is captured with WASAPI application loopback, and dynamically linked `FFmpeg`
-//! libraries encode/mux H.264 + AAC into Twitch's RTMP ingest. No subprocess,
-//! desktop capture, virtual cable, or OBS installation is involved.
+//! Video comes either from Windows Graphics Capture of the game preview or from
+//! an asynchronous Bevy offscreen-target readback in stream-only mode. Process
+//! audio is captured with WASAPI application loopback, and dynamically linked
+//! `FFmpeg` libraries encode/mux H.264 + AAC into Twitch's RTMP ingest. No
+//! subprocess, virtual cable, or OBS installation is involved.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fmt,
     sync::{
         Arc, Mutex,
@@ -19,18 +20,31 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use bevy::{
+    camera::RenderTarget,
     prelude::*,
     render::{
-        render_resource::TextureFormat,
-        view::screenshot::{Screenshot, ScreenshotCaptured},
+        gpu_readback::{Readback, ReadbackComplete},
+        render_resource::{TextureFormat, TextureUsages},
     },
+    window::{PrimaryWindow, WindowRef, WindowResolution},
+    winit::{UpdateMode, WinitSettings},
 };
 use ffmpeg::{
     ChannelLayout, Codec, Dictionary, Packet, Rational, codec, encoder, format, frame, software,
 };
 use ffmpeg_next as ffmpeg;
-use stream_town_domain::{BroadcastConfig, BroadcastEncoderPreference};
+use stream_town_domain::{BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode};
 use wasapi::{AudioClient, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
+use windows_capture::{
+    capture::{Context as CaptureContext, GraphicsCaptureApiHandler},
+    frame::Frame as CapturedWindowFrame,
+    graphics_capture_api::InternalCaptureControl,
+    settings::{
+        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
+        MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings as CaptureSettings,
+    },
+    window::Window as CapturableWindow,
+};
 
 use crate::{
     RuntimeConfig, SensitiveScreenActive, SensitiveScreenUpdateSet,
@@ -40,13 +54,17 @@ use crate::{
 const AUDIO_SAMPLE_RATE: u32 = 48_000;
 const AUDIO_CHANNELS: usize = 2;
 const AUDIO_FRAME_SAMPLES: usize = 1_024;
-const MEDIA_QUEUE_CAPACITY: usize = 12;
+const AUDIO_QUEUE_CAPACITY: usize = 32;
+const STREAM_HEALTH_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_RECONNECT_DELAY_SECONDS: u64 = 30;
+const OPERATOR_WINDOW_WIDTH: u32 = 960;
+const OPERATOR_WINDOW_HEIGHT: u32 = 540;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectBroadcastPhase {
     Disabled,
     WaitingForBroadcasterAuthorization,
+    WaitingForGameplay,
     ResolvingIngest,
     Connecting,
     Broadcasting,
@@ -62,6 +80,7 @@ impl DirectBroadcastPhase {
         matches!(
             self,
             Self::WaitingForBroadcasterAuthorization
+                | Self::WaitingForGameplay
                 | Self::ResolvingIngest
                 | Self::Connecting
                 | Self::Broadcasting
@@ -71,7 +90,7 @@ impl DirectBroadcastPhase {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DirectBroadcastSnapshot {
     pub phase: DirectBroadcastPhase,
     pub encoder: Option<String>,
@@ -80,6 +99,17 @@ pub struct DirectBroadcastSnapshot {
     pub encoded_video_frames: u64,
     pub dropped_video_frames: u64,
     pub encoded_audio_frames: u64,
+    pub dropped_audio_frames: u64,
+    pub replaced_video_frames: u64,
+    pub skipped_video_frames: u64,
+    pub audio_queue_depth: u64,
+    pub audio_queue_high_water: u64,
+    pub captured_video_fps: f64,
+    pub encoded_video_fps: f64,
+    pub average_capture_ms: f64,
+    pub maximum_capture_ms: f64,
+    pub average_encode_ms: f64,
+    pub maximum_encode_ms: f64,
 }
 
 #[derive(Resource)]
@@ -88,11 +118,45 @@ pub struct DirectBroadcastRuntime {
     encoder: Option<String>,
     ingest: Option<String>,
     authorization: Option<Arc<Mutex<Receiver<AuthorizationEvent>>>>,
+    pending_target: Option<BroadcastTarget>,
     controller: Option<BroadcastController>,
     capture_elapsed: f32,
-    capture_in_flight: bool,
-    captured_video_frames: u64,
+    broadcast_started: Option<Instant>,
+    health_reported_at: Option<Instant>,
+    health_reported_metrics: BroadcastMetricsSnapshot,
+    rolling_captured_video_fps: f64,
+    rolling_encoded_video_fps: f64,
 }
+
+#[derive(Resource, Default)]
+struct StreamOnlyCaptureState {
+    target: Option<Handle<Image>>,
+    readback_entity: Option<Entity>,
+    operator_window: Option<Entity>,
+    operator_camera: Option<Entity>,
+    operator_root: Option<Entity>,
+    previous_camera_targets: HashMap<Entity, RenderTarget>,
+    previous_primary_visibility: Option<bool>,
+    previous_unfocused_mode: Option<UpdateMode>,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Component)]
+pub(crate) struct StreamOperatorCamera;
+
+#[derive(Component)]
+pub(crate) struct StreamOperatorWindow;
+
+#[derive(Component)]
+struct StreamOperatorInfoText;
+
+type StreamCameraTargetQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut RenderTarget),
+    (With<Camera>, Without<StreamOperatorCamera>),
+>;
 
 impl Default for DirectBroadcastRuntime {
     fn default() -> Self {
@@ -101,10 +165,14 @@ impl Default for DirectBroadcastRuntime {
             encoder: None,
             ingest: None,
             authorization: None,
+            pending_target: None,
             controller: None,
             capture_elapsed: 0.0,
-            capture_in_flight: false,
-            captured_video_frames: 0,
+            broadcast_started: None,
+            health_reported_at: None,
+            health_reported_metrics: BroadcastMetricsSnapshot::default(),
+            rolling_captured_video_fps: 0.0,
+            rolling_encoded_video_fps: 0.0,
         }
     }
 }
@@ -116,14 +184,42 @@ impl DirectBroadcastRuntime {
             BroadcastMetricsSnapshot::default,
             BroadcastController::metrics,
         );
+        let elapsed = self
+            .broadcast_started
+            .map_or(0.0, |started| started.elapsed().as_secs_f64());
         DirectBroadcastSnapshot {
             phase: self.phase.clone(),
             encoder: self.encoder.clone(),
             ingest: self.ingest.clone(),
-            captured_video_frames: self.captured_video_frames,
+            captured_video_frames: metrics.captured_video,
             encoded_video_frames: metrics.encoded_video,
             dropped_video_frames: metrics.dropped_video,
             encoded_audio_frames: metrics.encoded_audio,
+            dropped_audio_frames: metrics.dropped_audio,
+            replaced_video_frames: metrics.replaced_video,
+            skipped_video_frames: metrics.skipped_video,
+            audio_queue_depth: metrics.queued_audio,
+            audio_queue_high_water: metrics.audio_queue_high_water,
+            captured_video_fps: if self.rolling_captured_video_fps > 0.0 {
+                self.rolling_captured_video_fps
+            } else {
+                rate_per_second(metrics.captured_video, elapsed)
+            },
+            encoded_video_fps: if self.rolling_encoded_video_fps > 0.0 {
+                self.rolling_encoded_video_fps
+            } else {
+                rate_per_second(metrics.encoded_video, elapsed)
+            },
+            average_capture_ms: average_milliseconds(
+                metrics.capture_micros,
+                metrics.capture_samples,
+            ),
+            maximum_capture_ms: micros_to_milliseconds(metrics.maximum_capture_micros),
+            average_encode_ms: average_milliseconds(
+                metrics.video_encode_micros,
+                metrics.encoded_video,
+            ),
+            maximum_encode_ms: micros_to_milliseconds(metrics.maximum_video_encode_micros),
         }
     }
 
@@ -131,6 +227,30 @@ impl DirectBroadcastRuntime {
     pub(crate) fn set_phase_for_test(&mut self, phase: DirectBroadcastPhase) {
         self.phase = phase;
     }
+}
+
+fn rate_per_second(count: u64, elapsed_seconds: f64) -> f64 {
+    if elapsed_seconds > f64::EPSILON {
+        f64::from(u32::try_from(count).unwrap_or(u32::MAX)) / elapsed_seconds
+    } else {
+        0.0
+    }
+}
+
+fn average_milliseconds(total_micros: u64, samples: u64) -> f64 {
+    if samples == 0 {
+        0.0
+    } else {
+        micros_to_milliseconds(total_micros) / f64::from(u32::try_from(samples).unwrap_or(u32::MAX))
+    }
+}
+
+fn micros_to_milliseconds(micros: u64) -> f64 {
+    Duration::from_micros(micros).as_secs_f64() * 1_000.0
+}
+
+fn duration_as_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 #[derive(Resource, Default)]
@@ -162,16 +282,74 @@ impl Plugin for DirectTwitchBroadcastPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DirectBroadcastRuntime>()
             .init_resource::<DirectBroadcastControl>()
+            .init_resource::<StreamOnlyCaptureState>()
             .add_systems(
                 Update,
                 (
+                    start_local_broadcast_diagnostic,
                     apply_direct_broadcast_control,
                     poll_direct_broadcast_authorization,
+                    start_prepared_broadcast_when_gameplay_ready,
                     poll_direct_broadcast_worker,
+                    sync_stream_only_capture,
+                    update_stream_operator_info,
                     capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
                 )
                     .chain(),
             );
+    }
+}
+
+fn start_local_broadcast_diagnostic(
+    config: Res<RuntimeConfig>,
+    gameplay_ready: Option<Res<crate::GameplayReady>>,
+    mut runtime: ResMut<DirectBroadcastRuntime>,
+) {
+    if runtime.phase != DirectBroadcastPhase::Disabled
+        || gameplay_ready.is_none()
+        || std::env::var_os("STREAM_TOWN_AUTOSTART_BROADCAST_DIAGNOSTIC").is_none()
+    {
+        return;
+    }
+    let Some(output) = std::env::var_os("STREAM_TOWN_BROADCAST_DIAGNOSTIC_OUTPUT") else {
+        runtime.phase = DirectBroadcastPhase::Error(
+            "broadcast diagnostic autostart requires STREAM_TOWN_BROADCAST_DIAGNOSTIC_OUTPUT"
+                .to_owned(),
+        );
+        return;
+    };
+    if !config.0.twitch.broadcast.enabled {
+        runtime.phase = DirectBroadcastPhase::Error(
+            "broadcast diagnostic autostart requires direct streaming to be enabled".to_owned(),
+        );
+        return;
+    }
+    let output = std::path::PathBuf::from(output);
+    if let Some(parent) = output.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        runtime.phase = DirectBroadcastPhase::Error(format!(
+            "could not create broadcast diagnostic directory: {error}"
+        ));
+        return;
+    }
+    let target = BroadcastTarget {
+        ingest_name: "local FLV diagnostic".to_owned(),
+        url: output.to_string_lossy().into_owned(),
+    };
+    runtime.ingest = Some(target.ingest_name.clone());
+    runtime.phase = DirectBroadcastPhase::Connecting;
+    match BroadcastController::start(
+        target,
+        config.0.twitch.broadcast.clone(),
+        config.0.window.title.clone(),
+    ) {
+        Ok(controller) => runtime.controller = Some(controller),
+        Err(error) => {
+            runtime.phase = DirectBroadcastPhase::Error(format!(
+                "could not start local broadcast diagnostic: {error:#}"
+            ));
+        }
     }
 }
 
@@ -182,7 +360,7 @@ fn apply_direct_broadcast_control(
 ) {
     if std::mem::take(&mut control.stop_requested) {
         runtime.authorization = None;
-        runtime.capture_in_flight = false;
+        runtime.pending_target = None;
         if let Some(controller) = &runtime.controller {
             controller.request_stop();
             runtime.phase = DirectBroadcastPhase::Stopping;
@@ -284,10 +462,7 @@ fn resolve_broadcast_target(
     })
 }
 
-fn poll_direct_broadcast_authorization(
-    config: Res<RuntimeConfig>,
-    mut runtime: ResMut<DirectBroadcastRuntime>,
-) {
+fn poll_direct_broadcast_authorization(mut runtime: ResMut<DirectBroadcastRuntime>) {
     let event = runtime
         .authorization
         .as_ref()
@@ -299,14 +474,9 @@ fn poll_direct_broadcast_authorization(
     runtime.authorization = None;
     match event {
         AuthorizationEvent::Ready(target) => {
-            runtime.phase = DirectBroadcastPhase::Connecting;
             runtime.ingest = Some(target.ingest_name.clone());
-            match BroadcastController::start(target, config.0.twitch.broadcast.clone()) {
-                Ok(controller) => runtime.controller = Some(controller),
-                Err(error) => {
-                    runtime.phase = DirectBroadcastPhase::Error(format!("{error:#}"));
-                }
-            }
+            runtime.pending_target = Some(target);
+            runtime.phase = DirectBroadcastPhase::WaitingForGameplay;
         }
         AuthorizationEvent::Error(error) => {
             runtime.phase = DirectBroadcastPhase::Error(error);
@@ -314,7 +484,41 @@ fn poll_direct_broadcast_authorization(
     }
 }
 
-fn poll_direct_broadcast_worker(mut runtime: ResMut<DirectBroadcastRuntime>) {
+fn start_prepared_broadcast_when_gameplay_ready(
+    config: Res<RuntimeConfig>,
+    gameplay_ready: Option<Res<crate::GameplayReady>>,
+    mut runtime: ResMut<DirectBroadcastRuntime>,
+) {
+    if !prepared_broadcast_can_start(&runtime.phase, gameplay_ready.is_some()) {
+        return;
+    }
+    let Some(target) = runtime.pending_target.take() else {
+        runtime.phase = DirectBroadcastPhase::Error(
+            "prepared broadcast target disappeared before gameplay became ready".to_owned(),
+        );
+        return;
+    };
+    runtime.phase = DirectBroadcastPhase::Connecting;
+    match BroadcastController::start(
+        target,
+        config.0.twitch.broadcast.clone(),
+        config.0.window.title.clone(),
+    ) {
+        Ok(controller) => runtime.controller = Some(controller),
+        Err(error) => {
+            runtime.phase = DirectBroadcastPhase::Error(format!("{error:#}"));
+        }
+    }
+}
+
+const fn prepared_broadcast_can_start(phase: &DirectBroadcastPhase, gameplay_ready: bool) -> bool {
+    gameplay_ready && matches!(phase, DirectBroadcastPhase::WaitingForGameplay)
+}
+
+fn poll_direct_broadcast_worker(
+    config: Res<RuntimeConfig>,
+    mut runtime: ResMut<DirectBroadcastRuntime>,
+) {
     let events = runtime
         .controller
         .as_ref()
@@ -326,6 +530,9 @@ fn poll_direct_broadcast_worker(mut runtime: ResMut<DirectBroadcastRuntime>) {
             WorkerEvent::Broadcasting { encoder } => {
                 runtime.encoder = Some(encoder);
                 runtime.phase = DirectBroadcastPhase::Broadcasting;
+                let now = Instant::now();
+                runtime.broadcast_started.get_or_insert(now);
+                runtime.health_reported_at.get_or_insert(now);
             }
             WorkerEvent::Reconnecting(error) => {
                 runtime.phase = DirectBroadcastPhase::Reconnecting;
@@ -340,16 +547,423 @@ fn poll_direct_broadcast_worker(mut runtime: ResMut<DirectBroadcastRuntime>) {
             }
         }
     }
+    report_stream_health(&mut runtime, config.0.twitch.broadcast.frames_per_second);
+}
+
+fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
+    if runtime.phase != DirectBroadcastPhase::Broadcasting {
+        return;
+    }
+    let now = Instant::now();
+    let Some(previous_at) = runtime.health_reported_at else {
+        runtime.health_reported_at = Some(now);
+        return;
+    };
+    let interval = now.saturating_duration_since(previous_at);
+    if interval < STREAM_HEALTH_REPORT_INTERVAL {
+        return;
+    }
+    let metrics = runtime.controller.as_ref().map_or_else(
+        BroadcastMetricsSnapshot::default,
+        BroadcastController::metrics,
+    );
+    let elapsed = interval.as_secs_f64();
+    let captured_fps = rate_per_second(
+        metrics
+            .captured_video
+            .saturating_sub(runtime.health_reported_metrics.captured_video),
+        elapsed,
+    );
+    let encoded_fps = rate_per_second(
+        metrics
+            .encoded_video
+            .saturating_sub(runtime.health_reported_metrics.encoded_video),
+        elapsed,
+    );
+    let audio_fps = rate_per_second(
+        metrics
+            .encoded_audio
+            .saturating_sub(runtime.health_reported_metrics.encoded_audio),
+        elapsed,
+    );
+    let new_video_drops = metrics
+        .dropped_video
+        .saturating_sub(runtime.health_reported_metrics.dropped_video);
+    let new_audio_drops = metrics
+        .dropped_audio
+        .saturating_sub(runtime.health_reported_metrics.dropped_audio);
+    let average_encode_ms = average_milliseconds(
+        metrics
+            .video_encode_micros
+            .saturating_sub(runtime.health_reported_metrics.video_encode_micros),
+        metrics
+            .encoded_video
+            .saturating_sub(runtime.health_reported_metrics.encoded_video),
+    );
+    runtime.rolling_captured_video_fps = captured_fps;
+    runtime.rolling_encoded_video_fps = encoded_fps;
+    let minimum_healthy_fps = f64::from(target_fps) * 0.9;
+    let unhealthy = captured_fps < minimum_healthy_fps
+        || encoded_fps < minimum_healthy_fps
+        || new_audio_drops > 0;
+    if unhealthy {
+        warn!(
+            target_fps,
+            captured_fps,
+            encoded_fps,
+            audio_fps,
+            new_video_drops,
+            new_audio_drops,
+            audio_queue_depth = metrics.queued_audio,
+            average_encode_ms,
+            maximum_encode_ms = micros_to_milliseconds(metrics.maximum_video_encode_micros),
+            "direct Twitch broadcast health is below target"
+        );
+    } else {
+        info!(
+            target_fps,
+            captured_fps,
+            encoded_fps,
+            audio_fps,
+            new_video_drops,
+            new_audio_drops,
+            audio_queue_depth = metrics.queued_audio,
+            average_encode_ms,
+            "direct Twitch broadcast health"
+        );
+    }
+    runtime.health_reported_at = Some(now);
+    runtime.health_reported_metrics = metrics;
+}
+
+fn sync_stream_only_capture(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    runtime: Res<DirectBroadcastRuntime>,
+    mut state: ResMut<StreamOnlyCaptureState>,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut camera_targets: StreamCameraTargetQuery,
+    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
+    mut winit: Option<ResMut<WinitSettings>>,
+) {
+    let stream_only_active = config.0.twitch.broadcast.render_mode
+        == BroadcastRenderMode::StreamOnly
+        && runtime.controller.is_some()
+        && matches!(
+            runtime.phase,
+            DirectBroadcastPhase::Connecting
+                | DirectBroadcastPhase::Broadcasting
+                | DirectBroadcastPhase::Reconnecting
+        );
+
+    if stream_only_active {
+        if state.target.is_none() {
+            let Some(images) = images.as_deref_mut() else {
+                return;
+            };
+            let width = u32::from(config.0.twitch.broadcast.width);
+            let height = u32::from(config.0.twitch.broadcast.height);
+            let mut target =
+                Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None);
+            target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+            let target = images.add(target);
+            let readback_entity = commands
+                .spawn(Readback::texture(target.clone()))
+                .observe(publish_stream_only_frame)
+                .id();
+            state.target = Some(target);
+            state.readback_entity = Some(readback_entity);
+            state.width = width;
+            state.height = height;
+            let operator_window = commands
+                .spawn((
+                    StreamOperatorWindow,
+                    Window {
+                        title: "Stream Town — Operator".to_owned(),
+                        resolution: WindowResolution::new(
+                            OPERATOR_WINDOW_WIDTH,
+                            OPERATOR_WINDOW_HEIGHT,
+                        ),
+                        resizable: false,
+                        ..default()
+                    },
+                ))
+                .id();
+            let operator_camera = commands
+                .spawn((
+                    StreamOperatorCamera,
+                    Camera2d,
+                    Camera {
+                        order: 1_000,
+                        ..default()
+                    },
+                    RenderTarget::Window(WindowRef::Entity(operator_window)),
+                ))
+                .id();
+            let operator_root = spawn_stream_operator_view(
+                &mut commands,
+                operator_camera,
+                state.target.as_ref().expect("target was just installed"),
+            );
+            state.operator_window = Some(operator_window);
+            state.operator_camera = Some(operator_camera);
+            state.operator_root = Some(operator_root);
+            info!(width, height, "stream-only offscreen render target enabled");
+        }
+        let Some(target) = state.target.clone() else {
+            return;
+        };
+        for (entity, mut camera_target) in &mut camera_targets {
+            if matches!(&*camera_target, RenderTarget::Image(image) if image.handle == target) {
+                continue;
+            }
+            if camera_targets_primary_window(&camera_target) {
+                state
+                    .previous_camera_targets
+                    .entry(entity)
+                    .or_insert_with(|| camera_target.clone());
+                *camera_target = RenderTarget::Image(target.clone().into());
+            }
+        }
+        if let Ok(mut window) = primary_window.single_mut()
+            && state.previous_primary_visibility.is_none()
+        {
+            state.previous_primary_visibility = Some(window.visible);
+            window.visible = false;
+        }
+        if let Some(winit) = winit.as_deref_mut() {
+            state
+                .previous_unfocused_mode
+                .get_or_insert(winit.unfocused_mode);
+            winit.unfocused_mode = UpdateMode::Continuous;
+        }
+        return;
+    }
+
+    if state.target.is_none() {
+        return;
+    }
+    for (entity, previous_target) in state.previous_camera_targets.drain() {
+        if let Ok((_, mut camera_target)) = camera_targets.get_mut(entity) {
+            *camera_target = previous_target;
+        }
+    }
+    if let Ok(mut window) = primary_window.single_mut()
+        && let Some(visible) = state.previous_primary_visibility.take()
+    {
+        window.visible = visible;
+    }
+    if let Some(previous) = state.previous_unfocused_mode.take()
+        && let Some(winit) = winit.as_deref_mut()
+    {
+        winit.unfocused_mode = previous;
+    }
+    if let Some(entity) = state.readback_entity.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(entity) = state.operator_root.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(entity) = state.operator_camera.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(entity) = state.operator_window.take() {
+        commands.entity(entity).despawn();
+    }
+    if let Some(target) = state.target.take()
+        && let Some(images) = images.as_deref_mut()
+    {
+        images.remove(target.id());
+    }
+    state.width = 0;
+    state.height = 0;
+    info!("stream-only offscreen render target disabled; local preview restored");
+}
+
+fn spawn_stream_operator_view(
+    commands: &mut Commands,
+    camera: Entity,
+    stream_target: &Handle<Image>,
+) -> Entity {
+    commands
+        .spawn((
+            Name::new("Stream-only operator information view"),
+            UiTargetCamera(camera),
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                padding: UiRect::all(px(48)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.018, 0.024, 0.034)),
+            GlobalZIndex(10_000),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new("STREAM TOWN · OPERATOR VIEW"),
+                TextFont {
+                    font_size: FontSize::Px(30.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.82, 0.92, 1.0)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(48),
+                    top: px(42),
+                    ..default()
+                },
+            ));
+            root.spawn((
+                StreamOperatorInfoText,
+                Text::new("Preparing direct stream…"),
+                TextFont {
+                    font_size: FontSize::Px(20.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.70, 0.78, 0.86)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(50),
+                    top: px(100),
+                    ..default()
+                },
+            ));
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(42),
+                    bottom: px(42),
+                    width: px(336),
+                    height: px(196),
+                    padding: UiRect::all(px(8)),
+                    border: UiRect::all(px(2)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.035, 0.045, 0.06)),
+                BorderColor::all(Color::srgb(0.22, 0.35, 0.48)),
+            ))
+            .with_children(|preview| {
+                preview.spawn((
+                    Name::new("Low-resolution stream preview"),
+                    ImageNode::new(stream_target.clone()),
+                    Node {
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                ));
+            });
+            root.spawn((
+                Text::new(
+                    "Preview · 320 × 180\nUse the local LIVE control or Esc menu to end the stream",
+                ),
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.52, 0.62, 0.72)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(48),
+                    bottom: px(250),
+                    ..default()
+                },
+            ));
+        })
+        .id()
+}
+
+fn update_stream_operator_info(
+    runtime: Res<DirectBroadcastRuntime>,
+    mut text: Query<&mut Text, With<StreamOperatorInfoText>>,
+) {
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    let snapshot = runtime.snapshot();
+    **text = format!(
+        "Status: {:?}\nEncoder: {}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nVideo drops: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
+        snapshot.phase,
+        snapshot.encoder.as_deref().unwrap_or("starting"),
+        snapshot.captured_video_fps,
+        snapshot.encoded_video_fps,
+        snapshot.dropped_video_frames,
+        snapshot.dropped_audio_frames,
+        snapshot.average_encode_ms,
+        snapshot.maximum_encode_ms,
+    );
+}
+
+const fn camera_targets_primary_window(target: &RenderTarget) -> bool {
+    matches!(target, RenderTarget::Window(WindowRef::Primary))
+}
+
+fn publish_stream_only_frame(
+    mut event: On<ReadbackComplete>,
+    state: Res<StreamOnlyCaptureState>,
+    sensitive_screen: Res<SensitiveScreenActive>,
+    runtime: Res<DirectBroadcastRuntime>,
+) {
+    if sensitive_screen.0 || state.width == 0 || state.height == 0 {
+        return;
+    }
+    let Some(controller) = runtime.controller.as_ref() else {
+        return;
+    };
+    let capture_started = Instant::now();
+    let readback = std::mem::take(&mut event.event_mut().data);
+    let pixels = remove_gpu_row_padding(readback, state.width, state.height);
+    if pixels.is_empty() {
+        controller.drop_video_frames(1);
+        return;
+    }
+    controller
+        .metrics
+        .observe_capture_latency(capture_started.elapsed());
+    let _ = controller.send_video(VideoFrame {
+        width: state.width,
+        height: state.height,
+        pixel_format: VideoPixelFormat::Bgra,
+        pixels,
+    });
+}
+
+fn remove_gpu_row_padding(mut data: Vec<u8>, width: u32, height: u32) -> Vec<u8> {
+    let row_bytes = usize::try_from(width).unwrap_or_default().saturating_mul(4);
+    let aligned_row_bytes = row_bytes.div_ceil(256).saturating_mul(256);
+    let height = usize::try_from(height).unwrap_or_default();
+    let expected = aligned_row_bytes.saturating_mul(height);
+    if row_bytes == 0 || height == 0 || data.len() < expected {
+        return Vec::new();
+    }
+    if row_bytes == aligned_row_bytes {
+        data.truncate(row_bytes.saturating_mul(height));
+        return data;
+    }
+    for row in 1..height {
+        let source = row.saturating_mul(aligned_row_bytes);
+        let destination = row.saturating_mul(row_bytes);
+        data.copy_within(source..source + row_bytes, destination);
+    }
+    data.truncate(row_bytes.saturating_mul(height));
+    data
 }
 
 fn capture_direct_broadcast_frame(
-    mut commands: Commands,
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     sensitive_screen: Res<SensitiveScreenActive>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
+    if let Some(controller) = &runtime.controller {
+        controller.set_sensitive_screen(sensitive_screen.0);
+    }
     if runtime.phase != DirectBroadcastPhase::Broadcasting {
+        return;
+    }
+    if !sensitive_screen.0 {
+        runtime.capture_elapsed = 0.0;
         return;
     }
     let frame_period = 1.0 / f32::from(config.0.twitch.broadcast.frames_per_second);
@@ -357,65 +971,27 @@ fn capture_direct_broadcast_frame(
     if runtime.capture_elapsed < frame_period {
         return;
     }
-    runtime.capture_elapsed = runtime.capture_elapsed.rem_euclid(frame_period);
-    if sensitive_screen.0 {
-        let width = u32::from(config.0.twitch.broadcast.width);
-        let height = u32::from(config.0.twitch.broadcast.height);
-        let rgba = sensitive_rgba_frame(width, height);
-        let sent = runtime.controller.as_ref().is_some_and(|controller| {
-            controller.send_video(VideoFrame {
-                width,
-                height,
-                rgba,
-            })
-        });
-        if sent {
-            runtime.captured_video_frames = runtime.captured_video_frames.saturating_add(1);
-        }
-        return;
+    let mut due_frames = 0_u64;
+    while runtime.capture_elapsed >= frame_period {
+        runtime.capture_elapsed -= frame_period;
+        due_frames = due_frames.saturating_add(1);
     }
-    if runtime.capture_in_flight {
-        if let Some(controller) = &runtime.controller {
-            controller.drop_video_frame();
-        }
-        return;
+    if due_frames > 1
+        && let Some(controller) = &runtime.controller
+    {
+        controller.drop_video_frames(due_frames - 1);
     }
-    runtime.capture_in_flight = true;
-    commands.spawn(Screenshot::primary_window()).observe(
-        move |captured: On<ScreenshotCaptured>,
-              sensitive_screen: Res<SensitiveScreenActive>,
-              mut runtime: ResMut<DirectBroadcastRuntime>| {
-            runtime.capture_in_flight = false;
-            let Some(controller) = runtime.controller.as_ref() else {
-                return;
-            };
-            if sensitive_screen.0 {
-                let width = captured.image.texture_descriptor.size.width;
-                let height = captured.image.texture_descriptor.size.height;
-                if controller.send_video(VideoFrame {
-                    width,
-                    height,
-                    rgba: sensitive_rgba_frame(width, height),
-                }) {
-                    runtime.captured_video_frames = runtime.captured_video_frames.saturating_add(1);
-                }
-                return;
-            }
-            match screenshot_rgba(&captured.image) {
-                Ok((width, height, rgba)) => {
-                    if controller.send_video(VideoFrame {
-                        width,
-                        height,
-                        rgba,
-                    }) {
-                        runtime.captured_video_frames =
-                            runtime.captured_video_frames.saturating_add(1);
-                    }
-                }
-                Err(error) => warn!(%error, "could not convert broadcast frame"),
-            }
-        },
-    );
+    let width = u32::from(config.0.twitch.broadcast.width);
+    let height = u32::from(config.0.twitch.broadcast.height);
+    let rgba = sensitive_rgba_frame(width, height);
+    let _ = runtime.controller.as_ref().is_some_and(|controller| {
+        controller.send_video(VideoFrame {
+            width,
+            height,
+            pixel_format: VideoPixelFormat::Rgba,
+            pixels: rgba,
+        })
+    });
 }
 
 fn sensitive_rgba_frame(width: u32, height: u32) -> Vec<u8> {
@@ -529,51 +1105,6 @@ const fn sensitive_label_glyph(character: char) -> [u8; 7] {
     }
 }
 
-fn screenshot_rgba(image: &Image) -> Result<(u32, u32, Vec<u8>)> {
-    let width = image.texture_descriptor.size.width;
-    let height = image.texture_descriptor.size.height;
-    if width == 0 || height == 0 {
-        bail!("captured image has zero dimensions");
-    }
-    let rgba = match image.texture_descriptor.format {
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => image
-            .data
-            .clone()
-            .context("captured RGBA image has no CPU data")?,
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
-            let mut data = image
-                .data
-                .clone()
-                .context("captured BGRA image has no CPU data")?;
-            for pixel in data.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-            data
-        }
-        _ => image
-            .clone()
-            .try_into_dynamic()
-            .map_err(|error| anyhow!("unsupported screenshot format: {error}"))?
-            .to_rgba8()
-            .into_raw(),
-    };
-    let expected = usize::try_from(width)
-        .ok()
-        .and_then(|width| {
-            usize::try_from(height)
-                .ok()
-                .map(|height| width * height * 4)
-        })
-        .context("captured image dimensions overflow")?;
-    if rgba.len() != expected {
-        bail!(
-            "captured RGBA buffer has {} bytes, expected {expected}",
-            rgba.len()
-        );
-    }
-    Ok((width, height, rgba))
-}
-
 #[derive(Debug)]
 enum AuthorizationEvent {
     Ready(BroadcastTarget),
@@ -638,7 +1169,23 @@ fn build_ingest_url(template: &str, stream_key: &str, bandwidth_test: bool) -> R
 struct VideoFrame {
     width: u32,
     height: u32,
-    rgba: Vec<u8>,
+    pixel_format: VideoPixelFormat,
+    pixels: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VideoPixelFormat {
+    Rgba,
+    Bgra,
+}
+
+impl VideoPixelFormat {
+    const fn ffmpeg(self) -> ffmpeg::format::Pixel {
+        match self {
+            Self::Rgba => ffmpeg::format::Pixel::RGBA,
+            Self::Bgra => ffmpeg::format::Pixel::BGRA,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -648,9 +1195,8 @@ struct AudioFrame {
 }
 
 #[derive(Clone, Debug)]
-enum MediaInput {
-    Video(VideoFrame),
-    Audio(AudioFrame),
+enum AudioInput {
+    Frame(AudioFrame),
     Stop,
 }
 
@@ -665,45 +1211,241 @@ enum WorkerEvent {
 
 #[derive(Default)]
 struct BroadcastMetrics {
+    captured_video: AtomicU64,
     encoded_video: AtomicU64,
     dropped_video: AtomicU64,
     encoded_audio: AtomicU64,
+    dropped_audio: AtomicU64,
+    replaced_video: AtomicU64,
+    skipped_video: AtomicU64,
+    queued_audio: AtomicU64,
+    audio_queue_high_water: AtomicU64,
+    capture_samples: AtomicU64,
+    capture_micros: AtomicU64,
+    maximum_capture_micros: AtomicU64,
+    video_encode_micros: AtomicU64,
+    maximum_video_encode_micros: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct BroadcastMetricsSnapshot {
+    captured_video: u64,
     encoded_video: u64,
     dropped_video: u64,
     encoded_audio: u64,
+    dropped_audio: u64,
+    replaced_video: u64,
+    skipped_video: u64,
+    queued_audio: u64,
+    audio_queue_high_water: u64,
+    capture_samples: u64,
+    capture_micros: u64,
+    maximum_capture_micros: u64,
+    video_encode_micros: u64,
+    maximum_video_encode_micros: u64,
 }
 
 impl BroadcastMetrics {
     fn snapshot(&self) -> BroadcastMetricsSnapshot {
         BroadcastMetricsSnapshot {
+            captured_video: self.captured_video.load(Ordering::Relaxed),
             encoded_video: self.encoded_video.load(Ordering::Relaxed),
             dropped_video: self.dropped_video.load(Ordering::Relaxed),
             encoded_audio: self.encoded_audio.load(Ordering::Relaxed),
+            dropped_audio: self.dropped_audio.load(Ordering::Relaxed),
+            replaced_video: self.replaced_video.load(Ordering::Relaxed),
+            skipped_video: self.skipped_video.load(Ordering::Relaxed),
+            queued_audio: self.queued_audio.load(Ordering::Relaxed),
+            audio_queue_high_water: self.audio_queue_high_water.load(Ordering::Relaxed),
+            capture_samples: self.capture_samples.load(Ordering::Relaxed),
+            capture_micros: self.capture_micros.load(Ordering::Relaxed),
+            maximum_capture_micros: self.maximum_capture_micros.load(Ordering::Relaxed),
+            video_encode_micros: self.video_encode_micros.load(Ordering::Relaxed),
+            maximum_video_encode_micros: self.maximum_video_encode_micros.load(Ordering::Relaxed),
         }
+    }
+
+    fn observe_capture_latency(&self, duration: Duration) {
+        let micros = duration_as_micros(duration);
+        self.capture_samples.fetch_add(1, Ordering::Relaxed);
+        self.capture_micros.fetch_add(micros, Ordering::Relaxed);
+        self.maximum_capture_micros
+            .fetch_max(micros, Ordering::Relaxed);
+    }
+
+    fn observe_video_encode_latency(&self, duration: Duration) {
+        let micros = duration_as_micros(duration);
+        self.video_encode_micros
+            .fetch_add(micros, Ordering::Relaxed);
+        self.maximum_video_encode_micros
+            .fetch_max(micros, Ordering::Relaxed);
     }
 }
 
+struct WindowCaptureFlags {
+    video: Arc<Mutex<Option<VideoFrame>>>,
+    metrics: Arc<BroadcastMetrics>,
+    stop: Arc<AtomicBool>,
+    sensitive_screen: Arc<AtomicBool>,
+}
+
+struct WindowCaptureHandler {
+    video: Arc<Mutex<Option<VideoFrame>>>,
+    metrics: Arc<BroadcastMetrics>,
+    stop: Arc<AtomicBool>,
+    sensitive_screen: Arc<AtomicBool>,
+    row_scratch: Vec<u8>,
+}
+
+impl GraphicsCaptureApiHandler for WindowCaptureHandler {
+    type Flags = WindowCaptureFlags;
+    type Error = anyhow::Error;
+
+    fn new(context: CaptureContext<Self::Flags>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            video: context.flags.video,
+            metrics: context.flags.metrics,
+            stop: context.flags.stop,
+            sensitive_screen: context.flags.sensitive_screen,
+            row_scratch: Vec::new(),
+        })
+    }
+
+    fn on_frame_arrived(
+        &mut self,
+        frame: &mut CapturedWindowFrame,
+        capture_control: InternalCaptureControl,
+    ) -> Result<(), Self::Error> {
+        if self.stop.load(Ordering::Relaxed) {
+            capture_control.stop();
+            return Ok(());
+        }
+        if self.sensitive_screen.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let capture_started = Instant::now();
+        let buffer = frame
+            .buffer_without_title_bar()
+            .context("could not map the captured game window")?;
+        let width = buffer.width();
+        let height = buffer.height();
+        let pixels = buffer.as_nopadding_buffer(&mut self.row_scratch).to_vec();
+        self.metrics
+            .observe_capture_latency(capture_started.elapsed());
+        let _ = publish_latest_video(
+            &self.video,
+            &self.stop,
+            &self.metrics,
+            VideoFrame {
+                width,
+                height,
+                pixel_format: VideoPixelFormat::Bgra,
+                pixels,
+            },
+        );
+        Ok(())
+    }
+
+    fn on_closed(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+fn start_window_capture(
+    window_title: &str,
+    frames_per_second: u8,
+    video: Arc<Mutex<Option<VideoFrame>>>,
+    metrics: Arc<BroadcastMetrics>,
+    stop: Arc<AtomicBool>,
+    sensitive_screen: Arc<AtomicBool>,
+    events: mpsc::Sender<WorkerEvent>,
+) -> Result<()> {
+    let window = CapturableWindow::from_name(window_title)
+        .with_context(|| format!("could not find the game window '{window_title}' for capture"))?;
+    let settings = CaptureSettings::new(
+        window,
+        CursorCaptureSettings::WithoutCursor,
+        DrawBorderSettings::WithoutBorder,
+        SecondaryWindowSettings::Exclude,
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(
+            1.0 / f64::from(frames_per_second),
+        )),
+        DirtyRegionSettings::Default,
+        ColorFormat::Bgra8,
+        WindowCaptureFlags {
+            video,
+            metrics,
+            stop: Arc::clone(&stop),
+            sensitive_screen,
+        },
+    );
+    thread::Builder::new()
+        .name("stream-town-window-capture".to_owned())
+        .spawn(move || {
+            if let Err(error) = WindowCaptureHandler::start(settings)
+                && !stop.load(Ordering::Relaxed)
+            {
+                stop.store(true, Ordering::Relaxed);
+                let _ = events.send(WorkerEvent::Error(format!(
+                    "game-window capture stopped: {error}"
+                )));
+            }
+        })
+        .context("failed to start Windows Graphics Capture")?;
+    Ok(())
+}
+
+fn publish_latest_video(
+    video: &Mutex<Option<VideoFrame>>,
+    stop: &AtomicBool,
+    metrics: &BroadcastMetrics,
+    frame: VideoFrame,
+) -> bool {
+    if stop.load(Ordering::Relaxed) {
+        metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    let Ok(mut latest) = video.lock() else {
+        metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
+        return false;
+    };
+    if latest.replace(frame).is_some() {
+        metrics.replaced_video.fetch_add(1, Ordering::Relaxed);
+        metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
+    }
+    metrics.captured_video.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
 struct BroadcastController {
-    media: SyncSender<MediaInput>,
+    audio: SyncSender<AudioInput>,
+    video: Arc<Mutex<Option<VideoFrame>>>,
     events: Arc<Mutex<Receiver<WorkerEvent>>>,
     stop: Arc<AtomicBool>,
+    sensitive_screen: Arc<AtomicBool>,
     metrics: Arc<BroadcastMetrics>,
 }
 
 impl BroadcastController {
-    fn start(target: BroadcastTarget, config: BroadcastConfig) -> Result<Self> {
-        let (media, receiver) = mpsc::sync_channel(MEDIA_QUEUE_CAPACITY);
+    fn start(
+        target: BroadcastTarget,
+        config: BroadcastConfig,
+        window_title: String,
+    ) -> Result<Self> {
+        let (audio, receiver) = mpsc::sync_channel(AUDIO_QUEUE_CAPACITY);
         let (event_sender, event_receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let metrics = Arc::new(BroadcastMetrics::default());
+        let video = Arc::new(Mutex::new(None));
+        let sensitive_screen = Arc::new(AtomicBool::new(false));
+        let capture_fps = config.frames_per_second;
+        let stream_only = config.render_mode == BroadcastRenderMode::StreamOnly;
 
         let worker_stop = Arc::clone(&stop);
         let worker_metrics = Arc::clone(&metrics);
+        let worker_video = Arc::clone(&video);
         let audio_event_sender = event_sender.clone();
+        let capture_event_sender = event_sender.clone();
         thread::Builder::new()
             .name("stream-town-ffmpeg".to_owned())
             .spawn(move || {
@@ -711,6 +1453,7 @@ impl BroadcastController {
                     target,
                     config,
                     receiver,
+                    worker_video,
                     &event_sender,
                     &worker_stop,
                     &worker_metrics,
@@ -718,13 +1461,31 @@ impl BroadcastController {
             })
             .context("failed to start the in-process FFmpeg worker")?;
 
-        let audio_sender = media.clone();
+        if !stream_only
+            && let Err(error) = start_window_capture(
+                &window_title,
+                capture_fps,
+                Arc::clone(&video),
+                Arc::clone(&metrics),
+                Arc::clone(&stop),
+                Arc::clone(&sensitive_screen),
+                capture_event_sender,
+            )
+        {
+            stop.store(true, Ordering::Relaxed);
+            return Err(error);
+        }
+
+        let audio_sender = audio.clone();
         let audio_stop = Arc::clone(&stop);
+        let audio_metrics = Arc::clone(&metrics);
         let audio_events = Arc::new(Mutex::new(event_receiver));
         let audio_spawn = thread::Builder::new()
             .name("stream-town-wasapi".to_owned())
             .spawn(move || {
-                if let Err(error) = capture_process_audio(audio_sender, &audio_stop) {
+                if let Err(error) = capture_process_audio(audio_sender, &audio_stop, &audio_metrics)
+                {
+                    audio_stop.store(true, Ordering::Relaxed);
                     let message = format!("game-process audio capture stopped: {error:#}");
                     error!(%error, "game-process audio capture stopped");
                     let _ = audio_event_sender.send(WorkerEvent::Error(message));
@@ -732,32 +1493,34 @@ impl BroadcastController {
             });
         if let Err(error) = audio_spawn {
             stop.store(true, Ordering::Relaxed);
-            let _ = media.try_send(MediaInput::Stop);
+            let _ = audio.try_send(AudioInput::Stop);
             return Err(anyhow!(
                 "failed to start WASAPI game-audio capture: {error}"
             ));
         }
 
         Ok(Self {
-            media,
+            audio,
+            video,
             events: audio_events,
             stop,
+            sensitive_screen,
             metrics,
         })
     }
 
     fn send_video(&self, frame: VideoFrame) -> bool {
-        match self.media.try_send(MediaInput::Video(frame)) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
-                self.drop_video_frame();
-                false
-            }
-        }
+        publish_latest_video(&self.video, &self.stop, &self.metrics, frame)
     }
 
-    fn drop_video_frame(&self) {
-        self.metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
+    fn drop_video_frames(&self, count: u64) {
+        self.metrics
+            .dropped_video
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    fn set_sensitive_screen(&self, active: bool) {
+        self.sensitive_screen.store(active, Ordering::Relaxed);
     }
 
     fn events(&self) -> Vec<WorkerEvent> {
@@ -773,7 +1536,7 @@ impl BroadcastController {
 
     fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.media.try_send(MediaInput::Stop);
+        let _ = self.audio.try_send(AudioInput::Stop);
     }
 }
 
@@ -783,7 +1546,11 @@ impl Drop for BroadcastController {
     }
 }
 
-fn capture_process_audio(media: SyncSender<MediaInput>, stop: &AtomicBool) -> Result<()> {
+fn capture_process_audio(
+    audio: SyncSender<AudioInput>,
+    stop: &AtomicBool,
+    metrics: &BroadcastMetrics,
+) -> Result<()> {
     initialize_mta()
         .ok()
         .map_err(|error| anyhow!("could not initialize Windows audio COM: {error}"))?;
@@ -840,11 +1607,9 @@ fn capture_process_audio(media: SyncSender<MediaInput>, stop: &AtomicBool) -> Re
                 .chunks_exact(4)
                 .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
                 .collect::<Vec<_>>();
-            if media
-                .send(MediaInput::Audio(AudioFrame { pts, samples }))
-                .is_err()
-            {
-                break;
+            if !queue_audio_frame(&audio, metrics, AudioFrame { pts, samples }) {
+                let _ = client.stop_stream();
+                return Ok(());
             }
             pts = pts.saturating_add(i64::try_from(AUDIO_FRAME_SAMPLES).unwrap_or(i64::MAX));
         }
@@ -853,10 +1618,34 @@ fn capture_process_audio(media: SyncSender<MediaInput>, stop: &AtomicBool) -> Re
     Ok(())
 }
 
+fn queue_audio_frame(
+    audio: &SyncSender<AudioInput>,
+    metrics: &BroadcastMetrics,
+    frame: AudioFrame,
+) -> bool {
+    let depth = metrics.queued_audio.fetch_add(1, Ordering::Relaxed) + 1;
+    metrics
+        .audio_queue_high_water
+        .fetch_max(depth, Ordering::Relaxed);
+    match audio.try_send(AudioInput::Frame(frame)) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) => {
+            metrics.queued_audio.fetch_sub(1, Ordering::Relaxed);
+            metrics.dropped_audio.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            metrics.queued_audio.fetch_sub(1, Ordering::Relaxed);
+            false
+        }
+    }
+}
+
 fn run_broadcast_worker(
     target: BroadcastTarget,
     config: BroadcastConfig,
-    receiver: Receiver<MediaInput>,
+    receiver: Receiver<AudioInput>,
+    video: Arc<Mutex<Option<VideoFrame>>>,
     events: &mpsc::Sender<WorkerEvent>,
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
@@ -868,7 +1657,7 @@ fn run_broadcast_worker(
             return;
         }
         let _ = events.send(WorkerEvent::Connecting);
-        match encode_broadcast_session(&target, &config, &receiver, stop, metrics, events) {
+        match encode_broadcast_session(&target, &config, &receiver, &video, stop, metrics, events) {
             Ok(SessionEnd::Stopped | SessionEnd::InputClosed) => {
                 let _ = events.send(WorkerEvent::Stopped);
                 return;
@@ -902,6 +1691,12 @@ struct VideoCadence {
     next_pts: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CadenceTick {
+    pts: i64,
+    skipped: u64,
+}
+
 impl VideoCadence {
     fn new(frames_per_second: u8) -> Self {
         Self {
@@ -915,15 +1710,25 @@ impl VideoCadence {
         self.next_deadline.get_or_insert(now);
     }
 
-    fn take_due_pts(&mut self, now: Instant) -> Option<i64> {
+    fn take_due_tick(&mut self, now: Instant) -> Option<CadenceTick> {
         let deadline = self.next_deadline.as_mut()?;
         if now < *deadline {
             return None;
         }
-        *deadline += self.frame_period;
-        let pts = self.next_pts;
-        self.next_pts = self.next_pts.saturating_add(1);
-        Some(pts)
+        let overdue = now.saturating_duration_since(*deadline);
+        let period_nanos = self.frame_period.as_nanos().max(1);
+        let due_slots = 1_u128.saturating_add(overdue.as_nanos() / period_nanos);
+        let due_slots_u64 = u64::try_from(due_slots).unwrap_or(u64::MAX);
+        let skipped = due_slots_u64.saturating_sub(1);
+        let pts = self
+            .next_pts
+            .saturating_add(i64::try_from(skipped).unwrap_or(i64::MAX));
+        self.next_pts = self
+            .next_pts
+            .saturating_add(i64::try_from(due_slots_u64).unwrap_or(i64::MAX));
+        let advance = u32::try_from(due_slots_u64).unwrap_or(u32::MAX);
+        *deadline += self.frame_period.saturating_mul(advance);
+        Some(CadenceTick { pts, skipped })
     }
 
     fn receive_timeout(&self, now: Instant) -> Duration {
@@ -942,17 +1747,19 @@ struct BroadcastEncoder {
     audio_stream: usize,
     video_time_base: Rational,
     audio_time_base: Rational,
-    scaler: Option<(u32, u32, software::scaling::Context)>,
+    scaler: Option<(u32, u32, ffmpeg::format::Pixel, software::scaling::Context)>,
     resampler: software::resampling::Context,
     width: u32,
     height: u32,
+    video_input_format: ffmpeg::format::Pixel,
     audio_pts_base: Option<i64>,
 }
 
 fn encode_broadcast_session(
     target: &BroadcastTarget,
     config: &BroadcastConfig,
-    receiver: &Receiver<MediaInput>,
+    receiver: &Receiver<AudioInput>,
+    video_mailbox: &Mutex<Option<VideoFrame>>,
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
     events: &mpsc::Sender<WorkerEvent>,
@@ -960,29 +1767,49 @@ fn encode_broadcast_session(
     ffmpeg::init().context("could not initialize the linked FFmpeg libraries")?;
     ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
     let (mut encoder, encoder_name) = BroadcastEncoder::open(target, config)?;
+    if discard_pending_audio(receiver, metrics) {
+        encoder.finish()?;
+        return Ok(SessionEnd::Stopped);
+    }
     let _ = events.send(WorkerEvent::Broadcasting {
         encoder: encoder_name,
     });
     let mut cadence = VideoCadence::new(config.frames_per_second);
-    let mut latest_video = None;
+    let mut latest_video = take_latest_video(video_mailbox);
+    if latest_video.is_some() {
+        cadence.start(Instant::now());
+    }
     loop {
         if stop.load(Ordering::Relaxed) {
             encoder.finish()?;
             return Ok(SessionEnd::Stopped);
         }
-        while let Some(video) = latest_video.as_ref() {
-            let Some(pts) = cadence.take_due_pts(Instant::now()) else {
-                break;
-            };
-            encoder.encode_video(video, pts)?;
+        if let Some(video) = take_latest_video(video_mailbox) {
+            cadence.start(Instant::now());
+            latest_video = Some(video);
+        }
+        if let Some((video, tick)) = latest_video.as_ref().and_then(|video| {
+            cadence
+                .take_due_tick(Instant::now())
+                .map(|tick| (video, tick))
+        }) {
+            if tick.skipped > 0 {
+                metrics
+                    .skipped_video
+                    .fetch_add(tick.skipped, Ordering::Relaxed);
+                metrics
+                    .dropped_video
+                    .fetch_add(tick.skipped, Ordering::Relaxed);
+            }
+            let encode_started = Instant::now();
+            encoder.encode_video(video, tick.pts)?;
+            metrics.observe_video_encode_latency(encode_started.elapsed());
             metrics.encoded_video.fetch_add(1, Ordering::Relaxed);
+            continue;
         }
         match receiver.recv_timeout(cadence.receive_timeout(Instant::now())) {
-            Ok(MediaInput::Video(video)) => {
-                cadence.start(Instant::now());
-                latest_video = Some(video);
-            }
-            Ok(MediaInput::Audio(audio)) => {
+            Ok(AudioInput::Frame(audio)) => {
+                metrics.queued_audio.fetch_sub(1, Ordering::Relaxed);
                 // Establish both media timelines at the first video frame. This
                 // avoids publishing an audio lead while the first GPU readback
                 // is still pending, then keeps audio continuous while the
@@ -992,7 +1819,7 @@ fn encode_broadcast_session(
                     metrics.encoded_audio.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            Ok(MediaInput::Stop) => {
+            Ok(AudioInput::Stop) => {
                 encoder.finish()?;
                 return Ok(SessionEnd::Stopped);
             }
@@ -1003,6 +1830,24 @@ fn encode_broadcast_session(
             }
         }
     }
+}
+
+fn take_latest_video(mailbox: &Mutex<Option<VideoFrame>>) -> Option<VideoFrame> {
+    mailbox.lock().ok().and_then(|mut latest| latest.take())
+}
+
+fn discard_pending_audio(receiver: &Receiver<AudioInput>, metrics: &BroadcastMetrics) -> bool {
+    let mut stopped = false;
+    for input in receiver.try_iter() {
+        match input {
+            AudioInput::Frame(_) => {
+                metrics.queued_audio.fetch_sub(1, Ordering::Relaxed);
+                metrics.dropped_audio.fetch_add(1, Ordering::Relaxed);
+            }
+            AudioInput::Stop => stopped = true,
+        }
+    }
+    stopped
 }
 
 impl BroadcastEncoder {
@@ -1017,7 +1862,8 @@ impl BroadcastEncoder {
             .format()
             .flags()
             .contains(format::Flags::GLOBAL_HEADER);
-        let (video, video_codec, encoder_name) = open_video_encoder(config, global_header)?;
+        let (video, video_codec, encoder_name, video_input_format) =
+            open_video_encoder(config, global_header)?;
         let (audio, audio_codec) = open_audio_encoder(config, global_header)?;
 
         let video_stream = {
@@ -1070,6 +1916,7 @@ impl BroadcastEncoder {
                 resampler,
                 width: u32::from(config.width),
                 height: u32::from(config.height),
+                video_input_format,
                 audio_pts_base: None,
             },
             encoder_name,
@@ -1077,41 +1924,48 @@ impl BroadcastEncoder {
     }
 
     fn encode_video(&mut self, video: &VideoFrame, pts: i64) -> Result<()> {
+        let source_format = video.pixel_format.ffmpeg();
+        let mut source = frame::Video::new(source_format, video.width, video.height);
+        copy_packed_video_frame(video, &mut source)?;
+        if source_format == self.video_input_format
+            && video.width == self.width
+            && video.height == self.height
+        {
+            source.set_pts(Some(pts));
+            self.video
+                .send_frame(&source)
+                .context("H.264 encoder rejected a packed frame")?;
+            return self.drain_video();
+        }
         if self
             .scaler
             .as_ref()
-            .is_none_or(|(width, height, _)| *width != video.width || *height != video.height)
+            .is_none_or(|(width, height, format, _)| {
+                *width != video.width || *height != video.height || *format != source_format
+            })
         {
             let scaler = software::scaling::Context::get(
-                ffmpeg::format::Pixel::RGBA,
+                source_format,
                 video.width,
                 video.height,
-                ffmpeg::format::Pixel::YUV420P,
+                self.video_input_format,
                 self.width,
                 self.height,
-                software::scaling::Flags::BILINEAR,
+                software::scaling::Flags::FAST_BILINEAR,
             )
             .context("could not initialize the broadcast video scaler")?;
-            self.scaler = Some((video.width, video.height, scaler));
+            self.scaler = Some((video.width, video.height, source_format, scaler));
         }
-        let mut rgba = frame::Video::new(ffmpeg::format::Pixel::RGBA, video.width, video.height);
-        let source_stride = usize::try_from(video.width).unwrap_or(0) * 4;
-        let target_stride = rgba.stride(0);
-        for (row, source) in video.rgba.chunks_exact(source_stride).enumerate() {
-            let start = row * target_stride;
-            rgba.data_mut(0)[start..start + source_stride].copy_from_slice(source);
-        }
-        rgba.set_pts(Some(pts));
-        let mut yuv = frame::Video::new(ffmpeg::format::Pixel::YUV420P, self.width, self.height);
+        let mut converted = frame::Video::new(self.video_input_format, self.width, self.height);
         self.scaler
             .as_mut()
             .context("broadcast scaler was not initialized")?
-            .2
-            .run(&rgba, &mut yuv)
+            .3
+            .run(&source, &mut converted)
             .context("could not scale a broadcast frame")?;
-        yuv.set_pts(Some(pts));
+        converted.set_pts(Some(pts));
         self.video
-            .send_frame(&yuv)
+            .send_frame(&converted)
             .context("H.264 encoder rejected a frame")?;
         self.drain_video()
     }
@@ -1182,15 +2036,42 @@ impl BroadcastEncoder {
     }
 }
 
+fn copy_packed_video_frame(video: &VideoFrame, target: &mut frame::Video) -> Result<()> {
+    let source_stride = usize::try_from(video.width)
+        .context("broadcast frame width does not fit in memory")?
+        .saturating_mul(4);
+    let expected = source_stride.saturating_mul(
+        usize::try_from(video.height).context("broadcast frame height does not fit in memory")?,
+    );
+    if video.pixels.len() != expected {
+        bail!(
+            "broadcast frame has {} bytes, expected {expected}",
+            video.pixels.len()
+        );
+    }
+    let target_stride = target.stride(0);
+    for (row, source) in video.pixels.chunks_exact(source_stride).enumerate() {
+        let start = row.saturating_mul(target_stride);
+        target.data_mut(0)[start..start + source_stride].copy_from_slice(source);
+    }
+    Ok(())
+}
+
 fn open_video_encoder(
     config: &BroadcastConfig,
     global_header: bool,
-) -> Result<(encoder::video::Encoder, Codec, String)> {
+) -> Result<(
+    encoder::video::Encoder,
+    Codec,
+    String,
+    ffmpeg::format::Pixel,
+)> {
     let mut failures = Vec::new();
     for &name in encoder_candidates(config.encoder) {
         let Some(codec) = encoder::find_by_name(name) else {
             continue;
         };
+        let input_format = encoder_input_format(name);
         let outcome = (|| -> Result<encoder::video::Encoder> {
             let mut video = codec::context::Context::new_with_codec(codec)
                 .encoder()
@@ -1198,7 +2079,7 @@ fn open_video_encoder(
                 .context("encoder is not a video encoder")?;
             video.set_width(u32::from(config.width));
             video.set_height(u32::from(config.height));
-            video.set_format(ffmpeg::format::Pixel::YUV420P);
+            video.set_format(input_format);
             video.set_time_base((1, i32::from(config.frames_per_second)));
             video.set_frame_rate(Some((i32::from(config.frames_per_second), 1)));
             video.set_bit_rate(config.video_bitrate_kbps as usize * 1_000);
@@ -1213,21 +2094,32 @@ fn open_video_encoder(
             match name {
                 "h264_nvenc" => {
                     options.set("profile", "high");
-                    options.set("preset", "p4");
-                    options.set("tune", "ll");
+                    options.set("preset", "p2");
+                    options.set("tune", "ull");
                     options.set("rc", "cbr");
+                    options.set("rc-lookahead", "0");
+                    options.set("multipass", "disabled");
                     options.set("zerolatency", "1");
                 }
                 "h264_qsv" => {
                     options.set("profile", "high");
-                    options.set("preset", "medium");
+                    options.set("preset", "veryfast");
                     options.set("look_ahead", "0");
+                    options.set("async_depth", "2");
+                    options.set("scenario", "livestreaming");
                 }
                 "h264_amf" => {
                     options.set("profile", "high");
                     options.set("usage", "ultralowlatency");
-                    options.set("quality", "balanced");
+                    options.set("quality", "speed");
                     options.set("rc", "cbr");
+                    options.set("latency", "1");
+                    options.set("async_depth", "4");
+                }
+                "h264_mf" => {
+                    options.set("rate_control", "cbr");
+                    options.set("scenario", "live_streaming");
+                    options.set("hw_encoding", "1");
                 }
                 "libopenh264" => options.set("profile", "high"),
                 _ => {}
@@ -1237,7 +2129,7 @@ fn open_video_encoder(
                 .with_context(|| format!("could not open {name}"))
         })();
         match outcome {
-            Ok(video) => return Ok((video, codec, name.to_owned())),
+            Ok(video) => return Ok((video, codec, name.to_owned(), input_format)),
             Err(error) => failures.push(format!("{name}: {error:#}")),
         }
     }
@@ -1245,6 +2137,14 @@ fn open_video_encoder(
         "no requested H.264 encoder could be opened ({})",
         failures.join("; ")
     )
+}
+
+fn encoder_input_format(name: &str) -> ffmpeg::format::Pixel {
+    match name {
+        "h264_nvenc" | "h264_amf" => ffmpeg::format::Pixel::BGRA,
+        "h264_qsv" | "h264_mf" => ffmpeg::format::Pixel::NV12,
+        _ => ffmpeg::format::Pixel::YUV420P,
+    }
 }
 
 fn open_audio_encoder(
@@ -1339,7 +2239,8 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
             &VideoFrame {
                 width: u32::from(config.width),
                 height: u32::from(config.height),
-                rgba: rgba.clone(),
+                pixel_format: VideoPixelFormat::Rgba,
+                pixels: rgba.clone(),
             },
             pts,
         )?;
@@ -1456,9 +2357,26 @@ mod tests {
     }
 
     #[test]
+    fn prepared_broadcast_waits_for_the_truthful_gameplay_ready_gate() {
+        assert!(!prepared_broadcast_can_start(
+            &DirectBroadcastPhase::WaitingForGameplay,
+            false,
+        ));
+        assert!(prepared_broadcast_can_start(
+            &DirectBroadcastPhase::WaitingForGameplay,
+            true,
+        ));
+        assert!(!prepared_broadcast_can_start(
+            &DirectBroadcastPhase::Connecting,
+            true,
+        ));
+    }
+
+    #[test]
     fn active_phase_contract_covers_every_session_that_locks_streaming_settings() {
         for phase in [
             DirectBroadcastPhase::WaitingForBroadcasterAuthorization,
+            DirectBroadcastPhase::WaitingForGameplay,
             DirectBroadcastPhase::ResolvingIngest,
             DirectBroadcastPhase::Connecting,
             DirectBroadcastPhase::Broadcasting,
@@ -1474,6 +2392,23 @@ mod tests {
         ] {
             assert!(!phase.is_active(), "{phase:?} must be operator-inactive");
         }
+    }
+
+    #[test]
+    fn gpu_readback_padding_is_removed_without_corrupting_rows() {
+        let width = 65_u32;
+        let height = 2_u32;
+        let row_bytes = usize::try_from(width).unwrap() * 4;
+        let aligned_row_bytes = row_bytes.div_ceil(256) * 256;
+        let mut padded = vec![0xEE; aligned_row_bytes * usize::try_from(height).unwrap()];
+        padded[..row_bytes].fill(0x11);
+        padded[aligned_row_bytes..aligned_row_bytes + row_bytes].fill(0x22);
+
+        let pixels = remove_gpu_row_padding(padded, width, height);
+
+        assert_eq!(pixels.len(), row_bytes * usize::try_from(height).unwrap());
+        assert!(pixels[..row_bytes].iter().all(|byte| *byte == 0x11));
+        assert!(pixels[row_bytes..].iter().all(|byte| *byte == 0x22));
     }
 
     #[test]
@@ -1502,18 +2437,22 @@ mod tests {
     }
 
     #[test]
-    fn video_cadence_keeps_advancing_when_the_game_stops_supplying_frames() {
+    fn video_cadence_skips_stale_slots_instead_of_bursting_after_a_stall() {
         let started = Instant::now();
         let mut cadence = VideoCadence::new(30);
         cadence.start(started);
-        assert_eq!(cadence.take_due_pts(started), Some(0));
-        assert_eq!(cadence.take_due_pts(started), None);
+        assert_eq!(
+            cadence.take_due_tick(started),
+            Some(CadenceTick { pts: 0, skipped: 0 })
+        );
+        assert_eq!(cadence.take_due_tick(started), None);
 
         let after_three_periods = started + cadence.frame_period * 3;
-        assert_eq!(cadence.take_due_pts(after_three_periods), Some(1));
-        assert_eq!(cadence.take_due_pts(after_three_periods), Some(2));
-        assert_eq!(cadence.take_due_pts(after_three_periods), Some(3));
-        assert_eq!(cadence.take_due_pts(after_three_periods), None);
+        assert_eq!(
+            cadence.take_due_tick(after_three_periods),
+            Some(CadenceTick { pts: 3, skipped: 2 })
+        );
+        assert_eq!(cadence.take_due_tick(after_three_periods), None);
         assert_eq!(
             cadence.receive_timeout(after_three_periods),
             cadence.frame_period
@@ -1531,6 +2470,129 @@ mod tests {
                 "h264_mf",
                 "libopenh264"
             ]
+        );
+    }
+
+    #[test]
+    fn hardware_encoders_accept_packed_gpu_readback_without_cpu_yuv_conversion() {
+        assert_eq!(
+            encoder_input_format("h264_nvenc"),
+            ffmpeg::format::Pixel::BGRA
+        );
+        assert_eq!(
+            encoder_input_format("h264_amf"),
+            ffmpeg::format::Pixel::BGRA
+        );
+        assert_eq!(
+            encoder_input_format("h264_qsv"),
+            ffmpeg::format::Pixel::NV12
+        );
+        assert_eq!(
+            encoder_input_format("libopenh264"),
+            ffmpeg::format::Pixel::YUV420P
+        );
+    }
+
+    #[test]
+    fn video_mailbox_replaces_stale_frames_instead_of_building_latency() {
+        let mailbox = Mutex::new(None);
+        let first = VideoFrame {
+            width: 1,
+            height: 1,
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels: vec![1, 2, 3, 4],
+        };
+        let second = VideoFrame {
+            pixels: vec![5, 6, 7, 8],
+            ..first.clone()
+        };
+        mailbox.lock().unwrap().replace(first);
+        mailbox.lock().unwrap().replace(second);
+        assert_eq!(take_latest_video(&mailbox).unwrap().pixels, [5, 6, 7, 8]);
+        assert!(take_latest_video(&mailbox).is_none());
+    }
+
+    #[test]
+    fn controller_counts_replaced_video_without_rejecting_the_newest_frame() {
+        let (audio, _audio_receiver) = mpsc::sync_channel(1);
+        let (_event_sender, event_receiver) = mpsc::channel();
+        let metrics = Arc::new(BroadcastMetrics::default());
+        let controller = BroadcastController {
+            audio,
+            video: Arc::new(Mutex::new(None)),
+            events: Arc::new(Mutex::new(event_receiver)),
+            stop: Arc::new(AtomicBool::new(false)),
+            sensitive_screen: Arc::new(AtomicBool::new(false)),
+            metrics: Arc::clone(&metrics),
+        };
+        let first = VideoFrame {
+            width: 1,
+            height: 1,
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels: vec![1, 2, 3, 4],
+        };
+        let second = VideoFrame {
+            pixels: vec![5, 6, 7, 8],
+            ..first.clone()
+        };
+        assert!(controller.send_video(first));
+        assert!(controller.send_video(second));
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.replaced_video, 1);
+        assert_eq!(snapshot.dropped_video, 1);
+        assert_eq!(
+            take_latest_video(&controller.video).unwrap().pixels,
+            [5, 6, 7, 8]
+        );
+    }
+
+    #[test]
+    #[ignore = "local 1080p60 hardware-encoder throughput diagnostic"]
+    fn configured_1080p60_encoder_sustains_realtime_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("direct-broadcast-1080p60.flv");
+        let target = BroadcastTarget {
+            ingest_name: "local-performance-diagnostic".to_owned(),
+            url: output.to_string_lossy().into_owned(),
+        };
+        let config = BroadcastConfig {
+            enabled: true,
+            width: 1_920,
+            height: 1_080,
+            frames_per_second: 60,
+            video_bitrate_kbps: 6_000,
+            encoder: BroadcastEncoderPreference::Auto,
+            ..BroadcastConfig::default()
+        };
+        ffmpeg::init().unwrap();
+        ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
+        let (mut encoder, selected) = BroadcastEncoder::open(&target, &config).unwrap();
+        let frame = VideoFrame {
+            width: u32::from(config.width),
+            height: u32::from(config.height),
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels: vec![
+                0;
+                usize::from(config.width)
+                    .saturating_mul(usize::from(config.height))
+                    .saturating_mul(4)
+            ],
+        };
+        let frame_count = 120_u32;
+        let started = Instant::now();
+        for pts in 0..frame_count {
+            encoder.encode_video(&frame, i64::from(pts)).unwrap();
+        }
+        encoder.finish().unwrap();
+        let elapsed = started.elapsed().as_secs_f64();
+        let frames_per_second = f64::from(frame_count) / elapsed;
+        eprintln!(
+            "1080p60 local encoder diagnostic: {selected}, {frames_per_second:.1} FPS, {:.2} ms/frame",
+            elapsed * 1_000.0 / f64::from(frame_count)
+        );
+        assert!(
+            frames_per_second >= 60.0,
+            "{selected} only sustained {frames_per_second:.1} FPS"
         );
     }
 
@@ -1574,7 +2636,8 @@ mod tests {
                     &VideoFrame {
                         width: u32::from(config.width),
                         height: u32::from(config.height),
-                        rgba: rgba.clone(),
+                        pixel_format: VideoPixelFormat::Rgba,
+                        pixels: rgba.clone(),
                     },
                     video_pts,
                 )
