@@ -7,8 +7,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 3;
+pub const CURRENT_PLAYER_SETTINGS_SCHEMA: u32 = 4;
 const LEGACY_BEVY_EXPOSURE_OFFSET_EV: f32 = 0.5;
+const PREVIOUS_INGAME_BRIGHTNESS_OFFSET_EV: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DisplayMode {
@@ -192,6 +193,14 @@ impl PlayerSettings {
         if self.schema_version == 2 {
             // Schema 3 only adds serde-defaulted accessibility preferences, so
             // existing players retain the exact presentation they had before.
+            self.schema_version = 3;
+        }
+        if self.schema_version == 3 {
+            // The calibrated neutral image moved from the former -1.0 readout
+            // to 0.0. Shift stored values in the opposite direction to keep
+            // every existing player's rendered image unchanged.
+            self.video.brightness_ev =
+                (self.video.brightness_ev + PREVIOUS_INGAME_BRIGHTNESS_OFFSET_EV).clamp(-5.0, 5.0);
             self.schema_version = CURRENT_PLAYER_SETTINGS_SCHEMA;
         }
         self.validate()?;
@@ -500,6 +509,22 @@ mod tests {
             schema_version: 1,
             video: VideoSettings {
                 brightness_ev: 0.5,
+                ..defaults.video
+            },
+            ..defaults
+        };
+        let upgraded = settings.upgrade().unwrap();
+        assert_eq!(upgraded.schema_version, CURRENT_PLAYER_SETTINGS_SCHEMA);
+        assert!((upgraded.video.brightness_ev - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn schema_three_minus_one_brightness_becomes_the_new_neutral_zero() {
+        let defaults = PlayerSettings::default();
+        let settings = PlayerSettings {
+            schema_version: 3,
+            video: VideoSettings {
+                brightness_ev: -1.0,
                 ..defaults.video
             },
             ..defaults

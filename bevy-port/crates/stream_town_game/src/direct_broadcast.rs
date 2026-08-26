@@ -164,6 +164,10 @@ fn configure_direct_broadcast(
     config: &stream_town_domain::GameConfig,
     runtime: &mut DirectBroadcastRuntime,
 ) {
+    if std::env::var_os("STREAM_TOWN_DISABLE_DIRECT_BROADCAST").is_some() {
+        runtime.phase = DirectBroadcastPhase::Disabled;
+        return;
+    }
     let twitch = &config.twitch;
     if !twitch.broadcast.enabled || !twitch.broadcast.start_on_launch {
         runtime.phase = DirectBroadcastPhase::Disabled;

@@ -2,7 +2,7 @@
   "references": {
     "animation": {
       "height": 180,
-      "sha256": "c84c18d18b64d7fa1c7528c284fc340a7c20b1b6c35156dcc95768b150752933",
+      "sha256": "576c291edac2b8e88929123e197930247833026b1322b8be741ca10f0eb034c8",
       "width": 320
     },
     "credits": {
@@ -12,47 +12,47 @@
     },
     "current-event": {
       "height": 180,
-      "sha256": "a66d8ad14895141048045cf96dcc50e2b755a131c33ff7af698448efaafb7908",
+      "sha256": "299fc88c40aa8fe6d86667f3fd237e29f56aa00e7167a5631564da8c3a050d85",
       "width": 320
     },
     "foliage": {
       "height": 180,
-      "sha256": "37cafba1719d90c508c1936e7af45558b98cd89ac83e62a22498b228a0f307c7",
+      "sha256": "bb5d96de66800f68f62f6415a7a82360db2203dae3ecdf0ca22d06a67e2a2756",
       "width": 320
     },
     "game-menu": {
       "height": 180,
-      "sha256": "4f264b39589a056cd11c4ff7e9db75a4e1eab47d023cf71621914bad084e9327",
+      "sha256": "2f2cb243104bb937f4322aaea77809b4c4be3f043f253fb8dd363ae89a1dd25b",
       "width": 320
     },
     "giraffe-pet": {
       "height": 180,
-      "sha256": "aaa16f3475456bf6944381bf445c6a1f5fade0c7d9cbe55a85158b8d730b5ed0",
+      "sha256": "81348f85e710c0ea28ca535bb76cc86ca7ff7f7f3df3fbdc0dc1f5410ed3a645",
       "width": 320
     },
     "main-menu": {
       "height": 180,
-      "sha256": "4c82487c23e661366dce7eb48e48a9484d3c1dc97185535c1cbac5c61a2a9dd6",
+      "sha256": "b589b4817d38309d72d3d22466248cb829ce7e902b69f6459efcac189655727f",
       "width": 320
     },
     "ruler-vote": {
       "height": 180,
-      "sha256": "b39739ac2eeec183f28ec56674c350f207ed856f22e7527fc7112f632c1e7aa2",
+      "sha256": "daba26b56ab2b82f85dfe760c7527fb026d2b568f3fad94bb7a9887a401a5395",
       "width": 320
     },
     "settings": {
       "height": 180,
-      "sha256": "eaf1f4a25f6af37da0d7a3f792e4e7115d462e48548f225265afc3b4a8422446",
+      "sha256": "7dadef6b3671b1e2261e84ccabcc92e9d19d1f80c7f05a74944213576c5f9210",
       "width": 320
     },
     "shoreline": {
       "height": 180,
-      "sha256": "0b6d88ad662323b5c17698e0cc2dd80818eeaf003719bf88f19dcfa1f4b62a81",
+      "sha256": "ad69ac1ec8e1539b2d0642ec8d448a19633dc25eaf396ee76d09b8611ce16472",
       "width": 320
     },
     "town-overview": {
       "height": 180,
-      "sha256": "3239b7124b9c4adf0a134c87ea221b2d92420ce9e9b28473e35e3df08276d020",
+      "sha256": "c84e4d438c32d1ad211f7227400dd6f95c12ff52533470dea49ce8f9f9ce3338",
       "width": 320
     }
   },

@@ -36,13 +36,12 @@ use bevy::{
     asset::{AssetId, AssetPlugin, LoadState, RenderAssetUsages, UntypedAssetId, UntypedHandle},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
     camera::primitives::Aabb,
-    camera::{Hdr, ScalingMode},
+    camera::{Hdr, RenderTarget, ScalingMode},
     color::LinearRgba,
     core_pipeline::tonemapping::Tonemapping,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     ecs::{query::QueryData, system::SystemParam},
     gltf::{GltfMaterialName, GltfMeshName},
-    input::mouse::AccumulatedMouseScroll,
     input_focus::{
         FocusCause, InputFocus, InputFocusVisible,
         tab_navigation::{TabGroup, TabIndex, TabNavigationPlugin},
@@ -77,8 +76,8 @@ use bevy::{
     transform::TransformSystems,
     ui_widgets::SelectAllOnFocus,
     window::{
-        CursorOptions, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode,
-        WindowResolution,
+        CompositeAlphaMode, CursorOptions, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow,
+        WindowLevel, WindowMode, WindowMoved, WindowPosition, WindowRef, WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
     world_serialization::{WorldInstance, WorldInstanceReady},
@@ -127,11 +126,10 @@ const PERFORMANCE_ACTOR_DETAIL_BUDGET: usize = 16;
 const UNITY_TOWN_CAMERA_FOV_DEGREES: f32 = 60.0;
 const UNITY_TOWN_CAMERA_NEAR: f32 = 0.3;
 const UNITY_TOWN_CAMERA_FAR: f32 = 1_000.0;
-const UNITY_TOWN_CAMERA_OFFSET: Vec3 = Vec3::new(-26.8, 26.592_45, 0.0);
+const UNITY_TOWN_CAMERA_OFFSET: Vec3 = Vec3::new(-33.5, 33.240_562, 0.0);
+const UNITY_TOWN_CAMERA_FOCUS_BACK_SHIFT: f32 = 16.0;
 const UNITY_TOWN_CAMERA_MIN_HEIGHT: f32 = 11.0;
 const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
-const UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT: f32 = 15.0;
-const UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT: f32 = 20.0;
 const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
 const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
     [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
@@ -169,7 +167,9 @@ const TERRAIN_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Terrain.ma
 const WATER_SHADER_ASSET_PATH: &str = "shaders/water_material.wgsl";
 const WATER_MATERIAL_PATH: &str = "Assets/Materials/Environment/Env_Water.mat";
 const MAIN_MENU_BASELINE_EXPOSURE_EV: f32 = -1.5;
-const IN_GAME_BASELINE_EXPOSURE_EV: f32 = 0.5;
+// Neutral now renders exactly like the former -1.0 brightness setting:
+// 0.5 authored baseline + (-1.0) user adjustment = -0.5 EV.
+const IN_GAME_BASELINE_EXPOSURE_EV: f32 = -0.5;
 // Entity construction must yield back to Bevy regularly so the loading UI can
 // be extracted and presented. Asset decoding and deterministic generation run
 // on worker pools. A time budget handles models with unequal construction cost,
@@ -235,7 +235,7 @@ const GAME_MENU_TEXTURE_PATHS: [&str; 3] = [
     "Assets/Sprites/Miscellaneous/UI_Checkmark.png",
 ];
 const SETTINGS_BACKGROUND_TEXTURE_PATH: &str = "Assets/Sprites/Settings/UI_Settings_Background.png";
-const SECRETS_DISCLAIMER: &str = "By choosing Yes, you confirm that you are not presently streaming or recording this screen through OBS, Streamlabs, XSplit, browser capture, a capture card, or any other third-party application. The next screen contains sensitive Twitch account setup information. You accept any and all responsibility for keeping that information private and absolve Stream Town, Human Bean Games, contributors, and all other parties of liability arising from violating this agreement.";
+const SECRETS_DISCLAIMER: &str = "By choosing Yes, you confirm that you are not presently streaming or recording this screen through OBS, Streamlabs, XSplit, browser capture, a capture card, or any other third-party application. The next screen contains sensitive Twitch account setup information. You accept any and all responsibility for keeping that information private and absolve Stream Town, its contributors, and all other parties of liability arising from violating this agreement.";
 const SECRETS_PRIVACY_NOTICE: &str = "INTERNAL TWITCH VIDEO IS BLACKED OUT WHILE THIS SCREEN IS OPEN. Third-party capture software cannot be controlled by Stream Town. Never paste a Client Secret or stream key here.";
 const SECRETS_INITIAL_FEEDBACK: &str =
     "Enter the public Client ID and both account logins, then authorize each account separately.";
@@ -2163,6 +2163,9 @@ struct MainMenuCloudPrism {
     drift_per_second: Vec3,
     wrap_min_x: f32,
     wrap_max_x: f32,
+    fade_delay_seconds: f32,
+    fade_elapsed_seconds: f32,
+    target_alpha: f32,
 }
 
 #[derive(Component)]
@@ -2199,6 +2202,15 @@ struct Agent {
     action_cooldown_seconds: f32,
     action_started: bool,
     health_regen_accumulator: f64,
+    wander_sequence: u64,
+    previous_wander_origin: Option<GridPos>,
+}
+
+#[derive(Resource, Default)]
+struct RulerVoteAnnouncementRuntime {
+    initialized: bool,
+    active_kind: Option<RulerVoteKind>,
+    ruler_before_vote: Option<StableId>,
 }
 
 #[derive(Component, Default)]
@@ -2724,6 +2736,20 @@ struct BuildingPresentation {
 #[derive(Component)]
 struct TownCamera;
 
+#[cfg(target_os = "windows")]
+#[derive(Component)]
+struct LocalBroadcastStatusWindow;
+
+#[cfg(target_os = "windows")]
+#[derive(Component)]
+struct LocalBroadcastStatusText;
+
+#[cfg(target_os = "windows")]
+#[derive(Resource, Default)]
+struct LocalBroadcastStatusAnchor {
+    primary_origin: IVec2,
+}
+
 #[derive(Component, Clone)]
 struct TownCameraControllerRuntime {
     home: Transform,
@@ -2736,6 +2762,8 @@ struct FoliageAcceptanceCapture {
     initialized: bool,
     elapsed_seconds: f32,
     next_capture: usize,
+    written_captures: usize,
+    capture_cooldown_seconds: f32,
     starting_camera: Option<Transform>,
     output_directory: Option<PathBuf>,
     renderer_count: usize,
@@ -2747,25 +2775,28 @@ struct FoliageAcceptanceCapture {
     completion_delay_seconds: Option<f32>,
 }
 
+#[derive(Component)]
+struct FoliageAcceptanceScreenshot;
+
 impl TownCameraControllerRuntime {
     fn new(home: Transform) -> Self {
         Self {
             move_target: home.translation,
-            zoom_target_height: UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT,
+            zoom_target_height: home.translation.y,
             home,
         }
     }
 
     fn set_home(&mut self, home: Transform) {
         self.move_target = home.translation;
-        self.zoom_target_height = UNITY_TOWN_CAMERA_INITIAL_ZOOM_HEIGHT;
+        self.zoom_target_height = home.translation.y;
         self.home = home;
     }
 
     fn reset(&mut self, transform: &mut Transform) {
         *transform = self.home;
         self.move_target = transform.translation;
-        self.zoom_target_height = UNITY_TOWN_CAMERA_RESET_ZOOM_HEIGHT;
+        self.zoom_target_height = transform.translation.y;
     }
 }
 
@@ -3094,6 +3125,177 @@ struct BuildingMaterialInstanced;
 
 pub struct StreamTownGamePlugin;
 
+#[cfg(target_os = "windows")]
+struct LocalBroadcastStatusPlugin;
+
+#[cfg(not(target_os = "windows"))]
+struct LocalBroadcastStatusPlugin;
+
+#[cfg(not(target_os = "windows"))]
+impl Plugin for LocalBroadcastStatusPlugin {
+    fn build(&self, _app: &mut App) {}
+}
+
+#[cfg(target_os = "windows")]
+impl Plugin for LocalBroadcastStatusPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<LocalBroadcastStatusAnchor>()
+            .add_systems(Startup, spawn_local_broadcast_status)
+            .add_systems(
+                Update,
+                (anchor_local_broadcast_status, update_local_broadcast_status),
+            );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_local_broadcast_status(mut commands: Commands) {
+    let window = commands
+        .spawn((
+            LocalBroadcastStatusWindow,
+            Window {
+                title: "Stream Town broadcast status".to_owned(),
+                name: Some("stream-town-local-broadcast-status".to_owned()),
+                resolution: WindowResolution::new(196, 42).with_scale_factor_override(1.0),
+                position: WindowPosition::At(IVec2::new(0, 0)),
+                present_mode: PresentMode::AutoVsync,
+                resizable: false,
+                decorations: false,
+                // Keep the local-only status surface opaque. Some Windows GPU
+                // and remote-session surfaces advertise only Opaque alpha;
+                // requesting PostMultiplied made the entire game fail before
+                // the primary window could render.
+                transparent: false,
+                composite_alpha_mode: CompositeAlphaMode::Auto,
+                focused: false,
+                window_level: WindowLevel::AlwaysOnTop,
+                skip_taskbar: true,
+                ..default()
+            },
+            CursorOptions {
+                visible: false,
+                hit_test: false,
+                ..default()
+            },
+        ))
+        .id();
+    let camera = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                clear_color: bevy::camera::ClearColorConfig::Custom(Color::srgb(
+                    0.02, 0.025, 0.035,
+                )),
+                ..default()
+            },
+            RenderTarget::Window(WindowRef::Entity(window)),
+        ))
+        .id();
+    commands
+        .spawn((
+            UiTargetCamera(camera),
+            Node {
+                width: percent(100.0),
+                height: percent(100.0),
+                padding: UiRect::horizontal(px(12.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border_radius: BorderRadius::all(px(10.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.92)),
+        ))
+        .with_child((
+            LocalBroadcastStatusText,
+            Text::new("● NOT LIVE"),
+            TextFont {
+                font_size: FontSize::Px(17.0),
+                ..default()
+            },
+            TextLayout::no_wrap().with_justify(Justify::Center),
+            TextColor(Color::srgb(0.78, 0.80, 0.84)),
+            TextShadow {
+                offset: Vec2::splat(1.0),
+                color: Color::BLACK,
+            },
+        ));
+}
+
+#[cfg(target_os = "windows")]
+fn anchor_local_broadcast_status(
+    mut moved: MessageReader<WindowMoved>,
+    mut anchor: ResMut<LocalBroadcastStatusAnchor>,
+    primary: Query<(Entity, &Window), With<PrimaryWindow>>,
+    mut status: Query<&mut Window, (With<LocalBroadcastStatusWindow>, Without<PrimaryWindow>)>,
+) {
+    let Ok((primary_entity, primary)) = primary.single() else {
+        return;
+    };
+    for event in moved.read() {
+        if event.window == primary_entity {
+            anchor.primary_origin = event.position;
+        }
+    }
+    if let WindowPosition::At(position) = primary.position {
+        anchor.primary_origin = position;
+    }
+    let Ok(mut status) = status.single_mut() else {
+        return;
+    };
+    let right_margin = 14_i32;
+    let desired = IVec2::new(
+        anchor.primary_origin.x + i32::try_from(primary.physical_width()).unwrap_or(i32::MAX)
+            - i32::try_from(status.physical_width()).unwrap_or(i32::MAX)
+            - right_margin,
+        anchor.primary_origin.y + 14,
+    );
+    if status.position != WindowPosition::At(desired) {
+        status.position = WindowPosition::At(desired);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn local_broadcast_status_label(
+    config: &GameConfig,
+    phase: &direct_broadcast::DirectBroadcastPhase,
+) -> (&'static str, Color) {
+    use direct_broadcast::DirectBroadcastPhase;
+    match phase {
+        DirectBroadcastPhase::Broadcasting if !config.twitch.broadcast.bandwidth_test => {
+            ("● LIVE", Color::srgb(1.0, 0.28, 0.25))
+        }
+        DirectBroadcastPhase::Broadcasting => ("● NOT LIVE · TEST", Color::srgb(0.98, 0.78, 0.28)),
+        DirectBroadcastPhase::WaitingForBroadcasterAuthorization
+        | DirectBroadcastPhase::ResolvingIngest
+        | DirectBroadcastPhase::Connecting
+        | DirectBroadcastPhase::Reconnecting => {
+            ("● NOT LIVE · CONNECTING", Color::srgb(0.98, 0.78, 0.28))
+        }
+        DirectBroadcastPhase::Error(_) => ("● NOT LIVE · ERROR", Color::srgb(1.0, 0.42, 0.38)),
+        DirectBroadcastPhase::Disabled
+        | DirectBroadcastPhase::Stopping
+        | DirectBroadcastPhase::Stopped => ("● NOT LIVE", Color::srgb(0.78, 0.80, 0.84)),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn update_local_broadcast_status(
+    config: Res<RuntimeConfig>,
+    broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
+    mut text: Query<(&mut Text, &mut TextColor), With<LocalBroadcastStatusText>>,
+) {
+    if !config.is_changed() && !broadcast.is_changed() {
+        return;
+    }
+    let Ok((mut text, mut color)) = text.single_mut() else {
+        return;
+    };
+    let snapshot = broadcast.snapshot();
+    let (label, next_color) = local_broadcast_status_label(&config.0, &snapshot.phase);
+    label.clone_into(&mut **text);
+    color.0 = next_color;
+}
+
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((UnityColorFilterPlugin, TabNavigationPlugin));
@@ -3142,6 +3344,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<WorldRenderStats>()
             .init_resource::<CrowdSeparationRuntime>()
             .init_resource::<StationTargetRuntime>()
+            .init_resource::<RulerVoteAnnouncementRuntime>()
             .init_resource::<InjectedCommands>()
             .init_resource::<CommandFeedback>()
             .init_resource::<MenuRuntime>()
@@ -3210,7 +3413,13 @@ impl Plugin for StreamTownGamePlugin {
             )
             .add_systems(
                 OnEnter(GameState::MainMenu),
-                (spawn_main_menu, spawn_menu_overlay),
+                (
+                    spawn_loading_screen,
+                    ensure_main_menu_loading,
+                    spawn_main_menu,
+                    spawn_menu_overlay,
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -3531,7 +3740,8 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     sync_selection_outline.after(select_grid_cell),
                     update_selection_panel.after(select_grid_cell),
-                    update_vote_panels.after(move_agents),
+                    announce_ruler_vote_result.after(move_agents),
+                    update_vote_panels.after(announce_ruler_vote_result),
                     update_town_goal_panel.after(move_agents),
                     update_current_event_panel.after(update_enemy_encounters),
                 )
@@ -3722,6 +3932,7 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                     ..default()
                 }),
         )
+        .add_plugins(LocalBroadcastStatusPlugin)
         .add_plugins(tidal_music::tidal_plugin(&asset_root))
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::new(600))
@@ -6252,7 +6463,6 @@ fn begin_menu_loading(
     asset_root: Res<RuntimeAssetRoot>,
     asset_server: Option<Res<AssetServer>>,
 ) {
-    let started_at = Instant::now();
     let destination = if std::env::var_os("STREAM_TOWN_AUTOSTART_CREDITS").is_some() {
         BootDestination::Credits
     } else if std::env::var_os("STREAM_TOWN_AUTOSTART").is_some() {
@@ -6260,9 +6470,46 @@ fn begin_menu_loading(
     } else {
         BootDestination::MainMenu
     };
+    commands.insert_resource(menu_loading_runtime(
+        destination,
+        &content.0,
+        render.as_deref(),
+        &asset_root.0,
+        asset_server.as_deref(),
+    ));
+}
+
+fn ensure_main_menu_loading(
+    mut commands: Commands,
+    existing: Option<Res<MenuLoadingRuntime>>,
+    content: Res<RuntimeContent>,
+    render: Option<Res<RenderAssets>>,
+    asset_root: Res<RuntimeAssetRoot>,
+    asset_server: Option<Res<AssetServer>>,
+) {
+    if existing.is_some() {
+        return;
+    }
+    commands.insert_resource(menu_loading_runtime(
+        BootDestination::MainMenu,
+        &content.0,
+        render.as_deref(),
+        &asset_root.0,
+        asset_server.as_deref(),
+    ));
+}
+
+fn menu_loading_runtime(
+    destination: BootDestination,
+    content: &ContentCatalog,
+    render: Option<&RenderAssets>,
+    asset_root: &Path,
+    asset_server: Option<&AssetServer>,
+) -> MenuLoadingRuntime {
+    let started_at = Instant::now();
     let mut asset_handles = if destination == BootDestination::MainMenu {
-        asset_server.as_deref().map_or_else(Vec::new, |server| {
-            main_menu_preload_paths(&content.0, &asset_root.0)
+        asset_server.map_or_else(Vec::new, |server| {
+            main_menu_preload_paths(content, asset_root)
                 .into_iter()
                 .map(|path| {
                     // Preload the exact scene sub-asset instantiated by
@@ -6317,7 +6564,7 @@ fn begin_menu_loading(
             format!("0 / {asset_count} assets"),
         ),
     };
-    commands.insert_resource(MenuLoadingRuntime {
+    MenuLoadingRuntime {
         started_at,
         destination,
         progress: 0.0,
@@ -6327,7 +6574,7 @@ fn begin_menu_loading(
         loaded_assets: 0,
         failed_assets: 0,
         ready_presented_frames: 0,
-    });
+    }
 }
 
 fn main_menu_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTreeSet<String> {
@@ -7002,6 +7249,7 @@ fn spawn_main_menu(
     presentation: Res<RuntimePresentation>,
     asset_server: Option<Res<AssetServer>>,
     meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     mut cameras: TownCameraMutQuery,
     mut sun: TownSunMutQuery,
 ) {
@@ -7134,7 +7382,7 @@ fn spawn_main_menu(
         });
     }
 
-    spawn_authored_main_menu_clouds(&mut commands, &render);
+    spawn_authored_main_menu_clouds(&mut commands, &render, materials.as_deref_mut());
     spawn_fish_school_scene(
         &mut commands,
         &presentation.0,
@@ -8997,18 +9245,40 @@ fn enforce_main_menu_building_shadow_casters(
     }
 }
 
-fn spawn_authored_main_menu_clouds(commands: &mut Commands, render: &RenderAssets) {
+fn spawn_authored_main_menu_clouds(
+    commands: &mut Commands,
+    render: &RenderAssets,
+    materials: Option<&mut Assets<StandardMaterial>>,
+) {
+    let material = materials
+        .and_then(|materials| {
+            materials
+                .get(&render.menu_cloud)
+                .cloned()
+                .map(|base| (materials, base))
+        })
+        .map_or_else(
+            || render.menu_cloud.clone(),
+            |(materials, mut material)| {
+                material.base_color.set_alpha(0.0);
+                material.alpha_mode = AlphaMode::Blend;
+                materials.add(material)
+            },
+        );
     for layer in 0..MAIN_MENU_CLOUD_COLUMNS * MAIN_MENU_CLOUD_ROWS {
         commands.spawn((
             StateEntity,
             Name::new(format!("Menu cloud prism {layer:02}")),
             MainMenuCloudPrism {
                 drift_per_second: Vec3::new(1.15 + small_pattern(layer, 5) * 0.12, 0.0, 0.16),
-                wrap_min_x: -95.0,
+                wrap_min_x: -135.0,
                 wrap_max_x: 330.0,
+                fade_delay_seconds: 0.0,
+                fade_elapsed_seconds: 0.0,
+                target_alpha: 0.82,
             },
             Mesh3d(render.cube.clone()),
-            MeshMaterial3d(render.menu_cloud.clone()),
+            MeshMaterial3d(material.clone()),
             main_menu_cloud_prism_transform(layer),
             bevy::light::NotShadowCaster,
             bevy::light::NotShadowReceiver,
@@ -9024,7 +9294,7 @@ fn main_menu_cloud_prism_transform(layer: usize) -> Transform {
     let small =
         |value: usize| f32::from(u8::try_from(value).expect("menu cloud pattern value fits in u8"));
     let position = Vec3::new(
-        -55.0 + column_f * 34.0 - row_f * 7.0,
+        -105.0 + column_f * 34.0 - row_f * 7.0,
         25.0 + row_f * 5.5 + small((column * 2 + row) % 3) * 2.1,
         42.0 + row_f * 48.0 + small(column % 2) * 7.0,
     );
@@ -9043,12 +9313,27 @@ fn small_pattern(value: usize, modulo: usize) -> f32 {
 fn animate_main_menu_clouds(
     time: Res<Time>,
     settings: Option<Res<RuntimePlayerSettings>>,
-    mut clouds: Query<(&MainMenuCloudPrism, &mut Transform)>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    mut clouds: Query<(
+        &mut MainMenuCloudPrism,
+        &MeshMaterial3d<StandardMaterial>,
+        &mut Transform,
+    )>,
 ) {
-    if settings.is_some_and(|settings| settings.0.interface.reduced_motion) {
-        return;
-    }
-    for (cloud, mut transform) in &mut clouds {
+    let reduced_motion = settings.is_some_and(|settings| settings.0.interface.reduced_motion);
+    for (mut cloud, material, mut transform) in &mut clouds {
+        cloud.fade_elapsed_seconds += time.delta_secs();
+        let fade = ((cloud.fade_elapsed_seconds - cloud.fade_delay_seconds) / 1.8).clamp(0.0, 1.0);
+        if let Some(materials) = materials.as_deref_mut()
+            && let Some(mut material) = materials.get_mut(material)
+        {
+            material
+                .base_color
+                .set_alpha(cloud.target_alpha * fade * fade * (3.0 - 2.0 * fade));
+        }
+        if reduced_motion {
+            continue;
+        }
         transform.translation += cloud.drift_per_second * time.delta_secs();
         if transform.translation.x > cloud.wrap_max_x {
             transform.translation.x = cloud.wrap_min_x;
@@ -9624,6 +9909,11 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 },
                 TextLayout::justify(Justify::Center),
                 TextColor(Color::srgb(0.91, 0.89, 0.81)),
+                TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.9),
+                },
+                ZIndex(2),
                 Node {
                     position_type: PositionType::Absolute,
                     top: percent(18.9),
@@ -9673,6 +9963,11 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 },
                 TextLayout::justify(Justify::Center),
                 TextColor(Color::srgb(0.91, 0.89, 0.81)),
+                TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.9),
+                },
+                ZIndex(2),
                 Node {
                     position_type: PositionType::Absolute,
                     left: percent(17.9),
@@ -14589,6 +14884,8 @@ fn generate_and_spawn_world(
                 action_cooldown_seconds: 0.0,
                 action_started: false,
                 health_regen_accumulator: 0.0,
+                wander_sequence: 0,
+                previous_wander_origin: None,
             },
             AgentLocomotion::default(),
             AgentAnimation {
@@ -19909,6 +20206,7 @@ fn move_agents(
                 agent.path_index = 0;
                 agent.action_cooldown_seconds = 0.0;
                 agent.action_started = false;
+                agent.previous_wander_origin = None;
             }
         } else {
             agent.path.clear();
@@ -19952,6 +20250,7 @@ fn move_agents(
             agent.target = deterministic_wander_target(&world.generated, &agent.id, spawn);
             agent.action_cooldown_seconds = 0.0;
             agent.action_started = false;
+            agent.previous_wander_origin = None;
             spawn_healing_effect(
                 &mut commands,
                 &authored_presentation.0,
@@ -20103,6 +20402,24 @@ fn move_agents(
                 &resource_reservations,
                 &target_assignment_counts,
             );
+            let target = if goal == AgentGoal::Wander {
+                let anchor =
+                    actor_idle_anchor(&content.0, &simulation.0, &config.0, &agent.id, location.0);
+                let target = deterministic_wander_target_step(
+                    &world.generated,
+                    &agent.id,
+                    anchor,
+                    location.0,
+                    agent.wander_sequence,
+                    agent.previous_wander_origin,
+                );
+                agent.wander_sequence = agent.wander_sequence.wrapping_add(1);
+                agent.previous_wander_origin = Some(location.0);
+                target
+            } else {
+                agent.previous_wander_origin = None;
+                target
+            };
             agent.goal = goal;
             agent.action_started = false;
             agent.action_cooldown_seconds = 0.0;
@@ -25179,6 +25496,7 @@ fn capture_foliage_acceptance(
         ),
         Or<(With<ResourceNode>, With<FoliageVisual>)>,
     >,
+    active_screenshots: Query<(), With<FoliageAcceptanceScreenshot>>,
     mut capture: Local<FoliageAcceptanceCapture>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -25188,6 +25506,13 @@ fn capture_foliage_acceptance(
         return;
     };
     if reveal.is_some() {
+        return;
+    }
+    if !active_screenshots.is_empty() {
+        return;
+    }
+    if capture.capture_cooldown_seconds > 0.0 {
+        capture.capture_cooldown_seconds -= time.delta_secs();
         return;
     }
     if let Some(delay) = capture.completion_delay_seconds.as_mut() {
@@ -25272,35 +25597,25 @@ fn capture_foliage_acceptance(
     controller.move_target = sampled_camera.translation;
     controller.zoom_target_height = sampled_camera.translation.y;
 
-    let Some(&capture_time) = FOLIAGE_CAPTURE_TIMES_SECONDS.get(capture.next_capture) else {
-        return;
-    };
-    if capture.elapsed_seconds < capture_time {
+    // Screenshot readback is asynchronous. Do not enqueue the next primary
+    // window screenshot until the previous observer has actually written its
+    // PNG; overlapping requests can target the same surface and silently skip
+    // one of the promised acceptance frames.
+    if capture.next_capture > capture.written_captures {
+        let previous =
+            output_directory.join(format!("foliage-sweep-{:02}.png", capture.next_capture - 1));
+        if !previous.is_file() {
+            return;
+        }
+        // Bevy marks the completed Screenshot entity for cleanup in the same
+        // frame that its observer writes the file. Its extracted render-world
+        // target can outlive the main-world entity for a few more frames, so
+        // leave a short deterministic gap before targeting the surface again.
+        capture.written_captures = capture.next_capture;
+        capture.capture_cooldown_seconds = 0.75;
         return;
     }
-    let frame_number = capture.next_capture;
-    let path = output_directory.join(format!("foliage-sweep-{frame_number:02}.png"));
-    commands
-        .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(path.clone()));
-    let captured_seconds = capture.elapsed_seconds;
-    capture.frames.push(serde_json::json!({
-        "frame": frame_number,
-        "scheduled_seconds": capture_time,
-        "captured_seconds": captured_seconds,
-        "path": path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-        "camera_translation": sampled_camera.translation.to_array(),
-        "camera_rotation": sampled_camera.rotation.to_array(),
-    }));
-    capture.next_capture += 1;
-    info!(
-        frame = frame_number,
-        elapsed_seconds = capture.elapsed_seconds,
-        path = %path.display(),
-        "capturing foliage acceptance frame"
-    );
-
-    if capture.next_capture == FOLIAGE_CAPTURE_TIMES_SECONDS.len() {
+    let Some(&capture_time) = FOLIAGE_CAPTURE_TIMES_SECONDS.get(capture.next_capture) else {
         let structural_passed = capture.duplicate_group_count == 0
             && capture.shadow_caster_count == capture.renderer_count;
         let manifest = serde_json::json!({
@@ -25330,17 +25645,39 @@ fn capture_foliage_acceptance(
                 "foliage acceptance capture complete"
             );
         }
-        // Screenshot readback and PNG encoding happen asynchronously. Keep the
-        // render app alive long enough for the final observer to flush to disk.
-        capture.completion_delay_seconds = Some(2.0);
+        capture.completion_delay_seconds = Some(0.5);
+        return;
+    };
+    if capture.elapsed_seconds < capture_time {
+        return;
     }
+    let frame_number = capture.next_capture;
+    let path = output_directory.join(format!("foliage-sweep-{frame_number:02}.png"));
+    commands
+        .spawn((Screenshot::primary_window(), FoliageAcceptanceScreenshot))
+        .observe(save_to_disk(path.clone()));
+    let captured_seconds = capture.elapsed_seconds;
+    capture.frames.push(serde_json::json!({
+        "frame": frame_number,
+        "scheduled_seconds": capture_time,
+        "captured_seconds": captured_seconds,
+        "path": path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        "camera_translation": sampled_camera.translation.to_array(),
+        "camera_rotation": sampled_camera.rotation.to_array(),
+    }));
+    capture.next_capture += 1;
+    info!(
+        frame = frame_number,
+        elapsed_seconds = capture.elapsed_seconds,
+        path = %path.display(),
+        "capturing foliage acceptance frame"
+    );
 }
 
 fn camera_zoom_and_commands(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mouse_scroll: Res<AccumulatedMouseScroll>,
     menu: Res<MenuRuntime>,
     idle: Res<CameraIdleMode>,
     settings: Res<RuntimePlayerSettings>,
@@ -25416,12 +25753,6 @@ fn camera_zoom_and_commands(
     }
 
     if !idle.0 {
-        let scroll = unity_mouse_scroll_delta(&mouse_scroll);
-        if scroll.abs() > f32::EPSILON {
-            controller.zoom_target_height = (controller.zoom_target_height
-                - scroll * settings.0.camera.zoom_sensitivity * 0.004)
-                .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
-        }
         let keyboard_zoom = if keyboard.pressed(KeyCode::KeyQ) {
             1.0
         } else if keyboard.pressed(KeyCode::KeyE) {
@@ -25500,13 +25831,6 @@ fn follow_pet_closeup_camera(
 
 fn unity_camera_world_direction(screen_direction: Vec2) -> Vec2 {
     Vec2::new(screen_direction.y, -screen_direction.x)
-}
-
-fn unity_mouse_scroll_delta(scroll: &AccumulatedMouseScroll) -> f32 {
-    match scroll.unit {
-        bevy::input::mouse::MouseScrollUnit::Line => scroll.delta.y * 120.0,
-        bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta.y,
-    }
 }
 
 fn constrain_town_camera_position(
@@ -25784,11 +26108,13 @@ const fn in_game_ambient_brightness(authored: f32) -> f32 {
 }
 
 fn unity_town_camera_transform(focus: Vec3) -> Transform {
-    // Unity MainCamera.prefab: position (-26.8, 26.59245, 0), Euler (45, 90, 0).
-    // Unity's +Z reflection changes handedness, but this side-on pose has no Z
-    // offset; looking along +X/down reproduces the authored rotation directly.
-    Transform::from_translation(focus + UNITY_TOWN_CAMERA_OFFSET)
-        .looking_to(Vec3::new(1.0, -1.0, 0.0).normalize(), Vec3::Y)
+    // Retain Unity's side-on 45-degree view, with a wider shipping frame. The
+    // backward shift keeps the Town Hall around the upper third instead of
+    // pinning it to screen centre, leaving the playable foreground visible.
+    Transform::from_translation(
+        focus + UNITY_TOWN_CAMERA_OFFSET - Vec3::X * UNITY_TOWN_CAMERA_FOCUS_BACK_SHIFT,
+    )
+    .looking_to(Vec3::new(1.0, -1.0, 0.0).normalize(), Vec3::Y)
 }
 
 fn town_camera_projection(field_of_view_degrees: f32) -> Projection {
@@ -26509,18 +26835,91 @@ fn ruler_vote_option_lines(simulation: &WorldSimulation) -> Vec<String> {
                 .get(option)
                 .and_then(|actor| actor.display_name.as_deref())
                 .unwrap_or(option.as_str());
-            format!("!vote {label}  ({count})")
+            format!("{label}  ({count})")
         })
         .collect::<Vec<_>>();
     if lines.is_empty() {
         lines = match vote.kind {
             RulerVoteKind::NewRuler => Vec::new(),
             RulerVoteKind::KeepRuler => {
-                vec!["!vote yes  (0)".to_owned(), "!vote no  (0)".to_owned()]
+                vec!["yes  (0)".to_owned(), "no  (0)".to_owned()]
             }
         };
     }
     lines
+}
+
+fn ruler_vote_option_font_size(line: &str) -> f32 {
+    let characters = u16::try_from(line.chars().count()).unwrap_or(u16::MAX);
+    (320.0 / f32::from(characters.max(1))).clamp(11.0, 17.0)
+}
+
+fn ruler_vote_result_announcement(
+    previous_kind: RulerVoteKind,
+    ruler_before_vote: Option<&StableId>,
+    simulation: &WorldSimulation,
+) -> Option<String> {
+    let actor_label = |id: &StableId| {
+        simulation
+            .actors
+            .get(id)
+            .and_then(|actor| actor.display_name.as_deref())
+            .unwrap_or(id.as_str())
+            .to_owned()
+    };
+    match previous_kind {
+        RulerVoteKind::NewRuler => simulation.current_ruler.as_ref().map(|ruler| {
+            format!(
+                "{} has been elected Ruler of Stream Town!",
+                actor_label(ruler)
+            )
+        }),
+        RulerVoteKind::KeepRuler if simulation.current_ruler.as_ref() == ruler_before_vote => {
+            simulation.current_ruler.as_ref().map(|ruler| {
+                format!(
+                    "Chat has chosen to keep {} as Ruler of Stream Town!",
+                    actor_label(ruler)
+                )
+            })
+        }
+        RulerVoteKind::KeepRuler => ruler_before_vote.map(|ruler| {
+            format!(
+                "{} was not retained as Ruler. Nominations are now open.",
+                actor_label(ruler)
+            )
+        }),
+    }
+}
+
+fn announce_ruler_vote_result(
+    simulation: Res<SimulationRuntime>,
+    mut runtime: ResMut<RulerVoteAnnouncementRuntime>,
+    connection: Res<TwitchConnection>,
+) {
+    let active_kind = simulation.0.ruler_vote.as_ref().map(|vote| vote.kind);
+    if !runtime.initialized {
+        runtime.initialized = true;
+        runtime.active_kind = active_kind;
+        runtime.ruler_before_vote = active_kind.and(simulation.0.current_ruler.clone());
+        return;
+    }
+    if let Some(previous_kind) = runtime.active_kind
+        && active_kind != Some(previous_kind)
+        && let Some(message) = ruler_vote_result_announcement(
+            previous_kind,
+            runtime.ruler_before_vote.as_ref(),
+            &simulation.0,
+        )
+    {
+        info!(announcement = %message, "ruler vote result announced");
+        if let Some(transport) = &connection.transport {
+            let _ = transport.send(TwitchControl::SendMessage(message));
+        }
+    }
+    if active_kind != runtime.active_kind {
+        runtime.active_kind = active_kind;
+        runtime.ruler_before_vote = active_kind.and(simulation.0.current_ruler.clone());
+    }
 }
 
 #[cfg(test)]
@@ -26597,7 +26996,7 @@ fn update_vote_panels(
 
     if let Some(vote) = &simulation.0.ruler_vote {
         let description = match vote.kind {
-            RulerVoteKind::NewRuler => "Who should be Ruler?\ntype !vote playername",
+            RulerVoteKind::NewRuler => "Who should be Ruler?",
             RulerVoteKind::KeepRuler => "Keep the current Ruler?",
         };
         for (kind, mut text) in &mut texts {
@@ -26632,6 +27031,7 @@ fn update_vote_panels(
                     ));
                 }
                 for line in lines {
+                    let font_size = ruler_vote_option_font_size(&line);
                     options
                         .spawn((
                             authored_ui_image(
@@ -26652,12 +27052,17 @@ fn update_vote_panels(
                             row.spawn((
                                 Text::new(line),
                                 TextFont {
-                                    font_size: FontSize::Px(17.0),
+                                    font_size: FontSize::Px(font_size),
                                     ..default()
                                 },
-                                TextLayout::justify(Justify::Center),
+                                TextLayout::no_wrap().with_justify(Justify::Center),
                                 TextColor(Color::BLACK),
                                 Pickable::IGNORE,
+                                Node {
+                                    width: percent(100.0),
+                                    overflow: Overflow::clip(),
+                                    ..default()
+                                },
                             ));
                         });
                 }
@@ -27934,6 +28339,8 @@ fn load_input(
         agent.target = deterministic_wander_target(&world.generated, &agent.id, position);
         agent.action_cooldown_seconds = 0.0;
         agent.action_started = false;
+        agent.wander_sequence = 0;
+        agent.previous_wander_origin = None;
         location.0 = position;
         transform.translation = world_position;
         restored_ids.insert(saved.id.clone());
@@ -27976,6 +28383,8 @@ fn load_input(
                 action_cooldown_seconds: 0.0,
                 action_started: false,
                 health_regen_accumulator: 0.0,
+                wander_sequence: 0,
+                previous_wander_origin: None,
             },
             AgentLocomotion::default(),
             AgentAnimation {
@@ -28056,6 +28465,12 @@ fn capture_screenshot(
     mut exit: MessageWriter<AppExit>,
     mut runtime_console: ResMut<RuntimeConsoleRuntime>,
 ) {
+    // The foliage sweep owns primary-window capture while it is active. A
+    // simultaneous F12/runtime/automatic screenshot would make wgpu discard
+    // one target and leave a hole in the deterministic frame sequence.
+    if std::env::var_os("STREAM_TOWN_FOLIAGE_CAPTURE_DIR").is_some() {
+        return;
+    }
     if let Some(remaining) = exit_delay.as_mut() {
         *remaining -= time.delta_secs();
         if *remaining <= 0.0 {
@@ -28228,6 +28643,85 @@ fn report_frame_time_gate(
     *reported = true;
     if std::env::var_os("STREAM_TOWN_EXIT_AFTER_FRAME_TIME").is_some() {
         exit.write(AppExit::Success);
+    }
+}
+
+fn actor_idle_anchor(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    config: &GameConfig,
+    actor_id: &StableId,
+    current: GridPos,
+) -> GridPos {
+    let Some(actor) = simulation.actors.get(actor_id) else {
+        return current;
+    };
+    if let Some(station) = assigned_station(content, simulation, config, actor) {
+        return station.position;
+    }
+    let Some(station_id) = best_station_id(content, simulation, config, &actor.role, current)
+    else {
+        return current;
+    };
+    station_candidate(content, simulation, config, &station_id)
+        .map_or(current, |station| station.position)
+}
+
+fn deterministic_wander_target_step(
+    world: &GeneratedWorld,
+    actor: &StableId,
+    anchor: GridPos,
+    current: GridPos,
+    sequence: u64,
+    avoid: Option<GridPos>,
+) -> GridPos {
+    // Unity samples Random.insideUnitCircle around the actor's station whenever
+    // its three-second idle timer completes. Stable sequence state supplies a
+    // fresh deterministic sample without deriving the next destination only
+    // from the current cell (which created A/B pendulum routes).
+    let mut actor_hash = 0xcbf2_9ce4_8422_2325_u64 ^ world.seed;
+    for byte in actor.as_str().bytes() {
+        actor_hash = (actor_hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for attempt in 0_u64..96 {
+        let serial = sequence.wrapping_mul(96).wrapping_add(attempt);
+        let mut mixed = actor_hash.wrapping_add(serial.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        mixed ^= mixed >> 31;
+        let offset_x = i32::try_from(mixed % 11).expect("bounded idle offset") - 5;
+        let offset_z = i32::try_from((mixed >> 16) % 11).expect("bounded idle offset") - 5;
+        let distance_squared = offset_x * offset_x + offset_z * offset_z;
+        if !(4..=25).contains(&distance_squared) {
+            continue;
+        }
+        let candidate_x = i32::from(anchor.x) + offset_x;
+        let candidate_z = i32::from(anchor.z) + offset_z;
+        if candidate_x < 0
+            || candidate_z < 0
+            || candidate_x >= i32::from(world.navigation.width())
+            || candidate_z >= i32::from(world.navigation.height())
+        {
+            continue;
+        }
+        let candidate = GridPos {
+            x: u16::try_from(candidate_x).expect("checked idle x"),
+            z: u16::try_from(candidate_z).expect("checked idle z"),
+        };
+        if candidate == current || Some(candidate) == avoid {
+            continue;
+        }
+        if world.navigation.is_walkable(candidate)
+            && world.navigation.find_path(current, candidate).is_ok()
+        {
+            return candidate;
+        }
+    }
+    let fallback = deterministic_wander_target(world, actor, current);
+    if fallback == current || Some(fallback) == avoid {
+        current
+    } else {
+        fallback
     }
 }
 
@@ -29011,6 +29505,8 @@ fn spawn_runtime_enemy(
             action_cooldown_seconds: 0.0,
             action_started: false,
             health_regen_accumulator: 0.0,
+            wander_sequence: 0,
+            previous_wander_origin: None,
         },
         AgentLocomotion::default(),
         AgentAnimation {
@@ -29722,6 +30218,8 @@ fn recruit_npcs(
                 action_cooldown_seconds: 0.0,
                 action_started: false,
                 health_regen_accumulator: 0.0,
+                wander_sequence: 0,
+                previous_wander_origin: None,
             },
             AgentLocomotion::default(),
             AgentAnimation {
@@ -30065,6 +30563,8 @@ fn process_injected_commands(
                                 action_cooldown_seconds: 0.0,
                                 action_started: false,
                                 health_regen_accumulator: 0.0,
+                                wander_sequence: 0,
+                                previous_wander_origin: None,
                             },
                             AgentLocomotion::default(),
                             AgentAnimation {
@@ -32385,6 +32885,7 @@ fn cleanup_world(
     mut commands: Commands,
     entities: Query<Entity, With<WorldEntity>>,
     mut station_targets: ResMut<StationTargetRuntime>,
+    mut ruler_announcements: ResMut<RulerVoteAnnouncementRuntime>,
 ) {
     for entity in &entities {
         commands.entity(entity).despawn();
@@ -32396,6 +32897,7 @@ fn cleanup_world(
     commands.insert_resource(BuildingPlacers::default());
     commands.insert_resource(BuildingCommandQueue::default());
     *station_targets = StationTargetRuntime::default();
+    *ruler_announcements = RulerVoteAnnouncementRuntime::default();
 }
 
 fn cleanup_menu_overlay(mut commands: Commands, overlays: MenuOverlayEntityQuery) {
@@ -33799,15 +34301,14 @@ mod tests {
     }
 
     #[test]
-    fn town_camera_matches_the_shipping_unity_prefab() {
+    fn town_camera_keeps_the_unity_angle_with_the_wider_upper_third_frame() {
         let config = GameConfig::default();
         let focus = Vec3::new(7.0, 2.5, -11.0);
         let transform = unity_town_camera_transform(focus);
         assert!(
-            transform
-                .translation
-                .distance(focus + Vec3::new(-26.8, 26.592_45, 0.0))
-                < 0.000_1
+            transform.translation.distance(
+                focus + UNITY_TOWN_CAMERA_OFFSET - Vec3::X * UNITY_TOWN_CAMERA_FOCUS_BACK_SHIFT,
+            ) < 0.000_1
         );
         assert!(
             transform
@@ -33824,6 +34325,16 @@ mod tests {
         assert!((projection.fov.to_degrees() - 60.0).abs() < 0.000_1);
         assert!((projection.near - 0.3).abs() < 0.000_1);
         assert!((projection.far - 1_000.0).abs() < 0.000_1);
+        let clip = Mat4::perspective_rh(60.0_f32.to_radians(), 16.0 / 9.0, 0.3, 1_000.0)
+            * transform.to_matrix().inverse()
+            * focus.extend(1.0);
+        let top_fraction = (1.0 - clip.y / clip.w) * 0.5;
+        assert!(
+            (0.29..=0.37).contains(&top_fraction),
+            "Town Hall should frame one third from the top, got {top_fraction}"
+        );
+        let controller = TownCameraControllerRuntime::new(transform);
+        assert!((controller.zoom_target_height - transform.translation.y).abs() < f32::EPSILON);
         let constrained = constrain_town_camera_position(
             Vec3::new(-500.0, UNITY_TOWN_CAMERA_MAX_HEIGHT, 500.0),
             &config.world,
@@ -33844,7 +34355,7 @@ mod tests {
     }
 
     #[test]
-    fn local_wander_is_reachable_bounded_and_not_a_two_point_mirror() {
+    fn station_anchored_wander_is_reachable_and_never_immediately_backtracks() {
         let config = GameConfig::default();
         let world = generate_world(&config.world);
         let actor = StableId::new("npc:wander_regression").unwrap();
@@ -33852,20 +34363,26 @@ mod tests {
             x: config.world.width / 2,
             z: config.world.height / 2,
         };
-        let mut current = nearest_walkable(&world, centre).unwrap();
+        let anchor = nearest_walkable(&world, centre).unwrap();
+        let mut current = anchor;
+        let mut previous = None;
         let mut visited = BTreeSet::from([current]);
-        for _ in 0..8 {
-            let next = deterministic_wander_target(&world, &actor, current);
+        for sequence in 0..24 {
+            let next = deterministic_wander_target_step(
+                &world, &actor, anchor, current, sequence, previous,
+            );
             assert_ne!(next, current);
-            assert!(next.x.abs_diff(current.x) <= 5);
-            assert!(next.z.abs_diff(current.z) <= 5);
+            assert_ne!(Some(next), previous);
+            assert!(next.x.abs_diff(anchor.x) <= 5);
+            assert!(next.z.abs_diff(anchor.z) <= 5);
             assert!(world.navigation.find_path(current, next).is_ok());
             visited.insert(next);
+            previous = Some(current);
             current = next;
         }
         assert!(
-            visited.len() >= 4,
-            "idle wandering must explore locally instead of alternating two endpoints"
+            visited.len() >= 8,
+            "idle wandering must explore its station radius instead of cycling a tiny route"
         );
     }
 
@@ -33954,6 +34471,30 @@ mod tests {
         app.world_mut().remove_resource::<WorldRevealRuntime>();
         app.update();
         assert!(app.world().contains_resource::<GameplayReady>());
+    }
+
+    #[test]
+    fn returning_to_main_menu_recreates_the_cover_before_scene_construction() {
+        let mut app = App::new();
+        app.insert_resource(RuntimeConfig(GameConfig::default()))
+            .insert_resource(RuntimeContent(embedded_content()))
+            .insert_resource(RuntimeAssetRoot(PathBuf::from("unused-test-assets")))
+            .add_systems(
+                Update,
+                (spawn_loading_screen, ensure_main_menu_loading).chain(),
+            );
+
+        app.update();
+
+        let mut covers = app
+            .world_mut()
+            .query_filtered::<Entity, With<LoadingScreenEntity>>();
+        assert!(covers.iter(app.world()).count() >= 4);
+        assert_eq!(
+            app.world().resource::<MenuLoadingRuntime>().destination,
+            BootDestination::MainMenu
+        );
+        assert!(app.world().resource::<MenuLoadingRuntime>().progress.abs() < f32::EPSILON);
     }
 
     #[test]
@@ -34311,6 +34852,7 @@ mod tests {
         assert!(SECRETS_DISCLAIMER.contains("not presently streaming"));
         assert!(SECRETS_DISCLAIMER.contains("any and all responsibility"));
         assert!(SECRETS_DISCLAIMER.contains("liability"));
+        assert!(!SECRETS_DISCLAIMER.contains("Human Bean"));
         assert_eq!(
             secrets_action_label(SecretsAction::DisclaimerNo, &GameConfig::default()),
             "No — go back"
@@ -34413,6 +34955,20 @@ mod tests {
             broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
         assert!(status.contains("● LIVE"));
         assert_eq!(tone, SecretsStatusTone::Good);
+        assert_eq!(
+            local_broadcast_status_label(&config, &DirectBroadcastPhase::Broadcasting).0,
+            "● LIVE"
+        );
+        config.twitch.broadcast.bandwidth_test = true;
+        assert_eq!(
+            local_broadcast_status_label(&config, &DirectBroadcastPhase::Broadcasting).0,
+            "● NOT LIVE · TEST"
+        );
+        assert!(
+            local_broadcast_status_label(&config, &DirectBroadcastPhase::Connecting)
+                .0
+                .starts_with("● NOT LIVE")
+        );
     }
 
     #[test]
@@ -35454,6 +36010,8 @@ mod tests {
             action_cooldown_seconds: 0.0,
             action_started: false,
             health_regen_accumulator: 0.0,
+            wander_sequence: 0,
+            previous_wander_origin: None,
         };
         assert_eq!(
             arrived_action_phase(&mut agent, 2.5),
@@ -36022,6 +36580,8 @@ mod tests {
             action_cooldown_seconds: 0.75,
             action_started: true,
             health_regen_accumulator: 0.0,
+            wander_sequence: 0,
+            previous_wander_origin: None,
         };
 
         for (role, goal, expected) in [
@@ -39432,6 +39992,7 @@ mod tests {
         let prepass = include_str!("../../../assets/shaders/tree_material_prepass.wgsl");
         let shared_wind = include_str!("../../../assets/shaders/tree_wind.wgsl");
         assert!(shader.contains("get_world_from_local(in.instance_index)[3].xz"));
+        assert!(shader.contains("0.3 * max(1.0 - vertex_color.b, vertex_color.r)"));
         assert!(shader.contains("stream_town_tree_deformed_position"));
         assert!(prepass.contains("stream_town_tree_deformed_position"));
         assert!(!prepass.contains("TreeMaterialUniform"));
@@ -40317,9 +40878,30 @@ mod tests {
             .unwrap();
         simulation.cast_ruler_vote(&first, second.clone()).unwrap();
         simulation.actors.get_mut(&second).unwrap().display_name = Some("Second Viewer".to_owned());
+        assert_eq!(ruler_vote_option_text(&simulation), "Second Viewer  (1)");
+        assert!((ruler_vote_option_font_size("Amy  (1)") - 17.0).abs() < f32::EPSILON);
+        assert!(ruler_vote_option_font_size("A Very Long Twitch Display Name  (12)") < 17.0);
+    }
+
+    #[test]
+    fn ruler_vote_results_produce_the_chat_announcement_that_tick_discards() {
+        let mut simulation = WorldSimulation::new(17);
+        let winner = StableId::new("viewer:winner").unwrap();
+        simulation.join_player(winner.clone(), GridPos { x: 1, z: 1 });
+        simulation.actors.get_mut(&winner).unwrap().display_name = Some("Town Hero".to_owned());
+        simulation.current_ruler = Some(winner.clone());
         assert_eq!(
-            ruler_vote_option_text(&simulation),
-            "!vote Second Viewer  (1)"
+            ruler_vote_result_announcement(RulerVoteKind::NewRuler, None, &simulation),
+            Some("Town Hero has been elected Ruler of Stream Town!".to_owned())
+        );
+        assert_eq!(
+            ruler_vote_result_announcement(RulerVoteKind::KeepRuler, Some(&winner), &simulation,),
+            Some("Chat has chosen to keep Town Hero as Ruler of Stream Town!".to_owned())
+        );
+        simulation.current_ruler = None;
+        assert_eq!(
+            ruler_vote_result_announcement(RulerVoteKind::KeepRuler, Some(&winner), &simulation,),
+            Some("Town Hero was not retained as Ruler. Nominations are now open.".to_owned())
         );
     }
 
@@ -40697,7 +41279,8 @@ mod tests {
 
         let focus = camera_ground_focus(&default_town_camera_transform());
         let authored_focus = Vec2::new(
-            UNITY_TOWN_CAMERA_OFFSET.x + UNITY_TOWN_CAMERA_OFFSET.y,
+            UNITY_TOWN_CAMERA_OFFSET.x - UNITY_TOWN_CAMERA_FOCUS_BACK_SHIFT
+                + UNITY_TOWN_CAMERA_OFFSET.y,
             UNITY_TOWN_CAMERA_OFFSET.z,
         );
         assert!(focus.distance(authored_focus) < 0.000_1);

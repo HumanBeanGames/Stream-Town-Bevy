@@ -125,6 +125,17 @@ Use the same fixed seed, camera, day, season, and tree for every toggle. Change 
   - User result: not checked.
   - Reuse rule: never fall back to hashing only the coarse grid position; retain stable ID and source offset as collision discriminants.
 
+- [x] **`current candidate` — restore Unity's 30% seasonal canopy blend**
+  - Object/spawn path: the shared gameplay `TreeMaterial` used by generated resource and foliage trees.
+  - Fixed seed/camera/day/season: default deterministic foliage sweep; Spring/Rain; twelve 1920x1080 frames.
+  - Single changed variable: ordinary canopy texels now blend the seasonal gradient at Unity's authored `0.3 * (1 - COLOR_0.b)` strength instead of replacing the atlas at 100%. The red wind-mask fallback is retained for the pine mesh, and only detected blue-atlas leakage can still force full replacement.
+  - Duplicate renderer count: zero duplicate mesh/quantized-global-transform groups across 19,901 renderers.
+  - Stationary-camera result: frames 00–01 retain atlas variation, two-sided lighting, and ordinary ground shadows without black/blue facets.
+  - Moving-camera result: `.stream-town/diagnostics/foliage-20260826-tree-colour-v9` contains all twelve frames and the assembled sweep video; the stricter script rejects missing asynchronous PNG writes.
+  - Shadows still cast: yes; the manifest reports 19,901/19,901 casters.
+  - User result: GPU-validated candidate for the reported washed-out colour; awaiting ordinary-play confirmation.
+  - Reuse rule: do not restore the 100% seasonal replacement or remove the narrow blue-atlas guard.
+
 The recorded local acceptance set is `.stream-town/diagnostics/foliage-moving-final-2026-08-25-v2`. It is intentionally ignored because twelve full-resolution PNGs are machine evidence, not shipping assets. Reproduce it from `bevy-port` with:
 
 ```powershell

@@ -165,9 +165,13 @@ fn fragment(
         0.22,
         main_sample.b - max(main_sample.r, main_sample.g),
     );
-    // Red is also the authored wind mask and is the more reliable canopy mask
-    // on the pine variant, whose blue-channel mask is fully set.
-    let canopy_weight = max(max(1.0 - vertex_color.b, vertex_color.r), atlas_blue_leak);
+    // Unity blends only 30% of the seasonal gradient into ordinary canopy
+    // texels. Replacing the atlas outright flattened the foliage into a pale,
+    // washed-out block under direct light. Red is also the authored wind mask
+    // and is the more reliable canopy mask on the pine variant, whose blue
+    // channel is fully set. Only proven blue-atlas leakage is replaced fully.
+    let authored_canopy_weight = 0.3 * max(1.0 - vertex_color.b, vertex_color.r);
+    let canopy_weight = max(authored_canopy_weight, atlas_blue_leak);
     let summer = mix(main_sample.rgb, summer_color(seed), canopy_weight);
     let autumn = mix(autumn_color(seed), main_sample.rgb, vertex_color.b);
     var authored_color = mix(summer, autumn, tree_material.season_controls.x);

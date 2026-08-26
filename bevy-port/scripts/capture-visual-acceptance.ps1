@@ -42,6 +42,14 @@ try {
     if (-not (Test-Path -LiteralPath $executable)) {
         throw "The visual-acceptance executable is missing: $executable"
     }
+    $ffmpegRuntime = Get-ChildItem (Join-Path $workspace "target\debug\build") -Directory -Filter "ffmpeg-sys-next-*" |
+        ForEach-Object { Join-Path $_.FullName "out" } |
+        Where-Object {
+            (Test-Path -LiteralPath $_) -and
+            @(Get-ChildItem -LiteralPath $_ -Filter "avcodec-*.dll" -File).Count -gt 0
+        } |
+        Sort-Object { (Get-Item -LiteralPath $_).LastWriteTime } -Descending |
+        Select-Object -First 1
 
     foreach ($case in $selectedScenarios) {
         $capturePath = Join-Path $OutputDirectory "$($case.name).png"
@@ -62,6 +70,10 @@ try {
         $start.Environment["STREAM_TOWN_SCREENSHOT"] = $capturePath
         $start.Environment["STREAM_TOWN_SCREENSHOT_DELAY"] = [string]$case.delay_seconds
         $start.Environment["STREAM_TOWN_EXIT_AFTER_SCREENSHOT"] = "1"
+        $start.Environment["STREAM_TOWN_DISABLE_DIRECT_BROADCAST"] = "1"
+        if ($null -ne $ffmpegRuntime) {
+            $start.Environment["PATH"] = "$ffmpegRuntime;$($start.Environment['PATH'])"
+        }
         foreach ($property in $case.environment.PSObject.Properties) {
             $start.Environment[$property.Name] = [string]$property.Value
         }

@@ -75,9 +75,9 @@ Run the complete curated GPU acceptance matrix with:
 .\scripts\capture-visual-acceptance.ps1
 ```
 
-The runner performs twelve independent fresh-process launches at 1920x1080
+The runner performs eleven independent fresh-process launches at 1920x1080
 and waits for the real scene-reveal gate before timing each capture. It covers
-the Main Menu, town overview, Settings, game menu, build menu, ruler vote,
+the Main Menu, town overview, Settings, game menu, ruler vote,
 current event, foliage, generated shoreline, live character animation, the
 converted Giraffe pet follower, and Credits. `xtask visual-acceptance` downsamples
 the results to the checked 320x180 references, verifies their SHA-256 integrity,
@@ -250,6 +250,12 @@ The encoder worker owns the constant-rate video clock and repeats the latest
 completed GPU frame if the game thread stalls. Audio starts against the first
 video frame and continues on its 48 kHz capture clock, preventing loading work
 from advancing audio while leaving video timestamps behind.
+Every Windows launch also creates a small, click-through, always-on-top local
+status window showing `LIVE`, `NOT LIVE`, test, connecting, or error state. It
+is a separate opaque render surface for broad driver compatibility, follows the
+primary window, and is deliberately absent from the primary-window frames sent
+to Twitch. Automated capture scripts forcibly disable direct broadcasting so a
+visual regression run can never publish its diagnostic frames.
 The protected Main Menu > Secrets screen also reports credential presence, live
 bot/command-gate state, and the direct encoder phase with advancing media-frame
 counts. Its Restart stream control reapplies the visible settings and rebuilds
@@ -263,8 +269,8 @@ local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass
 In-game gameplay interaction is text-command only. Keyboard, edge, and
 middle-mouse panning are disabled, pointer selection is opt-in for future
 automatic-camera work, and the pointer is hidden until Escape opens the game
-menu or one of its Settings children. Mouse-wheel and Q/E zoom remain
-view-only controls; F12 remains a diagnostic screenshot shortcut. Gameplay uses
+menu or one of its Settings children. Mouse-wheel zoom is disabled; Q/E remains
+the view-only keyboard zoom control and F12 remains a diagnostic screenshot shortcut. Gameplay uses
 the shipping `MainCamera.prefab` contract directly: a 60-degree perspective
 lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
 the town's negative-X side and physical 11-60 height zoom. The pose is translated to the generated
