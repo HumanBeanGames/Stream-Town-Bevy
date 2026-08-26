@@ -86,18 +86,19 @@ use stream_town_domain::{
     ActorCustomization, ActorKind, ActorState, AnimationBlendSelection, AnimationClipDef,
     AnimationControllerRuntime, AnimationLayerBlendMode, AnimationLayerDef,
     AnimationTransformTrack, AnimationTransitionPlayback, ArchetypeDef, ArchetypeKind,
-    ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BuildingAction, BuildingDef,
-    BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
-    CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
-    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
-    EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage,
-    GeneratedWorld, GridPos, HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata,
-    MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
-    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings,
-    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
-    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
-    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
-    StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
+    ArchetypeScene, AvatarMaskDef, BUILDING_MAX_HEALTH, BroadcastConfig,
+    BroadcastEncoderPreference, BuildingAction, BuildingDef, BuildingDirection,
+    BuildingHealthDisplayMode, BuildingModelDef, BuildingState, CURRENT_RUNTIME_CONSOLE_SCHEMA,
+    CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection, ChatCommand, ChimneySmokeDef,
+    ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState, EnemyModelSetDef,
+    EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage, GeneratedWorld, GridPos,
+    HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata, MainMenuSceneReference,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
+    ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
+    RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
+    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
+    StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
     generate_world_with_content, generate_world_with_content_observed, unity_command_usage,
 };
@@ -300,10 +301,12 @@ const FIREBALL_TRAIL_SIZE: f32 = 0.3;
 const BUILDING_HIT_SECONDS: f32 = 0.5;
 const BUILDING_HIT_SMOKE_SPEED: f32 = 3.0;
 const BUILDING_HIT_SPARK_SPEED: f32 = 12.0;
-const SETTINGS_APPLY_INDEX: usize = 23;
-const SETTINGS_DEFAULTS_INDEX: usize = 24;
-const SETTINGS_BACK_INDEX: usize = 25;
-const SETTINGS_MENU_ITEM_COUNT: usize = 26;
+const SETTINGS_STREAMING_FIRST_INDEX: usize = 23;
+const SETTINGS_STREAMING_LAST_INDEX: usize = 29;
+const SETTINGS_APPLY_INDEX: usize = 30;
+const SETTINGS_DEFAULTS_INDEX: usize = 31;
+const SETTINGS_BACK_INDEX: usize = 32;
+const SETTINGS_MENU_ITEM_COUNT: usize = 33;
 const AMBIENCE_GAIN: f32 = 0.16;
 const SEAGULL_GAIN: f32 = 0.28;
 const SEAGULL_FLIGHT_SECONDS: f32 = 32.0;
@@ -604,6 +607,7 @@ enum SettingsTab {
     Audio,
     Gameplay,
     Accessibility,
+    Streaming,
     Connection,
 }
 
@@ -615,6 +619,7 @@ struct MenuRuntime {
     settings_tab: SettingsTab,
     confirm_settings_close: bool,
     draft: PlayerSettings,
+    streaming_draft: BroadcastConfig,
     feedback: String,
 }
 
@@ -627,6 +632,7 @@ impl Default for MenuRuntime {
             settings_tab: SettingsTab::Video,
             confirm_settings_close: false,
             draft: PlayerSettings::default(),
+            streaming_draft: BroadcastConfig::default(),
             feedback: String::new(),
         }
     }
@@ -1511,6 +1517,9 @@ struct GameMenuIdleToggle;
 
 #[derive(Component)]
 struct GameMenuIdleCheckmark;
+
+#[derive(Component)]
+struct GameMenuActionLabel(GameMenuAction);
 
 #[derive(Component)]
 struct LoadingScreenEntity;
@@ -3355,10 +3364,12 @@ fn local_broadcast_status_button(
         if !clickable || *interaction != Interaction::Pressed {
             continue;
         }
-        if !accounts_ready {
+        let phase = broadcast.snapshot().phase;
+        if phase.is_active() {
+            control.request_stop();
+        } else if !accounts_ready {
             open_twitch_setup_required(&mut menu);
-        } else if broadcast.snapshot().phase != direct_broadcast::DirectBroadcastPhase::Broadcasting
-        {
+        } else {
             control.request_restart();
         }
     }
@@ -10558,7 +10569,12 @@ fn main_menu_buttons(
                 }
             }
             MainMenuAction::Settings => {
-                open_settings_menu(&mut menu, MenuPage::Closed, &settings.0);
+                open_settings_menu(
+                    &mut menu,
+                    MenuPage::Closed,
+                    &settings.0,
+                    &config.0.twitch.broadcast,
+                );
             }
             MainMenuAction::Secrets => {
                 menu.page = MenuPage::SecretsDisclaimer;
@@ -10599,14 +10615,36 @@ fn update_main_menu_buttons(
     }
 }
 
-const fn game_menu_action_label(action: GameMenuAction) -> &'static str {
+const fn game_menu_action_label(action: GameMenuAction, broadcast_active: bool) -> &'static str {
     match action {
         GameMenuAction::SaveGame => "Save Game",
         GameMenuAction::LoadGame => "Load Game",
         GameMenuAction::Settings => "Settings",
+        GameMenuAction::GoLive if broadcast_active => "End Stream",
         GameMenuAction::GoLive => "Go Live",
         GameMenuAction::ExitGame => "Exit Game",
         GameMenuAction::Close => "Close",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn toggle_direct_broadcast(
+    config: &GameConfig,
+    secrets: &SecretsRuntime,
+    connection: &TwitchConnection,
+    runtime: &direct_broadcast::DirectBroadcastRuntime,
+    control: &mut direct_broadcast::DirectBroadcastControl,
+    feedback: &mut String,
+) {
+    if runtime.snapshot().phase.is_active() {
+        control.request_stop();
+        "Ending the internal Twitch stream...".clone_into(feedback);
+    } else if twitch_accounts_connected(config, secrets, connection) {
+        control.request_restart();
+        "Starting the internal Twitch stream...".clone_into(feedback);
+    } else {
+        "Connect both Twitch accounts from Main Menu → Secrets before going live."
+            .clone_into(feedback);
     }
 }
 
@@ -10635,7 +10673,10 @@ fn game_menu_buttons(
     mut io: ResMut<MenuIoRequest>,
     buttons: Query<(&Interaction, &GameMenuAction), Changed<Interaction>>,
     mut next_state: ResMut<NextState<GameState>>,
-    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
+    #[cfg(target_os = "windows")] broadcast_runtime: Res<direct_broadcast::DirectBroadcastRuntime>,
+    #[cfg(target_os = "windows")] mut broadcast_control: ResMut<
+        direct_broadcast::DirectBroadcastControl,
+    >,
 ) {
     if menu.page != MenuPage::Game {
         return;
@@ -10655,22 +10696,26 @@ fn game_menu_buttons(
                 menu.page = MenuPage::Closed;
             }
             GameMenuAction::Settings => {
-                open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
+                open_settings_menu(
+                    &mut menu,
+                    MenuPage::Game,
+                    &settings.0,
+                    &config.0.twitch.broadcast,
+                );
             }
             GameMenuAction::GoLive => {
-                if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    #[cfg(target_os = "windows")]
-                    {
-                        broadcast.request_restart();
-                        "Starting the internal Twitch stream...".clone_into(&mut menu.feedback);
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    "Direct Twitch streaming is available only on Windows."
-                        .clone_into(&mut menu.feedback);
-                } else {
-                    "Connect both Twitch accounts from Main Menu → Secrets before going live."
-                        .clone_into(&mut menu.feedback);
-                }
+                #[cfg(target_os = "windows")]
+                toggle_direct_broadcast(
+                    &config.0,
+                    &secrets,
+                    &connection,
+                    &broadcast_runtime,
+                    &mut broadcast_control,
+                    &mut menu.feedback,
+                );
+                #[cfg(not(target_os = "windows"))]
+                "Direct Twitch streaming is available only on Windows."
+                    .clone_into(&mut menu.feedback);
             }
             GameMenuAction::ExitGame => {
                 menu.page = MenuPage::Closed;
@@ -10849,9 +10894,14 @@ fn enhance_accessible_buttons(
     menu: Res<MenuRuntime>,
     save: Res<SaveRuntime>,
     idle: Res<CameraIdleMode>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
     mut buttons: Query<AccessibleButtonNodeQuery>,
 ) {
     let has_save = save.store.path().is_file();
+    #[cfg(target_os = "windows")]
+    let broadcast_active = broadcast.snapshot().phase.is_active();
+    #[cfg(not(target_os = "windows"))]
+    let broadcast_active = false;
     for mut button in &mut buttons {
         let node = &mut button.node;
         node.add_action(AccessAction::Click);
@@ -10867,7 +10917,10 @@ fn enhance_accessible_buttons(
         } else {
             node.set_hidden();
         }
-        let enabled = accessibility_button_enabled(button.main, button.game, has_save);
+        let enabled = accessibility_button_enabled(button.main, button.game, has_save)
+            && button
+                .settings_value
+                .is_none_or(|value| settings_value_enabled(value.index, broadcast_active));
         if enabled {
             node.clear_disabled();
         } else {
@@ -10876,7 +10929,7 @@ fn enhance_accessible_buttons(
         if let Some(action) = button.main {
             set_accessibility_label(node, main_menu_action_label(*action));
         } else if let Some(action) = button.game {
-            set_accessibility_label(node, game_menu_action_label(*action));
+            set_accessibility_label(node, game_menu_action_label(*action, broadcast_active));
         } else if button.idle_toggle.is_some() {
             node.set_role(Role::CheckBox);
             set_accessibility_label(node, "Idle Mode");
@@ -10890,7 +10943,8 @@ fn enhance_accessible_buttons(
             set_accessibility_label(node, settings_tab_label(tab.0));
             node.set_selected(tab.0 == menu.settings_tab);
         } else if let Some(value_button) = button.settings_value {
-            let (label, value) = settings_value_label(&menu.draft, value_button.index);
+            let (label, value) =
+                settings_value_label(&menu.draft, &menu.streaming_draft, value_button.index);
             let direction = if value_button.direction < 0 {
                 "Previous"
             } else {
@@ -11215,7 +11269,8 @@ fn accessibility_settings_selection(menu: &MenuRuntime) -> String {
         };
     }
     if menu.selected < SETTINGS_APPLY_INDEX {
-        let (label, value) = settings_value_label(&menu.draft, menu.selected);
+        let (label, value) =
+            settings_value_label(&menu.draft, &menu.streaming_draft, menu.selected);
         format!("{label}: {value}")
     } else {
         match menu.selected {
@@ -11278,11 +11333,23 @@ fn update_game_menu_controls(
     menu: Res<MenuRuntime>,
     idle: Res<CameraIdleMode>,
     render: Res<RenderAssets>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
     mut buttons: Query<(&Interaction, &GameMenuAction, &mut ImageNode)>,
+    mut labels: Query<(&GameMenuActionLabel, &mut Text)>,
     mut idle_toggle: GameMenuIdleToggleQuery,
     mut checkmarks: Query<&mut Visibility, With<GameMenuIdleCheckmark>>,
 ) {
     let has_save = save.store.path().is_file();
+    #[cfg(target_os = "windows")]
+    let broadcast_active = broadcast.snapshot().phase.is_active();
+    #[cfg(not(target_os = "windows"))]
+    let broadcast_active = false;
+    for (label, mut text) in &mut labels {
+        let desired = game_menu_action_label(label.0, broadcast_active);
+        if text.0 != desired {
+            desired.clone_into(&mut text.0);
+        }
+    }
     for (interaction, action, mut image) in &mut buttons {
         let enabled = menu.page == MenuPage::Game && game_menu_action_enabled(*action, has_save);
         let selected =
@@ -11324,11 +11391,12 @@ fn update_game_menu_controls(
     }
 }
 
-const SETTINGS_TABS: [SettingsTab; 5] = [
+const SETTINGS_TABS: [SettingsTab; 6] = [
     SettingsTab::Video,
     SettingsTab::Audio,
     SettingsTab::Gameplay,
     SettingsTab::Accessibility,
+    SettingsTab::Streaming,
     SettingsTab::Connection,
 ];
 
@@ -11338,6 +11406,7 @@ const fn settings_tab_label(tab: SettingsTab) -> &'static str {
         SettingsTab::Audio => "Audio",
         SettingsTab::Gameplay => "Gameplay",
         SettingsTab::Accessibility => "Accessibility",
+        SettingsTab::Streaming => "Streaming",
         SettingsTab::Connection => "Connection",
     }
 }
@@ -11348,8 +11417,17 @@ fn settings_tab_indices(tab: SettingsTab) -> &'static [usize] {
         SettingsTab::Audio => &[11, 12, 13, 14],
         SettingsTab::Gameplay => &[15, 16, 17, 18, 19],
         SettingsTab::Accessibility => &[20, 21, 22],
+        SettingsTab::Streaming => &[23, 24, 25, 26, 27, 28, 29],
         SettingsTab::Connection => &[],
     }
+}
+
+const fn settings_index_is_streaming(index: usize) -> bool {
+    index >= SETTINGS_STREAMING_FIRST_INDEX && index <= SETTINGS_STREAMING_LAST_INDEX
+}
+
+const fn settings_value_enabled(index: usize, streaming_locked: bool) -> bool {
+    !streaming_locked || !settings_index_is_streaming(index)
 }
 
 const fn settings_tab_for_index(index: usize) -> Option<SettingsTab> {
@@ -11358,6 +11436,9 @@ const fn settings_tab_for_index(index: usize) -> Option<SettingsTab> {
         11..=14 => Some(SettingsTab::Audio),
         15..=19 => Some(SettingsTab::Gameplay),
         20..=22 => Some(SettingsTab::Accessibility),
+        SETTINGS_STREAMING_FIRST_INDEX..=SETTINGS_STREAMING_LAST_INDEX => {
+            Some(SettingsTab::Streaming)
+        }
         _ => None,
     }
 }
@@ -11375,7 +11456,11 @@ fn cycle_settings_tab(tab: SettingsTab, forward: bool) -> SettingsTab {
     SETTINGS_TABS[next]
 }
 
-fn settings_value_label(settings: &PlayerSettings, index: usize) -> (&'static str, String) {
+fn settings_value_label(
+    settings: &PlayerSettings,
+    streaming: &BroadcastConfig,
+    index: usize,
+) -> (&'static str, String) {
     let video = &settings.video;
     let camera = &settings.camera;
     let interface = &settings.interface;
@@ -11439,6 +11524,25 @@ fn settings_value_label(settings: &PlayerSettings, index: usize) -> (&'static st
             "Reduced Motion",
             on_off(interface.reduced_motion).to_owned(),
         ),
+        23 => ("Direct Streaming", on_off(streaming.enabled).to_owned()),
+        24 => (
+            "Output Resolution",
+            format!("{} x {}", streaming.width, streaming.height),
+        ),
+        25 => ("Frame Rate", format!("{} FPS", streaming.frames_per_second)),
+        26 => (
+            "Video Bitrate",
+            format!("{} kbps", streaming.video_bitrate_kbps),
+        ),
+        27 => (
+            "Audio Bitrate",
+            format!("{} kbps", streaming.audio_bitrate_kbps),
+        ),
+        28 => ("Encoder", format!("{:?}", streaming.encoder)),
+        29 => (
+            "Bandwidth Test",
+            on_off(streaming.bandwidth_test).to_owned(),
+        ),
         _ => ("Unknown", String::new()),
     }
 }
@@ -11483,15 +11587,17 @@ fn spawn_settings_button(
 fn spawn_settings_value_row(
     parent: &mut ChildSpawnerCommands,
     settings: &PlayerSettings,
+    streaming: &BroadcastConfig,
     selected: usize,
     index: usize,
+    enabled: bool,
     render: &RenderAssets,
 ) {
-    let (label, value) = settings_value_label(settings, index);
+    let (label, value) = settings_value_label(settings, streaming, index);
     parent
         .spawn((
             SettingsValueRow(index),
-            BackgroundColor(if selected == index {
+            BackgroundColor(if selected == index && enabled {
                 Color::srgb(0.211, 0.240, 0.358)
             } else {
                 Color::srgb(0.055, 0.071, 0.141)
@@ -11514,7 +11620,11 @@ fn spawn_settings_value_row(
                     font_size: FontSize::Px(15.0),
                     ..default()
                 },
-                TextColor(Color::srgb(0.827, 0.745, 0.498)),
+                TextColor(if enabled {
+                    Color::srgb(0.827, 0.745, 0.498)
+                } else {
+                    Color::srgb(0.48, 0.48, 0.52)
+                }),
                 Node {
                     width: percent(43.0),
                     overflow: Overflow::clip(),
@@ -11531,7 +11641,11 @@ fn spawn_settings_value_row(
                             ..default()
                         },
                         TextLayout::justify(Justify::Center),
-                        TextColor(Color::srgb(0.90, 0.88, 0.80)),
+                        TextColor(if enabled {
+                            Color::srgb(0.90, 0.88, 0.80)
+                        } else {
+                            Color::srgb(0.56, 0.56, 0.60)
+                        }),
                         Pickable::IGNORE,
                         Node {
                             width: percent(30.0),
@@ -11561,6 +11675,11 @@ fn spawn_settings_value_row(
                 .with_children(|button| {
                     button.spawn((
                         Text::new(if direction < 0 { "<" } else { ">" }),
+                        TextColor(if enabled {
+                            Color::WHITE
+                        } else {
+                            Color::srgb(0.42, 0.42, 0.46)
+                        }),
                         Pickable::IGNORE,
                     ));
                 });
@@ -11590,6 +11709,7 @@ fn settings_tab_buttons(
 fn settings_value_buttons(
     mut menu: ResMut<MenuRuntime>,
     buttons: Query<(&Interaction, &SettingsValueButton), Changed<Interaction>>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
 ) {
     if menu.page != MenuPage::Settings || menu.confirm_settings_close {
         return;
@@ -11597,7 +11717,21 @@ fn settings_value_buttons(
     for (interaction, button) in &buttons {
         if *interaction == Interaction::Pressed {
             menu.selected = button.index;
-            adjust_settings_menu(&mut menu.draft, button.index, button.direction);
+            #[cfg(target_os = "windows")]
+            let streaming_locked = broadcast.snapshot().phase.is_active();
+            #[cfg(not(target_os = "windows"))]
+            let streaming_locked = false;
+            if !settings_value_enabled(button.index, streaming_locked) {
+                "End the stream before changing streaming settings.".clone_into(&mut menu.feedback);
+                continue;
+            }
+            let menu = &mut *menu;
+            adjust_settings_menu(
+                &mut menu.draft,
+                &mut menu.streaming_draft,
+                button.index,
+                button.direction,
+            );
             menu.feedback.clear();
         }
     }
@@ -11606,17 +11740,36 @@ fn settings_value_buttons(
 fn apply_settings_draft(
     menu: &mut MenuRuntime,
     player_settings: &mut RuntimePlayerSettings,
+    config: &mut RuntimeConfig,
+    streaming_locked: bool,
 ) -> bool {
     if let Err(error) = menu.draft.validate() {
         menu.feedback = format!("Settings are invalid: {error}");
         return false;
     }
+    if streaming_locked && menu.streaming_draft != config.0.twitch.broadcast {
+        "End the stream before applying streaming settings.".clone_into(&mut menu.feedback);
+        return false;
+    }
+    let mut config_draft = config.0.clone();
+    config_draft.twitch.broadcast = menu.streaming_draft.clone();
+    if let Err(error) = config_draft.validate() {
+        menu.feedback = format!("Streaming settings are invalid: {error}");
+        return false;
+    }
     match PlayerSettingsStore::new(player_settings_path()).write(&menu.draft) {
-        Ok(()) => {
-            player_settings.0 = menu.draft.clone();
-            "Applied and saved settings".clone_into(&mut menu.feedback);
-            true
-        }
+        Ok(()) => match save_runtime_config(&config_draft) {
+            Ok(_) => {
+                config.0 = config_draft;
+                player_settings.0 = menu.draft.clone();
+                "Applied and saved settings".clone_into(&mut menu.feedback);
+                true
+            }
+            Err(error) => {
+                menu.feedback = format!("Streaming settings could not be saved: {error}");
+                false
+            }
+        },
         Err(error) => {
             menu.feedback = format!("Settings could not be saved: {error}");
             false
@@ -11636,8 +11789,12 @@ fn close_settings_menu(menu: &mut MenuRuntime) {
     menu.feedback.clear();
 }
 
-fn request_settings_close(menu: &mut MenuRuntime, player_settings: &PlayerSettings) {
-    if menu.draft == *player_settings {
+fn request_settings_close(
+    menu: &mut MenuRuntime,
+    player_settings: &PlayerSettings,
+    streaming: &BroadcastConfig,
+) {
+    if menu.draft == *player_settings && menu.streaming_draft == *streaming {
         close_settings_menu(menu);
     } else {
         menu.confirm_settings_close = true;
@@ -11649,7 +11806,9 @@ fn request_settings_close(menu: &mut MenuRuntime, player_settings: &PlayerSettin
 fn settings_action_buttons(
     mut menu: ResMut<MenuRuntime>,
     mut player_settings: ResMut<RuntimePlayerSettings>,
+    mut config: ResMut<RuntimeConfig>,
     buttons: Query<(&Interaction, &SettingsAction), Changed<Interaction>>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
 ) {
     if menu.page != MenuPage::Settings {
         return;
@@ -11658,25 +11817,43 @@ fn settings_action_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
+        #[cfg(target_os = "windows")]
+        let streaming_locked = broadcast.snapshot().phase.is_active();
+        #[cfg(not(target_os = "windows"))]
+        let streaming_locked = false;
         match action {
             SettingsAction::Apply if !menu.confirm_settings_close => {
-                apply_settings_draft(&mut menu, &mut player_settings);
+                apply_settings_draft(
+                    &mut menu,
+                    &mut player_settings,
+                    &mut config,
+                    streaming_locked,
+                );
             }
             SettingsAction::Defaults if !menu.confirm_settings_close => {
                 menu.draft = PlayerSettings::default();
+                if !streaming_locked {
+                    menu.streaming_draft = BroadcastConfig::default();
+                }
                 "Restored Unity defaults in this draft".clone_into(&mut menu.feedback);
             }
             SettingsAction::Back if !menu.confirm_settings_close => {
-                request_settings_close(&mut menu, &player_settings.0);
+                request_settings_close(&mut menu, &player_settings.0, &config.0.twitch.broadcast);
             }
             SettingsAction::ConfirmApply
                 if menu.confirm_settings_close
-                    && apply_settings_draft(&mut menu, &mut player_settings) =>
+                    && apply_settings_draft(
+                        &mut menu,
+                        &mut player_settings,
+                        &mut config,
+                        streaming_locked,
+                    ) =>
             {
                 close_settings_menu(&mut menu);
             }
             SettingsAction::ConfirmDiscard if menu.confirm_settings_close => {
                 menu.draft = player_settings.0.clone();
+                menu.streaming_draft = config.0.twitch.broadcast.clone();
                 close_settings_menu(&mut menu);
             }
             _ => {}
@@ -11691,8 +11868,13 @@ fn rebuild_settings_rows(
     render: Res<RenderAssets>,
     mut cache: ResMut<SettingsUiCache>,
     rows: Query<Entity, With<SettingsRows>>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
 ) {
-    let signature = settings_rows_signature(&menu, &twitch);
+    #[cfg(target_os = "windows")]
+    let streaming_locked = broadcast.snapshot().phase.is_active();
+    #[cfg(not(target_os = "windows"))]
+    let streaming_locked = false;
+    let signature = settings_rows_signature(&menu, &twitch, streaming_locked);
     if cache.signature == signature {
         return;
     }
@@ -11722,6 +11904,34 @@ fn rebuild_settings_rows(
             ));
             return;
         }
+        if menu.settings_tab == SettingsTab::Streaming {
+            parent.spawn((
+                Text::new(if streaming_locked {
+                    "STREAMING IS LIVE — END THE STREAM TO CHANGE THESE SETTINGS"
+                } else {
+                    "Changes are saved for the next stream. Preferred ingest remains in Secrets."
+                }),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Center),
+                TextColor(if streaming_locked {
+                    Color::srgb(1.0, 0.54, 0.38)
+                } else {
+                    Color::srgb(0.76, 0.82, 0.92)
+                }),
+                Pickable::IGNORE,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(0),
+                    top: px(0),
+                    width: percent(100.0),
+                    height: px(30),
+                    ..default()
+                },
+            ));
+        }
         let indices = settings_tab_indices(menu.settings_tab);
         let split = indices.len().div_ceil(2);
         for column_indices in [&indices[..split], &indices[split..]] {
@@ -11729,6 +11939,11 @@ fn rebuild_settings_rows(
                 .spawn(Node {
                     width: percent(48.0),
                     height: percent(100.0),
+                    margin: UiRect::top(if menu.settings_tab == SettingsTab::Streaming {
+                        px(38)
+                    } else {
+                        px(0)
+                    }),
                     flex_direction: FlexDirection::Column,
                     row_gap: px(8),
                     overflow: Overflow::clip(),
@@ -11739,8 +11954,10 @@ fn rebuild_settings_rows(
                         spawn_settings_value_row(
                             column,
                             &menu.draft,
+                            &menu.streaming_draft,
                             menu.selected,
                             index,
+                            settings_value_enabled(index, streaming_locked),
                             &render,
                         );
                     }
@@ -11749,15 +11966,19 @@ fn rebuild_settings_rows(
     });
 }
 
-fn settings_rows_signature(menu: &MenuRuntime, twitch: &TwitchConnection) -> String {
+fn settings_rows_signature(
+    menu: &MenuRuntime,
+    twitch: &TwitchConnection,
+    streaming_locked: bool,
+) -> String {
     let connection_status = if menu.settings_tab == SettingsTab::Connection {
         twitch_status_text(twitch)
     } else {
         String::new()
     };
     format!(
-        "{:?}:{:?}:{connection_status}",
-        menu.page, menu.settings_tab
+        "{:?}:{:?}:{streaming_locked}:{connection_status}",
+        menu.page, menu.settings_tab,
     )
 }
 
@@ -11765,12 +11986,18 @@ fn update_settings_value_rows(
     menu: Res<MenuRuntime>,
     mut rows: Query<(&SettingsValueRow, &mut BackgroundColor)>,
     mut values: Query<(&SettingsValueText, &mut Text)>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
 ) {
     if menu.page != MenuPage::Settings || menu.settings_tab == SettingsTab::Connection {
         return;
     }
+    #[cfg(target_os = "windows")]
+    let streaming_locked = broadcast.snapshot().phase.is_active();
+    #[cfg(not(target_os = "windows"))]
+    let streaming_locked = false;
     for (row, mut background) in &mut rows {
-        let desired = BackgroundColor(if menu.selected == row.0 {
+        let enabled = settings_value_enabled(row.0, streaming_locked);
+        let desired = BackgroundColor(if menu.selected == row.0 && enabled {
             Color::srgb(0.211, 0.240, 0.358)
         } else {
             Color::srgb(0.055, 0.071, 0.141)
@@ -11780,7 +12007,7 @@ fn update_settings_value_rows(
         }
     }
     for (value_text, mut text) in &mut values {
-        let (_, desired) = settings_value_label(&menu.draft, value_text.0);
+        let (_, desired) = settings_value_label(&menu.draft, &menu.streaming_draft, value_text.0);
         if text.0 != desired {
             text.0 = desired;
         }
@@ -11802,7 +12029,12 @@ fn update_settings_controls(
         Without<SettingsAction>,
     >,
     mut feedback: Query<&mut Text, With<SettingsFeedbackText>>,
+    #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
 ) {
+    #[cfg(target_os = "windows")]
+    let streaming_locked = broadcast.snapshot().phase.is_active();
+    #[cfg(not(target_os = "windows"))]
+    let streaming_locked = false;
     if let Ok(mut visibility) = root.single_mut() {
         *visibility = if menu.page == MenuPage::Settings {
             Visibility::Visible
@@ -11854,7 +12086,10 @@ fn update_settings_controls(
         image.image = main_menu_texture(&render, source_path);
     }
     for (interaction, button, mut image) in &mut values {
-        let source_path = if menu.selected == button.index
+        let enabled = settings_value_enabled(button.index, streaming_locked);
+        let source_path = if !enabled {
+            MAIN_MENU_TEXTURE_PATHS[2]
+        } else if menu.selected == button.index
             || *interaction == Interaction::Hovered
             || *interaction == Interaction::Pressed
         {
@@ -11863,6 +12098,11 @@ fn update_settings_controls(
             MAIN_MENU_TEXTURE_PATHS[0]
         };
         image.image = main_menu_texture(&render, source_path);
+        image.color = if enabled {
+            Color::WHITE
+        } else {
+            Color::srgba(0.55, 0.55, 0.58, 0.55)
+        };
     }
     if let Ok(mut text) = feedback.single_mut() {
         (**text).clone_from(&menu.feedback);
@@ -11889,7 +12129,18 @@ fn spawn_menu_overlay(
         menu.selected = 0;
         menu.feedback.clear();
     } else if std::env::var_os("STREAM_TOWN_AUTOSTART_SETTINGS").is_some() {
-        open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
+        open_settings_menu(
+            &mut menu,
+            MenuPage::Game,
+            &settings.0,
+            &config.0.twitch.broadcast,
+        );
+        if std::env::var("STREAM_TOWN_AUTOSTART_SETTINGS_TAB")
+            .is_ok_and(|tab| tab.eq_ignore_ascii_case("streaming"))
+        {
+            menu.settings_tab = SettingsTab::Streaming;
+            menu.selected = SETTINGS_STREAMING_FIRST_INDEX;
+        }
     } else if std::env::var_os("STREAM_TOWN_AUTOSTART_SECRETS_DISCLAIMER").is_some() {
         menu.page = MenuPage::SecretsDisclaimer;
         menu.return_page = MenuPage::Closed;
@@ -11994,7 +12245,8 @@ fn spawn_menu_overlay(
                         ))
                         .with_children(|button| {
                             button.spawn((
-                                Text::new(game_menu_action_label(action)),
+                                GameMenuActionLabel(action),
+                                Text::new(game_menu_action_label(action, false)),
                                 TextFont {
                                     font_size: FontSize::Px(18.0),
                                     ..default()
@@ -13695,7 +13947,12 @@ fn update_menu_overlay(
     }
     **text = match menu.page {
         MenuPage::Game => game_menu_text(*state.get(), menu.selected, save.store.path().is_file()),
-        MenuPage::Settings => settings_menu_text(&menu.draft, menu.selected, &menu.feedback),
+        MenuPage::Settings => settings_menu_text(
+            &menu.draft,
+            &menu.streaming_draft,
+            menu.selected,
+            &menu.feedback,
+        ),
         MenuPage::Closed | MenuPage::SecretsDisclaimer | MenuPage::Secrets => String::new(),
     };
     *visibility = Visibility::Visible;
@@ -13751,9 +14008,14 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
     text
 }
 
-fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str) -> String {
+fn settings_menu_text(
+    settings: &PlayerSettings,
+    streaming: &BroadcastConfig,
+    selected: usize,
+    feedback: &str,
+) -> String {
     use std::fmt::Write as _;
-    const COLUMN_BREAK: usize = 13;
+    const COLUMN_BREAK: usize = 17;
 
     let video = &settings.video;
     let camera = &settings.camera;
@@ -13800,6 +14062,13 @@ fn settings_menu_text(settings: &PlayerSettings, selected: usize, feedback: &str
         format!("UI scale: {}%", interface.ui_scale_percent),
         format!("High contrast: {}", on_off(interface.high_contrast)),
         format!("Reduced motion: {}", on_off(interface.reduced_motion)),
+        format!("Direct streaming: {}", on_off(streaming.enabled)),
+        format!("Stream output: {} x {}", streaming.width, streaming.height),
+        format!("Stream frame rate: {} FPS", streaming.frames_per_second),
+        format!("Video bitrate: {} kbps", streaming.video_bitrate_kbps),
+        format!("Audio bitrate: {} kbps", streaming.audio_bitrate_kbps),
+        format!("Stream encoder: {:?}", streaming.encoder),
+        format!("Bandwidth test: {}", on_off(streaming.bandwidth_test)),
         "Apply and save".to_owned(),
         "Restore Unity defaults".to_owned(),
         "Cancel changes".to_owned(),
@@ -13838,7 +14107,7 @@ fn menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     state: Res<State<GameState>>,
     save: Res<SaveRuntime>,
-    config: Res<RuntimeConfig>,
+    mut config: ResMut<RuntimeConfig>,
     secrets: Res<SecretsRuntime>,
     connection: Res<TwitchConnection>,
     mut menu: ResMut<MenuRuntime>,
@@ -13847,8 +14116,15 @@ fn menu_input(
     mut player_settings: ResMut<RuntimePlayerSettings>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
-    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
+    #[cfg(target_os = "windows")] broadcast_runtime: Res<direct_broadcast::DirectBroadcastRuntime>,
+    #[cfg(target_os = "windows")] mut broadcast_control: ResMut<
+        direct_broadcast::DirectBroadcastControl,
+    >,
 ) {
+    #[cfg(target_os = "windows")]
+    let streaming_locked = broadcast_runtime.snapshot().phase.is_active();
+    #[cfg(not(target_os = "windows"))]
+    let streaming_locked = false;
     let shift_escape = keyboard.just_pressed(KeyCode::Escape)
         && (keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight));
     let open_key = if *state.get() == GameState::InGame {
@@ -13874,7 +14150,7 @@ fn menu_input(
                 menu.confirm_settings_close = false;
                 menu.selected = SETTINGS_BACK_INDEX;
             } else {
-                request_settings_close(&mut menu, &player_settings.0);
+                request_settings_close(&mut menu, &player_settings.0, &config.0.twitch.broadcast);
                 if menu.confirm_settings_close {
                     menu.selected = 0;
                 }
@@ -13900,11 +14176,17 @@ fn menu_input(
         }
         if keyboard.just_pressed(KeyCode::Enter) {
             if menu.selected == 0 {
-                if apply_settings_draft(&mut menu, &mut player_settings) {
+                if apply_settings_draft(
+                    &mut menu,
+                    &mut player_settings,
+                    &mut config,
+                    streaming_locked,
+                ) {
                     close_settings_menu(&mut menu);
                 }
             } else {
                 menu.draft = player_settings.0.clone();
+                menu.streaming_draft = config.0.twitch.broadcast.clone();
                 close_settings_menu(&mut menu);
             }
         }
@@ -13941,29 +14223,54 @@ fn menu_input(
             - i8::from(keyboard.just_pressed(KeyCode::ArrowLeft));
         if adjustment != 0 && menu.selected < SETTINGS_APPLY_INDEX {
             let selected = menu.selected;
-            adjust_settings_menu(&mut menu.draft, selected, adjustment);
-            menu.feedback.clear();
+            if settings_value_enabled(selected, streaming_locked) {
+                let menu = &mut *menu;
+                adjust_settings_menu(
+                    &mut menu.draft,
+                    &mut menu.streaming_draft,
+                    selected,
+                    adjustment,
+                );
+                menu.feedback.clear();
+            } else {
+                "End the stream before changing streaming settings.".clone_into(&mut menu.feedback);
+            }
         }
         if !keyboard.just_pressed(KeyCode::Enter) {
             return;
         }
         match menu.selected {
             SETTINGS_APPLY_INDEX => {
-                apply_settings_draft(&mut menu, &mut player_settings);
+                apply_settings_draft(
+                    &mut menu,
+                    &mut player_settings,
+                    &mut config,
+                    streaming_locked,
+                );
             }
             SETTINGS_DEFAULTS_INDEX => {
                 menu.draft = PlayerSettings::default();
+                if !streaming_locked {
+                    menu.streaming_draft = BroadcastConfig::default();
+                }
                 "Restored Unity defaults in this draft".clone_into(&mut menu.feedback);
             }
             SETTINGS_BACK_INDEX => {
-                request_settings_close(&mut menu, &player_settings.0);
+                request_settings_close(&mut menu, &player_settings.0, &config.0.twitch.broadcast);
                 if menu.confirm_settings_close {
                     menu.selected = 0;
                 }
             }
             _ => {
                 let selected = menu.selected;
-                adjust_settings_menu(&mut menu.draft, selected, 1);
+                if settings_value_enabled(selected, streaming_locked) {
+                    let menu = &mut *menu;
+                    adjust_settings_menu(&mut menu.draft, &mut menu.streaming_draft, selected, 1);
+                    menu.feedback.clear();
+                } else {
+                    "End the stream before changing streaming settings."
+                        .clone_into(&mut menu.feedback);
+                }
             }
         }
         return;
@@ -13982,21 +14289,25 @@ fn menu_input(
                 io.load = true;
                 menu.page = MenuPage::Closed;
             }
-            2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
+            2 => open_settings_menu(
+                &mut menu,
+                MenuPage::Game,
+                &player_settings.0,
+                &config.0.twitch.broadcast,
+            ),
             3 => {
-                if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    #[cfg(target_os = "windows")]
-                    {
-                        broadcast.request_restart();
-                        "Starting the internal Twitch stream...".clone_into(&mut menu.feedback);
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    "Direct Twitch streaming is available only on Windows."
-                        .clone_into(&mut menu.feedback);
-                } else {
-                    "Connect both Twitch accounts from Main Menu → Secrets before going live."
-                        .clone_into(&mut menu.feedback);
-                }
+                #[cfg(target_os = "windows")]
+                toggle_direct_broadcast(
+                    &config.0,
+                    &secrets,
+                    &connection,
+                    &broadcast_runtime,
+                    &mut broadcast_control,
+                    &mut menu.feedback,
+                );
+                #[cfg(not(target_os = "windows"))]
+                "Direct Twitch streaming is available only on Windows."
+                    .clone_into(&mut menu.feedback);
             }
             4 => {
                 menu.page = MenuPage::Closed;
@@ -14032,7 +14343,12 @@ fn menu_input(
                     open_twitch_setup_required(&mut menu);
                 }
             }
-            2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
+            2 => open_settings_menu(
+                &mut menu,
+                MenuPage::Game,
+                &player_settings.0,
+                &config.0.twitch.broadcast,
+            ),
             3 => {
                 menu.page = MenuPage::Closed;
                 next_state.set(GameState::Credits);
@@ -14045,17 +14361,28 @@ fn menu_input(
     }
 }
 
-fn open_settings_menu(menu: &mut MenuRuntime, return_page: MenuPage, settings: &PlayerSettings) {
+fn open_settings_menu(
+    menu: &mut MenuRuntime,
+    return_page: MenuPage,
+    settings: &PlayerSettings,
+    streaming: &BroadcastConfig,
+) {
     menu.page = MenuPage::Settings;
     menu.return_page = return_page;
     menu.selected = 0;
     menu.settings_tab = SettingsTab::Video;
     menu.confirm_settings_close = false;
     menu.draft = settings.clone();
+    menu.streaming_draft = streaming.clone();
     menu.feedback.clear();
 }
 
-fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, direction: i8) {
+fn adjust_settings_menu(
+    settings: &mut PlayerSettings,
+    streaming: &mut BroadcastConfig,
+    selected: usize,
+    direction: i8,
+) {
     let increase = direction > 0;
     match selected {
         0 => {
@@ -14165,6 +14492,40 @@ fn adjust_settings_menu(settings: &mut PlayerSettings, selected: usize, directio
         }
         21 => settings.interface.high_contrast = !settings.interface.high_contrast,
         22 => settings.interface.reduced_motion = !settings.interface.reduced_motion,
+        23 => streaming.enabled = !streaming.enabled,
+        24 => {
+            const RESOLUTIONS: [(u16, u16); 4] =
+                [(640, 360), (854, 480), (1_280, 720), (1_920, 1_080)];
+            (streaming.width, streaming.height) =
+                cycle_choice(&RESOLUTIONS, (streaming.width, streaming.height), increase);
+        }
+        25 => {
+            const FRAME_RATES: [u8; 2] = [30, 60];
+            streaming.frames_per_second =
+                cycle_choice(&FRAME_RATES, streaming.frames_per_second, increase);
+        }
+        26 => {
+            const VIDEO_BITRATES: [u32; 7] = [500, 1_000, 2_000, 3_000, 4_500, 5_000, 6_000];
+            streaming.video_bitrate_kbps =
+                cycle_choice(&VIDEO_BITRATES, streaming.video_bitrate_kbps, increase);
+        }
+        27 => {
+            const AUDIO_BITRATES: [u16; 4] = [64, 96, 128, 160];
+            streaming.audio_bitrate_kbps =
+                cycle_choice(&AUDIO_BITRATES, streaming.audio_bitrate_kbps, increase);
+        }
+        28 => {
+            const ENCODERS: [BroadcastEncoderPreference; 6] = [
+                BroadcastEncoderPreference::Auto,
+                BroadcastEncoderPreference::Nvidia,
+                BroadcastEncoderPreference::Intel,
+                BroadcastEncoderPreference::Amd,
+                BroadcastEncoderPreference::MediaFoundation,
+                BroadcastEncoderPreference::OpenH264,
+            ];
+            streaming.encoder = cycle_choice(&ENCODERS, streaming.encoder, increase);
+        }
+        29 => streaming.bandwidth_test = !streaming.bandwidth_test,
         _ => {}
     }
 }
@@ -34824,7 +35185,7 @@ mod tests {
             GameMenuAction::Close,
         ];
         assert_eq!(
-            actions.map(game_menu_action_label),
+            actions.map(|action| game_menu_action_label(action, false)),
             [
                 "Save Game",
                 "Load Game",
@@ -34834,9 +35195,34 @@ mod tests {
                 "Close"
             ]
         );
+        assert_eq!(
+            game_menu_action_label(GameMenuAction::GoLive, true),
+            "End Stream"
+        );
         assert!(!game_menu_action_enabled(GameMenuAction::LoadGame, false));
         assert!(game_menu_action_enabled(GameMenuAction::LoadGame, true));
         assert!(game_menu_action_enabled(GameMenuAction::Close, false));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn shared_operator_toggle_ends_an_active_stream_before_checking_setup() {
+        let mut runtime = direct_broadcast::DirectBroadcastRuntime::default();
+        runtime.set_phase_for_test(direct_broadcast::DirectBroadcastPhase::Broadcasting);
+        let mut control = direct_broadcast::DirectBroadcastControl::default();
+        let mut feedback = String::new();
+
+        toggle_direct_broadcast(
+            &GameConfig::default(),
+            &SecretsRuntime::default(),
+            &TwitchConnection::default(),
+            &runtime,
+            &mut control,
+            &mut feedback,
+        );
+
+        assert!(control.stop_requested_for_test());
+        assert!(feedback.contains("Ending"));
     }
 
     #[test]
@@ -34859,7 +35245,8 @@ mod tests {
                 store: NativeSaveStore::new(&save_path),
             });
         #[cfg(target_os = "windows")]
-        app.init_resource::<direct_broadcast::DirectBroadcastControl>();
+        app.init_resource::<direct_broadcast::DirectBroadcastControl>()
+            .init_resource::<direct_broadcast::DirectBroadcastRuntime>();
         app.add_systems(Update, game_menu_buttons);
         app.world_mut()
             .spawn((Interaction::Pressed, GameMenuAction::SaveGame));
@@ -35599,32 +35986,45 @@ mod tests {
             selected: 12,
             ..default()
         };
-        let signature = settings_rows_signature(&menu, &twitch);
+        let signature = settings_rows_signature(&menu, &twitch, false);
         menu.draft.audio.music = 0.25;
         menu.selected = 13;
-        assert_eq!(settings_rows_signature(&menu, &twitch), signature);
+        assert_eq!(settings_rows_signature(&menu, &twitch, false), signature);
 
         menu.settings_tab = SettingsTab::Gameplay;
-        assert_ne!(settings_rows_signature(&menu, &twitch), signature);
+        assert_ne!(settings_rows_signature(&menu, &twitch, false), signature);
+        assert_ne!(settings_rows_signature(&menu, &twitch, true), signature);
     }
 
     #[test]
     fn settings_menu_edits_a_complete_valid_draft() {
         let original = PlayerSettings::default();
         let mut draft = original.clone();
+        let original_streaming = BroadcastConfig::default();
+        let mut streaming = original_streaming.clone();
 
-        adjust_settings_menu(&mut draft, 0, 1);
-        adjust_settings_menu(&mut draft, 1, 1);
-        adjust_settings_menu(&mut draft, 5, -1);
-        adjust_settings_menu(&mut draft, 8, 1);
-        adjust_settings_menu(&mut draft, 11, -1);
-        adjust_settings_menu(&mut draft, 15, 1);
-        adjust_settings_menu(&mut draft, 16, 1);
-        adjust_settings_menu(&mut draft, 17, 1);
-        adjust_settings_menu(&mut draft, 19, 1);
-        adjust_settings_menu(&mut draft, 20, 1);
-        adjust_settings_menu(&mut draft, 21, 1);
-        adjust_settings_menu(&mut draft, 22, 1);
+        for (index, direction) in [
+            (0, 1),
+            (1, 1),
+            (5, -1),
+            (8, 1),
+            (11, -1),
+            (15, 1),
+            (16, 1),
+            (17, 1),
+            (19, 1),
+            (20, 1),
+            (21, 1),
+            (22, 1),
+            (24, 1),
+            (25, 1),
+            (26, 1),
+            (27, 1),
+            (28, 1),
+            (29, 1),
+        ] {
+            adjust_settings_menu(&mut draft, &mut streaming, index, direction);
+        }
 
         assert_ne!(draft, original);
         assert_eq!(draft.video.display_mode, DisplayMode::Windowed);
@@ -35643,10 +36043,26 @@ mod tests {
         assert!(draft.interface.high_contrast);
         assert!(draft.interface.reduced_motion);
         draft.validate().unwrap();
+        assert_ne!(streaming, original_streaming);
+        assert_eq!((streaming.width, streaming.height), (1_920, 1_080));
+        assert_eq!(streaming.frames_per_second, 60);
+        assert_eq!(streaming.video_bitrate_kbps, 4_500);
+        assert_eq!(streaming.audio_bitrate_kbps, 64);
+        assert_eq!(streaming.encoder, BroadcastEncoderPreference::Nvidia);
+        assert!(streaming.bandwidth_test);
+        let mut config = GameConfig::default();
+        config.twitch.broadcast = streaming.clone();
+        config.validate().unwrap();
 
-        let text = settings_menu_text(&draft, SETTINGS_MENU_ITEM_COUNT - 1, "draft feedback");
+        let text = settings_menu_text(
+            &draft,
+            &streaming,
+            SETTINGS_MENU_ITEM_COUNT - 1,
+            "draft feedback",
+        );
         assert!(text.contains("> Cancel changes"));
         assert!(text.contains("Resolution: 2560 x 1440"));
+        assert!(text.contains("Stream output: 1920 x 1080"));
         assert!(text.contains("draft feedback"));
     }
 
@@ -35662,16 +36078,27 @@ mod tests {
         );
         assert_eq!(
             SETTINGS_TABS.map(settings_tab_label),
-            ["Video", "Audio", "Gameplay", "Accessibility", "Connection"]
+            [
+                "Video",
+                "Audio",
+                "Gameplay",
+                "Accessibility",
+                "Streaming",
+                "Connection"
+            ]
         );
         let editable = SETTINGS_TABS
             .into_iter()
             .flat_map(settings_tab_indices)
             .copied()
             .collect::<Vec<_>>();
-        assert_eq!(editable, (0..23).collect::<Vec<_>>());
+        assert_eq!(editable, (0..30).collect::<Vec<_>>());
         for index in editable {
-            let (label, value) = settings_value_label(&PlayerSettings::default(), index);
+            let (label, value) = settings_value_label(
+                &PlayerSettings::default(),
+                &BroadcastConfig::default(),
+                index,
+            );
             assert!(!label.is_empty());
             assert!(!value.is_empty());
             assert_eq!(
@@ -35680,9 +36107,15 @@ mod tests {
                     0..=10 => SettingsTab::Video,
                     11..=14 => SettingsTab::Audio,
                     15..=19 => SettingsTab::Gameplay,
-                    _ => SettingsTab::Accessibility,
+                    20..=22 => SettingsTab::Accessibility,
+                    _ => SettingsTab::Streaming,
                 }
             );
+            assert_eq!(
+                settings_value_enabled(index, true),
+                !settings_index_is_streaming(index)
+            );
+            assert!(settings_value_enabled(index, false));
         }
         assert_eq!(
             cycle_settings_tab(SettingsTab::Connection, true),
@@ -35839,6 +36272,8 @@ mod tests {
             Update,
             (settings_tab_buttons, settings_value_buttons).chain(),
         );
+        #[cfg(target_os = "windows")]
+        app.init_resource::<direct_broadcast::DirectBroadcastRuntime>();
         app.world_mut()
             .spawn((Interaction::Pressed, SettingsTabButton(SettingsTab::Audio)));
 
@@ -35862,23 +36297,75 @@ mod tests {
         assert_eq!(menu.selected, 11);
     }
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn streaming_pointer_controls_unlock_only_after_the_session_stops() {
+        let mut app = App::new();
+        app.insert_resource(MenuRuntime {
+            page: MenuPage::Settings,
+            settings_tab: SettingsTab::Streaming,
+            selected: SETTINGS_STREAMING_FIRST_INDEX,
+            ..default()
+        })
+        .init_resource::<direct_broadcast::DirectBroadcastRuntime>()
+        .add_systems(Update, settings_value_buttons);
+        app.world_mut()
+            .resource_mut::<direct_broadcast::DirectBroadcastRuntime>()
+            .set_phase_for_test(direct_broadcast::DirectBroadcastPhase::Broadcasting);
+        let original = app
+            .world()
+            .resource::<MenuRuntime>()
+            .streaming_draft
+            .video_bitrate_kbps;
+        app.world_mut().spawn((
+            Interaction::Pressed,
+            SettingsValueButton {
+                index: 26,
+                direction: 1,
+            },
+        ));
+
+        app.update();
+
+        let menu = app.world().resource::<MenuRuntime>();
+        assert_eq!(menu.streaming_draft.video_bitrate_kbps, original);
+        assert!(menu.feedback.contains("End the stream"));
+
+        app.world_mut()
+            .resource_mut::<direct_broadcast::DirectBroadcastRuntime>()
+            .set_phase_for_test(direct_broadcast::DirectBroadcastPhase::Stopped);
+        app.world_mut().spawn((
+            Interaction::Pressed,
+            SettingsValueButton {
+                index: 26,
+                direction: 1,
+            },
+        ));
+        app.update();
+
+        let menu = app.world().resource::<MenuRuntime>();
+        assert_ne!(menu.streaming_draft.video_bitrate_kbps, original);
+        assert!(menu.feedback.is_empty());
+    }
+
     #[test]
     fn settings_back_confirms_dirty_drafts_and_discard_restores_runtime() {
         let runtime = PlayerSettings::default();
+        let streaming = BroadcastConfig::default();
         let mut menu = MenuRuntime {
             page: MenuPage::Settings,
             return_page: MenuPage::Game,
             draft: runtime.clone(),
             ..default()
         };
-        request_settings_close(&mut menu, &runtime);
+        request_settings_close(&mut menu, &runtime, &streaming);
         assert_eq!(menu.page, MenuPage::Game);
         assert!(!menu.confirm_settings_close);
 
         menu.page = MenuPage::Settings;
         menu.return_page = MenuPage::Game;
         menu.draft.audio.master = 0.25;
-        request_settings_close(&mut menu, &runtime);
+        request_settings_close(&mut menu, &runtime, &streaming);
         assert_eq!(menu.page, MenuPage::Settings);
         assert!(menu.confirm_settings_close);
         assert_eq!(menu.selected, 0);
@@ -35886,7 +36373,10 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(menu)
             .insert_resource(RuntimePlayerSettings(runtime.clone()))
+            .insert_resource(RuntimeConfig(GameConfig::default()))
             .add_systems(Update, settings_action_buttons);
+        #[cfg(target_os = "windows")]
+        app.init_resource::<direct_broadcast::DirectBroadcastRuntime>();
         app.world_mut()
             .spawn((Interaction::Pressed, SettingsAction::ConfirmDiscard));
         app.update();

@@ -145,11 +145,14 @@ Start in Main Menu > **Secrets**:
    and audio frame counts. The broadcaster continues emitting only black video
    while the disclaimer or Secrets screen is open, with a centred
    **Sensitive Information Hidden** notice.
-2. Exit the Secrets screen. For advanced quality settings, open Stream Town
-   Tools > **Twitch**. Start with **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Automatic
+2. Exit the Secrets screen and open **Settings > Streaming**. Start with
+   **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Streaming settings are
+   read-only while a session is connecting, live, reconnecting, or stopping;
+   use **End Stream** first. Automatic
    encoder selection tries hardware paths first, Windows Media Foundation next,
    and the OpenH264 CPU encoder last. Select a specific encoder only when
-   diagnosing hardware support.
+   diagnosing hardware support. The external Tools > **Twitch** tab remains
+   available for detailed prerequisite diagnostics.
 3. Leave **Preferred ingest** empty for Twitch's default, or enter a region name
    substring such as `Sydney`.
 4. With **Bandwidth test** enabled, launch or continue the game. It will send
@@ -179,10 +182,12 @@ upload bandwidth:
 2. Launch `stream_town_game.exe`. It always starts offline. Wait for the local
    main-menu badge to read **GO LIVE**, then click it. If it reads **NOT SET UP**,
    click it to return to Secrets and finish both account grants. From a running
-   town, press Escape and use **Go Live** instead.
+   town, press Escape and use **Go Live** instead. While active, that control
+   changes to **End Stream**.
 3. Check Twitch's Stream Manager/Inspector from another device. To stop the
-   broadcast, exit the game; the encoder flushes the stream trailer and closes
-   RTMP.
+   broadcast, click the main-menu **LIVE** badge or choose Escape > **End Stream**
+   in a town. The encoder flushes the stream trailer and closes RTMP without
+   exiting the game.
 
 WASAPI capture is scoped to the Stream Town process tree, so both the Bevy sound
 engine and Bevy Tidal music are included while unrelated desktop/application
@@ -207,7 +212,8 @@ switcher; they are not silently captured from the desktop.
   in-process encoder if one exists, revalidates the broadcaster grant, fetches a
   fresh stream key and ingest list, and starts a new encoder connection.
 - In-game HUD state: `Twitch: Connected`; the local-only badge reports **NOT LIVE**
-  until Escape > **Go Live** starts the encoder.
+  until Escape > **Go Live** starts the encoder, then the menu action becomes
+  **End Stream** until shutdown completes.
 - A wrong-account authorization is rejected before IRC is started.
 - If authorization is revoked, the app registration changes, or the refresh token has expired from inactivity, reopen the Bevy tools **Twitch** tab, click **Forget token**, authorize again, and rerun the end-to-end diagnostic.
 - `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.

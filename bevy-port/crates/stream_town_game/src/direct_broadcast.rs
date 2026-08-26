@@ -56,6 +56,21 @@ pub enum DirectBroadcastPhase {
     Error(String),
 }
 
+impl DirectBroadcastPhase {
+    #[must_use]
+    pub(crate) const fn is_active(&self) -> bool {
+        matches!(
+            self,
+            Self::WaitingForBroadcasterAuthorization
+                | Self::ResolvingIngest
+                | Self::Connecting
+                | Self::Broadcasting
+                | Self::Reconnecting
+                | Self::Stopping
+        )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectBroadcastSnapshot {
     pub phase: DirectBroadcastPhase,
@@ -111,16 +126,33 @@ impl DirectBroadcastRuntime {
             encoded_audio_frames: metrics.encoded_audio,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_phase_for_test(&mut self, phase: DirectBroadcastPhase) {
+        self.phase = phase;
+    }
 }
 
 #[derive(Resource, Default)]
 pub(crate) struct DirectBroadcastControl {
     restart_requested: bool,
+    stop_requested: bool,
 }
 
 impl DirectBroadcastControl {
     pub(crate) fn request_restart(&mut self) {
         self.restart_requested = true;
+        self.stop_requested = false;
+    }
+
+    pub(crate) fn request_stop(&mut self) {
+        self.stop_requested = true;
+        self.restart_requested = false;
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn stop_requested_for_test(&self) -> bool {
+        self.stop_requested
     }
 }
 
@@ -133,7 +165,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
             .add_systems(
                 Update,
                 (
-                    restart_direct_broadcast,
+                    apply_direct_broadcast_control,
                     poll_direct_broadcast_authorization,
                     poll_direct_broadcast_worker,
                     capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
@@ -143,11 +175,22 @@ impl Plugin for DirectTwitchBroadcastPlugin {
     }
 }
 
-fn restart_direct_broadcast(
+fn apply_direct_broadcast_control(
     config: Res<RuntimeConfig>,
     mut control: ResMut<DirectBroadcastControl>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
+    if std::mem::take(&mut control.stop_requested) {
+        runtime.authorization = None;
+        runtime.capture_in_flight = false;
+        if let Some(controller) = &runtime.controller {
+            controller.request_stop();
+            runtime.phase = DirectBroadcastPhase::Stopping;
+        } else {
+            runtime.phase = DirectBroadcastPhase::Stopped;
+        }
+        return;
+    }
     if !std::mem::take(&mut control.restart_requested) {
         return;
     }
@@ -288,7 +331,10 @@ fn poll_direct_broadcast_worker(mut runtime: ResMut<DirectBroadcastRuntime>) {
                 runtime.phase = DirectBroadcastPhase::Reconnecting;
                 warn!(%error, "direct Twitch broadcast reconnecting");
             }
-            WorkerEvent::Stopped => runtime.phase = DirectBroadcastPhase::Stopped,
+            WorkerEvent::Stopped => {
+                runtime.phase = DirectBroadcastPhase::Stopped;
+                runtime.controller = None;
+            }
             WorkerEvent::Error(error) => {
                 runtime.phase = DirectBroadcastPhase::Error(error);
             }
@@ -724,12 +770,16 @@ impl BroadcastController {
     fn metrics(&self) -> BroadcastMetricsSnapshot {
         self.metrics.snapshot()
     }
+
+    fn request_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.media.try_send(MediaInput::Stop);
+    }
 }
 
 impl Drop for BroadcastController {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.media.try_send(MediaInput::Stop);
+        self.request_stop();
     }
 }
 
@@ -1403,6 +1453,52 @@ mod tests {
             app.world().resource::<DirectBroadcastRuntime>().phase,
             DirectBroadcastPhase::Disabled
         );
+    }
+
+    #[test]
+    fn active_phase_contract_covers_every_session_that_locks_streaming_settings() {
+        for phase in [
+            DirectBroadcastPhase::WaitingForBroadcasterAuthorization,
+            DirectBroadcastPhase::ResolvingIngest,
+            DirectBroadcastPhase::Connecting,
+            DirectBroadcastPhase::Broadcasting,
+            DirectBroadcastPhase::Reconnecting,
+            DirectBroadcastPhase::Stopping,
+        ] {
+            assert!(phase.is_active(), "{phase:?} must remain operator-active");
+        }
+        for phase in [
+            DirectBroadcastPhase::Disabled,
+            DirectBroadcastPhase::Stopped,
+            DirectBroadcastPhase::Error("test".to_owned()),
+        ] {
+            assert!(!phase.is_active(), "{phase:?} must be operator-inactive");
+        }
+    }
+
+    #[test]
+    fn operator_stop_cancels_an_in_flight_session_without_restarting_it() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(RuntimeConfig(stream_town_domain::GameConfig::default()))
+            .init_resource::<SensitiveScreenActive>()
+            .add_plugins(DirectTwitchBroadcastPlugin);
+        app.world_mut()
+            .resource_mut::<DirectBroadcastRuntime>()
+            .phase = DirectBroadcastPhase::Connecting;
+        app.world_mut()
+            .resource_mut::<DirectBroadcastControl>()
+            .request_stop();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<DirectBroadcastRuntime>().phase,
+            DirectBroadcastPhase::Stopped
+        );
+        let control = app.world().resource::<DirectBroadcastControl>();
+        assert!(!control.restart_requested);
+        assert!(!control.stop_requested);
     }
 
     #[test]

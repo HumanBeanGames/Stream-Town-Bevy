@@ -253,7 +253,8 @@ from advancing audio while leaving video timestamps behind.
 Every Windows launch also creates a small, always-on-top local status window
 showing `GO LIVE`, `LIVE`, `NOT LIVE`, `NOT SET UP`, test, connecting, or error
 state. On the main menu it is clickable; in-game, the Esc menu provides the Go
-Live action while the local badge remains non-interactive. It
+Live / End Stream action while the local badge remains non-interactive. Clicking
+the main-menu `LIVE` badge ends the current stream cleanly. It
 is a separate opaque render surface for broad driver compatibility, follows the
 primary window, and is deliberately absent from the primary-window frames sent
 to Twitch. Automated capture scripts forcibly disable direct broadcasting so a
@@ -267,6 +268,11 @@ save preserves the live bot connection and broadcast worker. The application
 always starts offline; broadcasting begins only after an explicit Go Live or
 Restart stream action. New/Load Town opens the protected Secrets setup prompt
 until the bot is connected and both account authorizations are stored.
+The ordinary Settings menu includes a Streaming tab for direct-stream enablement,
+output resolution, frame rate, video/audio bitrate, encoder preference, and
+bandwidth-test mode. These controls are visibly locked from authorization through
+shutdown while a broadcast session is active; end the stream before changing or
+applying them. Saved values take effect on the next Go Live action.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
@@ -685,8 +691,9 @@ state deterministically.
 `STREAM_TOWN_DEBUG_CREDITS_TIME=<seconds>` starts its authored timeline at a
 specific point for repeatable property-curve smoke captures.
 `STREAM_TOWN_AUTOSTART_SETTINGS=1` opens the authored settings shell on state
-entry so all five categories and the complete runtime draft can be captured
-repeatably.
+entry so all six categories and the complete runtime draft can be captured
+repeatably. Pair it with `STREAM_TOWN_AUTOSTART_SETTINGS_TAB=streaming` to open
+the direct-stream controls for a focused capture.
 `STREAM_TOWN_AUTOSTART_GAME_MENU=1` opens the shipping in-game menu after world
 loading so its Save, Load, Settings, Exit Game, Close, and Idle Mode controls
 can be captured without pointer or keyboard automation.
