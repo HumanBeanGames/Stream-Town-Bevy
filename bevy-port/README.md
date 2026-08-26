@@ -233,8 +233,8 @@ Twitch is disabled in the checked-in configuration. The tools application writes
 public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
 stored only in the operating-system credential vault. The game validates and
 proactively refreshes the token before starting IRC, revalidates hourly, rebuilds
-the IRC connection after token rotation, and keeps the Unity broadcaster
-`!connect` safety gate. The Twitch tab can verify a real channel join, resolve
+the IRC connection after token rotation, and enables text commands as soon as the
+authorized bot has joined the configured channel. The Twitch tab can verify a real channel join, resolve
 operator logins to stable numeric IDs, and capture a live Channel Points reward
 ID. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 On Windows, the same Twitch tab can separately authorize the configured channel
@@ -250,18 +250,23 @@ The encoder worker owns the constant-rate video clock and repeats the latest
 completed GPU frame if the game thread stalls. Audio starts against the first
 video frame and continues on its 48 kHz capture clock, preventing loading work
 from advancing audio while leaving video timestamps behind.
-Every Windows launch also creates a small, click-through, always-on-top local
-status window showing `LIVE`, `NOT LIVE`, test, connecting, or error state. It
+Every Windows launch also creates a small, always-on-top local status window
+showing `GO LIVE`, `LIVE`, `NOT LIVE`, `NOT SET UP`, test, connecting, or error
+state. On the main menu it is clickable; in-game, the Esc menu provides the Go
+Live action while the local badge remains non-interactive. It
 is a separate opaque render surface for broad driver compatibility, follows the
 primary window, and is deliberately absent from the primary-window frames sent
 to Twitch. Automated capture scripts forcibly disable direct broadcasting so a
 visual regression run can never publish its diagnostic frames.
 The protected Main Menu > Secrets screen also reports credential presence, live
-bot/command-gate state, and the direct encoder phase with advancing media-frame
+bot connection state, and the direct encoder phase with advancing media-frame
 counts. Its Restart stream control reapplies the visible settings and rebuilds
 the in-process Twitch connection without restarting the game. Save and apply
 restarts only a connection whose client ID or login actually changed; a no-op
-save preserves the live bot gate, `!connect` authorization, and broadcast worker.
+save preserves the live bot connection and broadcast worker. The application
+always starts offline; broadcasting begins only after an explicit Go Live or
+Restart stream action. New/Load Town opens the protected Secrets setup prompt
+until the bot is connected and both account authorizations are stored.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
@@ -276,7 +281,7 @@ lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
 the town's negative-X side and physical 11-60 height zoom. The pose is translated to the generated
 Town Hall so different deterministic terrain seeds retain Unity's opening
 composition. Use
-arrow keys and Enter to select Save Game, Load Game, Settings, Exit Game, or
+arrow keys and Enter to select Save Game, Load Game, Settings, Go Live, Exit Game, or
 Idle Mode. On the Main Menu and Credits, Tab/Shift+Tab moves
 focus, arrow keys continue from visible keyboard focus, and Enter or Space
 activates the focused control. Settings retain keyboard control: Tab/Shift+Tab changes category,

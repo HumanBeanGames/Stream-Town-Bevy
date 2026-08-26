@@ -138,6 +138,8 @@ pub struct TwitchConfig {
     pub client_id: String,
     pub bot_login: String,
     pub channel_login: String,
+    /// Legacy schema field retained for configuration compatibility. Chat
+    /// commands are enabled automatically after the authorized bot connects.
     pub require_broadcaster_connect: bool,
     /// Numeric Twitch user IDs authorized for Unity-compatible game-master commands.
     /// This intentionally does not inherit broadcaster or moderator privileges.
@@ -168,7 +170,8 @@ pub enum BroadcastEncoderPreference {
 pub struct BroadcastConfig {
     /// Broadcast remains independently opt-in from chat connectivity.
     pub enabled: bool,
-    /// Start publishing as soon as the game has a primary render target.
+    /// Legacy schema field retained for configuration compatibility. The game
+    /// always starts offline and requires an explicit operator Go Live action.
     pub start_on_launch: bool,
     pub width: u16,
     pub height: u16,
@@ -188,7 +191,7 @@ impl Default for BroadcastConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            start_on_launch: true,
+            start_on_launch: false,
             width: 1_280,
             height: 720,
             frames_per_second: 30,
@@ -284,7 +287,7 @@ impl Default for GameConfig {
                 client_id: String::new(),
                 bot_login: "humanbeanbot".to_owned(),
                 channel_login: "humanbeangames".to_owned(),
-                require_broadcaster_connect: true,
+                require_broadcaster_connect: false,
                 game_master_ids: BTreeSet::new(),
                 fish_god_reward_id: shipping_fish_god_reward_id(),
                 broadcast: BroadcastConfig::default(),

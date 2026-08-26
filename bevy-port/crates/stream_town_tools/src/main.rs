@@ -2684,10 +2684,6 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             start_twitch_reward_capture(state);
         }
     });
-    ui.checkbox(
-        &mut state.config.twitch.require_broadcaster_connect,
-        "Require the broadcaster's per-session !connect code",
-    );
     ui.horizontal(|ui| {
         if ui.button("Save runtime config").clicked() {
             state.status = match save_runtime_config(&state.config) {
@@ -2766,10 +2762,7 @@ fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         &mut state.config.twitch.broadcast.enabled,
         "Enable direct broadcast",
     );
-    ui.checkbox(
-        &mut state.config.twitch.broadcast.start_on_launch,
-        "Start when the game launches",
-    );
+    ui.label("The game always starts offline. Use Go Live from the main-menu status badge or the in-game Esc menu.");
     ui.horizontal(|ui| {
         ui.label("Output");
         ui.add(

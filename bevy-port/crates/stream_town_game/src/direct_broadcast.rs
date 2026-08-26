@@ -130,7 +130,6 @@ impl Plugin for DirectTwitchBroadcastPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DirectBroadcastRuntime>()
             .init_resource::<DirectBroadcastControl>()
-            .add_systems(Startup, begin_direct_broadcast)
             .add_systems(
                 Update,
                 (
@@ -142,10 +141,6 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     .chain(),
             );
     }
-}
-
-fn begin_direct_broadcast(config: Res<RuntimeConfig>, mut runtime: ResMut<DirectBroadcastRuntime>) {
-    configure_direct_broadcast(&config.0, &mut runtime);
 }
 
 fn restart_direct_broadcast(
@@ -169,7 +164,10 @@ fn configure_direct_broadcast(
         return;
     }
     let twitch = &config.twitch;
-    if !twitch.broadcast.enabled || !twitch.broadcast.start_on_launch {
+    // Going live is deliberately an operator action. Persisted settings and
+    // legacy `start_on_launch` values configure the encoder, but never start a
+    // public stream while the application is still booting.
+    if !twitch.broadcast.enabled {
         runtime.phase = DirectBroadcastPhase::Disabled;
         return;
     }
@@ -317,7 +315,7 @@ fn capture_direct_broadcast_frame(
     if sensitive_screen.0 {
         let width = u32::from(config.0.twitch.broadcast.width);
         let height = u32::from(config.0.twitch.broadcast.height);
-        let rgba = black_rgba_frame(width, height);
+        let rgba = sensitive_rgba_frame(width, height);
         let sent = runtime.controller.as_ref().is_some_and(|controller| {
             controller.send_video(VideoFrame {
                 width,
@@ -351,7 +349,7 @@ fn capture_direct_broadcast_frame(
                 if controller.send_video(VideoFrame {
                     width,
                     height,
-                    rgba: black_rgba_frame(width, height),
+                    rgba: sensitive_rgba_frame(width, height),
                 }) {
                     runtime.captured_video_frames = runtime.captured_video_frames.saturating_add(1);
                 }
@@ -374,7 +372,7 @@ fn capture_direct_broadcast_frame(
     );
 }
 
-fn black_rgba_frame(width: u32, height: u32) -> Vec<u8> {
+fn sensitive_rgba_frame(width: u32, height: u32) -> Vec<u8> {
     let bytes = usize::try_from(width)
         .unwrap_or(0)
         .saturating_mul(usize::try_from(height).unwrap_or(0))
@@ -383,7 +381,106 @@ fn black_rgba_frame(width: u32, height: u32) -> Vec<u8> {
     for alpha in rgba.iter_mut().skip(3).step_by(4) {
         *alpha = 255;
     }
+    draw_centered_sensitive_label(&mut rgba, width, height);
     rgba
+}
+
+fn draw_centered_sensitive_label(rgba: &mut [u8], width: u32, height: u32) {
+    const LABEL: &str = "SENSITIVE INFORMATION HIDDEN";
+    const GLYPH_WIDTH: u32 = 5;
+    const GLYPH_HEIGHT: u32 = 7;
+    const GLYPH_GAP: u32 = 1;
+    let unscaled_width = u32::try_from(LABEL.chars().count())
+        .unwrap_or_default()
+        .saturating_mul(GLYPH_WIDTH + GLYPH_GAP)
+        .saturating_sub(GLYPH_GAP);
+    if width < unscaled_width || height < GLYPH_HEIGHT {
+        return;
+    }
+    let scale = (width / unscaled_width.max(1))
+        .min(height / (GLYPH_HEIGHT * 4).max(1))
+        .clamp(1, 6);
+    let label_width = unscaled_width.saturating_mul(scale);
+    let label_height = GLYPH_HEIGHT.saturating_mul(scale);
+    let origin_x = width.saturating_sub(label_width) / 2;
+    let origin_y = height.saturating_sub(label_height) / 2;
+    let stride = usize::try_from(width).unwrap_or_default().saturating_mul(4);
+
+    for (glyph_index, character) in LABEL.chars().enumerate() {
+        let glyph = sensitive_label_glyph(character);
+        let glyph_x = origin_x.saturating_add(
+            u32::try_from(glyph_index)
+                .unwrap_or_default()
+                .saturating_mul((GLYPH_WIDTH + GLYPH_GAP) * scale),
+        );
+        for (row, bits) in glyph.into_iter().enumerate() {
+            for column in 0..GLYPH_WIDTH {
+                if bits & (1 << (GLYPH_WIDTH - 1 - column)) == 0 {
+                    continue;
+                }
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        let x = glyph_x + column * scale + dx;
+                        let y = origin_y + u32::try_from(row).unwrap_or_default() * scale + dy;
+                        let offset = usize::try_from(y)
+                            .unwrap_or_default()
+                            .saturating_mul(stride)
+                            .saturating_add(
+                                usize::try_from(x).unwrap_or_default().saturating_mul(4),
+                            );
+                        if let Some(pixel) = rgba.get_mut(offset..offset.saturating_add(4)) {
+                            pixel.copy_from_slice(&[255, 255, 255, 255]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+const fn sensitive_label_glyph(character: char) -> [u8; 7] {
+    match character {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        _ => [0; 7],
+    }
 }
 
 fn screenshot_rgba(image: &Image) -> Result<(u32, u32, Vec<u8>)> {
@@ -1259,12 +1356,53 @@ mod tests {
     }
 
     #[test]
-    fn sensitive_screen_frame_is_fully_opaque_black() {
-        let frame = black_rgba_frame(2, 3);
+    fn sensitive_screen_frame_is_opaque_black_when_too_small_for_the_notice() {
+        let frame = sensitive_rgba_frame(2, 3);
         assert_eq!(frame.len(), 24);
         for pixel in frame.chunks_exact(4) {
             assert_eq!(pixel, [0, 0, 0, 255]);
         }
+    }
+
+    #[test]
+    fn sensitive_screen_frame_centres_a_white_privacy_notice() {
+        let width = 640;
+        let height = 360;
+        let frame = sensitive_rgba_frame(width, height);
+        assert_eq!(frame.len(), usize::try_from(width * height * 4).unwrap());
+        assert_eq!(&frame[..4], &[0, 0, 0, 255]);
+        let white_pixels = frame
+            .chunks_exact(4)
+            .filter(|pixel| *pixel == [255, 255, 255, 255])
+            .count();
+        assert!(
+            white_pixels > 500,
+            "privacy notice must be visibly rendered"
+        );
+        let centre_band_start = usize::try_from((height / 3) * width * 4).unwrap();
+        let centre_band_end = usize::try_from((height * 2 / 3) * width * 4).unwrap();
+        assert!(
+            frame[centre_band_start..centre_band_end]
+                .chunks_exact(4)
+                .any(|pixel| pixel == [255, 255, 255, 255])
+        );
+    }
+
+    #[test]
+    fn direct_broadcast_stays_offline_until_operator_requests_it() {
+        let mut config = stream_town_domain::GameConfig::default();
+        config.twitch.broadcast.enabled = true;
+        config.twitch.broadcast.start_on_launch = true;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(RuntimeConfig(config))
+            .init_resource::<SensitiveScreenActive>()
+            .add_plugins(DirectTwitchBroadcastPlugin);
+        app.update();
+        assert_eq!(
+            app.world().resource::<DirectBroadcastRuntime>().phase,
+            DirectBroadcastPhase::Disabled
+        );
     }
 
     #[test]

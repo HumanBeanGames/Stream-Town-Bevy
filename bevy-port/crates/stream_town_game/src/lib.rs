@@ -758,8 +758,6 @@ enum AgentCommand {
 struct TwitchConnection {
     transport: Option<TwitchTransport>,
     status: TwitchStatus,
-    broadcaster_authorized: bool,
-    connect_code: String,
     fish_god_reward_id: Option<String>,
 }
 
@@ -768,8 +766,6 @@ impl Default for TwitchConnection {
         Self {
             transport: None,
             status: TwitchStatus::Disabled,
-            broadcaster_authorized: false,
-            connect_code: generate_connect_code(),
             fish_god_reward_id: None,
         }
     }
@@ -1410,6 +1406,7 @@ enum GameMenuAction {
     SaveGame,
     LoadGame,
     Settings,
+    GoLive,
     ExitGame,
     Close,
 }
@@ -2380,6 +2377,13 @@ type GameMenuIdleToggleQuery<'w, 's> = Query<
     (&'static Interaction, &'static mut BackgroundColor),
     (With<GameMenuIdleToggle>, Without<GameMenuAction>),
 >;
+#[cfg(target_os = "windows")]
+type LocalBroadcastStatusButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static mut BackgroundColor),
+    (With<LocalBroadcastStatusButton>, Changed<Interaction>),
+>;
 type MenuOverlayEntityQuery<'w, 's> =
     Query<'w, 's, Entity, Or<(With<MenuOverlay>, With<GameMenuRoot>, With<SettingsRoot>)>>;
 type TownCameraMutQuery<'w, 's> = Query<
@@ -2743,6 +2747,10 @@ struct LocalBroadcastStatusWindow;
 #[cfg(target_os = "windows")]
 #[derive(Component)]
 struct LocalBroadcastStatusText;
+
+#[cfg(target_os = "windows")]
+#[derive(Component)]
+struct LocalBroadcastStatusButton;
 
 #[cfg(target_os = "windows")]
 #[derive(Resource, Default)]
@@ -3143,7 +3151,11 @@ impl Plugin for LocalBroadcastStatusPlugin {
             .add_systems(Startup, spawn_local_broadcast_status)
             .add_systems(
                 Update,
-                (anchor_local_broadcast_status, update_local_broadcast_status),
+                (
+                    anchor_local_broadcast_status,
+                    update_local_broadcast_status,
+                    local_broadcast_status_button,
+                ),
             );
     }
 }
@@ -3156,7 +3168,7 @@ fn spawn_local_broadcast_status(mut commands: Commands) {
             Window {
                 title: "Stream Town broadcast status".to_owned(),
                 name: Some("stream-town-local-broadcast-status".to_owned()),
-                resolution: WindowResolution::new(196, 42).with_scale_factor_override(1.0),
+                resolution: WindowResolution::new(142, 32).with_scale_factor_override(1.0),
                 position: WindowPosition::At(IVec2::new(0, 0)),
                 present_mode: PresentMode::AutoVsync,
                 resizable: false,
@@ -3193,14 +3205,16 @@ fn spawn_local_broadcast_status(mut commands: Commands) {
         .id();
     commands
         .spawn((
+            LocalBroadcastStatusButton,
             UiTargetCamera(camera),
+            Button,
             Node {
                 width: percent(100.0),
                 height: percent(100.0),
-                padding: UiRect::horizontal(px(12.0)),
+                padding: UiRect::horizontal(px(8.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(px(10.0)),
+                border_radius: BorderRadius::all(px(7.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.92)),
@@ -3209,7 +3223,7 @@ fn spawn_local_broadcast_status(mut commands: Commands) {
             LocalBroadcastStatusText,
             Text::new("● NOT LIVE"),
             TextFont {
-                font_size: FontSize::Px(17.0),
+                font_size: FontSize::Px(13.0),
                 ..default()
             },
             TextLayout::no_wrap().with_justify(Justify::Center),
@@ -3247,7 +3261,7 @@ fn anchor_local_broadcast_status(
         anchor.primary_origin.x + i32::try_from(primary.physical_width()).unwrap_or(i32::MAX)
             - i32::try_from(status.physical_width()).unwrap_or(i32::MAX)
             - right_margin,
-        anchor.primary_origin.y + 14,
+        anchor.primary_origin.y + 114,
     );
     if status.position != WindowPosition::At(desired) {
         status.position = WindowPosition::At(desired);
@@ -3258,6 +3272,8 @@ fn anchor_local_broadcast_status(
 fn local_broadcast_status_label(
     config: &GameConfig,
     phase: &direct_broadcast::DirectBroadcastPhase,
+    state: GameState,
+    accounts_ready: bool,
 ) -> (&'static str, Color) {
     use direct_broadcast::DirectBroadcastPhase;
     match phase {
@@ -3271,10 +3287,21 @@ fn local_broadcast_status_label(
         | DirectBroadcastPhase::Reconnecting => {
             ("● NOT LIVE · CONNECTING", Color::srgb(0.98, 0.78, 0.28))
         }
-        DirectBroadcastPhase::Error(_) => ("● NOT LIVE · ERROR", Color::srgb(1.0, 0.42, 0.38)),
+        DirectBroadcastPhase::Error(_) if accounts_ready => {
+            ("● NOT LIVE · ERROR", Color::srgb(1.0, 0.42, 0.38))
+        }
+        _ if !accounts_ready && state == GameState::MainMenu => {
+            ("● NOT SET UP", Color::srgb(0.98, 0.78, 0.28))
+        }
+        DirectBroadcastPhase::Disabled | DirectBroadcastPhase::Stopped
+            if state == GameState::MainMenu =>
+        {
+            ("● GO LIVE", Color::srgb(0.48, 0.94, 0.58))
+        }
         DirectBroadcastPhase::Disabled
         | DirectBroadcastPhase::Stopping
-        | DirectBroadcastPhase::Stopped => ("● NOT LIVE", Color::srgb(0.78, 0.80, 0.84)),
+        | DirectBroadcastPhase::Stopped
+        | DirectBroadcastPhase::Error(_) => ("● NOT LIVE", Color::srgb(0.78, 0.80, 0.84)),
     }
 }
 
@@ -3282,18 +3309,59 @@ fn local_broadcast_status_label(
 fn update_local_broadcast_status(
     config: Res<RuntimeConfig>,
     broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
+    state: Res<State<GameState>>,
+    secrets: Res<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
     mut text: Query<(&mut Text, &mut TextColor), With<LocalBroadcastStatusText>>,
 ) {
-    if !config.is_changed() && !broadcast.is_changed() {
-        return;
-    }
     let Ok((mut text, mut color)) = text.single_mut() else {
         return;
     };
     let snapshot = broadcast.snapshot();
-    let (label, next_color) = local_broadcast_status_label(&config.0, &snapshot.phase);
+    let accounts_ready = twitch_accounts_connected(&config.0, &secrets, &connection);
+    let (label, next_color) =
+        local_broadcast_status_label(&config.0, &snapshot.phase, *state.get(), accounts_ready);
     label.clone_into(&mut **text);
     color.0 = next_color;
+}
+
+#[cfg(target_os = "windows")]
+fn local_broadcast_status_button(
+    state: Res<State<GameState>>,
+    config: Res<RuntimeConfig>,
+    secrets: Res<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
+    broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
+    mut control: ResMut<direct_broadcast::DirectBroadcastControl>,
+    mut menu: ResMut<MenuRuntime>,
+    mut windows: Query<
+        &mut CursorOptions,
+        (With<LocalBroadcastStatusWindow>, Without<PrimaryWindow>),
+    >,
+    mut buttons: LocalBroadcastStatusButtonQuery,
+) {
+    let clickable = *state.get() == GameState::MainMenu && menu.page == MenuPage::Closed;
+    for mut cursor in &mut windows {
+        cursor.visible = clickable;
+        cursor.hit_test = clickable;
+    }
+    let accounts_ready = twitch_accounts_connected(&config.0, &secrets, &connection);
+    for (interaction, mut background) in &mut buttons {
+        background.0 = if clickable && *interaction == Interaction::Hovered {
+            Color::srgba(0.07, 0.09, 0.12, 0.98)
+        } else {
+            Color::srgba(0.02, 0.025, 0.035, 0.92)
+        };
+        if !clickable || *interaction != Interaction::Pressed {
+            continue;
+        }
+        if !accounts_ready {
+            open_twitch_setup_required(&mut menu);
+        } else if broadcast.snapshot().phase != direct_broadcast::DirectBroadcastPhase::Broadcasting
+        {
+            control.request_restart();
+        }
+    }
 }
 
 impl Plugin for StreamTownGamePlugin {
@@ -3396,6 +3464,7 @@ impl Plugin for StreamTownGamePlugin {
                         .chain()
                         .after(setup_rendering),
                     setup_world_audio_sources.after(setup_rendering),
+                    initialize_twitch_account_state,
                     start_twitch_transport,
                     apply_player_settings.after(setup_rendering),
                     sync_authored_post_processing.after(apply_player_settings),
@@ -10419,7 +10488,10 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
 fn main_menu_input(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
-    menu: Res<MenuRuntime>,
+    config: Res<RuntimeConfig>,
+    secrets: Res<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
+    mut menu: ResMut<MenuRuntime>,
     focus: Res<InputFocus>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
@@ -10428,7 +10500,11 @@ fn main_menu_input(
         return;
     }
     if keyboard.just_pressed(KeyCode::Enter) && focus.get().is_none() {
-        queue_world_loading(&mut commands);
+        if twitch_accounts_connected(&config.0, &secrets, &connection) {
+            queue_world_loading(&mut commands);
+        } else {
+            open_twitch_setup_required(&mut menu);
+        }
     } else if keyboard.just_pressed(KeyCode::KeyC) {
         next_state.set(GameState::Credits);
     } else if keyboard.just_pressed(KeyCode::Escape)
@@ -10447,6 +10523,9 @@ fn main_menu_buttons(
     mut commands: Commands,
     save: Res<SaveRuntime>,
     settings: Res<RuntimePlayerSettings>,
+    config: Res<RuntimeConfig>,
+    secrets: Res<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
     mut menu: ResMut<MenuRuntime>,
     mut io: ResMut<MenuIoRequest>,
     buttons: Query<(&Interaction, &MainMenuAction), Changed<Interaction>>,
@@ -10463,12 +10542,20 @@ fn main_menu_buttons(
         }
         match action {
             MainMenuAction::NewGame => {
-                io.load = false;
-                queue_world_loading(&mut commands);
+                if twitch_accounts_connected(&config.0, &secrets, &connection) {
+                    io.load = false;
+                    queue_world_loading(&mut commands);
+                } else {
+                    open_twitch_setup_required(&mut menu);
+                }
             }
             MainMenuAction::LoadGame => {
-                io.load = true;
-                queue_world_loading(&mut commands);
+                if twitch_accounts_connected(&config.0, &secrets, &connection) {
+                    io.load = true;
+                    queue_world_loading(&mut commands);
+                } else {
+                    open_twitch_setup_required(&mut menu);
+                }
             }
             MainMenuAction::Settings => {
                 open_settings_menu(&mut menu, MenuPage::Closed, &settings.0);
@@ -10517,6 +10604,7 @@ const fn game_menu_action_label(action: GameMenuAction) -> &'static str {
         GameMenuAction::SaveGame => "Save Game",
         GameMenuAction::LoadGame => "Load Game",
         GameMenuAction::Settings => "Settings",
+        GameMenuAction::GoLive => "Go Live",
         GameMenuAction::ExitGame => "Exit Game",
         GameMenuAction::Close => "Close",
     }
@@ -10531,18 +10619,23 @@ const fn game_menu_action_index(action: GameMenuAction) -> usize {
         GameMenuAction::SaveGame => 0,
         GameMenuAction::LoadGame => 1,
         GameMenuAction::Settings => 2,
-        GameMenuAction::ExitGame => 3,
-        GameMenuAction::Close => 5,
+        GameMenuAction::GoLive => 3,
+        GameMenuAction::ExitGame => 4,
+        GameMenuAction::Close => 6,
     }
 }
 
 fn game_menu_buttons(
     save: Res<SaveRuntime>,
     settings: Res<RuntimePlayerSettings>,
+    config: Res<RuntimeConfig>,
+    secrets: Res<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
     mut menu: ResMut<MenuRuntime>,
     mut io: ResMut<MenuIoRequest>,
     buttons: Query<(&Interaction, &GameMenuAction), Changed<Interaction>>,
     mut next_state: ResMut<NextState<GameState>>,
+    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
 ) {
     if menu.page != MenuPage::Game {
         return;
@@ -10563,6 +10656,21 @@ fn game_menu_buttons(
             }
             GameMenuAction::Settings => {
                 open_settings_menu(&mut menu, MenuPage::Game, &settings.0);
+            }
+            GameMenuAction::GoLive => {
+                if twitch_accounts_connected(&config.0, &secrets, &connection) {
+                    #[cfg(target_os = "windows")]
+                    {
+                        broadcast.request_restart();
+                        "Starting the internal Twitch stream...".clone_into(&mut menu.feedback);
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    "Direct Twitch streaming is available only on Windows."
+                        .clone_into(&mut menu.feedback);
+                } else {
+                    "Connect both Twitch accounts from Main Menu → Secrets before going live."
+                        .clone_into(&mut menu.feedback);
+                }
             }
             GameMenuAction::ExitGame => {
                 menu.page = MenuPage::Closed;
@@ -11198,7 +11306,7 @@ fn update_game_menu_controls(
     }
     if let Ok((interaction, mut background)) = idle_toggle.single_mut() {
         background.0 = if menu.page == MenuPage::Game
-            && (menu.selected == 4
+            && (menu.selected == 5
                 || *interaction == Interaction::Hovered
                 || *interaction == Interaction::Pressed)
         {
@@ -11864,6 +11972,7 @@ fn spawn_menu_overlay(
                     GameMenuAction::SaveGame,
                     GameMenuAction::LoadGame,
                     GameMenuAction::Settings,
+                    GameMenuAction::GoLive,
                     GameMenuAction::ExitGame,
                 ] {
                     controls
@@ -12300,6 +12409,25 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                         TextLayout::justify(Justify::Center),
                         TextColor(Color::WHITE),
                         Pickable::IGNORE,
+                    ));
+                    panel.spawn((
+                        Text::new(
+                            "Both Twitch accounts must be connected before starting a town. Complete bot and stream authorization in this menu.",
+                        ),
+                        TextFont {
+                            font_size: FontSize::Px(20.0),
+                            ..default()
+                        },
+                        TextLayout {
+                            justify: Justify::Center,
+                            linebreak: LineBreak::WordBoundary,
+                        },
+                        TextColor(Color::srgb(1.0, 0.78, 0.34)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(92.0),
+                            ..default()
+                        },
                     ));
                     panel.spawn((
                         Text::new(SECRETS_DISCLAIMER),
@@ -12842,12 +12970,7 @@ fn secrets_buttons(
                 let enabled = !config.0.twitch.broadcast.enabled;
                 let outcome = save_secrets_fields(&fields, &mut config, |draft| {
                     draft.twitch.broadcast.enabled = enabled;
-                    draft.twitch.broadcast.start_on_launch = true;
                 });
-                if outcome.is_ok() {
-                    #[cfg(target_os = "windows")]
-                    broadcast.request_restart();
-                }
                 set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
             }
             SecretsAction::ToggleBandwidthTest => {
@@ -12855,10 +12978,6 @@ fn secrets_buttons(
                 let outcome = save_secrets_fields(&fields, &mut config, |draft| {
                     draft.twitch.broadcast.bandwidth_test = enabled;
                 });
-                if outcome.is_ok() {
-                    #[cfg(target_os = "windows")]
-                    broadcast.request_restart();
-                }
                 set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
             }
             SecretsAction::RestartBroadcast => {
@@ -12895,18 +13014,19 @@ fn secrets_buttons(
                 let previous = config.0.twitch.clone();
                 match save_secrets_fields(&fields, &mut config, |_| {}) {
                     Ok(path) => {
-                        let (restart_chat, restart_broadcast) =
+                        let (restart_chat, broadcast_settings_changed) =
                             secrets_restart_requirements(&previous, &config.0.twitch);
                         if restart_chat {
                             restart_twitch_connection(&config.0, &mut connection);
                         }
-                        #[cfg(target_os = "windows")]
-                        if restart_broadcast {
-                            broadcast.request_restart();
-                        }
-                        secrets.feedback = if restart_chat || restart_broadcast {
+                        secrets.feedback = if restart_chat {
                             format!(
-                                "Saved and applied {}. Only changed Twitch connections are restarting.",
+                                "Saved and applied {}. The bot connection is restarting; the stream remains under manual control.",
+                                path.display()
+                            )
+                        } else if broadcast_settings_changed {
+                            format!(
+                                "Saved and applied {}. Stream settings will be used the next time you choose Go Live.",
                                 path.display()
                             )
                         } else {
@@ -13016,14 +13136,11 @@ fn restart_twitch_connection(config: &GameConfig, connection: &mut TwitchConnect
     }
     if !config.twitch.enabled {
         connection.status = TwitchStatus::Disabled;
-        connection.broadcaster_authorized = false;
         return;
     }
-    connection.broadcaster_authorized = !config.twitch.require_broadcaster_connect;
     connection
         .fish_god_reward_id
         .clone_from(&config.twitch.fish_god_reward_id);
-    connection.connect_code = generate_connect_code();
     connection.status = TwitchStatus::Authorizing;
     match TwitchTransport::start(config.twitch.clone()) {
         Ok(transport) => connection.transport = Some(transport),
@@ -13137,7 +13254,6 @@ fn poll_secrets_authorization(
     mut secrets: ResMut<SecretsRuntime>,
     config: Res<RuntimeConfig>,
     mut connection: ResMut<TwitchConnection>,
-    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
 ) {
     let events = secrets
         .authorization_events
@@ -13184,8 +13300,6 @@ fn poll_secrets_authorization(
                     }
                     SecretsAuthorizationKind::Broadcaster => {
                         secrets.broadcaster_credential = SecretsCredentialState::Stored;
-                        #[cfg(target_os = "windows")]
-                        broadcast.request_restart();
                     }
                 }
             }
@@ -13218,6 +13332,36 @@ fn refresh_secrets_credential_state(secrets: &mut SecretsRuntime, config: &GameC
         CredentialVault::broadcaster(&signature.0, &signature.2),
     );
     secrets.credential_signature = Some(signature);
+}
+
+fn initialize_twitch_account_state(
+    config: Res<RuntimeConfig>,
+    mut secrets: ResMut<SecretsRuntime>,
+) {
+    refresh_secrets_credential_state(&mut secrets, &config.0);
+}
+
+fn twitch_accounts_connected(
+    config: &GameConfig,
+    secrets: &SecretsRuntime,
+    connection: &TwitchConnection,
+) -> bool {
+    config.twitch.enabled
+        && config.twitch.broadcast.enabled
+        && !config.twitch.client_id.trim().is_empty()
+        && !config.twitch.bot_login.trim().is_empty()
+        && !config.twitch.channel_login.trim().is_empty()
+        && secrets.bot_credential == SecretsCredentialState::Stored
+        && secrets.broadcaster_credential == SecretsCredentialState::Stored
+        && connection.status == TwitchStatus::Connected
+}
+
+fn open_twitch_setup_required(menu: &mut MenuRuntime) {
+    menu.page = MenuPage::SecretsDisclaimer;
+    menu.return_page = MenuPage::Closed;
+    menu.selected = 0;
+    "Connect both Twitch accounts in Secrets before starting a town."
+        .clone_into(&mut menu.feedback);
 }
 
 fn probe_secrets_credential(configured: bool, vault: CredentialVault) -> SecretsCredentialState {
@@ -13261,19 +13405,12 @@ fn bot_connection_status(
         };
     }
     match &connection.status {
-        TwitchStatus::Connected if connection.broadcaster_authorized => (
+        TwitchStatus::Connected => (
             format!(
-                "● Connected as @{} to #{}; commands are enabled.",
+                "● Connected automatically as @{} to #{}; commands are enabled.",
                 config.twitch.bot_login, config.twitch.channel_login
             ),
             SecretsStatusTone::Good,
-        ),
-        TwitchStatus::Connected => (
-            format!(
-                "● Chat connected as @{}; send !connect {} from #{} to enable commands.",
-                config.twitch.bot_login, connection.connect_code, config.twitch.channel_login
-            ),
-            SecretsStatusTone::Pending,
         ),
         TwitchStatus::Authorizing => (
             "● Validating the stored bot authorization...".to_owned(),
@@ -13435,9 +13572,7 @@ fn update_secrets_ui(
     mut labels: Query<(&SecretsDynamicLabel, &mut Text)>,
     mut buttons: Query<(&Interaction, &SecretsAction, &mut ImageNode)>,
 ) {
-    if menu.page == MenuPage::Secrets {
-        refresh_secrets_credential_state(&mut secrets, &config.0);
-    }
+    refresh_secrets_credential_state(&mut secrets, &config.0);
     if let Ok(mut visibility) = disclaimer.single_mut() {
         *visibility = if menu.page == MenuPage::SecretsDisclaimer {
             Visibility::Visible
@@ -13593,6 +13728,7 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
             ("Save Game", true),
             ("Load Game", has_save),
             ("Settings", true),
+            ("Go Live", true),
             ("Exit Game", true),
             ("Idle Mode", true),
         ]
@@ -13702,12 +13838,16 @@ fn menu_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     state: Res<State<GameState>>,
     save: Res<SaveRuntime>,
+    config: Res<RuntimeConfig>,
+    secrets: Res<SecretsRuntime>,
+    connection: Res<TwitchConnection>,
     mut menu: ResMut<MenuRuntime>,
     mut io: ResMut<MenuIoRequest>,
     mut idle: ResMut<CameraIdleMode>,
     mut player_settings: ResMut<RuntimePlayerSettings>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
+    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
 ) {
     let shift_escape = keyboard.just_pressed(KeyCode::Escape)
         && (keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight));
@@ -13772,6 +13912,8 @@ fn menu_input(
     }
     let item_count = if menu.page == MenuPage::Settings {
         SETTINGS_MENU_ITEM_COUNT
+    } else if *state.get() == GameState::InGame {
+        6
     } else {
         5
     };
@@ -13842,10 +13984,25 @@ fn menu_input(
             }
             2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
             3 => {
+                if twitch_accounts_connected(&config.0, &secrets, &connection) {
+                    #[cfg(target_os = "windows")]
+                    {
+                        broadcast.request_restart();
+                        "Starting the internal Twitch stream...".clone_into(&mut menu.feedback);
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    "Direct Twitch streaming is available only on Windows."
+                        .clone_into(&mut menu.feedback);
+                } else {
+                    "Connect both Twitch accounts from Main Menu → Secrets before going live."
+                        .clone_into(&mut menu.feedback);
+                }
+            }
+            4 => {
                 menu.page = MenuPage::Closed;
                 next_state.set(GameState::MainMenu);
             }
-            4 => {
+            5 => {
                 idle.0 = !idle.0;
                 if idle.0 {
                     "Idle Mode enabled"
@@ -13859,13 +14016,21 @@ fn menu_input(
     } else {
         match menu.selected {
             0 => {
-                menu.page = MenuPage::Closed;
-                queue_world_loading(&mut commands);
+                if twitch_accounts_connected(&config.0, &secrets, &connection) {
+                    menu.page = MenuPage::Closed;
+                    queue_world_loading(&mut commands);
+                } else {
+                    open_twitch_setup_required(&mut menu);
+                }
             }
             1 if save.store.path().is_file() => {
-                io.load = true;
-                menu.page = MenuPage::Closed;
-                queue_world_loading(&mut commands);
+                if twitch_accounts_connected(&config.0, &secrets, &connection) {
+                    io.load = true;
+                    menu.page = MenuPage::Closed;
+                    queue_world_loading(&mut commands);
+                } else {
+                    open_twitch_setup_required(&mut menu);
+                }
             }
             2 => open_settings_menu(&mut menu, MenuPage::Game, &player_settings.0),
             3 => {
@@ -19833,6 +19998,7 @@ fn completed_player_gate_cells(
         .collect()
 }
 
+#[cfg(test)]
 fn agent_path(
     navigation: &stream_town_domain::NavGrid,
     content: &ContentCatalog,
@@ -19841,6 +20007,18 @@ fn agent_path(
     start: GridPos,
     goal: GridPos,
 ) -> Vec<GridPos> {
+    try_agent_path(navigation, content, simulation, kind, start, goal)
+        .unwrap_or_else(|| vec![start])
+}
+
+fn try_agent_path(
+    navigation: &stream_town_domain::NavGrid,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    kind: &ActorKind,
+    start: GridPos,
+    goal: GridPos,
+) -> Option<Vec<GridPos>> {
     let path = if *kind == ActorKind::Player {
         navigation.find_path_with_exceptions(
             start,
@@ -19850,7 +20028,7 @@ fn agent_path(
     } else {
         navigation.find_path(start, goal)
     };
-    path.unwrap_or_else(|_| vec![start])
+    path.ok()
 }
 
 fn agent_action_facing_grid(
@@ -20391,17 +20569,56 @@ fn move_agents(
                     target_assignment_counts.remove(target);
                 }
             }
-            let (goal, target) = next_agent_goal_with_station_runtime(
-                &simulation.0,
-                &world.generated,
-                &config.0,
-                &content.0,
-                &station_targets,
-                &agent.id,
-                location.0,
-                &resource_reservations,
-                &target_assignment_counts,
-            );
+            let mut planning_reservations = resource_reservations.clone();
+            let unreachable_owner =
+                StableId::new("system:unreachable-resource").expect("static stable ID");
+            let mut rejected_resources = 0_usize;
+            let (goal, target, mut planned_path) = loop {
+                let (candidate_goal, candidate_target) = next_agent_goal_with_station_runtime(
+                    &simulation.0,
+                    &world.generated,
+                    &config.0,
+                    &content.0,
+                    &station_targets,
+                    &agent.id,
+                    location.0,
+                    &planning_reservations,
+                    &target_assignment_counts,
+                );
+                if candidate_goal == AgentGoal::Wander {
+                    break (candidate_goal, candidate_target, None);
+                }
+                if let Some(path) = try_agent_path(
+                    &world.generated.navigation,
+                    &content.0,
+                    &simulation.0,
+                    &agent.kind,
+                    location.0,
+                    candidate_target,
+                ) {
+                    break (candidate_goal, candidate_target, Some(path));
+                }
+                let AgentGoal::Gather(resource) = &candidate_goal else {
+                    debug!(
+                        actor = %agent.id,
+                        ?candidate_goal,
+                        ?candidate_target,
+                        "agent target has no valid path; retrying with idle movement"
+                    );
+                    break (AgentGoal::Wander, location.0, None);
+                };
+                debug!(
+                    actor = %agent.id,
+                    resource = %resource,
+                    ?candidate_target,
+                    "resource target has no valid path; trying another compatible target"
+                );
+                planning_reservations.insert(resource.clone(), unreachable_owner.clone());
+                rejected_resources += 1;
+                if rejected_resources >= world.generated.resources.len().max(1) {
+                    break (AgentGoal::Wander, location.0, None);
+                }
+            };
             let target = if goal == AgentGoal::Wander {
                 let anchor =
                     actor_idle_anchor(&content.0, &simulation.0, &config.0, &agent.id, location.0);
@@ -20420,6 +20637,16 @@ fn move_agents(
                 agent.previous_wander_origin = None;
                 target
             };
+            if planned_path.is_none() {
+                planned_path = try_agent_path(
+                    &world.generated.navigation,
+                    &content.0,
+                    &simulation.0,
+                    &agent.kind,
+                    location.0,
+                    target,
+                );
+            }
             agent.goal = goal;
             agent.action_started = false;
             agent.action_cooldown_seconds = 0.0;
@@ -20433,14 +20660,7 @@ fn move_agents(
                     .or_insert(1_u32);
             }
             agent.target = target;
-            agent.path = agent_path(
-                &world.generated.navigation,
-                &content.0,
-                &simulation.0,
-                &agent.kind,
-                location.0,
-                agent.target,
-            );
+            agent.path = planned_path.unwrap_or_else(|| vec![location.0]);
             agent.path_index = usize::from(agent.path.len() > 1);
         }
         let Some(next) = agent.path.get(agent.path_index).copied() else {
@@ -27574,19 +27794,11 @@ fn inject_environment_commands(
     }
 }
 
-fn generate_connect_code() -> String {
-    let subsecond = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.subsec_nanos());
-    format!("{:06}", 100_000 + subsecond % 900_000)
-}
-
 fn start_twitch_transport(config: Res<RuntimeConfig>, mut connection: ResMut<TwitchConnection>) {
     if !config.0.twitch.enabled {
         connection.status = TwitchStatus::Disabled;
         return;
     }
-    connection.broadcaster_authorized = !config.0.twitch.require_broadcaster_connect;
     connection
         .fish_god_reward_id
         .clone_from(&config.0.twitch.fish_god_reward_id);
@@ -27614,11 +27826,9 @@ fn twitch_connection_input(
         connection.status = TwitchStatus::Disconnected;
     } else if keyboard.just_pressed(KeyCode::F2) && config.0.twitch.enabled {
         connection.transport = None;
-        connection.broadcaster_authorized = !config.0.twitch.require_broadcaster_connect;
         connection
             .fish_god_reward_id
             .clone_from(&config.0.twitch.fish_god_reward_id);
-        connection.connect_code = generate_connect_code();
         connection.status = TwitchStatus::Authorizing;
         match TwitchTransport::start(config.0.twitch.clone()) {
             Ok(transport) => connection.transport = Some(transport),
@@ -27657,25 +27867,6 @@ fn handle_twitch_event(
             connection.status = status;
         }
         TwitchEvent::Chat(message) => {
-            if !connection.broadcaster_authorized {
-                let mut parts = message.message.split_whitespace();
-                let is_connect = parts
-                    .next()
-                    .is_some_and(|part| part.eq_ignore_ascii_case("!connect"));
-                let valid_code = parts
-                    .next()
-                    .is_some_and(|code| code == connection.connect_code);
-                if message.is_broadcaster && is_connect && valid_code {
-                    connection.broadcaster_authorized = true;
-                    info!(broadcaster = %message.login, "Twitch broadcaster authorized this session");
-                    if let Some(transport) = &connection.transport {
-                        let _ = transport.send(TwitchControl::SendMessage(
-                            "Stream Town chat commands are now enabled.".to_owned(),
-                        ));
-                    }
-                }
-                return;
-            }
             if connection
                 .fish_god_reward_id
                 .as_deref()
@@ -32111,13 +32302,9 @@ fn ruler_status(simulation: &WorldSimulation) -> String {
 }
 
 fn twitch_status_text(connection: &TwitchConnection) -> String {
-    if matches!(connection.status, TwitchStatus::Connected) && !connection.broadcaster_authorized {
-        format!("awaiting broadcaster !connect {}", connection.connect_code)
-    } else {
-        match &connection.status {
-            TwitchStatus::Error(error) => format!("error: {error}"),
-            status => format!("{status:?}"),
-        }
+    match &connection.status {
+        TwitchStatus::Error(error) => format!("error: {error}"),
+        status => format!("{status:?}"),
     }
 }
 
@@ -34632,12 +34819,20 @@ mod tests {
             GameMenuAction::SaveGame,
             GameMenuAction::LoadGame,
             GameMenuAction::Settings,
+            GameMenuAction::GoLive,
             GameMenuAction::ExitGame,
             GameMenuAction::Close,
         ];
         assert_eq!(
             actions.map(game_menu_action_label),
-            ["Save Game", "Load Game", "Settings", "Exit Game", "Close"]
+            [
+                "Save Game",
+                "Load Game",
+                "Settings",
+                "Go Live",
+                "Exit Game",
+                "Close"
+            ]
         );
         assert!(!game_menu_action_enabled(GameMenuAction::LoadGame, false));
         assert!(game_menu_action_enabled(GameMenuAction::LoadGame, true));
@@ -34656,11 +34851,16 @@ mod tests {
                 ..default()
             })
             .init_resource::<MenuIoRequest>()
+            .init_resource::<SecretsRuntime>()
+            .init_resource::<TwitchConnection>()
+            .insert_resource(RuntimeConfig(GameConfig::default()))
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(&save_path),
-            })
-            .add_systems(Update, game_menu_buttons);
+            });
+        #[cfg(target_os = "windows")]
+        app.init_resource::<direct_broadcast::DirectBroadcastControl>();
+        app.add_systems(Update, game_menu_buttons);
         app.world_mut()
             .spawn((Interaction::Pressed, GameMenuAction::SaveGame));
 
@@ -34898,7 +35098,7 @@ mod tests {
     }
 
     #[test]
-    fn secrets_bot_status_distinguishes_authorized_connected_and_command_ready() {
+    fn secrets_bot_status_reports_automatic_command_connection() {
         let mut config = GameConfig::default();
         config.twitch.enabled = false;
         let connection = TwitchConnection::default();
@@ -34909,22 +35109,46 @@ mod tests {
         assert_eq!(tone, SecretsStatusTone::Inactive);
 
         config.twitch.enabled = true;
-        let mut connection = TwitchConnection {
+        let connection = TwitchConnection {
             status: TwitchStatus::Connected,
-            broadcaster_authorized: false,
-            connect_code: "482193".to_owned(),
             ..default()
         };
         let (status, tone) =
             bot_connection_status(&config, &connection, &SecretsCredentialState::Stored);
-        assert!(status.contains("!connect 482193"));
-        assert_eq!(tone, SecretsStatusTone::Pending);
-
-        connection.broadcaster_authorized = true;
-        let (status, tone) =
-            bot_connection_status(&config, &connection, &SecretsCredentialState::Stored);
+        assert!(status.contains("Connected automatically"));
         assert!(status.contains("commands are enabled"));
         assert_eq!(tone, SecretsStatusTone::Good);
+    }
+
+    #[test]
+    fn town_start_requires_both_grants_and_a_connected_bot() {
+        let mut config = GameConfig::default();
+        config.twitch.enabled = true;
+        config.twitch.broadcast.enabled = true;
+        config.twitch.client_id = "public-client-id".to_owned();
+        config.twitch.bot_login = "humanbeanbot".to_owned();
+        config.twitch.channel_login = "humanbeangames".to_owned();
+        let mut secrets = SecretsRuntime {
+            bot_credential: SecretsCredentialState::Stored,
+            broadcaster_credential: SecretsCredentialState::Stored,
+            ..default()
+        };
+        let mut connection = TwitchConnection {
+            status: TwitchStatus::Connected,
+            ..default()
+        };
+        assert!(twitch_accounts_connected(&config, &secrets, &connection));
+
+        secrets.broadcaster_credential = SecretsCredentialState::Missing;
+        assert!(!twitch_accounts_connected(&config, &secrets, &connection));
+        secrets.broadcaster_credential = SecretsCredentialState::Stored;
+        connection.status = TwitchStatus::Connecting;
+        assert!(!twitch_accounts_connected(&config, &secrets, &connection));
+
+        let mut menu = MenuRuntime::default();
+        open_twitch_setup_required(&mut menu);
+        assert_eq!(menu.page, MenuPage::SecretsDisclaimer);
+        assert!(menu.feedback.contains("Connect both Twitch accounts"));
     }
 
     #[cfg(target_os = "windows")]
@@ -34956,18 +35180,65 @@ mod tests {
         assert!(status.contains("● LIVE"));
         assert_eq!(tone, SecretsStatusTone::Good);
         assert_eq!(
-            local_broadcast_status_label(&config, &DirectBroadcastPhase::Broadcasting).0,
+            local_broadcast_status_label(
+                &config,
+                &DirectBroadcastPhase::Broadcasting,
+                GameState::MainMenu,
+                true,
+            )
+            .0,
             "● LIVE"
         );
         config.twitch.broadcast.bandwidth_test = true;
         assert_eq!(
-            local_broadcast_status_label(&config, &DirectBroadcastPhase::Broadcasting).0,
+            local_broadcast_status_label(
+                &config,
+                &DirectBroadcastPhase::Broadcasting,
+                GameState::MainMenu,
+                true,
+            )
+            .0,
             "● NOT LIVE · TEST"
         );
         assert!(
-            local_broadcast_status_label(&config, &DirectBroadcastPhase::Connecting)
-                .0
-                .starts_with("● NOT LIVE")
+            local_broadcast_status_label(
+                &config,
+                &DirectBroadcastPhase::Connecting,
+                GameState::MainMenu,
+                true,
+            )
+            .0
+            .starts_with("● NOT LIVE")
+        );
+        assert_eq!(
+            local_broadcast_status_label(
+                &config,
+                &DirectBroadcastPhase::Disabled,
+                GameState::MainMenu,
+                true,
+            )
+            .0,
+            "● GO LIVE"
+        );
+        assert_eq!(
+            local_broadcast_status_label(
+                &config,
+                &DirectBroadcastPhase::Disabled,
+                GameState::InGame,
+                true,
+            )
+            .0,
+            "● NOT LIVE"
+        );
+        assert_eq!(
+            local_broadcast_status_label(
+                &config,
+                &DirectBroadcastPhase::Disabled,
+                GameState::MainMenu,
+                false,
+            )
+            .0,
+            "● NOT SET UP"
         );
     }
 
@@ -35244,6 +35515,9 @@ mod tests {
             .init_state::<GameState>()
             .init_resource::<MenuRuntime>()
             .init_resource::<MenuIoRequest>()
+            .init_resource::<SecretsRuntime>()
+            .init_resource::<TwitchConnection>()
+            .insert_resource(RuntimeConfig(GameConfig::default()))
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(SaveRuntime {
                 store: NativeSaveStore::new(&save_path),
@@ -37589,6 +37863,140 @@ mod tests {
         .0;
         assert!(matches!(second_goal, AgentGoal::Gather(ref id) if id != &claimed));
         assert!(reservation_available(&BTreeMap::new(), &second, &claimed));
+    }
+
+    #[test]
+    fn unreachable_resource_route_is_rejected_before_alternate_target_retry() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world(&config.world);
+        let mut template = world
+            .resources
+            .iter()
+            .find(|resource| resource.target_kind.as_str() == "target:tree")
+            .unwrap()
+            .clone();
+        let mut simulation = WorldSimulation::new(world.seed);
+        let current = restored_town_hall_position(&content, &simulation, &config);
+        let bad_position = GridPos {
+            x: current.x + 2,
+            z: current.z,
+        };
+        let good_position = GridPos {
+            x: current.x + 5,
+            z: current.z,
+        };
+        world.navigation = stream_town_domain::NavGrid::new(
+            config.world.width,
+            config.world.height,
+            vec![false; usize::from(config.world.width) * usize::from(config.world.height)],
+            vec![0; usize::from(config.world.width) * usize::from(config.world.height)],
+        )
+        .unwrap();
+        world
+            .navigation
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: GridPos {
+                        x: bad_position.x - 1,
+                        z: bad_position.z - 1,
+                    },
+                    max: GridPos {
+                        x: bad_position.x + 1,
+                        z: bad_position.z + 1,
+                    },
+                },
+                true,
+            )
+            .unwrap();
+        world
+            .navigation
+            .set_blocked(
+                stream_town_domain::DirtyRegion {
+                    min: bad_position,
+                    max: bad_position,
+                },
+                false,
+            )
+            .unwrap();
+        template.id = StableId::new("resource:unreachable-tree").unwrap();
+        template.position = bad_position;
+        template.amount = 100;
+        let mut reachable = template.clone();
+        reachable.id = StableId::new("resource:reachable-tree").unwrap();
+        reachable.position = good_position;
+        world.resources = vec![template.clone(), reachable.clone()];
+
+        let actor_id = StableId::new("npc:path-retry-logger").unwrap();
+        assert!(simulation.join_player(actor_id.clone(), current));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:logger").unwrap())
+            .unwrap();
+        let town_hall = StableId::new("building:townhall").unwrap();
+        let tree_kind = StableId::new("target:tree").unwrap();
+        let station_targets = StationTargetRuntime {
+            stations: BTreeMap::from([(
+                town_hall,
+                CachedStationTargets {
+                    targets: BTreeMap::from([(
+                        tree_kind,
+                        vec![template.id.clone(), reachable.id.clone()],
+                    )]),
+                    ..default()
+                },
+            )]),
+            ..default()
+        };
+        let (first_goal, first_target) = next_agent_goal_with_station_runtime(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &station_targets,
+            &actor_id,
+            current,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        assert_eq!(first_goal, AgentGoal::Gather(template.id.clone()));
+        assert!(
+            try_agent_path(
+                &world.navigation,
+                &content,
+                &simulation,
+                &ActorKind::Player,
+                current,
+                first_target,
+            )
+            .is_none()
+        );
+        let retry_reservations = BTreeMap::from([(
+            template.id,
+            StableId::new("system:unreachable-resource").unwrap(),
+        )]);
+        let (retry_goal, retry_target) = next_agent_goal_with_station_runtime(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &station_targets,
+            &actor_id,
+            current,
+            &retry_reservations,
+            &BTreeMap::new(),
+        );
+        assert_eq!(retry_goal, AgentGoal::Gather(reachable.id));
+        assert!(
+            try_agent_path(
+                &world.navigation,
+                &content,
+                &simulation,
+                &ActorKind::Player,
+                current,
+                retry_target,
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -42406,7 +42814,7 @@ mod tests {
     }
 
     #[test]
-    fn broadcaster_gate_precedes_twitch_command_dispatch() {
+    fn connected_bot_dispatches_twitch_commands_without_a_chat_gate() {
         let viewer = |message: &str, is_broadcaster| {
             TwitchEvent::Chat(twitch::TwitchChatEnvelope {
                 actor_id: StableId::new("twitch:42").unwrap(),
@@ -42420,20 +42828,9 @@ mod tests {
                 custom_reward_id: None,
             })
         };
-        let mut connection = TwitchConnection {
-            connect_code: "123456".to_owned(),
-            ..default()
-        };
+        let mut connection = TwitchConnection::default();
         let mut commands = InjectedCommands::default();
 
-        handle_twitch_event(viewer("!join", false), &mut connection, &mut commands);
-        assert!(commands.0.is_empty());
-        handle_twitch_event(
-            viewer("!connect 123456", true),
-            &mut connection,
-            &mut commands,
-        );
-        assert!(connection.broadcaster_authorized);
         handle_twitch_event(viewer("!join", false), &mut connection, &mut commands);
         let dispatched = commands.0.pop_front().unwrap();
         assert_eq!(dispatched.actor_id, StableId::new("twitch:42").unwrap());
@@ -42443,7 +42840,6 @@ mod tests {
     #[test]
     fn fish_god_channel_reward_dispatches_praise_without_command_text() {
         let mut connection = TwitchConnection {
-            broadcaster_authorized: true,
             fish_god_reward_id: Some(stream_town_domain::SHIPPING_FISH_GOD_REWARD_ID.to_owned()),
             ..default()
         };
@@ -42469,7 +42865,6 @@ mod tests {
     #[test]
     fn unconfigured_or_different_channel_reward_does_not_dispatch_praise() {
         let mut connection = TwitchConnection {
-            broadcaster_authorized: true,
             fish_god_reward_id: None,
             ..default()
         };
@@ -43048,6 +43443,72 @@ mod tests {
             .collect();
         assert_eq!(agents.len(), 5);
         assert!(agents.iter().all(|(_, kind)| *kind == ActorKind::Player));
+    }
+
+    #[test]
+    fn starting_logger_and_miner_recover_from_bad_targets_and_gather_resources() {
+        let config = GameConfig::default();
+        let save_directory = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(config))
+        .add_plugins(StreamTownGamePlugin);
+        app.insert_resource(SaveRuntime {
+            store: NativeSaveStore::new(save_directory.path().join("active-workers.stbevy")),
+        });
+        app.update();
+        app.update();
+        enter_headless_world(&mut app);
+
+        let logger = StableId::new("npc:starting_logger").unwrap();
+        let miner = StableId::new("npc:starting_miner").unwrap();
+        let wood = StableId::new("resource:wood").unwrap();
+        let ore = StableId::new("resource:ore").unwrap();
+        let resource_total = |world: &GeneratedWorld, kind: &StableId| {
+            world
+                .resources
+                .iter()
+                .filter(|resource| resource.kind == *kind)
+                .map(|resource| u64::from(resource.amount))
+                .sum::<u64>()
+        };
+        let initial_wood = resource_total(&app.world().resource::<WorldRuntime>().generated, &wood);
+        let initial_ore = resource_total(&app.world().resource::<WorldRuntime>().generated, &ore);
+        let mut logger_positions = BTreeSet::new();
+        let mut miner_positions = BTreeSet::new();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_millis(250),
+        ));
+        for _ in 0..720 {
+            app.update();
+            let simulation = &app.world().resource::<SimulationRuntime>().0;
+            logger_positions.insert(simulation.actors[&logger].position);
+            miner_positions.insert(simulation.actors[&miner].position);
+            let world = &app.world().resource::<WorldRuntime>().generated;
+            if resource_total(world, &wood) < initial_wood
+                && resource_total(world, &ore) < initial_ore
+            {
+                break;
+            }
+        }
+        let world = &app.world().resource::<WorldRuntime>().generated;
+        assert!(
+            resource_total(world, &wood) < initial_wood,
+            "the starting logger must eventually gather wood"
+        );
+        assert!(
+            resource_total(world, &ore) < initial_ore,
+            "the starting miner must eventually gather ore"
+        );
+        assert!(
+            logger_positions.len() > 2,
+            "logger remained effectively AFK"
+        );
+        assert!(miner_positions.len() > 2, "miner remained effectively AFK");
     }
 
     #[test]

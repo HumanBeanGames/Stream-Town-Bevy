@@ -27,9 +27,39 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
     let workspace = workspace
         .canonicalize()
         .with_context(|| format!("failed to resolve workspace {}", workspace.display()))?;
+    let vcpkg_root = std::env::var_os("VCPKG_ROOT")
+        .map(PathBuf::from)
+        .context("VCPKG_ROOT is required to package the shared FFmpeg runtime")?;
+    let installed_root = std::env::var_os("VCPKG_INSTALLED_ROOT").map_or_else(
+        || {
+            let manifest = workspace.join("vcpkg_installed");
+            if manifest.join("x64-windows").is_dir() {
+                manifest
+            } else {
+                vcpkg_root.join("installed")
+            }
+        },
+        PathBuf::from,
+    );
+    let native_root = installed_root.join("x64-windows");
     if !skip_build {
+        if ffmpeg_link_metadata_is_stale(&workspace, &native_root)? {
+            let status = std::process::Command::new("cargo")
+                .current_dir(&workspace)
+                .args(["clean", "--release", "-p", "ffmpeg-sys-next"])
+                .status()
+                .context("failed to clear stale FFmpeg release metadata")?;
+            if !status.success() {
+                bail!("clearing stale FFmpeg release metadata failed with {status}");
+            }
+        }
         let status = std::process::Command::new("cargo")
             .current_dir(&workspace)
+            // ffmpeg-sys' generic vcpkg probe inherits transitive pkg-config
+            // libraries, including optional modules that this manifest does not
+            // install. Point it at the exact dynamic-library prefix so its own
+            // feature-aware linker list remains authoritative.
+            .env("FFMPEG_DIR", &native_root)
             .args([
                 "build",
                 "--release",
@@ -76,21 +106,6 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
             ffmpeg_notice.display()
         );
     }
-    let vcpkg_root = std::env::var_os("VCPKG_ROOT")
-        .map(PathBuf::from)
-        .context("VCPKG_ROOT is required to package the shared FFmpeg runtime")?;
-    let installed_root = std::env::var_os("VCPKG_INSTALLED_ROOT").map_or_else(
-        || {
-            let manifest = workspace.join("vcpkg_installed");
-            if manifest.is_dir() {
-                manifest
-            } else {
-                vcpkg_root.join("installed")
-            }
-        },
-        PathBuf::from,
-    );
-    let native_root = installed_root.join("x64-windows");
     let native_bin = native_root.join("bin");
     let ffmpeg_dlls = [
         "avcodec-62.dll",
@@ -268,6 +283,46 @@ pub fn package_windows(workspace: &Path, output: &Path, skip_build: bool) -> Res
         files,
         bytes,
     })
+}
+
+fn ffmpeg_link_metadata_is_stale(workspace: &Path, native_root: &Path) -> Result<bool> {
+    let build_root = workspace.join("target/release/build");
+    if !build_root.is_dir() {
+        return Ok(false);
+    }
+    let expected_search = format!(
+        "cargo:rustc-link-search=native={}",
+        native_root.join("lib").display()
+    );
+    for entry in fs::read_dir(&build_root)
+        .with_context(|| format!("failed to inspect {}", build_root.display()))?
+    {
+        let entry = entry?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("ffmpeg-sys-next-")
+        {
+            continue;
+        }
+        let output = entry.path().join("output");
+        if !output.is_file() {
+            continue;
+        }
+        let metadata = fs::read_to_string(&output)
+            .with_context(|| format!("failed to read {}", output.display()))?;
+        if !metadata.lines().any(|line| line == expected_search)
+            || metadata.lines().any(|line| {
+                matches!(
+                    line,
+                    "cargo:rustc-link-lib=avdevice" | "cargo:rustc-link-lib=avfilter"
+                )
+            })
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn add_tree<W: Write + Seek>(

@@ -14,7 +14,8 @@ as the broadcaster, or the broadcaster grant while signed in as the bot.
 The shipping setup path is **Main Menu > Secrets**. Opening it requires an
 explicit Yes/No privacy confirmation. From the instant the confirmation appears
 until the Secrets screen closes, Stream Town's own Twitch video output is
-replaced with opaque black frames. Stream Town cannot stop OBS, Streamlabs,
+replaced with opaque black frames labelled **Sensitive Information Hidden**.
+Stream Town cannot stop OBS, Streamlabs,
 screen sharing, a capture card, or another third-party recorder, so close all of
 those applications before choosing Yes. The public Client ID and account logins
 are saved to `.stream-town/config.ron`; OAuth access and refresh tokens stay in
@@ -86,11 +87,11 @@ remains available as a diagnostic and advanced-configuration alternative.
    launched from `bevy-port`, its public settings are in
    `bevy-port/.stream-town/config.ron`; credentials remain in Windows Credential
    Manager.
-5. Start or load the world.
-6. When Stream Town displays its six-digit broadcaster connection code, send `!connect 123456` from the `HumanBeanGames` account, replacing `123456` with the displayed code.
+5. Wait for the bot card to report that it connected automatically. No chat-side
+   connection command is required.
+6. Start or load the world. Stream Town blocks this action and points back to
+   Secrets until the bot is connected and both account grants are stored.
 7. From a separate viewer account, send `!join`, then `!help`. The viewer should receive a stable actor and the bot should return command help in chat.
-
-The connection code is an application-level safety gate. It proves that the broadcaster present in chat is deliberately enabling bot output for this running game session.
 
 Broadcaster and moderator status grants the existing staff command set, but it
 does not grant game-master cheats. Those commands require an exact ID from
@@ -127,7 +128,8 @@ The checked-in default retains the reward ID recovered from the Unity project, b
    process-scoped Windows audio capture.
 
 This second token has a distinct Windows Credential Manager entry. Stream Town
-uses it to fetch the stream key from Twitch Helix when the game launches. The
+uses it to fetch the stream key from Twitch Helix only after an explicit Go Live
+or Restart stream action. The
 key is never written to configuration, the repository, logs, diagnostics, or
 the runtime console.
 
@@ -135,12 +137,14 @@ the runtime console.
 
 Start in Main Menu > **Secrets**:
 
-1. Set **Direct stream** to **Enabled**. This also enables start-on-launch. Keep
-   **Bandwidth test** enabled for the first test, then choose **Restart stream**.
+1. Set **Direct stream** to **Enabled**. Keep **Bandwidth test** enabled for the
+   first test, then choose **Restart stream** or leave Secrets and click the local
+   **GO LIVE** badge.
    The status progresses through authorization, ingest selection, and encoder
    connection before showing **BANDWIDTH TEST — not live** with advancing video
    and audio frame counts. The broadcaster continues emitting only black video
-   while the disclaimer or Secrets screen is open.
+   while the disclaimer or Secrets screen is open, with a centred
+   **Sensitive Information Hidden** notice.
 2. Exit the Secrets screen. For advanced quality settings, open Stream Town
    Tools > **Twitch**. Start with **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**. Automatic
    encoder selection tries hardware paths first, Windows Media Foundation next,
@@ -172,9 +176,10 @@ upload bandwidth:
 ## 8. Go live without OBS
 
 1. Verify **Bandwidth-test mode** is off.
-2. Launch `stream_town_game.exe`. Direct publishing begins once the primary
-   render target exists, so Twitch receives Stream Town's loading and menu
-   presentation as well as gameplay.
+2. Launch `stream_town_game.exe`. It always starts offline. Wait for the local
+   main-menu badge to read **GO LIVE**, then click it. If it reads **NOT SET UP**,
+   click it to return to Secrets and finish both account grants. From a running
+   town, press Escape and use **Go Live** instead.
 3. Check Twitch's Stream Manager/Inspector from another device. To stop the
    broadcast, exit the game; the encoder flushes the stream trailer and closes
    RTMP.
@@ -194,19 +199,19 @@ switcher; they are not silently captured from the desktop.
 - Direct-broadcast diagnostic success: validated broadcaster identity, non-empty
   Helix stream-key response, usable ingest list, linked H.264 encoder, and
   process-scoped WASAPI availability.
-- Main-menu status success: the bot card says **Connected** and the stream card
-  says either **BANDWIDTH TEST — not live** or **LIVE**, with encoded video and
+- Main-menu status success: the bot card says **Connected** and the local badge
+  changes from **GO LIVE** to either **NOT LIVE · TEST** or **LIVE**, with encoded video and
   audio frame counts increasing. Yellow is transitional/locked, grey is
   disabled, green is connected, and red includes the actionable runtime error.
 - **Restart stream** saves the visible public settings, stops the current
   in-process encoder if one exists, revalidates the broadcaster grant, fetches a
   fresh stream key and ingest list, and starts a new encoder connection.
-- In-game HUD state: `Twitch: Connected` (or the broadcaster authorization prompt).
+- In-game HUD state: `Twitch: Connected`; the local-only badge reports **NOT LIVE**
+  until Escape > **Go Live** starts the encoder.
 - A wrong-account authorization is rejected before IRC is started.
 - If authorization is revoked, the app registration changes, or the refresh token has expired from inactivity, reopen the Bevy tools **Twitch** tab, click **Forget token**, authorize again, and rerun the end-to-end diagnostic.
 - `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.
 - A channel-join timeout normally means the channel login is wrong or Twitch IRC is unreachable from the machine.
-- No response to `!connect` means it was not sent by the configured channel's broadcaster account or the six-digit code is stale.
 - `WaitingForBroadcasterAuthorization` means the broadcaster grant has not been
   completed or was revoked. Reauthorize the broadcaster, not the bot.
 - `Reconnecting` means the in-process RTMP worker encountered an ingest/network
