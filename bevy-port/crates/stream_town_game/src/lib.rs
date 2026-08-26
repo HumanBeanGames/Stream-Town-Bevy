@@ -10498,6 +10498,7 @@ fn accessibility_input(
     mut focus_visible: ResMut<InputFocusVisible>,
     mut runtime: ResMut<AccessibilityRuntime>,
     mut action_requests: MessageReader<AccessibilityActionRequest>,
+    focusable_widgets: Query<(), Or<(With<EditableText>, With<TabIndex>)>>,
     mut buttons: Query<(
         Entity,
         &mut Interaction,
@@ -10557,10 +10558,12 @@ fn accessibility_input(
         .iter()
         .map(|candidate| candidate.entity)
         .collect::<HashSet<_>>();
-    if focus
-        .get()
-        .is_some_and(|entity| !candidate_entities.contains(&entity))
-    {
+    if focus.get().is_some_and(|entity| {
+        accessibility_should_clear_focus(
+            candidate_entities.contains(&entity),
+            focusable_widgets.contains(entity),
+        )
+    }) {
         focus.clear();
     }
 
@@ -10627,6 +10630,13 @@ fn accessibility_input(
         *interaction = Interaction::Pressed;
         runtime.synthetic_pressed = Some(entity);
     }
+}
+
+const fn accessibility_should_clear_focus(
+    is_accessibility_candidate: bool,
+    is_focusable_widget: bool,
+) -> bool {
+    !is_accessibility_candidate && !is_focusable_widget
 }
 
 type AccessibilityFocusVisualQuery<'w, 's> = Query<
@@ -33851,6 +33861,42 @@ mod tests {
         assert_eq!(
             secrets_action_label(SecretsAction::DisclaimerYes, &GameConfig::default()),
             "Yes — continue"
+        );
+    }
+
+    #[test]
+    fn accessibility_navigation_preserves_editable_text_focus() {
+        assert!(!accessibility_should_clear_focus(false, true));
+        assert!(!accessibility_should_clear_focus(true, false));
+        assert!(accessibility_should_clear_focus(false, false));
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            bevy::input::InputPlugin,
+        ))
+        .insert_resource(RuntimeConfig(GameConfig::default()))
+        .add_plugins(StreamTownGamePlugin);
+        let field = app
+            .world_mut()
+            .spawn(EditableText::new("public-client-id"))
+            .id();
+        let tabbable_button = app.world_mut().spawn(TabIndex(1)).id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(field, FocusCause::Pressed);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(field));
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(tabbable_button, FocusCause::Navigated);
+        app.update();
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(tabbable_button)
         );
     }
 
