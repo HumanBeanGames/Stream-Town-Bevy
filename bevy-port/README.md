@@ -1003,7 +1003,8 @@ converted objective requirement on its own line. A single Twitch-chat
 announcement maps the numbered options to `!vote 1`, `!vote 2`, and `!vote 3`,
 keeping command instructions out of the half-width 260-pixel panel. The panel
 retains the full readable vote typography, uses flex-centred technology labels,
-and grows vertically to contain every objective line; as in Unity, the 60-second
+and packs entries using their actual objective-line counts so icons, requirements,
+and the timer fit without empty fixed-height gaps; as in Unity, the 60-second
 countdown begins with the first vote.
 Building-cap technologies are labelled `Max Lv` in this surface: Unity's
 `Level3TownHall` and `Level3Stonemason` nodes raise the permitted maximum to

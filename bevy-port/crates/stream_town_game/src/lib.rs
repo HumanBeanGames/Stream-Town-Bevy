@@ -109,6 +109,10 @@ const TWITCH_COMMAND_HELP_URL: &str = "https://github.com/HumanBeanGames/Stream-
 const INVALID_TWITCH_COMMAND_REPLY: &str = "Invalid Command! Type !help for the list of commands!";
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const TECHNOLOGY_VOTE_OPTION_COUNT: usize = 3;
+const TECHNOLOGY_VOTE_PANEL_HEIGHT: f32 = 340.0;
+const TECHNOLOGY_VOTE_FIRST_ROW_TOP: f32 = 48.0;
+const TECHNOLOGY_VOTE_SINGLE_LINE_ADVANCE: f32 = 76.0;
+const TECHNOLOGY_VOTE_EXTRA_LINE_ADVANCE: f32 = 13.0;
 const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
 const MAIN_MENU_SCENE_PATH: &str = "Assets/Scenes/Menu/Main_Menu_02.unity";
@@ -2441,6 +2445,16 @@ struct CurrentEventFill;
 
 type TechnologyVoteIconQuery<'w, 's> =
     Query<'w, 's, (&'static TechnologyVoteIcon, &'static mut ImageNode)>;
+type TechnologyVoteRowQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TechnologyVoteOptionRow,
+        &'static mut Visibility,
+        &'static mut Node,
+    ),
+    (Without<VotePanelKind>, Without<VoteFillKind>),
+>;
 type TownCameraMutQuery<'w, 's> = Query<
     'w,
     's,
@@ -9632,7 +9646,8 @@ fn spawn_technology_vote_option_row(
     render: &RenderAssets,
     index: u8,
 ) {
-    let top = 48.0 + f32::from(index) * 100.0;
+    let top =
+        TECHNOLOGY_VOTE_FIRST_ROW_TOP + f32::from(index) * TECHNOLOGY_VOTE_SINGLE_LINE_ADVANCE;
     panel
         .spawn((
             TechnologyVoteOptionRow(index),
@@ -9737,6 +9752,12 @@ fn spawn_technology_vote_option_row(
         });
 }
 
+fn technology_vote_row_advance(requirement_lines: usize) -> f32 {
+    let extra_lines = u16::try_from(requirement_lines.saturating_sub(1)).unwrap_or(u16::MAX);
+    TECHNOLOGY_VOTE_SINGLE_LINE_ADVANCE
+        + f32::from(extra_lines) * TECHNOLOGY_VOTE_EXTRA_LINE_ADVANCE
+}
+
 fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
     commands
         .spawn((
@@ -9755,7 +9776,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 top: px(96),
                 right: px(18),
                 width: px(260),
-                height: px(400),
+                height: px(TECHNOLOGY_VOTE_PANEL_HEIGHT),
                 ..default()
             },
         ))
@@ -27743,7 +27764,7 @@ fn update_vote_panels(
     mut texts: Query<(&VoteTextKind, &mut Text)>,
     mut fills: Query<(&VoteFillKind, &mut Node)>,
     mut technology_icons: TechnologyVoteIconQuery,
-    mut technology_rows: Query<(&TechnologyVoteOptionRow, &mut Visibility), Without<VotePanelKind>>,
+    mut technology_rows: TechnologyVoteRowQuery,
     ruler_options: Query<(Entity, Option<&Children>), With<RulerOptionsContainer>>,
 ) {
     if !simulation.is_changed() {
@@ -27762,12 +27783,31 @@ fn update_vote_panels(
     if let Some(vote) = &simulation.0.active_vote {
         let options = technology_vote_options(vote);
         let total = vote.votes.len() + vote.option_votes.len();
-        for (row, mut visibility) in &mut technology_rows {
+        let mut row_tops = [TECHNOLOGY_VOTE_FIRST_ROW_TOP; TECHNOLOGY_VOTE_OPTION_COUNT];
+        let mut next_row_top = TECHNOLOGY_VOTE_FIRST_ROW_TOP;
+        for (index, technology) in options
+            .iter()
+            .take(TECHNOLOGY_VOTE_OPTION_COUNT)
+            .enumerate()
+        {
+            row_tops[index] = next_row_top;
+            let requirement_lines = content
+                .0
+                .technology
+                .nodes
+                .get(technology)
+                .map_or(1, |node| node.objectives.len().max(1));
+            next_row_top += technology_vote_row_advance(requirement_lines);
+        }
+        for (row, mut visibility, mut node) in &mut technology_rows {
             *visibility = if options.get(usize::from(row.0)).is_some() {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
             };
+            if let Some(top) = row_tops.get(usize::from(row.0)) {
+                node.top = px(*top);
+            }
         }
         for (kind, mut text) in &mut texts {
             text.0 = match kind {
@@ -27828,7 +27868,7 @@ fn update_vote_panels(
         // Explicitly collapse every technology child as well as the parent.
         // This avoids stale absolute-positioned slider fills surviving the
         // frame where a completed ballot is removed from the simulation.
-        for (_, mut visibility) in &mut technology_rows {
+        for (_, mut visibility, _) in &mut technology_rows {
             *visibility = Visibility::Hidden;
         }
         for (kind, mut node) in &mut fills {
@@ -42537,17 +42577,28 @@ mod tests {
             *kind == VotePanelKind::Technology
                 && *visibility == Visibility::Visible
                 && node.width == px(260)
-                && node.height == px(400)
+                && node.height == px(TECHNOLOGY_VOTE_PANEL_HEIGHT)
         }));
         let mut rows = app
             .world_mut()
-            .query_filtered::<&Visibility, With<TechnologyVoteOptionRow>>();
+            .query::<(&TechnologyVoteOptionRow, &Visibility, &Node)>();
         assert_eq!(
             rows.iter(app.world())
-                .filter(|visibility| **visibility == Visibility::Visible)
+                .filter(|(_, visibility, _)| **visibility == Visibility::Visible)
                 .count(),
             TECHNOLOGY_VOTE_OPTION_COUNT
         );
+        let mut positioned_rows = rows.iter(app.world()).collect::<Vec<_>>();
+        positioned_rows.sort_by_key(|(row, _, _)| row.0);
+        let mut expected_top = TECHNOLOGY_VOTE_FIRST_ROW_TOP;
+        for (row, _, node) in positioned_rows {
+            assert_eq!(node.top, px(expected_top));
+            let requirement_lines = vote_options
+                .get(usize::from(row.0))
+                .and_then(|technology| content.technology.nodes.get(technology))
+                .map_or(1, |technology| technology.objectives.len().max(1));
+            expected_top += technology_vote_row_advance(requirement_lines);
+        }
         let mut vote_texts = app.world_mut().query::<(&VoteTextKind, &Text)>();
         let requirements = vote_texts
             .iter(app.world())
@@ -42606,10 +42657,10 @@ mod tests {
         app.update();
         let mut rows = app
             .world_mut()
-            .query_filtered::<&Visibility, With<TechnologyVoteOptionRow>>();
+            .query::<(&TechnologyVoteOptionRow, &Visibility)>();
         assert!(
             rows.iter(app.world())
-                .all(|visibility| *visibility == Visibility::Hidden)
+                .all(|(_, visibility)| *visibility == Visibility::Hidden)
         );
         let mut fills = app.world_mut().query::<(&VoteFillKind, &Node)>();
         assert!(fills.iter(app.world()).all(|(kind, node)| {
