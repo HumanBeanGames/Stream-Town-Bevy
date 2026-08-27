@@ -1004,8 +1004,9 @@ announcement maps the numbered options to `!vote 1`, `!vote 2`, and `!vote 3`,
 keeping command instructions out of the half-width 260-pixel panel. The panel
 retains the full readable vote typography, uses flex-centred technology labels,
 and packs entries using their actual objective-line counts so icons, requirements,
-and the timer fit without empty fixed-height gaps; as in Unity, the 60-second
-countdown begins with the first vote.
+and the timer fit without empty fixed-height gaps. That unchanged content block
+is centred inside a 400-pixel frame with added top and bottom breathing room;
+as in Unity, the 60-second countdown begins with the first vote.
 Building-cap technologies are labelled `Max Lv` in this surface: Unity's
 `Level3TownHall` and `Level3Stonemason` nodes raise the permitted maximum to
 three after their initially unlocked roots; they do not skip a level-up action.
