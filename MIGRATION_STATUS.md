@@ -815,6 +815,23 @@ mistaken for production-ready systems.
   stable target survives native serialization. The migration converter, asset
   validator, runtime tests, and focused archetype inspector all cover the new
   fields.
+- Content schema 34 converts `D_CampGenSettings.asset` into a typed enemy-camp
+  generation layer and closes the missing new-game encounter path. Fixed seeds
+  now place up to ten `EnemyCamp_Goblin` footprints using the authored 25–60
+  cell centre offsets, 30-cell separation, five-cell size, and 500 attempts per
+  camp, with deterministic land/building/connectivity validation. Connectivity
+  is computed from a walkable Town Hall perimeter rather than its blocked
+  centre, and a flood-fill cache keeps placement out of the loading hot path.
+  Old native saves with no camps are repaired from their world seed without
+  reading Unity-save coordinates. Normal night spawning preserves the
+  immediate first spawn, three-second cadence, day/player cap, weighted enemy
+  pool, and camp-centred offsets. Enemies now advance on the Town Hall when no
+  local target exists, repath moving targets every authored second, render their
+  converted model/controller variants, and retain player-only kill rewards and
+  retaliation semantics. Raid members select an eligible camp per enemy rather
+  than all using the first camp. Deterministic production-shaped placement and
+  sustained camp-route/defender/combat/death/reward tests cover the complete
+  encounter chain; the content tool exposes the converted generation contract.
 - Resource workers and `!target` now consume the assigned station's actual
   target catalog. Candidate resources/farms are constrained by the station's
   authored rectangular search region, per-target-kind list capacity, compatible

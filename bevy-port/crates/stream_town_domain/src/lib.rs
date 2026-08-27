@@ -31,11 +31,11 @@ pub use config::{
 };
 pub use content::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, BuildingModelDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyDef,
-    EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat,
-    FoliageLayerDef, FoliageVariantDef, HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind,
-    PassiveResourceContribution, PetDef, PetModelDef, ProjectileShooterDef, ResourceReward,
-    RoleDef, RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StationDef,
+    BuildingDef, BuildingModelDef, CURRENT_CONTENT_SCHEMA, ContentCatalog, EnemyCampGenerationDef,
+    EnemyDef, EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef, EnemyWeaponModelDef,
+    FoliageHabitat, FoliageLayerDef, FoliageVariantDef, HealthDef, LoadingScreenDef, ObjectiveDef,
+    ObjectiveKind, PassiveResourceContribution, PetDef, PetModelDef, ProjectileShooterDef,
+    ResourceReward, RoleDef, RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StationDef,
     StationUpdateMode, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup,
     TechNode, TechTree, WeightedEnemySpawn,
 };

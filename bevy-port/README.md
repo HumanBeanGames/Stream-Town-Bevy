@@ -445,22 +445,44 @@ enemy within 10 cells. Players trigger Death at zero health and use Unity's
 authored 60-second automatic revival. `!revive` pays 400 food for self-revival;
 Priests and Paladins can pay 200 food to revive another stable Twitch actor and
 receive role XP. Pending revival time and actor health survive native saves.
-New towns do not create an enemy camp: Unity's procedural placement loop is
-commented out and the four shipping scenes contain no camp instance (the prefab
-appears only in the disabled Necrolands scene). Camp simulation/presentation is
-retained for imported legacy/native saves. The clock uses Unity's shipping
-3,600-second day, 66.6% daylight
-boundary, and 100-second dusk/dawn transitions; its 10/5 day/night light values
-drive sun, ambient, sky, and building emission, and day/season progression uses
-the same clock. When a restored camp exists, at night it applies Unity's day/player population cap,
-three-second authored cadence, weighted Goblin/Blargul/Goblin Boss selection,
-and four converted spawn offsets. `!event raid` disables normal camp spawning
-and starts the Unity-authored five-wave Minotaur raid: 50 tracked enemies must
-be defeated before each next wave, followed by a Minotaur Boss whose health is
-at least 1,000 and otherwise scales by 50 per player. Enemy archetype, camp
-timers and members, wave progress, tracked enemies, and the next stable enemy ID
-survive native saves; legacy enemy and camp names resolve back to catalog
-archetypes.
+Content schema 34 restores new-town enemy camps from Unity's authored
+`D_CampGenSettings` and `EnemyCamp_Goblin` prefab contract. Although the old
+`GenerateEnemyCamps` body is commented in the available Unity source, its
+settings, prefab, save schema, runtime refresh path, and raid API all require
+generated camps for reachable enemy play. Bevy therefore deterministically
+attempts the same maximum of ten five-cell camps, 500 placements each, 25–60
+cells from map centre with 30-cell inter-camp spacing. Placement additionally
+requires land, a clear building footprint, and a route to the active Town Hall;
+the maximum is an upper bound when the generated island cannot satisfy every
+attempt. Camp footprints block enemy navigation and clear overlapping resource
+and foliage presentation. Native saves created before schema 34 receive the
+same seed-derived camps when their saved camp map is empty; no legacy-save
+coordinates are read to generate them.
+
+The clock retains Unity's shipping 3,600-second day, 66.6% daylight boundary,
+and 100-second dusk/dawn transitions; its 10/5 day/night light values drive sun,
+ambient, sky, and building emission. Normal enemies therefore first appear at
+night, roughly 39 minutes 58 seconds into an unaccelerated first day. Every camp
+begins with Unity's already-full spawn timer, then applies the authored
+three-second cadence, day/player population cap, weighted
+Goblin/Blargul/Goblin Boss selection, and four camp-relative spawn offsets.
+Enemies use their converted models and controllers, acquire the nearest target
+inside the serialized sensor radius, retaliate against valid attackers, and
+otherwise advance on the active Town Hall while continuously retargeting.
+Moving targets are repathed on the authored one-second interval. Player combat
+roles intercept enemies within Unity's 100-world-unit sensor region; attacks,
+projectiles, health, death, 60-second player revival, player-attributed kill
+objectives, and exact enemy gold rewards share the normal authoritative save
+state. Tower/environment kills intentionally do not grant player rewards or
+provoke retaliation, matching Unity's null attacker argument.
+
+`!event raid` disables normal camp spawning and starts the Unity-authored
+five-wave Minotaur raid: each of the first four waves distributes 50 tracked
+enemies across eligible camp spawn points, and the final Minotaur Boss has at
+least 1,000 health or 50 health per active player/recruit. The next wave waits
+for every tracked member to die. Enemy archetype, camp timers and members, wave
+progress, tracked enemies, and the next stable enemy ID survive native saves;
+legacy enemy and camp names resolve back to catalog archetypes.
 Native load also repositions the persistent Town Hall ECS root, presentation
 origin, rotation, and lower-left grid location from the saved footprint. Its
 rendered position therefore stays aligned with navigation occupancy, worker
@@ -616,6 +638,10 @@ production default.
 and revival cues together for a repeatable gameplay-VFX capture.
 `STREAM_TOWN_SMOKE_COMBAT_VFX=1` retriggers the four typed impact/trail styles
 and frames the converted Arrow GLB for a repeatable combat-VFX capture.
+`STREAM_TOWN_SMOKE_ENCOUNTER=1` starts a new town just inside the first night so
+the authored camps spawn immediately without changing production day length or
+spawn rules. Pair it with `STREAM_TOWN_AUTOSTART=1` for a deterministic live
+enemy/pathing/combat smoke run.
 `STREAM_TOWN_SMOKE_BUILDING_VFX=1` frames construction smoke, the
 spark-emitting construction hit, building-level arrows, and persistent
 damage fire/smoke together.

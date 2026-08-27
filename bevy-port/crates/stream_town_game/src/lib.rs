@@ -90,15 +90,16 @@ use stream_town_domain::{
     BroadcastEncoderPreference, BroadcastRenderMode, BuildingAction, BuildingDef,
     BuildingDirection, BuildingHealthDisplayMode, BuildingModelDef, BuildingState,
     CURRENT_RUNTIME_CONSOLE_SCHEMA, CURRENT_WORLD_SNAPSHOT_SCHEMA, CameraAction, CameraDirection,
-    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode, EnemyCampState,
-    EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef, GameConfig, GeneratedFoliage,
-    GeneratedWorld, GridPos, HealingBurstVfxDef, HealingChannelVfxDef, LegacyMigrationMetadata,
-    MainMenuSceneReference, MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode,
-    NativeSaveStore, ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings,
-    PlayerSettingsStore, PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping,
-    PresentationCatalog, RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction,
-    RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
-    StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
+    ChatCommand, ChimneySmokeDef, ContentCatalog, CustomizationKind, DisplayMode,
+    EnemyCampGenerationDef, EnemyCampState, EnemyModelSetDef, EnemyRunAnimation, FireworksVfxDef,
+    GameConfig, GeneratedFoliage, GeneratedWorld, GridPos, HealingBurstVfxDef,
+    HealingChannelVfxDef, LegacyMigrationMetadata, MainMenuSceneReference,
+    MaterialAlphaMode as AuthoredAlphaMode, MaterialDef, NameDisplayMode, NativeSaveStore,
+    ObjectiveEvent, ObjectiveKind, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PostProcessProfileDef, PostProcessTonemapping, PresentationCatalog,
+    RainingFishVfxDef, RoleEquipmentDef, RulerVoteKind, RuntimeConsoleAction, RuntimeConsoleStatus,
+    RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId, StationDef,
+    StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
     foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world_with_content,
     generate_world_with_content_observed, resource_visual_variant,
@@ -2239,6 +2240,7 @@ struct Agent {
     target: GridPos,
     action_cooldown_seconds: f32,
     action_started: bool,
+    repath_remaining_seconds: f32,
     health_regen_accumulator: f64,
     wander_sequence: u64,
     previous_wander_origin: Option<GridPos>,
@@ -15437,6 +15439,27 @@ fn generate_and_spawn_world(
     let mut spawned = 0_u16;
     let mut simulation = WorldSimulation::new(generated.seed);
     ensure_town_hall_state(&content.0, &config.0, &mut simulation);
+    let seeded_enemy_camps =
+        seed_generated_enemy_camps(&config.0, &content.0, &mut generated, &mut simulation);
+    for camp in simulation.enemy_camps.values() {
+        let archetype = &content.0.archetypes[&camp.archetype];
+        spawn_enemy_camp(
+            &mut commands,
+            &config.0,
+            &generated,
+            &presentation.0,
+            asset_server.as_deref(),
+            &asset_root.0,
+            &render,
+            &camp.id,
+            archetype,
+            camp.position,
+        );
+    }
+    info!(
+        camps = seeded_enemy_camps,
+        "seeded deterministic Unity-authored enemy camps"
+    );
     if let Some(health) = debug_building_health(building_max_health(
         &content.0,
         &simulation.buildings[&town_hall_id],
@@ -15521,6 +15544,13 @@ fn generate_and_spawn_world(
     }
     if let Some(day) = debug_start_day() {
         simulation.elapsed_seconds = f64::from(day) * f64::from(config.0.time.seconds_per_day);
+        simulation.tick(0.0, config.0.time.seconds_per_day);
+    }
+    if std::env::var_os("STREAM_TOWN_SMOKE_ENCOUNTER").is_some() {
+        simulation.elapsed_seconds = f64::from(config.0.time.seconds_per_day)
+            * f64::from(config.0.time.daylight_per_thousand)
+            / 1_000.0
+            + 1.0;
         simulation.tick(0.0, config.0.time.seconds_per_day);
     }
     if let Some(weather) = debug_weather_override() {
@@ -15670,6 +15700,7 @@ fn generate_and_spawn_world(
                 target,
                 action_cooldown_seconds: 0.0,
                 action_started: false,
+                repath_remaining_seconds: 0.0,
                 health_regen_accumulator: 0.0,
                 wander_sequence: 0,
                 previous_wander_origin: None,
@@ -18213,6 +18244,37 @@ fn next_agent_goal_with_station_runtime(
             }
             (None, None) => {}
         }
+        // Unity's STSM_Idle_Enemy does not wander around its camp when the
+        // local TargetSensor is empty. It advances on the active Town Hall,
+        // continuously checking for nearer players/buildings along the route.
+        // Selecting the Town Hall attack goal directly produces the same path
+        // and target handoff once the enemy reaches authored sensor range.
+        if enemy_targets_buildings(content, actor) {
+            let town_hall = StableId::new("building:townhall").expect("static building ID");
+            if let Some(building) = simulation
+                .buildings
+                .get(&town_hall)
+                .filter(|building| building.health > 0)
+                && let Some(definition) = building_def_for_archetype(content, &building.archetype)
+                && let Some(approach) = building_approach(
+                    world,
+                    building.position,
+                    rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                    current,
+                )
+            {
+                return (
+                    AgentGoal::AttackBuilding(town_hall),
+                    if within_enemy_building_attack_range(
+                        content, simulation, actor, building, current,
+                    ) {
+                        current
+                    } else {
+                        approach
+                    },
+                );
+            }
+        }
     }
     let combat_target = if is_combat_role(&actor.role) {
         simulation
@@ -18829,6 +18891,12 @@ fn apply_combat_damage(
         .actors
         .get(target_id)
         .is_some_and(|target| target.alive);
+    let killed_by_player = attacker_id.is_some_and(|attacker| {
+        simulation
+            .actors
+            .get(attacker)
+            .is_some_and(|actor| actor.alive && actor.role.as_str() != "role:enemy")
+    });
     let target_before_damage = simulation.actors.get(target_id).cloned();
     let enemy = target_before_damage
         .as_ref()
@@ -18847,6 +18915,7 @@ fn apply_combat_damage(
     }
     if killed
         && was_alive
+        && killed_by_player
         && let Some(enemy) = enemy
     {
         let _ = simulation.record_objective_event(
@@ -19822,10 +19891,13 @@ fn move_combat_projectiles(
                 &config.0,
                 &mut simulation.0,
                 &content.0,
-                Some(match &projectile.source {
-                    ProjectileSource::Actor(actor) => actor,
-                    ProjectileSource::Building(building) => building,
-                }),
+                match &projectile.source {
+                    ProjectileSource::Actor(actor) => Some(actor),
+                    // Unity tower projectiles call TakeDamage with a null
+                    // Targetable, so they neither provoke retaliation nor
+                    // count as player kills for rewards/objectives.
+                    ProjectileSource::Building(_) => None,
+                },
                 &projectile.target,
                 projectile.damage,
             ) {
@@ -19864,6 +19936,9 @@ fn update_enemy_encounters(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
     content: Res<RuntimeContent>,
+    presentation: Res<RuntimePresentation>,
+    asset_server: Option<Res<AssetServer>>,
+    asset_root: Res<RuntimeAssetRoot>,
     render: Res<RenderAssets>,
     world: Res<WorldRuntime>,
     mut simulation: ResMut<SimulationRuntime>,
@@ -19927,24 +20002,44 @@ fn update_enemy_encounters(
     if matches!(next_wave, Some(None)) {
         simulation.0.finish_raid();
     } else if let Some(Some((archetype, count, final_wave))) = next_wave {
-        let camp = simulation.0.enemy_camps.values().next().cloned();
-        let spawner = camp.as_ref().and_then(|camp| {
-            content
-                .0
-                .archetypes
-                .get(&camp.archetype)
-                .and_then(|archetype| archetype.enemy_spawner.clone())
-        });
-        if let (Some(camp), Some(spawner)) = (camp, spawner) {
+        let camps = simulation
+            .0
+            .enemy_camps
+            .values()
+            .filter_map(|camp| {
+                let camp_archetype = content.0.archetypes.get(&camp.archetype)?;
+                Some((
+                    camp.clone(),
+                    camp_archetype.enemy_spawner.clone()?,
+                    camp_archetype.footprint,
+                ))
+            })
+            .collect::<Vec<_>>();
+        if camps.is_empty() {
+            simulation.0.finish_raid();
+        } else {
             let mut wave_members = BTreeSet::new();
             for _ in 0..count {
                 let serial = simulation.0.next_enemy_serial;
-                let position = enemy_spawn_position(&world.generated, &camp, &spawner, serial);
+                // Unity chooses a random eligible camp for every raid member.
+                // Use the same per-enemy distribution with a stable hash so
+                // fixed seeds and replays remain deterministic in Bevy.
+                let camp_index = usize::try_from(
+                    generated_enemy_camp_hash(simulation.0.world_seed, &archetype, serial)
+                        % u64::try_from(camps.len()).expect("camp count fits u64"),
+                )
+                .expect("raid camp index fits usize");
+                let (camp, spawner, footprint) = &camps[camp_index];
+                let position =
+                    enemy_spawn_position(&world.generated, camp, spawner, *footprint, serial);
                 if let Some(enemy) = spawn_runtime_enemy(
                     &mut commands,
                     &config.0,
                     &world.generated,
                     &content.0,
+                    &presentation.0,
+                    asset_server.as_deref(),
+                    &asset_root.0,
                     &render,
                     &mut simulation.0,
                     archetype.clone(),
@@ -19972,8 +20067,6 @@ fn update_enemy_encounters(
                 raid.current_wave = raid.current_wave.saturating_add(1);
                 raid.tracked_enemies = wave_members;
             }
-        } else {
-            simulation.0.finish_raid();
         }
         return;
     }
@@ -20006,8 +20099,6 @@ fn update_enemy_encounters(
         else {
             continue;
         };
-        camp.spawn_remaining_seconds =
-            (camp.spawn_remaining_seconds - time.delta_secs_f64()).max(0.0);
         let day_cap = usize::try_from(simulation.0.day)
             .unwrap_or(usize::MAX)
             .saturating_add(player_count / 10)
@@ -20015,15 +20106,34 @@ fn update_enemy_encounters(
                 usize::from(spawner.min_total_enemies),
                 usize::from(spawner.max_total_enemies),
             );
-        if camp.spawned_enemies.len() < day_cap && camp.spawn_remaining_seconds <= f64::EPSILON {
+        let spawn_interval_seconds = f64::from(spawner.spawn_milliseconds) / 1_000.0;
+        if camp.spawned_enemies.len() >= day_cap {
+            // EnemySpawner resets its elapsed timer while the cap is full, so
+            // a later vacancy waits one complete authored interval.
+            camp.spawn_remaining_seconds = spawn_interval_seconds;
+            simulation.0.enemy_camps.insert(camp_id, camp);
+            continue;
+        }
+        camp.spawn_remaining_seconds =
+            (camp.spawn_remaining_seconds - time.delta_secs_f64()).max(0.0);
+        if camp.spawn_remaining_seconds <= f64::EPSILON {
             let serial = simulation.0.next_enemy_serial;
             let archetype = weighted_enemy_archetype(spawner, simulation.0.world_seed, serial);
-            let position = enemy_spawn_position(&world.generated, &camp, spawner, serial);
+            let footprint = content
+                .0
+                .archetypes
+                .get(&camp.archetype)
+                .map_or([1, 1], |archetype| archetype.footprint);
+            let position =
+                enemy_spawn_position(&world.generated, &camp, spawner, footprint, serial);
             if let Some(enemy) = spawn_runtime_enemy(
                 &mut commands,
                 &config.0,
                 &world.generated,
                 &content.0,
+                &presentation.0,
+                asset_server.as_deref(),
+                &asset_root.0,
                 &render,
                 &mut simulation.0,
                 archetype,
@@ -20031,7 +20141,7 @@ fn update_enemy_encounters(
             ) {
                 camp.spawned_enemies.insert(enemy);
             }
-            camp.spawn_remaining_seconds = f64::from(spawner.spawn_milliseconds) / 1_000.0;
+            camp.spawn_remaining_seconds = spawn_interval_seconds;
         }
         simulation.0.enemy_camps.insert(camp_id, camp);
     }
@@ -20928,6 +21038,8 @@ fn move_agents(
         };
         agent.action_cooldown_seconds =
             (agent.action_cooldown_seconds - time.delta_secs()).max(0.0);
+        agent.repath_remaining_seconds =
+            (agent.repath_remaining_seconds - time.delta_secs()).max(0.0);
         if let Some((role_stats, regeneration_requires_food)) = simulation
             .0
             .actors
@@ -21013,6 +21125,7 @@ fn move_agents(
                 agent.path_index = 0;
                 agent.action_cooldown_seconds = 0.0;
                 agent.action_started = false;
+                agent.repath_remaining_seconds = 0.0;
                 agent.previous_wander_origin = None;
             }
         } else {
@@ -21020,6 +21133,7 @@ fn move_agents(
             agent.goal = AgentGoal::Wander;
             agent.action_started = false;
             agent.action_cooldown_seconds = 0.0;
+            agent.repath_remaining_seconds = 0.0;
             agent.health_regen_accumulator = 0.0;
             let remaining = simulation
                 .0
@@ -21057,6 +21171,7 @@ fn move_agents(
             agent.target = deterministic_wander_target(&world.generated, &agent.id, spawn);
             agent.action_cooldown_seconds = 0.0;
             agent.action_started = false;
+            agent.repath_remaining_seconds = 0.0;
             agent.previous_wander_origin = None;
             spawn_healing_effect(
                 &mut commands,
@@ -21077,6 +21192,32 @@ fn move_agents(
             continue;
         }
         ensure_actor_station(&content.0, &mut simulation.0, &config.0, &agent.id);
+        if agent_is_moving(&agent)
+            && agent.repath_remaining_seconds <= f32::EPSILON
+            && matches!(
+                agent.goal,
+                AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_) | AgentGoal::Heal(_)
+            )
+        {
+            let (updated_goal, updated_target) = next_agent_goal_with_station_runtime(
+                &simulation.0,
+                &world.generated,
+                &config.0,
+                &content.0,
+                &station_targets,
+                &agent.id,
+                location.0,
+                &resource_reservations,
+                &target_assignment_counts,
+            );
+            if updated_goal != agent.goal || updated_target != agent.target {
+                agent.path.clear();
+                agent.path_index = 0;
+                agent.action_started = false;
+                agent.action_cooldown_seconds = 0.0;
+            }
+            agent.repath_remaining_seconds = config.0.gameplay.repath_interval_seconds.max(0.1);
+        }
         if agent.path.is_empty() || agent.path_index >= agent.path.len() {
             if !agent.path.is_empty() {
                 let completing_started_action = agent.action_started;
@@ -21522,19 +21663,33 @@ fn deterministic_overlap_direction(left: &StableId, right: &StableId) -> Vec2 {
 }
 
 fn sync_resource_nodes(
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
     world: Res<WorldRuntime>,
-    mut resources: Query<(&ResourceNode, &mut Visibility)>,
+    mut resources: Query<(&ResourceNode, &GridLocation, &mut Visibility)>,
 ) {
-    if !world.is_changed() {
+    if !world.is_changed() && !simulation.is_changed() {
         return;
     }
-    for (node, mut visibility) in &mut resources {
+    let camp_regions = simulation
+        .0
+        .enemy_camps
+        .values()
+        .filter_map(|camp| {
+            let archetype = content.0.archetypes.get(&camp.archetype)?;
+            building_region(camp.position, archetype.footprint, &world.generated)
+        })
+        .collect::<Vec<_>>();
+    for (node, location, mut visibility) in &mut resources {
         let available = world
             .generated
             .resources
             .iter()
             .find(|resource| resource.id == node.id)
-            .is_some_and(|resource| resource.amount > 0);
+            .is_some_and(|resource| resource.amount > 0)
+            && !camp_regions
+                .iter()
+                .any(|region| region_contains_grid_position(*region, location.0));
         *visibility = if available {
             Visibility::Inherited
         } else {
@@ -28936,6 +29091,18 @@ fn load_input(
             return;
         }
     }
+    let repaired_enemy_camps = seed_generated_enemy_camps(
+        &restored_config,
+        &content.0,
+        &mut restored_world,
+        &mut snapshot.simulation,
+    );
+    if repaired_enemy_camps > 0 {
+        info!(
+            camps = repaired_enemy_camps,
+            "repaired native save created before enemy camp generation was enabled"
+        );
+    }
     for camp in snapshot.simulation.enemy_camps.values() {
         let Some(archetype) = content.0.archetypes.get(&camp.archetype) else {
             runtime_console.last_result = format!(
@@ -29184,6 +29351,22 @@ fn load_input(
         if let Some(actor) = snapshot.simulation.actors.get_mut(&saved.id) {
             actor.position = position;
         }
+        if saved.kind == ActorKind::Enemy {
+            spawn_runtime_enemy_entity(
+                &mut ecs,
+                &restored_config,
+                &world.generated,
+                &content.0,
+                &load_render.presentation.0,
+                load_render.asset_server.as_deref(),
+                &load_render.asset_root.0,
+                &load_render.render,
+                &saved.id,
+                saved.archetype.clone(),
+                position,
+            );
+            continue;
+        }
         let world_position = grid_to_world_on_surface(position, &restored_config, &world.generated);
         let base_scale = Vec3::new(
             restored_config.world.cell_size * 0.3,
@@ -29205,6 +29388,7 @@ fn load_input(
                 target: deterministic_wander_target(&world.generated, &saved.id, position),
                 action_cooldown_seconds: 0.0,
                 action_started: false,
+                repath_remaining_seconds: 0.0,
                 health_regen_accumulator: 0.0,
                 wander_sequence: 0,
                 previous_wander_origin: None,
@@ -30292,6 +30476,265 @@ fn find_building_site(
     candidates.into_iter().next()
 }
 
+const ENEMY_CAMP_PLACEMENT_ATTEMPTS: u64 = 500;
+
+fn generated_enemy_camp_hash(seed: u64, layer: &StableId, serial: u64) -> u64 {
+    let mut mixed = layer.as_str().bytes().fold(seed, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    mixed = mixed.wrapping_add(serial.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^ (mixed >> 31)
+}
+
+fn rounded_milli_cells(value: u32) -> i32 {
+    i32::try_from(value.saturating_add(500) / 1_000).unwrap_or(i32::MAX)
+}
+
+fn enemy_camp_candidate(
+    config: &GameConfig,
+    layer: &EnemyCampGenerationDef,
+    footprint: [u16; 2],
+    camp_index: u16,
+    attempt: u64,
+) -> Option<(GridPos, GridPos)> {
+    let serial = u64::from(camp_index)
+        .saturating_mul(ENEMY_CAMP_PLACEMENT_ATTEMPTS)
+        .saturating_add(attempt);
+    let random = generated_enemy_camp_hash(config.world.seed, &layer.id, serial);
+    let sample_axis = |axis: usize, bits: u32| -> i32 {
+        let minimum = rounded_milli_cells(layer.minimum_absolute_offset_milli_cells[axis]);
+        let maximum = rounded_milli_cells(layer.maximum_absolute_offset_milli_cells[axis]);
+        let span = u64::try_from(maximum.saturating_sub(minimum))
+            .unwrap_or_default()
+            .saturating_add(1);
+        let magnitude = minimum.saturating_add(
+            i32::try_from((random >> bits) % span).expect("camp offset span fits i32"),
+        );
+        if (random >> (bits + 15)) & 1 == 0 {
+            -magnitude
+        } else {
+            magnitude
+        }
+    };
+    let map_centre = GridPos {
+        x: config.world.width / 2,
+        z: config.world.height / 2,
+    };
+    let centre_x = i32::from(map_centre.x).saturating_add(sample_axis(0, 0));
+    let centre_z = i32::from(map_centre.z).saturating_add(sample_axis(1, 32));
+    let origin_x = centre_x.saturating_sub(i32::from(footprint[0] / 2));
+    let origin_z = centre_z.saturating_sub(i32::from(footprint[1] / 2));
+    let origin = GridPos {
+        x: u16::try_from(origin_x).ok()?,
+        z: u16::try_from(origin_z).ok()?,
+    };
+    let centre = GridPos {
+        x: u16::try_from(centre_x).ok()?,
+        z: u16::try_from(centre_z).ok()?,
+    };
+    Some((origin, centre))
+}
+
+fn enemy_camp_region_is_clear(
+    world: &GeneratedWorld,
+    region: stream_town_domain::DirtyRegion,
+    excluded: &[stream_town_domain::DirtyRegion],
+) -> bool {
+    if excluded.iter().any(|other| {
+        region.min.x <= other.max.x
+            && region.max.x >= other.min.x
+            && region.min.z <= other.max.z
+            && region.max.z >= other.min.z
+    }) {
+        return false;
+    }
+    (region.min.z..=region.max.z).all(|z| {
+        (region.min.x..=region.max.x).all(|x| {
+            let position = GridPos { x, z };
+            world.navigation.height_at(position).unwrap_or_default() > 0
+        })
+    })
+}
+
+fn enemy_camp_has_town_route(
+    world: &GeneratedWorld,
+    region: stream_town_domain::DirtyRegion,
+    town_reachable: &HashSet<GridPos>,
+) -> bool {
+    let min_x = region.min.x.saturating_sub(1);
+    let min_z = region.min.z.saturating_sub(1);
+    let max_x = region
+        .max
+        .x
+        .saturating_add(1)
+        .min(world.navigation.width().saturating_sub(1));
+    let max_z = region
+        .max
+        .z
+        .saturating_add(1)
+        .min(world.navigation.height().saturating_sub(1));
+    (min_z..=max_z)
+        .flat_map(|z| (min_x..=max_x).map(move |x| GridPos { x, z }))
+        .filter(|position| {
+            position.x < region.min.x
+                || position.x > region.max.x
+                || position.z < region.min.z
+                || position.z > region.max.z
+        })
+        .any(|position| town_reachable.contains(&position))
+}
+
+fn enemy_camp_town_reachable_cells(
+    world: &GeneratedWorld,
+    town_hall_approach: GridPos,
+) -> HashSet<GridPos> {
+    if !world.navigation.is_walkable(town_hall_approach) {
+        return HashSet::new();
+    }
+    let mut reachable = HashSet::from([town_hall_approach]);
+    let mut open = VecDeque::from([town_hall_approach]);
+    while let Some(position) = open.pop_front() {
+        let neighbours = [
+            position
+                .x
+                .checked_sub(1)
+                .map(|x| GridPos { x, z: position.z }),
+            position
+                .x
+                .checked_add(1)
+                .map(|x| GridPos { x, z: position.z }),
+            position
+                .z
+                .checked_sub(1)
+                .map(|z| GridPos { x: position.x, z }),
+            position
+                .z
+                .checked_add(1)
+                .map(|z| GridPos { x: position.x, z }),
+        ];
+        for neighbour in neighbours.into_iter().flatten() {
+            if world.navigation.is_walkable(neighbour) && reachable.insert(neighbour) {
+                open.push_back(neighbour);
+            }
+        }
+    }
+    reachable
+}
+
+fn seed_generated_enemy_camps(
+    config: &GameConfig,
+    content: &ContentCatalog,
+    world: &mut GeneratedWorld,
+    simulation: &mut WorldSimulation,
+) -> usize {
+    if !simulation.enemy_camps.is_empty() {
+        return 0;
+    }
+    let town_hall_centre = restored_town_hall_position(content, simulation, config);
+    let town_hall_id = StableId::new("building:townhall").expect("static building ID");
+    let town_hall_approach = simulation
+        .buildings
+        .get(&town_hall_id)
+        .and_then(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            building_approach(
+                world,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                town_hall_centre,
+            )
+        })
+        .or_else(|| nearest_walkable(world, town_hall_centre))
+        .unwrap_or(town_hall_centre);
+    let mut town_reachable = enemy_camp_town_reachable_cells(world, town_hall_approach);
+    let mut excluded = simulation
+        .buildings
+        .values()
+        .filter_map(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            building_region(
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                world,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut centres = Vec::<GridPos>::new();
+    let mut spawned = 0_usize;
+    for layer in &content.enemy_camp_generation {
+        let Some(archetype) = content.archetypes.get(&layer.camp_archetype) else {
+            continue;
+        };
+        for camp_index in 0..layer.maximum_camps {
+            let placement = (0..ENEMY_CAMP_PLACEMENT_ATTEMPTS).find_map(|attempt| {
+                let (origin, centre) =
+                    enemy_camp_candidate(config, layer, archetype.footprint, camp_index, attempt)?;
+                let region = building_region(origin, archetype.footprint, world)?;
+                let centre_distance = grid_distance_squared(
+                    centre,
+                    GridPos {
+                        x: config.world.width / 2,
+                        z: config.world.height / 2,
+                    },
+                );
+                let centre_minimum = u128::from(layer.minimum_distance_from_centre_milli_cells);
+                if u128::from(centre_distance).saturating_mul(1_000_000)
+                    < centre_minimum.saturating_mul(centre_minimum)
+                    || centres.iter().any(|other| {
+                        let distance = u128::from(grid_distance_squared(*other, centre))
+                            .saturating_mul(1_000_000);
+                        let minimum = u128::from(layer.minimum_distance_between_camps_milli_cells);
+                        distance < minimum.saturating_mul(minimum)
+                    })
+                    || !enemy_camp_region_is_clear(world, region, &excluded)
+                    || !enemy_camp_has_town_route(world, region, &town_reachable)
+                {
+                    return None;
+                }
+                Some((origin, centre, region))
+            });
+            let Some((origin, centre, region)) = placement else {
+                warn!(
+                    layer = %layer.id,
+                    camp_index,
+                    attempts = ENEMY_CAMP_PLACEMENT_ATTEMPTS,
+                    "could not place every authored enemy camp"
+                );
+                continue;
+            };
+            let id = StableId::new(format!("enemy_camp:{}:{camp_index:02}", layer.id.as_str()))
+                .expect("generated camp IDs are valid");
+            let health = archetype.health.as_ref().map_or(1_000, |health| {
+                i32::try_from(health.max_health).unwrap_or(i32::MAX)
+            });
+            simulation.enemy_camps.insert(
+                id.clone(),
+                EnemyCampState {
+                    id,
+                    archetype: layer.camp_archetype.clone(),
+                    position: origin,
+                    health,
+                    // EnemySpawner.Awake seeds its elapsed timer to the full
+                    // interval, making the first eligible night spawn immediate.
+                    spawn_remaining_seconds: 0.0,
+                    spawned_enemies: BTreeSet::new(),
+                },
+            );
+            world
+                .navigation
+                .set_blocked(region, true)
+                .expect("validated enemy camp region updates navigation");
+            town_reachable = enemy_camp_town_reachable_cells(world, town_hall_approach);
+            centres.push(centre);
+            excluded.push(region);
+            spawned += 1;
+        }
+    }
+    spawned
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_enemy_camp(
     commands: &mut Commands,
@@ -30349,6 +30792,7 @@ fn enemy_spawn_position(
     world: &GeneratedWorld,
     camp: &EnemyCampState,
     spawner: &stream_town_domain::EnemySpawnerDef,
+    footprint: [u16; 2],
     serial: u64,
 ) -> GridPos {
     let offset = spawner.spawn_offsets_milli_cells
@@ -30360,8 +30804,12 @@ fn enemy_spawn_position(
             (value - 500) / 1_000
         }
     };
-    let x = i64::from(camp.position.x) + i64::from(offset_cells(offset[0]));
-    let z = i64::from(camp.position.z) + i64::from(offset_cells(offset[1]));
+    let x = i64::from(camp.position.x)
+        + i64::from(footprint[0] / 2)
+        + i64::from(offset_cells(offset[0]));
+    let z = i64::from(camp.position.z)
+        + i64::from(footprint[1] / 2)
+        + i64::from(offset_cells(offset[1]));
     let desired = GridPos {
         x: u16::try_from(x.clamp(0, i64::from(world.navigation.width() - 1))).unwrap_or(0),
         z: u16::try_from(z.clamp(0, i64::from(world.navigation.height() - 1))).unwrap_or(0),
@@ -30399,6 +30847,9 @@ fn spawn_runtime_enemy(
     config: &GameConfig,
     world: &GeneratedWorld,
     content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
     render: &RenderAssets,
     simulation: &mut WorldSimulation,
     archetype_id: StableId,
@@ -30434,13 +30885,69 @@ fn spawn_runtime_enemy(
     ) {
         return None;
     }
-    let world_position = grid_to_world_on_surface(position, config, world);
-    let base_scale = Vec3::new(
-        config.world.cell_size * 0.3,
-        config.world.cell_size * 0.55,
-        config.world.cell_size * 0.3,
+    spawn_runtime_enemy_entity(
+        commands,
+        config,
+        world,
+        content,
+        presentation,
+        asset_server,
+        asset_root,
+        render,
+        &id,
+        archetype_id,
+        position,
     );
-    commands.spawn((
+    Some(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_runtime_enemy_entity(
+    commands: &mut Commands,
+    config: &GameConfig,
+    world: &GeneratedWorld,
+    content: &ContentCatalog,
+    presentation: &PresentationCatalog,
+    asset_server: Option<&AssetServer>,
+    asset_root: &Path,
+    render: &RenderAssets,
+    id: &StableId,
+    archetype_id: StableId,
+    position: GridPos,
+) {
+    let Some(archetype) = content.archetypes.get(&archetype_id) else {
+        return;
+    };
+    let world_position = grid_to_world_on_surface(position, config, world);
+    let scene = runtime_archetype_scene(archetype).filter(|scene| {
+        asset_server.is_some() && converted_asset_exists(asset_root, &scene.asset_path)
+    });
+    let converted_animation = scene
+        .as_ref()
+        .and_then(|_| converted_animation_spec(archetype, presentation));
+    let native_animation = converted_animation
+        .is_none()
+        .then(|| {
+            scene
+                .as_ref()
+                .and_then(|scene| native_animation_request(archetype, scene, presentation))
+        })
+        .flatten();
+    let base_scale = if scene.is_some() {
+        Vec3::splat(config.world.cell_size / 2.0)
+    } else {
+        Vec3::new(
+            config.world.cell_size * 0.3,
+            config.world.cell_size * 0.55,
+            config.world.cell_size * 0.3,
+        )
+    };
+    let visual_height = if scene.is_some() {
+        world_position.y
+    } else {
+        world_position.y + base_scale.y * 0.5
+    };
+    let mut entity = commands.spawn((
         WorldEntity,
         GridLocation(position),
         Agent {
@@ -30452,9 +30959,10 @@ fn spawn_runtime_enemy(
             origin: position,
             path: Vec::new(),
             path_index: 0,
-            target: deterministic_wander_target(world, &id, position),
+            target: deterministic_wander_target(world, id, position),
             action_cooldown_seconds: 0.0,
             action_started: false,
+            repath_remaining_seconds: 0.0,
             health_regen_accumulator: 0.0,
             wander_sequence: 0,
             previous_wander_origin: None,
@@ -30462,18 +30970,32 @@ fn spawn_runtime_enemy(
         AgentLocomotion::default(),
         AgentAnimation {
             base_scale,
+            native: converted_animation.is_some() || native_animation.is_some(),
             ..default()
         },
-        Mesh3d(render.actor_lod.clone()),
-        MeshMaterial3d(render.enemy_idle.clone()),
-        Transform::from_xyz(
-            world_position.x,
-            world_position.y + base_scale.y * 0.5,
-            world_position.z,
-        )
-        .with_scale(base_scale),
+        Transform::from_xyz(world_position.x, visual_height, world_position.z)
+            .with_scale(base_scale),
     ));
-    Some(id)
+    if let Some(scene) = scene {
+        entity.insert(WorldAssetRoot(
+            asset_server
+                .expect("asset server checked above")
+                .load(GltfAssetLabel::Scene(0).from_asset(scene.asset_path.clone())),
+        ));
+        if let Some(converted_animation) = converted_animation {
+            entity.insert(converted_animation);
+        } else if let Some(native_animation) = native_animation {
+            entity.insert(native_animation);
+        }
+        if let Some(material) = prefab_material_spec(archetype, &scene, presentation, render) {
+            entity.insert(material);
+        }
+    } else {
+        entity.insert((
+            Mesh3d(render.actor_lod.clone()),
+            MeshMaterial3d(render.enemy_idle.clone()),
+        ));
+    }
 }
 
 fn runtime_building_id(simulation: &WorldSimulation) -> StableId {
@@ -31168,6 +31690,7 @@ fn recruit_npcs(
                 target,
                 action_cooldown_seconds: 0.0,
                 action_started: false,
+                repath_remaining_seconds: 0.0,
                 health_regen_accumulator: 0.0,
                 wander_sequence: 0,
                 previous_wander_origin: None,
@@ -31516,6 +32039,7 @@ fn process_injected_commands(
                                     target,
                                     action_cooldown_seconds: 0.0,
                                     action_started: false,
+                                    repath_remaining_seconds: 0.0,
                                     health_regen_accumulator: 0.0,
                                     wander_sequence: 0,
                                     previous_wander_origin: None,
@@ -37417,6 +37941,7 @@ mod tests {
             target: position,
             action_cooldown_seconds: 0.0,
             action_started: false,
+            repath_remaining_seconds: 0.0,
             health_regen_accumulator: 0.0,
             wander_sequence: 0,
             previous_wander_origin: None,
@@ -37987,6 +38512,7 @@ mod tests {
             target: GridPos { x: 10, z: 10 },
             action_cooldown_seconds: 0.75,
             action_started: true,
+            repath_remaining_seconds: 0.0,
             health_regen_accumulator: 0.0,
             wander_sequence: 0,
             previous_wander_origin: None,
@@ -39749,6 +40275,405 @@ mod tests {
     }
 
     #[test]
+    fn shipping_world_seeds_authored_enemy_camps_deterministically() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut first_world = generate_world(&config.world);
+        let mut first = WorldSimulation::new(first_world.seed);
+        ensure_town_hall_state(&content, &config, &mut first);
+        let town_hall = &first.buildings[&StableId::new("building:townhall").unwrap()];
+        let town_hall_definition =
+            building_def_for_archetype(&content, &town_hall.archetype).unwrap();
+        first_world
+            .navigation
+            .set_blocked(
+                building_region(
+                    town_hall.position,
+                    town_hall_definition.footprint,
+                    &first_world,
+                )
+                .unwrap(),
+                true,
+            )
+            .unwrap();
+        let expected = content
+            .enemy_camp_generation
+            .iter()
+            .map(|layer| usize::from(layer.maximum_camps))
+            .sum::<usize>();
+        let spawned = seed_generated_enemy_camps(&config, &content, &mut first_world, &mut first);
+        assert!(spawned > 0 && spawned <= expected);
+        assert_eq!(first.enemy_camps.len(), spawned);
+
+        let mut centres = Vec::new();
+        for camp in first.enemy_camps.values() {
+            let archetype = &content.archetypes[&camp.archetype];
+            let region = building_region(camp.position, archetype.footprint, &first_world).unwrap();
+            assert!(camp.spawn_remaining_seconds.abs() <= f64::EPSILON);
+            assert!(!first_world.navigation.is_walkable(region.min));
+            let centre = GridPos {
+                x: camp.position.x + archetype.footprint[0] / 2,
+                z: camp.position.z + archetype.footprint[1] / 2,
+            };
+            let layer = content
+                .enemy_camp_generation
+                .iter()
+                .find(|layer| layer.camp_archetype == camp.archetype)
+                .unwrap();
+            for other in &centres {
+                let distance = u128::from(grid_distance_squared(*other, centre)) * 1_000_000;
+                let minimum = u128::from(layer.minimum_distance_between_camps_milli_cells);
+                assert!(distance >= minimum * minimum);
+            }
+            centres.push(centre);
+        }
+
+        let mut second_world = generate_world(&config.world);
+        let mut second = WorldSimulation::new(second_world.seed);
+        ensure_town_hall_state(&content, &config, &mut second);
+        second_world
+            .navigation
+            .set_blocked(
+                building_region(
+                    second.buildings[&StableId::new("building:townhall").unwrap()].position,
+                    town_hall_definition.footprint,
+                    &second_world,
+                )
+                .unwrap(),
+                true,
+            )
+            .unwrap();
+        seed_generated_enemy_camps(&config, &content, &mut second_world, &mut second);
+        assert_eq!(second.enemy_camps, first.enemy_camps);
+    }
+
+    #[test]
+    fn enemies_advance_on_town_hall_while_defenders_acquire_them() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let world = generate_world(&config.world);
+        let mut simulation = WorldSimulation::new(world.seed);
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        let town_hall = StableId::new("building:townhall").unwrap();
+        let hall_position = building_visual_grid(&content, &simulation.buildings[&town_hall]);
+        let enemy_position = nearest_walkable(
+            &world,
+            GridPos {
+                x: hall_position.x.saturating_add(10),
+                z: hall_position.z,
+            },
+        )
+        .unwrap();
+        let defender_position = nearest_walkable(&world, hall_position).unwrap();
+        let enemy_id = StableId::new("actor:town_assault_test").unwrap();
+        let defender_id = StableId::new("npc:town_defender_test").unwrap();
+        let goblin =
+            archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab").unwrap();
+        let health = content.archetypes[&goblin]
+            .health
+            .as_ref()
+            .unwrap()
+            .max_health;
+        assert!(simulation.spawn_enemy(
+            enemy_id.clone(),
+            goblin,
+            enemy_position,
+            i32::try_from(health).unwrap(),
+        ));
+        assert!(simulation.join_player(defender_id.clone(), defender_position));
+        simulation
+            .assign_role(&defender_id, StableId::new("role:defender").unwrap())
+            .unwrap();
+
+        let enemy_goal = next_agent_goal(
+            &simulation,
+            &world,
+            &config,
+            &content,
+            &enemy_id,
+            enemy_position,
+        );
+        assert_eq!(enemy_goal.0, AgentGoal::AttackBuilding(town_hall));
+        assert_ne!(enemy_goal.1, enemy_position);
+        assert_eq!(
+            next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &defender_id,
+                defender_position,
+            )
+            .0,
+            AgentGoal::Attack(enemy_id),
+        );
+    }
+
+    #[test]
+    fn sustained_camp_encounter_reaches_combat_and_is_deterministic() {
+        fn run_encounter() -> (u32, i32, i32, i32, u32, u32, bool, bool) {
+            let config = GameConfig::default();
+            let content = embedded_content();
+            let mut world = generate_world(&config.world);
+            let mut simulation = WorldSimulation::new(world.seed);
+            ensure_town_hall_state(&content, &config, &mut simulation);
+            let town_hall = StableId::new("building:townhall").unwrap();
+            let hall_state = &simulation.buildings[&town_hall];
+            let hall_definition =
+                building_def_for_archetype(&content, &hall_state.archetype).unwrap();
+            world
+                .navigation
+                .set_blocked(
+                    building_region(hall_state.position, hall_definition.footprint, &world)
+                        .unwrap(),
+                    true,
+                )
+                .unwrap();
+            assert!(seed_generated_enemy_camps(&config, &content, &mut world, &mut simulation) > 0);
+
+            let camp = simulation.enemy_camps.values().next().unwrap().clone();
+            let camp_archetype = &content.archetypes[&camp.archetype];
+            let spawner = camp_archetype.enemy_spawner.as_ref().unwrap();
+            let enemy_archetype =
+                archetype_id_by_source(&content, ArchetypeKind::Enemy, "Enemy_Goblin.prefab")
+                    .unwrap();
+            let enemy_position =
+                enemy_spawn_position(&world, &camp, spawner, camp_archetype.footprint, 0);
+            let enemy_id = StableId::new("actor:sustained_enemy").unwrap();
+            let enemy_health = content.archetypes[&enemy_archetype]
+                .health
+                .as_ref()
+                .unwrap()
+                .max_health;
+            let expected_kill_reward = content.archetypes[&enemy_archetype]
+                .enemy
+                .as_ref()
+                .unwrap()
+                .kill_reward
+                .amount;
+            assert!(simulation.spawn_enemy(
+                enemy_id.clone(),
+                enemy_archetype,
+                enemy_position,
+                i32::try_from(enemy_health).unwrap(),
+            ));
+
+            let initial_enemy_goal = next_agent_goal(
+                &simulation,
+                &world,
+                &config,
+                &content,
+                &enemy_id,
+                enemy_position,
+            );
+            assert_eq!(
+                initial_enemy_goal.0,
+                AgentGoal::AttackBuilding(town_hall.clone())
+            );
+            let initial_enemy_path = try_agent_path(
+                &world.navigation,
+                &content,
+                &simulation,
+                &ActorKind::Enemy,
+                enemy_position,
+                initial_enemy_goal.1,
+            )
+            .expect("generated camp has a route to the active Town Hall");
+            assert!(initial_enemy_path.len() > 1);
+            // Put the defender on the verified assault route after proving the
+            // no-local-target Town Hall goal. This preserves the complete
+            // target-handoff/combat path while keeping the regression fast.
+            let defender_position =
+                initial_enemy_path[initial_enemy_path.len().saturating_sub(1).min(8)];
+            let defender_id = StableId::new("npc:sustained_defender").unwrap();
+            assert!(simulation.join_player(defender_id.clone(), defender_position));
+            simulation
+                .assign_role(&defender_id, StableId::new("role:defender").unwrap())
+                .unwrap();
+            let defender_damage =
+                effective_role_stats(&content, &simulation, &simulation.actors[&defender_id])
+                    .unwrap()
+                    .action_amount;
+            let encounter_health = i32::try_from(defender_damage.saturating_mul(3)).unwrap();
+            let enemy = simulation.actors.get_mut(&enemy_id).unwrap();
+            enemy.health = encounter_health;
+            enemy.max_health = encounter_health;
+
+            let mut cooldowns = BTreeMap::<StableId, f32>::new();
+            let mut movement_budget = BTreeMap::<StableId, f32>::new();
+            let mut combat_started = false;
+            let mut defender_acquired_enemy = false;
+            let mut elapsed_ticks = 0_u32;
+            let delta_seconds = 0.25_f32;
+            for tick in 1..=600_u32 {
+                elapsed_ticks = tick;
+                let actor_ids = simulation.actors.keys().cloned().collect::<Vec<_>>();
+                for actor_id in actor_ids {
+                    if !simulation
+                        .actors
+                        .get(&actor_id)
+                        .is_some_and(|actor| actor.alive)
+                    {
+                        continue;
+                    }
+                    cooldowns
+                        .entry(actor_id.clone())
+                        .and_modify(|remaining| {
+                            *remaining = (*remaining - delta_seconds).max(0.0);
+                        })
+                        .or_insert(0.0);
+                    let speed = actor_movement_speed(&config, &content, &simulation, &actor_id);
+                    movement_budget
+                        .entry(actor_id.clone())
+                        .and_modify(|budget| *budget += speed * delta_seconds)
+                        .or_insert(speed * delta_seconds);
+
+                    loop {
+                        let current = simulation.actors[&actor_id].position;
+                        let (goal, target) = next_agent_goal(
+                            &simulation,
+                            &world,
+                            &config,
+                            &content,
+                            &actor_id,
+                            current,
+                        );
+                        if actor_id == defender_id && goal == AgentGoal::Attack(enemy_id.clone()) {
+                            defender_acquired_enemy = true;
+                        }
+                        if target == current {
+                            if cooldowns[&actor_id] <= f32::EPSILON {
+                                let presentation = complete_agent_goal(
+                                    &mut simulation,
+                                    &mut world,
+                                    &config,
+                                    &content,
+                                    &actor_id,
+                                    &goal,
+                                    current,
+                                );
+                                if matches!(
+                                    goal,
+                                    AgentGoal::Attack(_) | AgentGoal::AttackBuilding(_)
+                                ) && presentation.is_some()
+                                {
+                                    combat_started = true;
+                                }
+                                if let Some(ActionPresentation::Projectile(projectile)) =
+                                    presentation
+                                {
+                                    let _ = apply_combat_damage(
+                                        &config,
+                                        &mut simulation,
+                                        &content,
+                                        match projectile.source {
+                                            ProjectileSource::Actor(ref source) => Some(source),
+                                            ProjectileSource::Building(_) => None,
+                                        },
+                                        &projectile.target,
+                                        projectile.damage,
+                                    );
+                                }
+                                cooldowns.insert(
+                                    actor_id.clone(),
+                                    action_cooldown(&content, &simulation, &actor_id, &goal),
+                                );
+                            }
+                            break;
+                        }
+                        if movement_budget[&actor_id] < 1.0 {
+                            break;
+                        }
+                        let kind = if actor_id == enemy_id {
+                            ActorKind::Enemy
+                        } else {
+                            ActorKind::Player
+                        };
+                        let Some(path) = try_agent_path(
+                            &world.navigation,
+                            &content,
+                            &simulation,
+                            &kind,
+                            current,
+                            target,
+                        ) else {
+                            break;
+                        };
+                        let Some(next) = path.get(1).copied() else {
+                            break;
+                        };
+                        simulation.actors.get_mut(&actor_id).unwrap().position = next;
+                        *movement_budget.get_mut(&actor_id).unwrap() -= 1.0;
+                    }
+                }
+                if !simulation.actors[&enemy_id].alive
+                    || !simulation.actors[&defender_id].alive
+                    || !simulation.buildings.contains_key(&town_hall)
+                {
+                    break;
+                }
+            }
+
+            (
+                elapsed_ticks,
+                simulation.actors[&enemy_id].health,
+                simulation.actors[&defender_id].health,
+                simulation
+                    .buildings
+                    .get(&town_hall)
+                    .map_or(0, |building| building.health),
+                simulation
+                    .town_resources
+                    .get(&StableId::new("resource:gold").unwrap())
+                    .copied()
+                    .unwrap_or_default(),
+                expected_kill_reward,
+                combat_started,
+                defender_acquired_enemy,
+            )
+        }
+
+        let first = run_encounter();
+        let second = run_encounter();
+        assert_eq!(second, first);
+        assert!(first.6, "the routed encounter never reached an attack");
+        assert!(first.7, "the defender never acquired the approaching enemy");
+        assert_eq!(first.1, 0, "the defender did not defeat the enemy");
+        assert_eq!(
+            first.4, first.5,
+            "the authored player kill reward did not fire once"
+        );
+    }
+
+    #[test]
+    fn every_camp_enemy_has_a_renderable_animated_model_contract() {
+        let content = embedded_content();
+        let presentation = embedded_presentation();
+        for layer in &content.enemy_camp_generation {
+            let spawner = content.archetypes[&layer.camp_archetype]
+                .enemy_spawner
+                .as_ref()
+                .unwrap();
+            for weighted in &spawner.weighted_enemies {
+                let archetype = &content.archetypes[&weighted.enemy_archetype];
+                let scene = runtime_archetype_scene(archetype).expect("enemy model scene");
+                assert!(
+                    Path::new(&scene.asset_path)
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+                );
+                assert!(archetype.enemy_models.is_some());
+                assert!(
+                    converted_animation_spec(archetype, &presentation).is_some()
+                        || native_animation_request(archetype, &scene, &presentation).is_some(),
+                    "{} lacks a usable animation contract",
+                    archetype.source_path
+                );
+            }
+        }
+    }
+
+    #[test]
     fn authored_enemies_drive_damage_range_cadence_and_weighted_spawning() {
         let config = GameConfig::default();
         let mut content = embedded_content();
@@ -39825,9 +40750,21 @@ mod tests {
         assert!(
             apply_combat_damage(&config, &mut simulation, &content, None, &enemy_id, 5).unwrap()
         );
-        assert_eq!(simulation.town_resources[&gold], 50);
+        assert_eq!(
+            simulation.town_resources[&gold], 0,
+            "Unity tower/environment damage does not count as a player kill"
+        );
+        simulation.respawn_actor(&enemy_id, enemy_position).unwrap();
         assert!(
-            apply_combat_damage(&config, &mut simulation, &content, None, &enemy_id, 5).unwrap()
+            apply_combat_damage(
+                &config,
+                &mut simulation,
+                &content,
+                Some(&player_id),
+                &enemy_id,
+                5,
+            )
+            .unwrap()
         );
         assert_eq!(simulation.town_resources[&gold], 50);
 
@@ -44998,7 +45935,11 @@ mod tests {
         {
             let simulation = &app.world().resource::<SimulationRuntime>().0;
             assert_eq!(simulation.actors.len(), 5);
-            assert!(simulation.enemy_camps.is_empty());
+            assert!(!simulation.enemy_camps.is_empty());
+            assert!(simulation.enemy_camps.values().all(|camp| {
+                camp.spawned_enemies.is_empty()
+                    && camp.spawn_remaining_seconds.abs() <= f64::EPSILON
+            }));
             assert!(
                 simulation
                     .actors
@@ -45426,7 +46367,7 @@ mod tests {
             .count();
         assert_eq!(enemies, 0);
         assert!(
-            app.world()
+            !app.world()
                 .resource::<SimulationRuntime>()
                 .0
                 .enemy_camps

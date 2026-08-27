@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 33;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 34;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -18,6 +18,9 @@ pub struct ContentCatalog {
     pub archetypes: BTreeMap<StableId, ArchetypeDef>,
     #[serde(default)]
     pub foliage: Vec<FoliageLayerDef>,
+    /// Unity `CampGenSettings` entries converted from world units to logical cells.
+    #[serde(default)]
+    pub enemy_camp_generation: Vec<EnemyCampGenerationDef>,
     pub buildings: BTreeMap<StableId, BuildingDef>,
     pub roles: BTreeMap<StableId, RoleDef>,
     /// Unity `TargetSettings` policy controlling whether a station replaces or
@@ -70,6 +73,23 @@ pub struct FoliageVariantDef {
     pub source_model: String,
     pub asset_path: String,
     pub base_scale: [f32; 3],
+}
+
+/// One authored Unity enemy-camp generation layer.
+///
+/// Distances use milli-cells. The shipping Unity grid uses two world units per
+/// logical cell, so the converter halves serialized world-space distances.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EnemyCampGenerationDef {
+    pub id: StableId,
+    pub source_path: String,
+    pub camp_archetype: StableId,
+    pub minimum_absolute_offset_milli_cells: [u32; 2],
+    pub maximum_absolute_offset_milli_cells: [u32; 2],
+    pub maximum_camps: u16,
+    pub minimum_distance_from_centre_milli_cells: u32,
+    pub minimum_distance_between_camps_milli_cells: u32,
+    pub camp_size_milli_cells: u32,
 }
 
 /// A Unity prefab reduced to the stable data Bevy needs to spawn it.
@@ -580,6 +600,13 @@ pub enum ContentError {
     InvalidEnemyModels(StableId),
     #[error("foliage layer {0} has invalid generation or variant values")]
     InvalidFoliage(StableId),
+    #[error("enemy camp generation layer {0} has invalid placement values")]
+    InvalidEnemyCampGeneration(StableId),
+    #[error("enemy camp generation layer {layer} references invalid camp archetype {archetype}")]
+    InvalidEnemyCampArchetype {
+        layer: StableId,
+        archetype: StableId,
+    },
     #[error("archetype {0} has invalid enemy-spawner values")]
     InvalidEnemySpawner(StableId),
     #[error("archetype {0} has invalid disable-after-time data")]
@@ -714,6 +741,32 @@ impl ContentCatalog {
                 })
             {
                 return Err(ContentError::InvalidFoliage(layer.id.clone()));
+            }
+        }
+        let mut enemy_camp_layer_ids = BTreeSet::new();
+        for layer in &self.enemy_camp_generation {
+            if !enemy_camp_layer_ids.insert(layer.id.clone())
+                || layer.source_path.trim().is_empty()
+                || layer.maximum_camps == 0
+                || layer.minimum_distance_between_camps_milli_cells == 0
+                || layer.camp_size_milli_cells == 0
+                || layer
+                    .minimum_absolute_offset_milli_cells
+                    .iter()
+                    .zip(layer.maximum_absolute_offset_milli_cells)
+                    .any(|(minimum, maximum)| maximum < *minimum || maximum == 0)
+            {
+                return Err(ContentError::InvalidEnemyCampGeneration(layer.id.clone()));
+            }
+            if self
+                .archetypes
+                .get(&layer.camp_archetype)
+                .is_none_or(|archetype| archetype.enemy_spawner.is_none())
+            {
+                return Err(ContentError::InvalidEnemyCampArchetype {
+                    layer: layer.id.clone(),
+                    archetype: layer.camp_archetype.clone(),
+                });
             }
         }
         for (id, archetype) in &self.archetypes {

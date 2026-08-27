@@ -10,13 +10,13 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use stream_town_domain::{
     ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, AuthoredRecord, AuthoredValue,
-    BuildingDef, BuildingModelDef, ContentCatalog, EnemyDef, EnemyModelSetDef, EnemyRunAnimation,
-    EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, FoliageVariantDef,
-    HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind, PassiveResourceContribution, PetDef,
-    PetModelDef, ProjectileShooterDef, ResourceReward, RoleDef, RoleEquipmentDef,
-    RoleSlotContribution, RotatingNodeDef, StableId, StationDef, StationUpdateMode,
-    StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode, TechTree,
-    WeightedEnemySpawn,
+    BuildingDef, BuildingModelDef, ContentCatalog, EnemyCampGenerationDef, EnemyDef,
+    EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef, EnemyWeaponModelDef, FoliageHabitat,
+    FoliageLayerDef, FoliageVariantDef, HealthDef, LoadingScreenDef, ObjectiveDef, ObjectiveKind,
+    PassiveResourceContribution, PetDef, PetModelDef, ProjectileShooterDef, ResourceReward,
+    RoleDef, RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, StableId, StationDef,
+    StationUpdateMode, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup,
+    TechNode, TechTree, WeightedEnemySpawn,
 };
 
 const BUILDING_CONTAINER: &str = "Assets/DefaultSettings/D_AllBuildingDataSettings.asset";
@@ -30,6 +30,7 @@ const PLAYER_PREFAB: &str = "Assets/Prefabs/Player_Character.prefab";
 const POOL_SETTINGS: &str = "Assets/DefaultSettings/D_ObjectPoolingSettings.asset";
 const LAND_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_FoliageGenSettings.asset";
 const WATER_FOLIAGE_SETTINGS: &str = "Assets/DefaultSettings/D_WaterFoliageGenSettings.asset";
+const CAMP_SETTINGS: &str = "Assets/DefaultSettings/D_CampGenSettings.asset";
 const TARGET_SETTINGS: &str = "Assets/DefaultSettings/D_TargetSettings.asset";
 const LOADER_SCENE: &str = "Assets/Scenes/LOADER_INITIAL.unity";
 const PET_PREFAB: &str = "Assets/Prefabs/Pets/Pet.prefab";
@@ -54,6 +55,7 @@ pub struct ContentConversionReport {
     pub pet_models: usize,
     pub foliage_layers: usize,
     pub foliage_variants: usize,
+    pub enemy_camp_generation_layers: usize,
     pub buildings: usize,
     pub building_prefabs: usize,
     pub building_model_handlers: usize,
@@ -228,6 +230,11 @@ fn convert_export(
         "_waterFoliageGenerationSettings",
         FoliageHabitat::Underwater,
     )?);
+    let enemy_camp_generation = assets_by_path
+        .get(CAMP_SETTINGS)
+        .map(|asset| enemy_camp_generation_layers(asset, &pools))
+        .transpose()?
+        .unwrap_or_default();
     let role_equipment = role_equipment(required_asset(&assets_by_path, PLAYER_PREFAB)?)?;
     let station_target_update_modes =
         station_target_update_modes(required_asset(&assets_by_path, TARGET_SETTINGS)?)?;
@@ -518,6 +525,7 @@ fn convert_export(
         loading_screen: loading_screen_definition(required_asset(&assets_by_path, LOADER_SCENE)?)?,
         archetypes,
         foliage,
+        enemy_camp_generation,
         buildings,
         roles,
         station_target_update_modes,
@@ -528,7 +536,7 @@ fn convert_export(
     catalog.validate().context("converted catalog is invalid")?;
 
     let report = ContentConversionReport {
-        schema_version: 9,
+        schema_version: 10,
         source_schema_version: export.schema_version,
         source_unity_version: export.unity_version.clone(),
         source_sha256,
@@ -572,6 +580,7 @@ fn convert_export(
             .iter()
             .map(|layer| layer.variants.len())
             .sum(),
+        enemy_camp_generation_layers: catalog.enemy_camp_generation.len(),
         buildings: catalog.buildings.len(),
         building_prefabs: building_archetypes.len(),
         building_model_handlers: catalog
@@ -623,6 +632,8 @@ fn convert_export(
             "prefab archetypes retain spawn-critical component types and converted GLB scene dependencies"
                 .to_owned(),
             "pet follow distances, speeds, visible-forward rotation, model choices, and child transforms are converted from the shipping prefab"
+                .to_owned(),
+            "enemy camp bounds, spacing, count, spawner timing, weighted enemies, and spawn offsets are converted from the shipping settings and prefab"
                 .to_owned(),
             "Unity technology objectives are promoted to typed semantic records; remaining authored fields are retained in source_records"
                 .to_owned(),
@@ -2254,6 +2265,59 @@ fn glb_asset_path(source_model: &str) -> String {
         .rsplit_once('.')
         .map_or(relative, |(stem, _extension)| stem);
     format!("migrated/models/{stem}.glb")
+}
+
+fn enemy_camp_generation_layers(
+    asset: &UnityAsset,
+    pools: &PoolIndex,
+) -> Result<Vec<EnemyCampGenerationDef>> {
+    let list_path = "_campGenerationSettings";
+    let count = required_u32(asset, &format!("{list_path}.Array.size"))?;
+    (0..count)
+        .map(|index| {
+            let prefix = format!("{list_path}.Array.data[{index}]");
+            let pool_name = required_string(asset, &format!("{prefix}.PoolName"))?;
+            let camp_archetype = pools
+                .archetype_by_pool_name
+                .get(&slug(&pool_name))
+                .cloned()
+                .with_context(|| {
+                    format!(
+                        "{} references unknown enemy camp pool {pool_name}",
+                        asset.path
+                    )
+                })?;
+            let maximum_camps = required_u32(asset, &format!("{prefix}.MaxAmount"))?
+                .try_into()
+                .with_context(|| format!("{} camp count is out of range", asset.path))?;
+            Ok(EnemyCampGenerationDef {
+                id: StableId::new(format!(
+                    "enemy_camp_generation:{}:{index}",
+                    slug(&pool_name)
+                ))?,
+                source_path: asset.path.clone(),
+                camp_archetype,
+                minimum_absolute_offset_milli_cells: [
+                    required_milli_cells(asset, &format!("{prefix}.MinBounds.x"))?,
+                    required_milli_cells(asset, &format!("{prefix}.MinBounds.y"))?,
+                ],
+                maximum_absolute_offset_milli_cells: [
+                    required_milli_cells(asset, &format!("{prefix}.MaxBounds.x"))?,
+                    required_milli_cells(asset, &format!("{prefix}.MaxBounds.y"))?,
+                ],
+                maximum_camps,
+                minimum_distance_from_centre_milli_cells: required_milli_cells(
+                    asset,
+                    &format!("{prefix}.MinDistanceFromCenter"),
+                )?,
+                minimum_distance_between_camps_milli_cells: required_milli_cells(
+                    asset,
+                    &format!("{prefix}.MinDistanceFromOther"),
+                )?,
+                camp_size_milli_cells: required_milli_cells(asset, &format!("{prefix}.CampSize"))?,
+            })
+        })
+        .collect()
 }
 
 fn foliage_layers(

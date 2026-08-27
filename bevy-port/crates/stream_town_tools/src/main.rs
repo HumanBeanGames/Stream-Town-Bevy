@@ -681,7 +681,10 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
         ui.separator();
         ui.label(format!("Roles: {}", state.catalog.roles.len()));
         ui.separator();
-        ui.label(format!("Enemies / camps: {enemies} / {camps}"));
+        ui.label(format!(
+            "Enemies / camp prefabs / generation layers: {enemies} / {camps} / {}",
+            state.catalog.enemy_camp_generation.len()
+        ));
         ui.separator();
         ui.label(format!("Enemy model sets: {enemy_model_handlers}"));
         ui.separator();
@@ -752,6 +755,30 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
     });
     ui.separator();
     egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.collapsing("Enemy camp generation", |ui| {
+            for layer in &state.catalog.enemy_camp_generation {
+                ui.collapsing(format!("{}  ({})", layer.camp_archetype, layer.id), |ui| {
+                    ui.monospace(format!("Unity settings: {}", layer.source_path));
+                    ui.label(format!(
+                        "Maximum camps: {}; placement attempts per camp: 500",
+                        layer.maximum_camps
+                    ));
+                    ui.label(format!(
+                        "Absolute centre offsets: X {:.1}–{:.1} cells, Z {:.1}–{:.1} cells",
+                        f64::from(layer.minimum_absolute_offset_milli_cells[0]) / 1_000.0,
+                        f64::from(layer.maximum_absolute_offset_milli_cells[0]) / 1_000.0,
+                        f64::from(layer.minimum_absolute_offset_milli_cells[1]) / 1_000.0,
+                        f64::from(layer.maximum_absolute_offset_milli_cells[1]) / 1_000.0,
+                    ));
+                    ui.label(format!(
+                        "Minimum centre / camp separation: {:.1} / {:.1} cells; camp size {:.1} cells",
+                        f64::from(layer.minimum_distance_from_centre_milli_cells) / 1_000.0,
+                        f64::from(layer.minimum_distance_between_camps_milli_cells) / 1_000.0,
+                        f64::from(layer.camp_size_milli_cells) / 1_000.0,
+                    ));
+                });
+            }
+        });
         ui.collapsing("Prefab archetypes", |ui| {
             for (id, archetype) in &state.catalog.archetypes {
                 ui.collapsing(format!("{}  ({id})", archetype.display_name), |ui| {

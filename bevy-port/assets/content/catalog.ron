@@ -1,5 +1,5 @@
 (
-    schema_version: 33,
+    schema_version: 34,
     loading_screen: (
         progress_milli_per_second: 500,
         completion_hold_milliseconds: 500,
@@ -8275,6 +8275,19 @@
                     base_scale: (1.0, 1.0, 1.0),
                 ),
             ],
+        ),
+    ],
+    enemy_camp_generation: [
+        (
+            id: "enemy_camp_generation:goblin",
+            source_path: "Assets/DefaultSettings/D_CampGenSettings.asset",
+            camp_archetype: "archetype:prefab:748f932d9c2961a4ebef254f29adb0d5",
+            minimum_absolute_offset_milli_cells: (25000, 25000),
+            maximum_absolute_offset_milli_cells: (60000, 60000),
+            maximum_camps: 10,
+            minimum_distance_from_centre_milli_cells: 0,
+            minimum_distance_between_camps_milli_cells: 30000,
+            camp_size_milli_cells: 5000,
         ),
     ],
     buildings: {
