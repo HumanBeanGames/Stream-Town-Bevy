@@ -10581,8 +10581,8 @@ fn toggle_direct_broadcast(
     feedback: &mut String,
 ) {
     if runtime.snapshot().phase.is_active() {
-        control.request_stop();
-        "Ending the internal Twitch stream...".clone_into(feedback);
+        control.request_stop_and_return_to_main_menu();
+        "Ending the internal Twitch stream and returning to Main Menu...".clone_into(feedback);
     } else if twitch_accounts_connected(config, secrets, connection) {
         control.request_restart();
         "Starting the internal Twitch stream...".clone_into(feedback);
@@ -13838,15 +13838,14 @@ fn broadcast_connection_status(
             "● Connecting the encoder to Twitch...".to_owned(),
             SecretsStatusTone::Pending,
         ),
+        DirectBroadcastPhase::VerifyingTwitch => (
+            "● Encoder output reached Twitch; waiting for Twitch to confirm that the channel is publicly live...".to_owned(),
+            SecretsStatusTone::Pending,
+        ),
         DirectBroadcastPhase::Broadcasting => {
-            let mode = if config.twitch.broadcast.bandwidth_test {
-                "BANDWIDTH TEST — not live"
-            } else {
-                "LIVE"
-            };
             (
                 format!(
-                    "● {mode}; {:.1} captured / {:.1} output FPS (target {}), {} video / {} audio drops via {} ({})",
+                    "● LIVE (confirmed by Twitch); {:.1} captured / {:.1} output FPS (target {}), {} video / {} audio drops via {} ({})",
                     snapshot.captured_video_fps,
                     snapshot.encoded_video_fps,
                     config.twitch.broadcast.frames_per_second,
@@ -13858,6 +13857,19 @@ fn broadcast_connection_status(
                 SecretsStatusTone::Good,
             )
         }
+        DirectBroadcastPhase::BandwidthTesting => (
+            format!(
+                "● BANDWIDTH TEST — not publicly live; {:.1} captured / {:.1} output FPS (target {}), {} video / {} audio drops via {} ({})",
+                snapshot.captured_video_fps,
+                snapshot.encoded_video_fps,
+                config.twitch.broadcast.frames_per_second,
+                snapshot.dropped_video_frames,
+                snapshot.dropped_audio_frames,
+                snapshot.encoder.as_deref().unwrap_or("encoder pending"),
+                snapshot.ingest.as_deref().unwrap_or("ingest pending")
+            ),
+            SecretsStatusTone::Good,
+        ),
         DirectBroadcastPhase::Reconnecting => (
             "● Twitch stream interrupted; reconnecting automatically...".to_owned(),
             SecretsStatusTone::Pending,
@@ -35673,8 +35685,8 @@ mod tests {
         let mut config = GameConfig::default();
         config.twitch.broadcast.enabled = true;
         config.twitch.broadcast.bandwidth_test = true;
-        let snapshot = DirectBroadcastSnapshot {
-            phase: DirectBroadcastPhase::Broadcasting,
+        let mut snapshot = DirectBroadcastSnapshot {
+            phase: DirectBroadcastPhase::BandwidthTesting,
             encoder: Some("h264_mf".to_owned()),
             encoder_rejections: Vec::new(),
             ingest: Some("US East".to_owned()),
@@ -35696,12 +35708,13 @@ mod tests {
         };
         let (status, tone) =
             broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
-        assert!(status.contains("BANDWIDTH TEST — not live"));
+        assert!(status.contains("BANDWIDTH TEST — not publicly live"));
         assert!(status.contains("29.5 captured / 30.0 output FPS"));
         assert!(status.contains("2 video / 1 audio drops"));
         assert_eq!(tone, SecretsStatusTone::Good);
 
         config.twitch.broadcast.bandwidth_test = false;
+        snapshot.phase = DirectBroadcastPhase::Broadcasting;
         let (status, tone) =
             broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
         assert!(status.contains("● LIVE"));

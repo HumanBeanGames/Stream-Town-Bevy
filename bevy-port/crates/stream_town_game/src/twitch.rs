@@ -24,6 +24,7 @@ const DEVICE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/device";
 const TOKEN_ENDPOINT: &str = "https://id.twitch.tv/oauth2/token";
 const VALIDATE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/validate";
 const USERS_ENDPOINT: &str = "https://api.twitch.tv/helix/users";
+const STREAMS_ENDPOINT: &str = "https://api.twitch.tv/helix/streams";
 const STREAM_KEY_ENDPOINT: &str = "https://api.twitch.tv/helix/streams/key";
 const INGESTS_ENDPOINT: &str = "https://ingest.twitch.tv/ingests";
 const VAULT_SERVICE: &str = "stream-town-twitch";
@@ -111,6 +112,18 @@ struct UsersResponse {
 #[derive(Deserialize)]
 struct StreamKeyResponse {
     data: Vec<StreamKeyData>,
+}
+
+#[derive(Deserialize)]
+struct StreamsResponse {
+    data: Vec<LiveStreamData>,
+}
+
+#[derive(Deserialize)]
+struct LiveStreamData {
+    user_id: String,
+    #[serde(rename = "type")]
+    stream_type: String,
 }
 
 #[derive(Deserialize)]
@@ -388,6 +401,31 @@ impl OAuthClient {
         Ok(TwitchStreamKey(key))
     }
 
+    pub async fn is_stream_live(
+        &self,
+        token: &StoredOAuthToken,
+        broadcaster_id: &str,
+    ) -> Result<bool> {
+        if broadcaster_id.is_empty() || !broadcaster_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("Twitch broadcaster ID is invalid");
+        }
+        let response: StreamsResponse = self
+            .http
+            .get(STREAMS_ENDPOINT)
+            .query(&[("user_id", broadcaster_id)])
+            .header("Client-Id", &self.client_id)
+            .bearer_auth(&token.access_token)
+            .send()
+            .await
+            .context("Twitch live-status lookup failed")?
+            .error_for_status()
+            .context("Twitch rejected the live-status lookup")?
+            .json()
+            .await
+            .context("Twitch returned an invalid live-status response")?;
+        Ok(response_contains_live_stream(&response, broadcaster_id))
+    }
+
     pub async fn ingests(&self) -> Result<Vec<TwitchIngest>> {
         let mut ingests = self
             .http
@@ -408,6 +446,13 @@ impl OAuthClient {
         }
         Ok(ingests)
     }
+}
+
+fn response_contains_live_stream(response: &StreamsResponse, broadcaster_id: &str) -> bool {
+    response
+        .data
+        .iter()
+        .any(|stream| stream.user_id == broadcaster_id && stream.stream_type == "live")
 }
 
 fn token_from_response(
@@ -810,5 +855,16 @@ mod tests {
         )
         .unwrap();
         assert!(!message_confirms_channel_join(&welcome, "channel"));
+    }
+
+    #[test]
+    fn live_status_requires_the_requested_broadcaster_and_live_type() {
+        let response: StreamsResponse = serde_json::from_str(
+            r#"{"data":[{"user_id":"42","type":"live"},{"user_id":"7","type":"rerun"}]}"#,
+        )
+        .unwrap();
+        assert!(response_contains_live_stream(&response, "42"));
+        assert!(!response_contains_live_stream(&response, "7"));
+        assert!(!response_contains_live_stream(&response, "99"));
     }
 }

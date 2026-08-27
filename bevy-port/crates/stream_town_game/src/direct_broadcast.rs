@@ -56,6 +56,8 @@ const AUDIO_CHANNELS: usize = 2;
 const AUDIO_FRAME_SAMPLES: usize = 1_024;
 const AUDIO_QUEUE_CAPACITY: usize = 32;
 const STREAM_HEALTH_REPORT_INTERVAL: Duration = Duration::from_secs(5);
+const TWITCH_LIVE_VERIFICATION_TIMEOUT: Duration = Duration::from_mins(1);
+const TWITCH_LIVE_VERIFICATION_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_RECONNECT_DELAY_SECONDS: u64 = 30;
 const OPERATOR_WINDOW_WIDTH: u32 = 960;
 const OPERATOR_WINDOW_HEIGHT: u32 = 540;
@@ -67,7 +69,9 @@ pub enum DirectBroadcastPhase {
     WaitingForGameplay,
     ResolvingIngest,
     Connecting,
+    VerifyingTwitch,
     Broadcasting,
+    BandwidthTesting,
     Reconnecting,
     Stopping,
     Stopped,
@@ -83,7 +87,9 @@ impl DirectBroadcastPhase {
                 | Self::WaitingForGameplay
                 | Self::ResolvingIngest
                 | Self::Connecting
+                | Self::VerifyingTwitch
                 | Self::Broadcasting
+                | Self::BandwidthTesting
                 | Self::Reconnecting
                 | Self::Stopping
         )
@@ -121,6 +127,8 @@ pub struct DirectBroadcastRuntime {
     ingest: Option<String>,
     authorization: Option<Arc<Mutex<Receiver<AuthorizationEvent>>>>,
     pending_target: Option<BroadcastTarget>,
+    verification_target: Option<LiveVerificationTarget>,
+    live_verification: Option<LiveVerification>,
     controller: Option<BroadcastController>,
     capture_elapsed: f32,
     broadcast_started: Option<Instant>,
@@ -185,6 +193,8 @@ impl Default for DirectBroadcastRuntime {
             ingest: None,
             authorization: None,
             pending_target: None,
+            verification_target: None,
+            live_verification: None,
             controller: None,
             capture_elapsed: 0.0,
             broadcast_started: None,
@@ -277,17 +287,24 @@ fn duration_as_micros(duration: Duration) -> u64 {
 pub(crate) struct DirectBroadcastControl {
     restart_requested: bool,
     stop_requested: bool,
+    return_to_main_menu_after_stop: bool,
 }
 
 impl DirectBroadcastControl {
     pub(crate) fn request_restart(&mut self) {
         self.restart_requested = true;
         self.stop_requested = false;
+        self.return_to_main_menu_after_stop = false;
     }
 
     pub(crate) fn request_stop(&mut self) {
         self.stop_requested = true;
         self.restart_requested = false;
+    }
+
+    pub(crate) fn request_stop_and_return_to_main_menu(&mut self) {
+        self.request_stop();
+        self.return_to_main_menu_after_stop = true;
     }
 
     #[cfg(test)]
@@ -316,6 +333,8 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     poll_direct_broadcast_authorization,
                     start_prepared_broadcast_when_gameplay_ready,
                     poll_direct_broadcast_worker,
+                    poll_twitch_live_verification,
+                    return_to_main_menu_after_broadcast_stops,
                     sync_stream_only_capture,
                     stream_operator_live_button,
                     update_stream_operator_info,
@@ -387,6 +406,8 @@ fn apply_direct_broadcast_control(
     if std::mem::take(&mut control.stop_requested) {
         runtime.authorization = None;
         runtime.pending_target = None;
+        runtime.verification_target = None;
+        runtime.live_verification = None;
         if let Some(controller) = &runtime.controller {
             controller.request_stop();
             runtime.phase = DirectBroadcastPhase::Stopping;
@@ -459,7 +480,7 @@ fn resolve_broadcast_target(
     channel_login: &str,
     requested_ingest: &str,
     bandwidth_test: bool,
-) -> Result<BroadcastTarget> {
+) -> Result<PreparedBroadcast> {
     let tokio = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -481,9 +502,17 @@ fn resolve_broadcast_target(
         let ingests = oauth.ingests().await?;
         let ingest = select_ingest(&ingests, requested_ingest)?;
         let url = build_ingest_url(&ingest.url_template, stream_key.expose(), bandwidth_test)?;
-        Ok(BroadcastTarget {
-            ingest_name: ingest.name.clone(),
-            url,
+        Ok(PreparedBroadcast {
+            target: BroadcastTarget {
+                ingest_name: ingest.name.clone(),
+                url,
+            },
+            verification: LiveVerificationTarget {
+                client_id: client_id.to_owned(),
+                channel_login: channel_login.to_owned(),
+                broadcaster_id: validation.user_id,
+                bandwidth_test,
+            },
         })
     })
 }
@@ -499,10 +528,11 @@ fn poll_direct_broadcast_authorization(mut runtime: ResMut<DirectBroadcastRuntim
     };
     runtime.authorization = None;
     match event {
-        AuthorizationEvent::Ready(target) => {
-            info!(ingest = %target.ingest_name, "Twitch broadcast authorization ready");
-            runtime.ingest = Some(target.ingest_name.clone());
-            runtime.pending_target = Some(target);
+        AuthorizationEvent::Ready(prepared) => {
+            info!(ingest = %prepared.target.ingest_name, "Twitch broadcast authorization ready");
+            runtime.ingest = Some(prepared.target.ingest_name.clone());
+            runtime.pending_target = Some(prepared.target);
+            runtime.verification_target = Some(prepared.verification);
             runtime.phase = DirectBroadcastPhase::WaitingForGameplay;
         }
         AuthorizationEvent::Error(error) => {
@@ -562,17 +592,21 @@ fn poll_direct_broadcast_worker(
                 info!(%encoder, "direct Twitch broadcast encoder active");
                 runtime.encoder = Some(encoder);
                 runtime.encoder_rejections = rejected_encoders;
-                runtime.phase = DirectBroadcastPhase::Broadcasting;
                 let now = Instant::now();
                 runtime.broadcast_started.get_or_insert(now);
                 runtime.health_reported_at.get_or_insert(now);
+                begin_twitch_live_verification(&mut runtime);
             }
             WorkerEvent::Reconnecting(error) => {
+                runtime.live_verification = None;
                 runtime.phase = DirectBroadcastPhase::Reconnecting;
                 warn!(%error, "direct Twitch broadcast reconnecting");
             }
             WorkerEvent::Stopped => {
-                runtime.phase = DirectBroadcastPhase::Stopped;
+                runtime.live_verification = None;
+                if !matches!(runtime.phase, DirectBroadcastPhase::Error(_)) {
+                    runtime.phase = DirectBroadcastPhase::Stopped;
+                }
                 runtime.controller = None;
             }
             WorkerEvent::Error(error) => {
@@ -584,8 +618,89 @@ fn poll_direct_broadcast_worker(
     report_stream_health(&mut runtime, config.0.twitch.broadcast.frames_per_second);
 }
 
+fn begin_twitch_live_verification(runtime: &mut DirectBroadcastRuntime) {
+    let Some(target) = runtime.verification_target.clone() else {
+        runtime.phase = DirectBroadcastPhase::Broadcasting;
+        return;
+    };
+    if target.bandwidth_test {
+        runtime.live_verification = None;
+        runtime.phase = DirectBroadcastPhase::BandwidthTesting;
+        return;
+    }
+    runtime.live_verification = None;
+    match LiveVerification::start(target) {
+        Ok(verification) => {
+            runtime.live_verification = Some(verification);
+            runtime.phase = DirectBroadcastPhase::VerifyingTwitch;
+        }
+        Err(error) => {
+            if let Some(controller) = &runtime.controller {
+                controller.request_stop();
+            }
+            runtime.phase = DirectBroadcastPhase::Error(format!(
+                "could not start Twitch live verification: {error:#}"
+            ));
+        }
+    }
+}
+
+fn poll_twitch_live_verification(mut runtime: ResMut<DirectBroadcastRuntime>) {
+    let event = runtime
+        .live_verification
+        .as_ref()
+        .and_then(LiveVerification::event);
+    let Some(event) = event else {
+        return;
+    };
+    runtime.live_verification = None;
+    match event {
+        LiveVerificationEvent::Live => {
+            info!("Twitch Helix confirmed that the channel is publicly live");
+            runtime.phase = DirectBroadcastPhase::Broadcasting;
+        }
+        LiveVerificationEvent::Error(error) => {
+            if let Some(controller) = &runtime.controller {
+                controller.request_stop();
+            }
+            error!(%error, "Twitch never confirmed the public stream");
+            runtime.phase = DirectBroadcastPhase::Error(error);
+        }
+    }
+}
+
+fn return_to_main_menu_after_broadcast_stops(
+    state: Option<Res<State<crate::GameState>>>,
+    next_state: Option<ResMut<NextState<crate::GameState>>>,
+    runtime: Res<DirectBroadcastRuntime>,
+    mut control: ResMut<DirectBroadcastControl>,
+) {
+    if !control.return_to_main_menu_after_stop
+        || !matches!(
+            runtime.phase,
+            DirectBroadcastPhase::Stopped
+                | DirectBroadcastPhase::Disabled
+                | DirectBroadcastPhase::Error(_)
+        )
+    {
+        return;
+    }
+    control.return_to_main_menu_after_stop = false;
+    let (Some(state), Some(mut next_state)) = (state, next_state) else {
+        return;
+    };
+    if *state.get() == crate::GameState::InGame {
+        next_state.set(crate::GameState::MainMenu);
+    }
+}
+
 fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
-    if runtime.phase != DirectBroadcastPhase::Broadcasting {
+    if !matches!(
+        runtime.phase,
+        DirectBroadcastPhase::VerifyingTwitch
+            | DirectBroadcastPhase::Broadcasting
+            | DirectBroadcastPhase::BandwidthTesting
+    ) {
         return;
     }
     let now = Instant::now();
@@ -702,8 +817,11 @@ fn sync_stream_only_capture(
         && matches!(
             runtime.phase,
             DirectBroadcastPhase::Connecting
+                | DirectBroadcastPhase::VerifyingTwitch
                 | DirectBroadcastPhase::Broadcasting
+                | DirectBroadcastPhase::BandwidthTesting
                 | DirectBroadcastPhase::Reconnecting
+                | DirectBroadcastPhase::Stopping
         );
 
     if target_required && state.target.is_none() {
@@ -1000,19 +1118,14 @@ fn stream_operator_live_button(
     let phase = runtime.snapshot().phase;
     let active = phase.is_active();
     let broadcasting = phase == DirectBroadcastPhase::Broadcasting;
+    let bandwidth_testing = phase == DirectBroadcastPhase::BandwidthTesting;
+    let ending_output = broadcasting || bandwidth_testing;
     if let Ok(mut label) = labels.single_mut() {
-        if broadcasting {
-            "● LIVE · END STREAM"
-        } else if active {
-            "● NOT LIVE · CANCEL START"
-        } else {
-            "● NOT LIVE · GO LIVE"
-        }
-        .clone_into(&mut **label);
+        operator_live_button_label(&phase).clone_into(&mut **label);
     }
     for (interaction, mut background, mut border) in &mut buttons {
         let hovered = *interaction == Interaction::Hovered;
-        background.0 = if broadcasting {
+        background.0 = if ending_output {
             if hovered {
                 Color::srgb(0.47, 0.08, 0.07)
             } else {
@@ -1023,18 +1136,28 @@ fn stream_operator_live_button(
         } else {
             Color::srgb(0.08, 0.31, 0.18)
         };
-        *border = BorderColor::all(if broadcasting {
+        *border = BorderColor::all(if ending_output {
             Color::srgb(1.0, 0.32, 0.28)
         } else {
             Color::srgb(0.31, 0.78, 0.46)
         });
         if *interaction == Interaction::Pressed {
             if active {
-                control.request_stop();
+                control.request_stop_and_return_to_main_menu();
             } else {
                 control.request_restart();
             }
         }
+    }
+}
+
+fn operator_live_button_label(phase: &DirectBroadcastPhase) -> &'static str {
+    match phase {
+        DirectBroadcastPhase::Broadcasting => "● LIVE · END STREAM",
+        DirectBroadcastPhase::BandwidthTesting => "● BANDWIDTH TEST · END TEST",
+        DirectBroadcastPhase::VerifyingTwitch => "● VERIFYING TWITCH · CANCEL",
+        phase if phase.is_active() => "● NOT LIVE · CANCEL START",
+        _ => "● NOT LIVE · GO LIVE",
     }
 }
 
@@ -1134,7 +1257,12 @@ fn capture_direct_broadcast_frame(
     if let Some(controller) = &runtime.controller {
         controller.set_sensitive_screen(sensitive_screen.0);
     }
-    if runtime.phase != DirectBroadcastPhase::Broadcasting {
+    if !matches!(
+        runtime.phase,
+        DirectBroadcastPhase::VerifyingTwitch
+            | DirectBroadcastPhase::Broadcasting
+            | DirectBroadcastPhase::BandwidthTesting
+    ) {
         return;
     }
     if !sensitive_screen.0 {
@@ -1282,8 +1410,105 @@ const fn sensitive_label_glyph(character: char) -> [u8; 7] {
 
 #[derive(Debug)]
 enum AuthorizationEvent {
-    Ready(BroadcastTarget),
+    Ready(PreparedBroadcast),
     Error(String),
+}
+
+#[derive(Debug)]
+struct PreparedBroadcast {
+    target: BroadcastTarget,
+    verification: LiveVerificationTarget,
+}
+
+#[derive(Clone, Debug)]
+struct LiveVerificationTarget {
+    client_id: String,
+    channel_login: String,
+    broadcaster_id: String,
+    bandwidth_test: bool,
+}
+
+#[derive(Debug)]
+enum LiveVerificationEvent {
+    Live,
+    Error(String),
+}
+
+struct LiveVerification {
+    events: Arc<Mutex<Receiver<LiveVerificationEvent>>>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl LiveVerification {
+    fn start(target: LiveVerificationTarget) -> Result<Self> {
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let thread_cancel = Arc::clone(&cancel);
+        thread::Builder::new()
+            .name("stream-town-live-verification".to_owned())
+            .spawn(move || {
+                let event = verify_twitch_public_stream(&target, &thread_cancel).map_or_else(
+                    |error| LiveVerificationEvent::Error(format!("{error:#}")),
+                    |()| LiveVerificationEvent::Live,
+                );
+                if !thread_cancel.load(Ordering::Relaxed) {
+                    let _ = sender.send(event);
+                }
+            })
+            .context("failed to spawn the Twitch live-verification worker")?;
+        Ok(Self {
+            events: Arc::new(Mutex::new(receiver)),
+            cancel,
+        })
+    }
+
+    fn event(&self) -> Option<LiveVerificationEvent> {
+        self.events
+            .lock()
+            .ok()
+            .and_then(|events| events.try_recv().ok())
+    }
+}
+
+impl Drop for LiveVerification {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+fn verify_twitch_public_stream(target: &LiveVerificationTarget, cancel: &AtomicBool) -> Result<()> {
+    let tokio = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to construct the Twitch live-verification runtime")?;
+    tokio.block_on(async {
+        let oauth = OAuthClient::broadcaster(target.client_id.clone())?;
+        let vault = CredentialVault::broadcaster(&target.client_id, &target.channel_login);
+        let (token, validation) = oauth.load_validated_token(&vault).await?;
+        if validation.user_id != target.broadcaster_id {
+            bail!("the stored Twitch broadcaster changed while the stream was starting");
+        }
+        let started = Instant::now();
+        let mut last_error = None;
+        while started.elapsed() < TWITCH_LIVE_VERIFICATION_TIMEOUT {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("Twitch live verification was cancelled");
+            }
+            match oauth
+                .is_stream_live(&token, &target.broadcaster_id)
+                .await
+            {
+                Ok(true) => return Ok(()),
+                Ok(false) => last_error = None,
+                Err(error) => last_error = Some(format!("{error:#}")),
+            }
+            tokio::time::sleep(TWITCH_LIVE_VERIFICATION_INTERVAL).await;
+        }
+        if let Some(error) = last_error {
+            bail!("Twitch did not confirm the channel as live within 60 seconds; last status check failed: {error}");
+        }
+        bail!("Twitch did not confirm the channel as live within 60 seconds; the encoder session was stopped instead of reporting a false LIVE state")
+    })
 }
 
 struct BroadcastTarget {
@@ -1974,10 +2199,7 @@ fn encode_broadcast_session(
         encoder.finish()?;
         return Ok(SessionEnd::Stopped);
     }
-    let _ = events.send(WorkerEvent::Broadcasting {
-        encoder: encoder_selection.display_name(),
-        rejected_encoders: encoder_selection.rejections,
-    });
+    let mut encoder_selection = Some(encoder_selection);
     let mut cadence = VideoCadence::new(config.frames_per_second);
     let mut latest_video = take_latest_video(video_mailbox);
     if latest_video.is_some() {
@@ -2006,6 +2228,12 @@ fn encode_broadcast_session(
             encoder.encode_video(video, tick.pts)?;
             metrics.observe_video_encode_latency(encode_started.elapsed());
             metrics.encoded_video.fetch_add(1, Ordering::Relaxed);
+            if let Some(selection) = encoder_selection.take() {
+                let _ = events.send(WorkerEvent::Broadcasting {
+                    encoder: selection.display_name(),
+                    rejected_encoders: selection.rejections,
+                });
+            }
             continue;
         }
         match receiver.recv_timeout(cadence.receive_timeout(Instant::now())) {
@@ -2597,7 +2825,9 @@ mod tests {
             DirectBroadcastPhase::WaitingForGameplay,
             DirectBroadcastPhase::ResolvingIngest,
             DirectBroadcastPhase::Connecting,
+            DirectBroadcastPhase::VerifyingTwitch,
             DirectBroadcastPhase::Broadcasting,
+            DirectBroadcastPhase::BandwidthTesting,
             DirectBroadcastPhase::Reconnecting,
             DirectBroadcastPhase::Stopping,
         ] {
@@ -2652,6 +2882,75 @@ mod tests {
         let control = app.world().resource::<DirectBroadcastControl>();
         assert!(!control.restart_requested);
         assert!(!control.stop_requested);
+    }
+
+    #[test]
+    fn operator_only_reports_live_after_twitch_verification() {
+        assert_eq!(
+            operator_live_button_label(&DirectBroadcastPhase::Connecting),
+            "● NOT LIVE · CANCEL START"
+        );
+        assert_eq!(
+            operator_live_button_label(&DirectBroadcastPhase::VerifyingTwitch),
+            "● VERIFYING TWITCH · CANCEL"
+        );
+        assert_eq!(
+            operator_live_button_label(&DirectBroadcastPhase::Broadcasting),
+            "● LIVE · END STREAM"
+        );
+    }
+
+    #[test]
+    fn bandwidth_test_never_claims_to_be_publicly_live() {
+        let mut runtime = DirectBroadcastRuntime {
+            verification_target: Some(LiveVerificationTarget {
+                client_id: "client".to_owned(),
+                channel_login: "channel".to_owned(),
+                broadcaster_id: "42".to_owned(),
+                bandwidth_test: true,
+            }),
+            ..default()
+        };
+        begin_twitch_live_verification(&mut runtime);
+        assert_eq!(runtime.phase, DirectBroadcastPhase::BandwidthTesting);
+        assert_eq!(
+            operator_live_button_label(&runtime.phase),
+            "● BANDWIDTH TEST · END TEST"
+        );
+        assert!(runtime.live_verification.is_none());
+    }
+
+    #[test]
+    fn ending_stream_returns_the_operator_to_main_menu_after_shutdown() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<crate::GameState>()
+            .insert_resource(RuntimeConfig(stream_town_domain::GameConfig::default()))
+            .init_resource::<SensitiveScreenActive>()
+            .add_plugins(DirectTwitchBroadcastPlugin);
+        app.world_mut()
+            .resource_mut::<NextState<crate::GameState>>()
+            .set(crate::GameState::InGame);
+        app.update();
+        app.world_mut()
+            .resource_mut::<DirectBroadcastRuntime>()
+            .phase = DirectBroadcastPhase::Connecting;
+        app.world_mut()
+            .resource_mut::<DirectBroadcastControl>()
+            .request_stop_and_return_to_main_menu();
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<crate::GameState>>().get(),
+            crate::GameState::MainMenu
+        );
+        assert!(
+            !app.world()
+                .resource::<DirectBroadcastControl>()
+                .return_to_main_menu_after_stop
+        );
     }
 
     #[test]
