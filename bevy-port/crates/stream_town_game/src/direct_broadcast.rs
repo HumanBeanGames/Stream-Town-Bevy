@@ -1017,7 +1017,7 @@ fn spawn_stream_operator_view(
             root.spawn((
                 Text::new("STREAM TOWN · OPERATOR VIEW"),
                 TextFont {
-                    font_size: FontSize::Px(30.0),
+                    font_size: FontSize::Px(26.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.82, 0.92, 1.0)),
@@ -1032,14 +1032,15 @@ fn spawn_stream_operator_view(
                 StreamOperatorInfoText,
                 Text::new("Preparing direct stream…"),
                 TextFont {
-                    font_size: FontSize::Px(20.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.70, 0.78, 0.86)),
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(50),
-                    top: px(100),
+                    top: px(92),
+                    width: px(510),
                     ..default()
                 },
             ));
@@ -1049,9 +1050,9 @@ fn spawn_stream_operator_view(
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(48),
-                    top: px(324),
+                    bottom: px(42),
                     width: px(230),
-                    height: px(58),
+                    height: px(52),
                     border: UiRect::all(px(2)),
                     border_radius: BorderRadius::all(px(10)),
                     justify_content: JustifyContent::Center,
@@ -1065,7 +1066,7 @@ fn spawn_stream_operator_view(
                 StreamOperatorLiveButtonText,
                 Text::new("● GO LIVE"),
                 TextFont {
-                    font_size: FontSize::Px(20.0),
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -1118,24 +1119,6 @@ fn spawn_stream_operator_view(
                     ));
                 });
             }
-            root.spawn((
-                Text::new(if stream_target.is_some() {
-                    "Preview · 320 × 180\nThis local operator panel is excluded from the stream"
-                } else {
-                    "Headed capture mode\nThis local operator panel is excluded from the stream"
-                }),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.52, 0.62, 0.72)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(48),
-                    bottom: px(250),
-                    ..default()
-                },
-            ));
         })
         .id()
 }
@@ -3113,6 +3096,39 @@ mod tests {
         assert_eq!(
             operator_live_button_label(&DirectBroadcastPhase::Broadcasting),
             "● LIVE · END STREAM"
+        );
+    }
+
+    #[test]
+    fn operator_panel_uses_compact_telemetry_and_bottom_left_live_control() {
+        fn spawn_test_view(mut commands: Commands) {
+            let camera = commands.spawn_empty().id();
+            let _ = spawn_stream_operator_view(&mut commands, camera, None);
+        }
+
+        let mut app = App::new();
+        app.add_systems(Startup, spawn_test_view);
+        app.update();
+
+        let world = app.world_mut();
+        let mut telemetry =
+            world.query_filtered::<(&TextFont, &Node), With<StreamOperatorInfoText>>();
+        let (font, node) = telemetry.single(world).unwrap();
+        assert_eq!(font.font_size, FontSize::Px(15.0));
+        assert_eq!(node.top, px(92));
+        let mut live_button = world.query_filtered::<&Node, With<StreamOperatorLiveButton>>();
+        let node = live_button.single(world).unwrap();
+        assert_eq!(node.left, px(48));
+        assert_eq!(node.bottom, px(42));
+        assert_eq!(node.top, Val::Auto);
+        let mut text = world.query::<&Text>();
+        assert!(
+            text.iter(world)
+                .all(|text| !text.0.contains("This local operator panel is excluded"))
+        );
+        assert!(
+            text.iter(world)
+                .all(|text| !text.0.contains("Preview · 320 × 180"))
         );
     }
 

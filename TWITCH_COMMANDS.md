@@ -60,7 +60,8 @@ masters as appropriate.
 | `!levelall <building> <level>` | Level every instance of a building type. |
 | `!remove <building> <id>` | Remove a building instance. |
 | `!recruit <role> [amount]` | Recruit town-controlled characters. |
-| `!cam <direction> [amount]` | Move the broadcast camera using `up`, `down`, `left`, `right`, `in`, or `out`. Several direction/amount pairs may be supplied. |
+| `!cam <direction> [amount]` | Smoothly move the broadcast camera using `up`, `down`, `left`, `right`, `in`, or `out`. Several direction/amount pairs may be supplied. |
+| `!cam home` | Smoothly return to the authored home position and base zoom. The camera also returns home after one minute without camera input. |
 | `!resetcam` | Restore the authored town camera. |
 | `!rulervote` | Start a ruler vote. |
 | `!resign` | Resign as ruler. |

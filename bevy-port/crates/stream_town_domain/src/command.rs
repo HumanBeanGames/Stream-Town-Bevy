@@ -60,7 +60,7 @@ pub fn unity_command_usage(input: &str) -> Option<&'static str> {
         "recruit" => "!recruit <role> [amount]",
         "givepet" => "!givepet <player> <pet>",
         "pet" => "!pet <pet> (or !pet to list pets)",
-        "cam" => "!cam <up|down|left|right|in|out> [amount]",
+        "cam" => "!cam <up|down|left|right|in|out> [amount] OR !cam home",
         "info" => "!info <resource|role|building|enemy> [id]",
         "rrole" => "!rrole <id> <role>",
         "rinfo" => "!rinfo <id>",
@@ -405,7 +405,14 @@ impl FromStr for ChatCommand {
                     })
                 }
             }
-            "cam" => parse_camera_actions(parts).map(Self::Camera),
+            "cam" => {
+                let arguments = parts.collect::<Vec<_>>();
+                if matches!(arguments.as_slice(), [home] if home.eq_ignore_ascii_case("home")) {
+                    Ok(Self::ResetCamera)
+                } else {
+                    parse_camera_actions(arguments.into_iter()).map(Self::Camera)
+                }
+            }
             "move" => parse_building_actions(None, parts).map(Self::MoveBuilding),
             "up" | "down" | "left" | "right" | "rotate" => {
                 parse_building_actions(Some(command.as_str()), parts).map(Self::MoveBuilding)
@@ -820,6 +827,7 @@ mod tests {
                 },
             ]))
         );
+        assert_eq!("!cam home".parse(), Ok(ChatCommand::ResetCamera));
         assert_eq!(
             "!body 3".parse(),
             Ok(ChatCommand::Customize {

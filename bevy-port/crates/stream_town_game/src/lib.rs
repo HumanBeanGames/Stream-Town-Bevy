@@ -134,7 +134,9 @@ const UNITY_TOWN_CAMERA_OFFSET: Vec3 = Vec3::new(-33.5, 33.240_562, 0.0);
 const UNITY_TOWN_CAMERA_FOCUS_BACK_SHIFT: f32 = 16.0;
 const UNITY_TOWN_CAMERA_MIN_HEIGHT: f32 = 11.0;
 const UNITY_TOWN_CAMERA_MAX_HEIGHT: f32 = 60.0;
-const UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS: f32 = 5.0;
+const UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS: f32 = 5.0;
+const TWITCH_CAMERA_PAN_DISTANCE: f32 = 12.0;
+const TWITCH_CAMERA_HOME_TIMEOUT_SECONDS: f32 = 60.0;
 const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
     [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
 const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
@@ -2294,6 +2296,15 @@ struct FoliageRenderBatch(FoliageBatchKey);
 #[derive(Component)]
 struct Hud;
 
+#[derive(Component)]
+struct HudResourceStrip;
+
+#[derive(Component)]
+struct HudStatsStrip;
+
+#[derive(Component)]
+struct HudMetricRow;
+
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 enum HudMetric {
     Food,
@@ -2770,6 +2781,7 @@ struct TownCameraControllerRuntime {
     home: Transform,
     move_target: Vec3,
     zoom_target_height: f32,
+    seconds_since_input: f32,
 }
 
 #[derive(Default)]
@@ -2798,6 +2810,7 @@ impl TownCameraControllerRuntime {
         Self {
             move_target: home.translation,
             zoom_target_height: home.translation.y,
+            seconds_since_input: 0.0,
             home,
         }
     }
@@ -2805,13 +2818,13 @@ impl TownCameraControllerRuntime {
     fn set_home(&mut self, home: Transform) {
         self.move_target = home.translation;
         self.zoom_target_height = home.translation.y;
+        self.seconds_since_input = 0.0;
         self.home = home;
     }
 
-    fn reset(&mut self, transform: &mut Transform) {
-        *transform = self.home;
-        self.move_target = transform.translation;
-        self.zoom_target_height = transform.translation.y;
+    fn return_home(&mut self) {
+        self.move_target = self.home.translation;
+        self.zoom_target_height = self.home.translation.y;
     }
 }
 
@@ -10022,14 +10035,17 @@ fn spawn_hud_metric(
     width: Val,
 ) {
     parent
-        .spawn(Node {
-            width,
-            height: percent(100.0),
-            flex_shrink: 0.0,
-            align_items: AlignItems::Center,
-            overflow: Overflow::clip(),
-            ..default()
-        })
+        .spawn((
+            HudMetricRow,
+            Node {
+                width,
+                height: percent(100.0),
+                flex_shrink: 0.0,
+                align_items: AlignItems::Center,
+                overflow: Overflow::clip(),
+                ..default()
+            },
+        ))
         .with_children(|metric_parent| {
             if let Some(icon) = top_bar_texture(render, source_path) {
                 metric_parent.spawn((
@@ -10052,6 +10068,7 @@ fn spawn_hud_metric(
                 TextColor(Color::srgb(0.91, 0.89, 0.81)),
                 Node {
                     flex_grow: 1.0,
+                    align_self: AlignSelf::Center,
                     padding: UiRect::left(px(5)),
                     overflow: Overflow::clip(),
                     ..default()
@@ -10090,15 +10107,18 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
     }
     root.with_children(|parent| {
         parent
-            .spawn(Node {
-                position_type: PositionType::Absolute,
-                left: percent(0.0),
-                top: percent(18.0),
-                width: percent(40.6),
-                height: percent(82.0),
-                overflow: Overflow::clip(),
-                ..default()
-            })
+            .spawn((
+                HudResourceStrip,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(0.0),
+                    top: percent(0.0),
+                    width: percent(40.6),
+                    height: percent(100.0),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ))
             .with_children(|resources| {
                 for (metric, path) in [
                     (HudMetric::Food, TOP_BAR_TEXTURE_PATHS[1]),
@@ -10110,15 +10130,18 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                 }
             });
         parent
-            .spawn(Node {
-                position_type: PositionType::Absolute,
-                right: percent(0.0),
-                top: percent(18.0),
-                width: percent(38.4),
-                height: percent(82.0),
-                overflow: Overflow::clip(),
-                ..default()
-            })
+            .spawn((
+                HudStatsStrip,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: percent(0.0),
+                    top: percent(0.0),
+                    width: percent(38.4),
+                    height: percent(100.0),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ))
             .with_children(|stats| {
                 spawn_hud_metric(
                     stats,
@@ -10152,7 +10175,8 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                     Node {
                         width: percent(25.4),
                         height: percent(100.0),
-                        padding: UiRect::top(px(9)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
                         overflow: Overflow::clip(),
                         ..default()
                     },
@@ -26287,8 +26311,9 @@ fn camera_zoom_and_commands(
     }
 
     if let Some(request) = requests.0.pop_front() {
+        controller.seconds_since_input = 0.0;
         if request.reset {
-            controller.reset(&mut transform);
+            controller.return_home();
         } else {
             for action in request.actions {
                 let amount = i16::try_from(action.amount.clamp(-100, 100)).map_or(0.0, f32::from);
@@ -26305,10 +26330,9 @@ fn camera_zoom_and_commands(
                             CameraDirection::In | CameraDirection::Out => unreachable!(),
                         };
                         let direction = unity_camera_world_direction(screen);
-                        controller.move_target +=
-                            Vec3::new(direction.x, 0.0, direction.y) * amount * 12.0;
-                        controller.move_target =
-                            constrain_town_camera_position(controller.move_target, &config.0.world);
+                        controller.move_target += Vec3::new(direction.x, 0.0, direction.y)
+                            * amount
+                            * TWITCH_CAMERA_PAN_DISTANCE;
                     }
                     CameraDirection::In | CameraDirection::Out => {
                         let signed = if action.direction == CameraDirection::In {
@@ -26321,16 +26345,28 @@ fn camera_zoom_and_commands(
                     }
                 }
             }
-            transform.translation.x = controller.move_target.x;
-            transform.translation.z = controller.move_target.z;
+        }
+        controller.move_target.y = controller.zoom_target_height;
+        controller.move_target =
+            constrain_town_camera_position(controller.move_target, &config.0.world);
+    } else {
+        controller.seconds_since_input = (controller.seconds_since_input + delta_seconds)
+            .min(TWITCH_CAMERA_HOME_TIMEOUT_SECONDS);
+        if controller.seconds_since_input >= TWITCH_CAMERA_HOME_TIMEOUT_SECONDS {
+            controller.return_home();
         }
     }
 
-    transform.translation.y = transform.translation.y.lerp(
+    let smoothing = (delta_seconds * UNITY_TOWN_CAMERA_MOVE_SMOOTHNESS).clamp(0.0, 1.0);
+    let target = Vec3::new(
+        controller.move_target.x,
         controller.zoom_target_height,
-        (delta_seconds * UNITY_TOWN_CAMERA_ZOOM_SMOOTHNESS).clamp(0.0, 1.0),
+        controller.move_target.z,
     );
-    controller.move_target.y = transform.translation.y;
+    transform.translation = transform.translation.lerp(target, smoothing);
+    transform.rotation = transform
+        .rotation
+        .slerp(controller.home.rotation, smoothing);
 }
 
 #[allow(clippy::type_complexity)]
@@ -26391,7 +26427,7 @@ fn follow_pet_closeup_camera(
 }
 
 fn unity_camera_world_direction(screen_direction: Vec2) -> Vec2 {
-    Vec2::new(screen_direction.y, -screen_direction.x)
+    Vec2::new(screen_direction.y, screen_direction.x)
 }
 
 fn constrain_town_camera_position(
@@ -32593,7 +32629,7 @@ fn update_hud(
         meter.left = percent(season_progress);
     }
     hud.0 = format!(
-        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nText commands active | Q/E or wheel zoom | ESC menu | F12 capture | first {first_id}",
+        "Day {} ({day_phase}) | {} routes | workers {gathering}/{depositing}/{constructing} | construction {incomplete_buildings}, levels {building_levels} | combat {attacking}/{healing}/{dead} | {} commands | {:?}/{:?} | Twitch {}\nRecruit {} | Goals {} | Event {} | Governance {} | {}\nText commands active | !help lists commands | ESC menu | F12 capture | first {first_id}",
         simulation.0.day,
         stats.paths_completed,
         stats.commands_processed,
@@ -34865,13 +34901,13 @@ mod tests {
     fn camera_screen_directions_match_the_shipping_unity_mapping() {
         assert_eq!(
             unity_camera_world_direction(Vec2::new(-1.0, 0.0)),
-            Vec2::new(0.0, 1.0),
-            "left edge moves toward +Z"
+            Vec2::new(0.0, -1.0),
+            "left command moves toward -Z"
         );
         assert_eq!(
             unity_camera_world_direction(Vec2::new(1.0, 0.0)),
-            Vec2::new(0.0, -1.0),
-            "right edge moves toward -Z"
+            Vec2::new(0.0, 1.0),
+            "right command moves toward +Z"
         );
         assert_eq!(
             unity_camera_world_direction(Vec2::new(0.0, 1.0)),
@@ -34888,8 +34924,10 @@ mod tests {
     #[test]
     fn queued_camera_command_executes_without_legacy_idle_gate() {
         let home = Transform::from_xyz(0.0, 120.0, 0.0);
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_millis(100));
         let mut app = App::new();
-        app.insert_resource(Time::<()>::default())
+        app.insert_resource(time)
             .insert_resource(RuntimeConfig(GameConfig::default()))
             .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
             .insert_resource(MenuRuntime::default())
@@ -34914,9 +34952,53 @@ mod tests {
         app.update();
 
         assert!(app.world().resource::<CameraCommandQueue>().0.is_empty());
-        let transform = app.world().entity(camera).get::<Transform>().unwrap();
-        assert!((transform.translation.x - (home.translation.x + 24.0)).abs() < 0.001);
+        let camera = app.world().entity(camera);
+        let transform = camera.get::<Transform>().unwrap();
+        let controller = camera.get::<TownCameraControllerRuntime>().unwrap();
+        assert!((controller.move_target.x - (home.translation.x + 24.0)).abs() < 0.001);
+        assert!(transform.translation.x > home.translation.x);
+        assert!(transform.translation.x < controller.move_target.x);
         assert!((transform.translation.z - home.translation.z).abs() < 0.001);
+    }
+
+    #[test]
+    fn inactive_camera_smoothly_returns_to_home_position_and_zoom() {
+        let home = Transform::from_xyz(0.0, 30.0, 0.0);
+        let current = Transform::from_xyz(24.0, 40.0, 12.0);
+        let mut controller = TownCameraControllerRuntime::new(home);
+        controller.move_target = current.translation;
+        controller.zoom_target_height = current.translation.y;
+        controller.seconds_since_input = TWITCH_CAMERA_HOME_TIMEOUT_SECONDS - 0.05;
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_millis(100));
+        let mut app = App::new();
+        app.insert_resource(time)
+            .insert_resource(RuntimeConfig(GameConfig::default()))
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(MenuRuntime::default())
+            .init_resource::<CameraCommandQueue>()
+            .add_systems(Update, camera_zoom_and_commands);
+        let camera = app
+            .world_mut()
+            .spawn((
+                TownCamera,
+                current,
+                Projection::Perspective(PerspectiveProjection::default()),
+                controller,
+            ))
+            .id();
+
+        app.update();
+
+        let camera = app.world().entity(camera);
+        let transform = camera.get::<Transform>().unwrap();
+        let controller = camera.get::<TownCameraControllerRuntime>().unwrap();
+        assert_eq!(controller.move_target, home.translation);
+        assert!((controller.zoom_target_height - home.translation.y).abs() < 0.001);
+        assert!(transform.translation.x > home.translation.x);
+        assert!(transform.translation.x < current.translation.x);
+        assert!(transform.translation.y > home.translation.y);
+        assert!(transform.translation.y < current.translation.y);
     }
 
     #[test]
@@ -41902,6 +41984,21 @@ mod tests {
             !app.world()
                 .contains_resource::<PointerObjectSelectionEnabled>()
         );
+        let mut strips = app
+            .world_mut()
+            .query_filtered::<&Node, Or<(With<HudResourceStrip>, With<HudStatsStrip>)>>();
+        let strips = strips.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(strips.len(), 2);
+        for strip in strips {
+            assert_eq!(strip.top, percent(0.0));
+            assert_eq!(strip.height, percent(100.0));
+        }
+        let mut rows = app
+            .world_mut()
+            .query_filtered::<&Node, With<HudMetricRow>>();
+        let rows = rows.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 7);
+        assert!(rows.iter().all(|row| row.align_items == AlignItems::Center));
     }
 
     #[test]
