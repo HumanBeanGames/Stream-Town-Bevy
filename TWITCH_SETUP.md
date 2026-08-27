@@ -171,9 +171,11 @@ Start in Main Menu > **Secrets**:
    **LIVE** after loading completes.
 
 Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
-keyframe interval; the game sets those details internally. Higher presets may
-be selected as follows, subject to Twitch's current guidance and the available
-upload bandwidth:
+keyframe interval; the game sets those details internally. The AMD AMF path
+also enables HRD enforcement and filler packets so low-motion or static scenes
+remain at the configured transport bitrate instead of collapsing to a nominal
+CBR stream with almost no data. Higher presets may be selected as follows,
+subject to Twitch's current guidance and the available upload bandwidth:
 
 - 1920×1080 30 FPS: 4500 Kbps
 - 1280×720 60 FPS: 4500 Kbps
@@ -236,6 +238,9 @@ switcher; they are not silently captured from the desktop.
 - `Reconnecting` means the in-process RTMP worker encountered an ingest/network
   error. It retries with bounded exponential backoff and never buffers an
   unbounded number of render frames.
+- `VerifyingTwitch` means Twitch has accepted at least one encoded video packet
+  and the app is waiting for the channel to appear in Twitch's public live API.
+  It is not used as a substitute for a real public-live confirmation.
 - Missing `avcodec-62.dll` (or another FFmpeg/OpenH264 DLL) means a development
   build was launched without the pinned vcpkg runtime on `PATH`; packaged builds
   put the replaceable DLLs beside the executable.

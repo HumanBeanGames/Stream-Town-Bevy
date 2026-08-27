@@ -453,7 +453,8 @@ fn configure_direct_broadcast(
     let client_id = twitch.client_id.clone();
     let channel_login = twitch.channel_login.clone();
     let requested_ingest = twitch.broadcast.ingest.clone();
-    let bandwidth_test = twitch.broadcast.bandwidth_test;
+    let bandwidth_test = twitch.broadcast.bandwidth_test
+        || std::env::var_os("STREAM_TOWN_FORCE_BANDWIDTH_TEST").is_some();
     let (sender, receiver) = mpsc::channel();
     runtime.authorization = Some(Arc::new(Mutex::new(receiver)));
     runtime.phase = DirectBroadcastPhase::WaitingForBroadcasterAuthorization;
@@ -2586,7 +2587,10 @@ fn open_video_encoder(
             video.set_bit_rate(config.video_bitrate_kbps as usize * 1_000);
             video.set_max_bit_rate(config.video_bitrate_kbps as usize * 1_000);
             video.set_gop(u32::from(config.frames_per_second) * 2);
-            video.set_max_b_frames(0);
+            // The AMD path below uses Twitch's two-B-frame broadcast profile.
+            // Preserve the separately tuned latency contracts of the other
+            // hardware backends until each can be exercised on its own GPU.
+            video.set_max_b_frames(usize::from(name == "h264_amf") * 2);
             if global_header {
                 video.set_flags(codec::Flags::GLOBAL_HEADER);
             }
@@ -2611,10 +2615,18 @@ fn open_video_encoder(
                 }
                 "h264_amf" => {
                     options.set("profile", "high");
-                    options.set("usage", "ultralowlatency");
-                    options.set("quality", "speed");
+                    options.set("usage", "lowlatency_high_quality");
+                    options.set("quality", "balanced");
                     options.set("rc", "cbr");
-                    options.set("latency", "1");
+                    // AMF's default `auto` values do not guarantee that a
+                    // nominal CBR session actually emits a constant transport
+                    // rate for low-motion frames. Twitch uses that transport
+                    // cadence when deciding whether an ingest is healthy.
+                    options.set("enforce_hrd", "1");
+                    options.set("filler_data", "1");
+                    options.set("frame_skipping", "0");
+                    options.set("max_b_frames", "2");
+                    options.set("bf", "2");
                     options.set("async_depth", "4");
                 }
                 "h264_mf" => {
@@ -2818,6 +2830,18 @@ mod tests {
             url,
         };
         assert!(!format!("{target:?}").contains(key));
+    }
+
+    #[test]
+    fn public_ingest_url_does_not_enable_bandwidth_test_mode() {
+        let url = build_ingest_url(
+            "rtmp://example.invalid/app/{stream_key}",
+            "live_secret_key",
+            false,
+        )
+        .unwrap();
+        assert_eq!(url, "rtmp://example.invalid/app/live_secret_key");
+        assert!(!url.contains("bandwidthtest"));
     }
 
     #[test]
@@ -3147,7 +3171,10 @@ mod tests {
     #[ignore = "local 1080p60 hardware-encoder throughput diagnostic"]
     fn configured_1080p60_encoder_sustains_realtime_output() {
         let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("direct-broadcast-1080p60.flv");
+        let output = std::env::var_os("STREAM_TOWN_BROADCAST_DIAGNOSTIC_OUTPUT").map_or_else(
+            || directory.path().join("direct-broadcast-1080p60.flv"),
+            std::path::PathBuf::from,
+        );
         let target = BroadcastTarget {
             ingest_name: "local-performance-diagnostic".to_owned(),
             url: output.to_string_lossy().into_owned(),
@@ -3181,6 +3208,17 @@ mod tests {
             encoder.encode_video(&frame, i64::from(pts)).unwrap();
         }
         encoder.finish().unwrap();
+        if selected.name == "h264_amf" {
+            let encoded_bytes = std::fs::metadata(&output).unwrap().len();
+            let expected_bytes =
+                u64::from(config.video_bitrate_kbps) * 1_000 * u64::from(frame_count)
+                    / u64::from(config.frames_per_second)
+                    / 8;
+            assert!(
+                encoded_bytes >= expected_bytes * 9 / 10,
+                "AMF CBR output was only {encoded_bytes} bytes; expected about {expected_bytes}"
+            );
+        }
         let elapsed = started.elapsed().as_secs_f64();
         let frames_per_second = f64::from(frame_count) / elapsed;
         eprintln!(
@@ -3201,7 +3239,10 @@ mod tests {
     #[test]
     fn linked_ffmpeg_encodes_h264_aac_flv_without_a_subprocess() {
         let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("direct-broadcast-smoke.flv");
+        let output = std::env::var_os("STREAM_TOWN_BROADCAST_DIAGNOSTIC_OUTPUT").map_or_else(
+            || directory.path().join("direct-broadcast-smoke.flv"),
+            std::path::PathBuf::from,
+        );
         let target = BroadcastTarget {
             ingest_name: "local-file".to_owned(),
             url: output.to_string_lossy().into_owned(),
