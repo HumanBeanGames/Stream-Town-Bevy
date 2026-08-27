@@ -2423,6 +2423,9 @@ struct TechnologyVoteIcon(u8);
 #[derive(Component, Clone, Copy)]
 struct TechnologyVoteOptionRow(u8);
 
+#[derive(Component, Clone, Copy)]
+struct TechnologyVoteTitleBar;
+
 #[derive(Component)]
 struct CurrentEventPanel;
 
@@ -9629,7 +9632,7 @@ fn spawn_technology_vote_option_row(
     render: &RenderAssets,
     index: u8,
 ) {
-    let top = 42.0 + f32::from(index) * 69.0;
+    let top = 48.0 + f32::from(index) * 100.0;
     panel
         .spawn((
             TechnologyVoteOptionRow(index),
@@ -9639,7 +9642,7 @@ fn spawn_technology_vote_option_row(
                 top: px(top),
                 left: px(32),
                 right: px(32),
-                height: px(65),
+                height: px(92),
                 overflow: Overflow::clip(),
                 ..default()
             },
@@ -9656,46 +9659,60 @@ fn spawn_technology_vote_option_row(
                     top: px(0),
                     left: px(0),
                     right: px(0),
-                    height: px(20),
+                    height: px(28),
                     ..default()
                 },
             );
-            // The title deliberately follows the track in draw order so the
-            // filled vote bar never covers it.
+            // A flex container centers the label against the bar's real
+            // bounds. This remains correct when the display font changes.
             row.spawn((
-                VoteTextKind::TechnologyOptionTitle(index),
-                UiDisplayFont,
-                Text::new(format!("{}. Technology", index + 1)),
-                TextFont {
-                    font_size: FontSize::Px(9.5),
-                    ..default()
-                },
-                TextLayout::new(Justify::Center, LineBreak::NoWrap),
-                TextColor(Color::srgb(0.98, 0.94, 0.78)),
-                TextShadow {
-                    offset: Vec2::splat(1.0),
-                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.95),
-                },
+                TechnologyVoteTitleBar,
                 ZIndex(2),
+                Pickable::IGNORE,
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(4),
+                    top: px(0),
                     left: px(6),
                     right: px(6),
-                    height: px(14),
+                    height: px(28),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
                     overflow: Overflow::clip(),
                     ..default()
                 },
-            ));
+            ))
+            .with_children(|title_bar| {
+                title_bar.spawn((
+                    VoteTextKind::TechnologyOptionTitle(index),
+                    UiDisplayFont,
+                    Text::new(format!("{}. Technology", index + 1)),
+                    TextFont {
+                        font_size: FontSize::Px(13.5),
+                        ..default()
+                    },
+                    TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    TextColor(Color::srgb(0.98, 0.94, 0.78)),
+                    TextShadow {
+                        offset: Vec2::splat(1.0),
+                        color: Color::linear_rgba(0.0, 0.0, 0.0, 0.95),
+                    },
+                    Pickable::IGNORE,
+                    Node {
+                        width: percent(100),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                ));
+            });
             row.spawn((
                 TechnologyVoteIcon(index),
                 ImageNode::default(),
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(2),
-                    top: px(28),
-                    width: px(26),
-                    height: px(26),
+                    top: px(40),
+                    width: px(30),
+                    height: px(30),
                     ..default()
                 },
             ));
@@ -9703,16 +9720,16 @@ fn spawn_technology_vote_option_row(
                 VoteTextKind::TechnologyOptionRequirements(index),
                 Text::new("Requirements"),
                 TextFont {
-                    font_size: FontSize::Px(8.0),
+                    font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.91, 0.89, 0.81)),
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(25),
-                    left: px(36),
+                    top: px(36),
+                    left: px(38),
                     right: px(3),
-                    height: px(40),
+                    height: px(56),
                     overflow: Overflow::clip(),
                     ..default()
                 },
@@ -9738,7 +9755,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 top: px(96),
                 right: px(18),
                 width: px(260),
-                height: px(290),
+                height: px(400),
                 ..default()
             },
         ))
@@ -9748,7 +9765,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 UiDisplayFont,
                 Text::new("TECHNOLOGY VOTE"),
                 TextFont {
-                    font_size: FontSize::Px(14.0),
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
@@ -9772,8 +9789,8 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     position_type: PositionType::Absolute,
                     left: px(28),
                     bottom: px(18),
-                    width: px(20),
-                    height: px(20),
+                    width: px(24),
+                    height: px(24),
                     ..default()
                 },
             ));
@@ -9785,10 +9802,10 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VOTE_TEXTURE_PATHS[1],
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(54),
+                    left: px(60),
                     bottom: px(20),
-                    right: px(54),
-                    height: px(16),
+                    right: px(66),
+                    height: px(20),
                     ..default()
                 },
             );
@@ -9796,14 +9813,14 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VoteTextKind::TechnologyTimer,
                 Text::new("00:30"),
                 TextFont {
-                    font_size: FontSize::Px(11.0),
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
                 Node {
                     position_type: PositionType::Absolute,
                     right: px(24),
-                    bottom: px(19),
+                    bottom: px(20),
                     ..default()
                 },
             ));
@@ -42520,7 +42537,7 @@ mod tests {
             *kind == VotePanelKind::Technology
                 && *visibility == Visibility::Visible
                 && node.width == px(260)
-                && node.height == px(290)
+                && node.height == px(400)
         }));
         let mut rows = app
             .world_mut()
@@ -42559,6 +42576,27 @@ mod tests {
                 .iter()
                 .all(|text| { !text.0.contains("Vote through chat") && !text.0.contains("!vote") })
         );
+        let mut vote_fonts = app.world_mut().query::<(&VoteTextKind, &TextFont)>();
+        for (kind, font) in vote_fonts.iter(app.world()) {
+            let expected = match kind {
+                VoteTextKind::TechnologyTitle => Some(18.0),
+                VoteTextKind::TechnologyOptionTitle(_) => Some(13.5),
+                VoteTextKind::TechnologyOptionRequirements(_) => Some(11.0),
+                VoteTextKind::TechnologyTimer => Some(16.0),
+                _ => None,
+            };
+            if let Some(expected) = expected {
+                assert_eq!(font.font_size, FontSize::Px(expected));
+            }
+        }
+        let mut title_bars = app.world_mut().query::<(&TechnologyVoteTitleBar, &Node)>();
+        let title_bars = title_bars.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(title_bars.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
+        for (_, node) in title_bars {
+            assert_eq!(node.height, px(28));
+            assert_eq!(node.align_items, AlignItems::Center);
+            assert_eq!(node.justify_content, JustifyContent::Center);
+        }
 
         {
             let mut simulation = app.world_mut().resource_mut::<SimulationRuntime>();
