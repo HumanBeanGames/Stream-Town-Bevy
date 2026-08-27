@@ -48,7 +48,7 @@ use windows_capture::{
 
 use crate::{
     RuntimeConfig, SensitiveScreenActive, SensitiveScreenUpdateSet,
-    twitch::{CredentialVault, OAuthClient, TwitchIngest},
+    twitch::{CredentialVault, OAuthClient, StoredOAuthToken, TwitchIngest},
 };
 
 const AUDIO_SAMPLE_RATE: u32 = 48_000;
@@ -58,6 +58,7 @@ const AUDIO_QUEUE_CAPACITY: usize = 32;
 const STREAM_HEALTH_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 const TWITCH_LIVE_VERIFICATION_TIMEOUT: Duration = Duration::from_mins(1);
 const TWITCH_LIVE_VERIFICATION_INTERVAL: Duration = Duration::from_secs(2);
+const TWITCH_LIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RECONNECT_DELAY_SECONDS: u64 = 30;
 const OPERATOR_WINDOW_WIDTH: u32 = 960;
 const OPERATOR_WINDOW_HEIGHT: u32 = 540;
@@ -129,6 +130,7 @@ pub struct DirectBroadcastRuntime {
     pending_target: Option<BroadcastTarget>,
     verification_target: Option<LiveVerificationTarget>,
     live_verification: Option<LiveVerification>,
+    verification_status: Option<String>,
     controller: Option<BroadcastController>,
     capture_elapsed: f32,
     broadcast_started: Option<Instant>,
@@ -195,6 +197,7 @@ impl Default for DirectBroadcastRuntime {
             pending_target: None,
             verification_target: None,
             live_verification: None,
+            verification_status: None,
             controller: None,
             capture_elapsed: 0.0,
             broadcast_started: None,
@@ -408,6 +411,7 @@ fn apply_direct_broadcast_control(
         runtime.pending_target = None;
         runtime.verification_target = None;
         runtime.live_verification = None;
+        runtime.verification_status = None;
         if let Some(controller) = &runtime.controller {
             controller.request_stop();
             runtime.phase = DirectBroadcastPhase::Stopping;
@@ -509,9 +513,9 @@ fn resolve_broadcast_target(
             },
             verification: LiveVerificationTarget {
                 client_id: client_id.to_owned(),
-                channel_login: channel_login.to_owned(),
                 broadcaster_id: validation.user_id,
                 bandwidth_test,
+                token: Some(token),
             },
         })
     })
@@ -599,6 +603,7 @@ fn poll_direct_broadcast_worker(
             }
             WorkerEvent::Reconnecting(error) => {
                 runtime.live_verification = None;
+                runtime.verification_status = Some(format!("RTMP reconnect: {error}"));
                 runtime.phase = DirectBroadcastPhase::Reconnecting;
                 warn!(%error, "direct Twitch broadcast reconnecting");
             }
@@ -606,6 +611,7 @@ fn poll_direct_broadcast_worker(
                 runtime.live_verification = None;
                 if !matches!(runtime.phase, DirectBroadcastPhase::Error(_)) {
                     runtime.phase = DirectBroadcastPhase::Stopped;
+                    runtime.verification_status = Some("Broadcast output stopped".to_owned());
                 }
                 runtime.controller = None;
             }
@@ -625,6 +631,8 @@ fn begin_twitch_live_verification(runtime: &mut DirectBroadcastRuntime) {
     };
     if target.bandwidth_test {
         runtime.live_verification = None;
+        runtime.verification_status =
+            Some("Bandwidth-test output is intentionally not publicly listed".to_owned());
         runtime.phase = DirectBroadcastPhase::BandwidthTesting;
         return;
     }
@@ -632,12 +640,15 @@ fn begin_twitch_live_verification(runtime: &mut DirectBroadcastRuntime) {
     match LiveVerification::start(target) {
         Ok(verification) => {
             runtime.live_verification = Some(verification);
+            runtime.verification_status =
+                Some("Waiting for Twitch's public channel status...".to_owned());
             runtime.phase = DirectBroadcastPhase::VerifyingTwitch;
         }
         Err(error) => {
             if let Some(controller) = &runtime.controller {
                 controller.request_stop();
             }
+            runtime.verification_status = Some(format!("Verifier startup failed: {error:#}"));
             runtime.phase = DirectBroadcastPhase::Error(format!(
                 "could not start Twitch live verification: {error:#}"
             ));
@@ -646,25 +657,33 @@ fn begin_twitch_live_verification(runtime: &mut DirectBroadcastRuntime) {
 }
 
 fn poll_twitch_live_verification(mut runtime: ResMut<DirectBroadcastRuntime>) {
-    let event = runtime
+    let events = runtime
         .live_verification
         .as_ref()
-        .and_then(LiveVerification::event);
-    let Some(event) = event else {
-        return;
-    };
-    runtime.live_verification = None;
-    match event {
-        LiveVerificationEvent::Live => {
-            info!("Twitch Helix confirmed that the channel is publicly live");
-            runtime.phase = DirectBroadcastPhase::Broadcasting;
-        }
-        LiveVerificationEvent::Error(error) => {
-            if let Some(controller) = &runtime.controller {
-                controller.request_stop();
+        .map(LiveVerification::events)
+        .unwrap_or_default();
+    for event in events {
+        match event {
+            LiveVerificationEvent::Status(status) => {
+                status.clone_into(runtime.verification_status.get_or_insert_default());
+                info!(%status, "Twitch live verification status");
             }
-            error!(%error, "Twitch never confirmed the public stream");
-            runtime.phase = DirectBroadcastPhase::Error(error);
+            LiveVerificationEvent::Live => {
+                info!("Twitch Helix confirmed that the channel is publicly live");
+                runtime.live_verification = None;
+                runtime.verification_status =
+                    Some("Twitch confirmed public LIVE status".to_owned());
+                runtime.phase = DirectBroadcastPhase::Broadcasting;
+            }
+            LiveVerificationEvent::Error(error) => {
+                if let Some(controller) = &runtime.controller {
+                    controller.request_stop();
+                }
+                error!(%error, "Twitch never confirmed the public stream");
+                runtime.live_verification = None;
+                runtime.verification_status = Some(error.clone());
+                runtime.phase = DirectBroadcastPhase::Error(error);
+            }
         }
     }
 }
@@ -1177,9 +1196,14 @@ fn update_stream_operator_info(
             snapshot.encoder_rejections.join(" | ")
         )
     };
+    let twitch_status = runtime
+        .verification_status
+        .as_deref()
+        .unwrap_or("No Twitch public-status check is active");
     **text = format!(
-        "Status: {:?}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nCapture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
+        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nCapture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
         snapshot.phase,
+        twitch_status,
         snapshot.encoder.as_deref().unwrap_or("starting"),
         fallback,
         snapshot.captured_video_fps,
@@ -1423,13 +1447,14 @@ struct PreparedBroadcast {
 #[derive(Clone, Debug)]
 struct LiveVerificationTarget {
     client_id: String,
-    channel_login: String,
     broadcaster_id: String,
     bandwidth_test: bool,
+    token: Option<StoredOAuthToken>,
 }
 
 #[derive(Debug)]
 enum LiveVerificationEvent {
+    Status(String),
     Live,
     Error(String),
 }
@@ -1447,10 +1472,11 @@ impl LiveVerification {
         thread::Builder::new()
             .name("stream-town-live-verification".to_owned())
             .spawn(move || {
-                let event = verify_twitch_public_stream(&target, &thread_cancel).map_or_else(
-                    |error| LiveVerificationEvent::Error(format!("{error:#}")),
-                    |()| LiveVerificationEvent::Live,
-                );
+                let event = verify_twitch_public_stream(&target, &thread_cancel, &sender)
+                    .map_or_else(
+                        |error| LiveVerificationEvent::Error(format!("{error:#}")),
+                        |()| LiveVerificationEvent::Live,
+                    );
                 if !thread_cancel.load(Ordering::Relaxed) {
                     let _ = sender.send(event);
                 }
@@ -1462,11 +1488,12 @@ impl LiveVerification {
         })
     }
 
-    fn event(&self) -> Option<LiveVerificationEvent> {
+    fn events(&self) -> Vec<LiveVerificationEvent> {
         self.events
             .lock()
             .ok()
-            .and_then(|events| events.try_recv().ok())
+            .map(|events| events.try_iter().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -1476,39 +1503,76 @@ impl Drop for LiveVerification {
     }
 }
 
-fn verify_twitch_public_stream(target: &LiveVerificationTarget, cancel: &AtomicBool) -> Result<()> {
+fn verify_twitch_public_stream(
+    target: &LiveVerificationTarget,
+    cancel: &AtomicBool,
+    events: &mpsc::Sender<LiveVerificationEvent>,
+) -> Result<()> {
     let tokio = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("failed to construct the Twitch live-verification runtime")?;
     tokio.block_on(async {
         let oauth = OAuthClient::broadcaster(target.client_id.clone())?;
-        let vault = CredentialVault::broadcaster(&target.client_id, &target.channel_login);
-        let (token, validation) = oauth.load_validated_token(&vault).await?;
-        if validation.user_id != target.broadcaster_id {
-            bail!("the stored Twitch broadcaster changed while the stream was starting");
-        }
+        let token = target
+            .token
+            .as_ref()
+            .context("Twitch live verification is missing its validated broadcaster token")?;
         let started = Instant::now();
         let mut last_error = None;
+        let mut attempt = 0_u32;
         while started.elapsed() < TWITCH_LIVE_VERIFICATION_TIMEOUT {
             if cancel.load(Ordering::Relaxed) {
                 bail!("Twitch live verification was cancelled");
             }
-            match oauth
-                .is_stream_live(&token, &target.broadcaster_id)
-                .await
-            {
-                Ok(true) => return Ok(()),
-                Ok(false) => last_error = None,
-                Err(error) => last_error = Some(format!("{error:#}")),
+            attempt = attempt.saturating_add(1);
+            let remaining = TWITCH_LIVE_VERIFICATION_TIMEOUT.saturating_sub(started.elapsed());
+            let request_timeout = twitch_live_request_timeout(remaining);
+            let status = tokio::time::timeout(
+                request_timeout,
+                oauth.is_stream_live(token, &target.broadcaster_id),
+            )
+            .await;
+            match status {
+                Ok(Ok(true)) => return Ok(()),
+                Ok(Ok(false)) => {
+                    last_error = None;
+                    let _ = events.send(LiveVerificationEvent::Status(format!(
+                        "Check {attempt}: Twitch has not listed the channel as live yet"
+                    )));
+                }
+                Ok(Err(error)) => {
+                    let error = format!("{error:#}");
+                    let _ = events.send(LiveVerificationEvent::Status(format!(
+                        "Check {attempt} failed: {error}"
+                    )));
+                    last_error = Some(error);
+                }
+                Err(_) => {
+                    let error = format!(
+                        "Twitch live-status request timed out after {} seconds",
+                        request_timeout.as_secs()
+                    );
+                    let _ = events.send(LiveVerificationEvent::Status(format!(
+                        "Check {attempt} failed: {error}"
+                    )));
+                    last_error = Some(error);
+                }
             }
-            tokio::time::sleep(TWITCH_LIVE_VERIFICATION_INTERVAL).await;
+            let remaining = TWITCH_LIVE_VERIFICATION_TIMEOUT.saturating_sub(started.elapsed());
+            if !remaining.is_zero() {
+                tokio::time::sleep(remaining.min(TWITCH_LIVE_VERIFICATION_INTERVAL)).await;
+            }
         }
         if let Some(error) = last_error {
             bail!("Twitch did not confirm the channel as live within 60 seconds; last status check failed: {error}");
         }
         bail!("Twitch did not confirm the channel as live within 60 seconds; the encoder session was stopped instead of reporting a false LIVE state")
     })
+}
+
+fn twitch_live_request_timeout(remaining: Duration) -> Duration {
+    remaining.min(TWITCH_LIVE_REQUEST_TIMEOUT)
 }
 
 struct BroadcastTarget {
@@ -2225,10 +2289,12 @@ fn encode_broadcast_session(
                     .fetch_add(tick.skipped, Ordering::Relaxed);
             }
             let encode_started = Instant::now();
-            encoder.encode_video(video, tick.pts)?;
+            let published_packets = encoder.encode_video(video, tick.pts)?;
             metrics.observe_video_encode_latency(encode_started.elapsed());
             metrics.encoded_video.fetch_add(1, Ordering::Relaxed);
-            if let Some(selection) = encoder_selection.take() {
+            if published_packets > 0
+                && let Some(selection) = encoder_selection.take()
+            {
                 let _ = events.send(WorkerEvent::Broadcasting {
                     encoder: selection.display_name(),
                     rejected_encoders: selection.rejections,
@@ -2355,7 +2421,7 @@ impl BroadcastEncoder {
         ))
     }
 
-    fn encode_video(&mut self, video: &VideoFrame, pts: i64) -> Result<()> {
+    fn encode_video(&mut self, video: &VideoFrame, pts: i64) -> Result<u64> {
         let source_format = video.pixel_format.ffmpeg();
         let mut source = frame::Video::new(source_format, video.width, video.height);
         copy_packed_video_frame(video, &mut source)?;
@@ -2433,16 +2499,18 @@ impl BroadcastEncoder {
         self.drain_audio()
     }
 
-    fn drain_video(&mut self) -> Result<()> {
+    fn drain_video(&mut self) -> Result<u64> {
         let mut packet = Packet::empty();
+        let mut published = 0_u64;
         while self.video.receive_packet(&mut packet).is_ok() {
             packet.set_stream(self.video_stream);
             packet.rescale_ts(self.video.time_base(), self.video_time_base);
             packet
                 .write_interleaved(&mut self.output)
                 .context("could not publish an H.264 packet to Twitch")?;
+            published = published.saturating_add(1);
         }
-        Ok(())
+        Ok(published)
     }
 
     fn drain_audio(&mut self) -> Result<()> {
@@ -2901,13 +2969,25 @@ mod tests {
     }
 
     #[test]
+    fn twitch_live_requests_cannot_outlive_the_verification_deadline() {
+        assert_eq!(
+            twitch_live_request_timeout(Duration::from_secs(30)),
+            TWITCH_LIVE_REQUEST_TIMEOUT
+        );
+        assert_eq!(
+            twitch_live_request_timeout(Duration::from_secs(3)),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
     fn bandwidth_test_never_claims_to_be_publicly_live() {
         let mut runtime = DirectBroadcastRuntime {
             verification_target: Some(LiveVerificationTarget {
                 client_id: "client".to_owned(),
-                channel_login: "channel".to_owned(),
                 broadcaster_id: "42".to_owned(),
                 bandwidth_test: true,
+                token: None,
             }),
             ..default()
         };
@@ -3152,18 +3232,21 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut audio_pts = 0_i64;
+        let mut published_video_packets = 0_u64;
         for video_pts in 0..15_i64 {
-            encoder
-                .encode_video(
-                    &VideoFrame {
-                        width: u32::from(config.width),
-                        height: u32::from(config.height),
-                        pixel_format: VideoPixelFormat::Rgba,
-                        pixels: rgba.clone(),
-                    },
-                    video_pts,
-                )
-                .unwrap();
+            published_video_packets = published_video_packets.saturating_add(
+                encoder
+                    .encode_video(
+                        &VideoFrame {
+                            width: u32::from(config.width),
+                            height: u32::from(config.height),
+                            pixel_format: VideoPixelFormat::Rgba,
+                            pixels: rgba.clone(),
+                        },
+                        video_pts,
+                    )
+                    .unwrap(),
+            );
             let samples = vec![0.0; AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
             encoder
                 .encode_audio(AudioFrame {
@@ -3173,6 +3256,10 @@ mod tests {
                 .unwrap();
             audio_pts += i64::try_from(AUDIO_FRAME_SAMPLES).unwrap();
         }
+        assert!(
+            published_video_packets > 0,
+            "the live handshake requires a video packet before verification begins"
+        );
         encoder.finish().unwrap();
         assert!(std::fs::metadata(output).unwrap().len() > 1_024);
     }

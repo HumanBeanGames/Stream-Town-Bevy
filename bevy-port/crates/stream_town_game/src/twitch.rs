@@ -29,6 +29,8 @@ const STREAM_KEY_ENDPOINT: &str = "https://api.twitch.tv/helix/streams/key";
 const INGESTS_ENDPOINT: &str = "https://ingest.twitch.tv/ingests";
 const VAULT_SERVICE: &str = "stream-town-twitch";
 const TOKEN_REFRESH_WINDOW_SECONDS: u64 = 90 * 60;
+const TWITCH_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TWITCH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const REQUIRED_SCOPES: [&str; 2] = ["chat:read", "chat:edit"];
 pub const BROADCAST_SCOPES: [&str; 1] = ["channel:read:stream_key"];
 
@@ -211,6 +213,8 @@ impl OAuthClient {
             required_scopes,
             http: reqwest::Client::builder()
                 .user_agent("Stream-Town-Bevy/0.1")
+                .connect_timeout(TWITCH_HTTP_CONNECT_TIMEOUT)
+                .timeout(TWITCH_HTTP_REQUEST_TIMEOUT)
                 .build()
                 .context("failed to construct Twitch HTTP client")?,
         })
