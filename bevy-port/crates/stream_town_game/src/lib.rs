@@ -117,8 +117,10 @@ const TECHNOLOGY_VOTE_EXTRA_LINE_ADVANCE: f32 = 13.0;
 const TECHNOLOGY_VOTE_LABEL_OFFSET_Y: f32 = 3.0;
 const TECHNOLOGY_VOTE_ICON_TOP: f32 = 35.0;
 const TECHNOLOGY_VOTE_TIMER_TOP: f32 = 330.0;
-const TECHNOLOGY_VOTE_TIMER_LEFT: f32 = 64.0;
-const TECHNOLOGY_VOTE_TIMER_RIGHT: f32 = 70.0;
+const TECHNOLOGY_VOTE_TIMER_GROUP_TOP: f32 = TECHNOLOGY_VOTE_TIMER_TOP - 2.0;
+const TECHNOLOGY_VOTE_TIMER_BAR_WIDTH: f32 = 150.0;
+const TECHNOLOGY_VOTE_TIMER_GAP: f32 = 9.0;
+const TECHNOLOGY_VOTE_TIMER_TEXT_OFFSET_Y: f32 = 2.0;
 const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
 const MAIN_MENU_SCENE_PATH: &str = "Assets/Scenes/Menu/Main_Menu_02.unity";
@@ -2438,6 +2440,21 @@ struct TechnologyVoteTitleBar;
 
 #[derive(Component)]
 struct TechnologyVoteTimerTrack;
+
+#[derive(Component)]
+struct TechnologyVoteTimerLabel;
+
+#[derive(Component)]
+struct TechnologyVoteTimerGroup;
+
+#[derive(Component)]
+struct TechnologyVoteTimerBar;
+
+#[derive(Component)]
+struct TechnologyVoteTimerIcon;
+
+#[derive(Component)]
+struct TechnologyVoteTimerGap;
 
 #[derive(Component)]
 struct CurrentEventPanel;
@@ -9815,47 +9832,107 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
             {
                 spawn_technology_vote_option_row(panel, render, index);
             }
-            panel.spawn((
-                ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[3])),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(28),
-                    top: px(TECHNOLOGY_VOTE_TIMER_TOP - 2.0),
-                    width: px(24),
-                    height: px(24),
-                    ..default()
-                },
-            ));
-            spawn_vote_track(
-                panel,
-                render,
-                VoteFillKind::TechnologyTimer,
-                VOTE_TEXTURE_PATHS[2],
-                VOTE_TEXTURE_PATHS[1],
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(TECHNOLOGY_VOTE_TIMER_LEFT),
-                    top: px(TECHNOLOGY_VOTE_TIMER_TOP),
-                    right: px(TECHNOLOGY_VOTE_TIMER_RIGHT),
-                    height: px(20),
-                    ..default()
-                },
-            );
-            panel.spawn((
-                VoteTextKind::TechnologyTimer,
-                Text::new("00:30"),
-                TextFont {
-                    font_size: FontSize::Px(16.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Node {
-                    position_type: PositionType::Absolute,
-                    right: px(24),
-                    top: px(TECHNOLOGY_VOTE_TIMER_TOP),
-                    ..default()
-                },
-            ));
+            panel
+                .spawn((
+                    TechnologyVoteTimerGroup,
+                    Pickable::IGNORE,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(0),
+                        top: px(TECHNOLOGY_VOTE_TIMER_GROUP_TOP),
+                        right: px(0),
+                        height: px(24),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                ))
+                .with_children(|timer_group| {
+                    timer_group.spawn((
+                        TechnologyVoteTimerIcon,
+                        ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[3])),
+                        Pickable::IGNORE,
+                        Node {
+                            width: px(24),
+                            height: px(24),
+                            ..default()
+                        },
+                    ));
+                    timer_group.spawn((
+                        TechnologyVoteTimerGap,
+                        Pickable::IGNORE,
+                        Node {
+                            width: px(TECHNOLOGY_VOTE_TIMER_GAP),
+                            height: px(1),
+                            ..default()
+                        },
+                    ));
+                    timer_group
+                        .spawn((
+                            TechnologyVoteTimerBar,
+                            Pickable::IGNORE,
+                            Node {
+                                width: px(TECHNOLOGY_VOTE_TIMER_BAR_WIDTH),
+                                height: px(20),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|timer_bar| {
+                            spawn_vote_track(
+                                timer_bar,
+                                render,
+                                VoteFillKind::TechnologyTimer,
+                                VOTE_TEXTURE_PATHS[2],
+                                VOTE_TEXTURE_PATHS[1],
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: px(0),
+                                    top: px(0),
+                                    right: px(0),
+                                    height: px(20),
+                                    ..default()
+                                },
+                            );
+                            timer_bar
+                                .spawn((
+                                    TechnologyVoteTimerLabel,
+                                    ZIndex(2),
+                                    Pickable::IGNORE,
+                                    Node {
+                                        position_type: PositionType::Absolute,
+                                        left: px(0),
+                                        top: px(0),
+                                        right: px(0),
+                                        height: px(20),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        overflow: Overflow::clip(),
+                                        ..default()
+                                    },
+                                ))
+                                .with_children(|timer_label| {
+                                    timer_label.spawn((
+                                        VoteTextKind::TechnologyTimer,
+                                        Text::new("00:30"),
+                                        TextFont {
+                                            font_size: FontSize::Px(16.0),
+                                            ..default()
+                                        },
+                                        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                                        TextColor(Color::srgb(0.06, 0.08, 0.16)),
+                                        UiTransform::from_xy(
+                                            px(0),
+                                            px(TECHNOLOGY_VOTE_TIMER_TEXT_OFFSET_Y),
+                                        ),
+                                        Pickable::IGNORE,
+                                        Node {
+                                            overflow: Overflow::clip(),
+                                            ..default()
+                                        },
+                                    ));
+                                });
+                        });
+                });
         });
 
     commands
@@ -42658,21 +42735,80 @@ mod tests {
                     assert_eq!(node.top, px(TECHNOLOGY_VOTE_TITLE_TOP));
                 }
                 VoteTextKind::TechnologyTimer => {
-                    assert_eq!(node.top, px(TECHNOLOGY_VOTE_TIMER_TOP));
-                    assert_eq!(node.bottom, Val::Auto);
+                    assert_eq!(node.width, Val::Auto);
+                    assert_eq!(node.top, Val::Auto);
                 }
                 _ => {}
             }
         }
+        let mut vote_text_colors = app.world_mut().query::<(&VoteTextKind, &TextColor)>();
+        let timer_color = vote_text_colors
+            .iter(app.world())
+            .find_map(|(kind, color)| (*kind == VoteTextKind::TechnologyTimer).then_some(color.0))
+            .expect("technology timer text has a colour");
+        assert_eq!(timer_color, Color::srgb(0.06, 0.08, 0.16));
+        let mut vote_text_transforms = app.world_mut().query::<(&VoteTextKind, &UiTransform)>();
+        let timer_transform = vote_text_transforms
+            .iter(app.world())
+            .find_map(|(kind, transform)| {
+                (*kind == VoteTextKind::TechnologyTimer).then_some(*transform)
+            })
+            .expect("technology timer text has a transform");
+        assert_eq!(
+            timer_transform.translation,
+            Val2::new(px(0), px(TECHNOLOGY_VOTE_TIMER_TEXT_OFFSET_Y))
+        );
         let mut timer_tracks = app
             .world_mut()
             .query_filtered::<&Node, With<TechnologyVoteTimerTrack>>();
         let timer_tracks = timer_tracks.iter(app.world()).collect::<Vec<_>>();
         assert_eq!(timer_tracks.len(), 1);
-        assert_eq!(timer_tracks[0].top, px(TECHNOLOGY_VOTE_TIMER_TOP));
-        assert_eq!(timer_tracks[0].left, px(TECHNOLOGY_VOTE_TIMER_LEFT));
-        assert_eq!(timer_tracks[0].right, px(TECHNOLOGY_VOTE_TIMER_RIGHT));
+        assert_eq!(timer_tracks[0].top, px(0));
+        assert_eq!(timer_tracks[0].left, px(0));
+        assert_eq!(timer_tracks[0].right, px(0));
         assert_eq!(timer_tracks[0].bottom, Val::Auto);
+        let mut timer_labels = app
+            .world_mut()
+            .query_filtered::<&Node, With<TechnologyVoteTimerLabel>>();
+        let timer_labels = timer_labels.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(timer_labels.len(), 1);
+        assert_eq!(timer_labels[0].top, px(0));
+        assert_eq!(timer_labels[0].left, px(0));
+        assert_eq!(timer_labels[0].right, px(0));
+        assert_eq!(timer_labels[0].height, px(20));
+        assert_eq!(timer_labels[0].align_items, AlignItems::Center);
+        assert_eq!(timer_labels[0].justify_content, JustifyContent::Center);
+        let mut timer_groups = app
+            .world_mut()
+            .query_filtered::<&Node, With<TechnologyVoteTimerGroup>>();
+        let timer_groups = timer_groups.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(timer_groups.len(), 1);
+        assert_eq!(timer_groups[0].top, px(TECHNOLOGY_VOTE_TIMER_GROUP_TOP));
+        assert_eq!(timer_groups[0].left, px(0));
+        assert_eq!(timer_groups[0].right, px(0));
+        assert_eq!(timer_groups[0].height, px(24));
+        assert_eq!(timer_groups[0].align_items, AlignItems::Center);
+        assert_eq!(timer_groups[0].justify_content, JustifyContent::Center);
+        let mut timer_bars = app
+            .world_mut()
+            .query_filtered::<&Node, With<TechnologyVoteTimerBar>>();
+        let timer_bars = timer_bars.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(timer_bars.len(), 1);
+        assert_eq!(timer_bars[0].width, px(TECHNOLOGY_VOTE_TIMER_BAR_WIDTH));
+        assert_eq!(timer_bars[0].height, px(20));
+        let mut timer_icons = app
+            .world_mut()
+            .query_filtered::<&Node, With<TechnologyVoteTimerIcon>>();
+        let timer_icons = timer_icons.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(timer_icons.len(), 1);
+        assert_eq!(timer_icons[0].width, px(24));
+        assert_eq!(timer_icons[0].height, px(24));
+        let mut timer_gaps = app
+            .world_mut()
+            .query_filtered::<&Node, With<TechnologyVoteTimerGap>>();
+        let timer_gaps = timer_gaps.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(timer_gaps.len(), 1);
+        assert_eq!(timer_gaps[0].width, px(TECHNOLOGY_VOTE_TIMER_GAP));
         let mut title_bars = app.world_mut().query::<(&TechnologyVoteTitleBar, &Node)>();
         let title_bars = title_bars.iter(app.world()).collect::<Vec<_>>();
         assert_eq!(title_bars.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
