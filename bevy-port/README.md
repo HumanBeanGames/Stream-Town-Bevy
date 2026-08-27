@@ -1001,7 +1001,7 @@ authored 20-second delay. Up to three eligible options show converted icons,
 their technology names directly over the live vote-share bars, and every
 converted objective requirement on its own line. A single Twitch-chat
 announcement maps the numbered options to `!vote 1`, `!vote 2`, and `!vote 3`,
-keeping command instructions out of the compact panel; as in Unity, the
+keeping command instructions out of the 260-pixel compact panel; as in Unity, the
 60-second countdown begins with the first vote.
 Building-cap technologies are labelled `Max Lv` in this surface: Unity's
 `Level3TownHall` and `Level3Stonemason` nodes raise the permitted maximum to
