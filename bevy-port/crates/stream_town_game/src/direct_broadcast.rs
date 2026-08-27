@@ -2631,6 +2631,27 @@ fn copy_packed_video_frame(video: &VideoFrame, target: &mut frame::Video) -> Res
     Ok(())
 }
 
+fn configure_amf_quality(options: &mut Dictionary<'_>) {
+    options.set("profile", "high");
+    options.set("usage", "lowlatency_high_quality");
+    options.set("quality", "quality");
+    options.set("rc", "cbr");
+    options.set("enforce_hrd", "1");
+    options.set("filler_data", "1");
+    options.set("frame_skipping", "0");
+    options.set("forced_idr", "1");
+    options.set("max_b_frames", "2");
+    options.set("bf", "2");
+    options.set("bf_delta_qp", "0");
+    options.set("bf_ref_delta_qp", "0");
+    options.set("async_depth", "4");
+    // The shipping terrain grid is mostly static, high-frequency detail.
+    // AMF's automatic static-scene and adaptive-mini-GOP decisions repeatedly
+    // starved that detail between Twitch's required two-second IDR frames.
+    options.set("vbaq", "1");
+    options.set("preanalysis", "0");
+}
+
 fn open_video_encoder(
     config: &BroadcastConfig,
     global_header: bool,
@@ -2687,20 +2708,7 @@ fn open_video_encoder(
                     options.set("scenario", "livestreaming");
                 }
                 "h264_amf" => {
-                    options.set("profile", "high");
-                    options.set("usage", "lowlatency_high_quality");
-                    options.set("quality", "balanced");
-                    options.set("rc", "cbr");
-                    // AMF's default `auto` values do not guarantee that a
-                    // nominal CBR session actually emits a constant transport
-                    // rate for low-motion frames. Twitch uses that transport
-                    // cadence when deciding whether an ingest is healthy.
-                    options.set("enforce_hrd", "1");
-                    options.set("filler_data", "1");
-                    options.set("frame_skipping", "0");
-                    options.set("max_b_frames", "2");
-                    options.set("bf", "2");
-                    options.set("async_depth", "4");
+                    configure_amf_quality(&mut options);
                 }
                 "h264_mf" => {
                     options.set("rate_control", "cbr");
@@ -3305,6 +3313,19 @@ mod tests {
             take_latest_video(&controller.video).unwrap().pixels,
             [5, 6, 7, 8]
         );
+    }
+
+    #[test]
+    fn amf_quality_profile_keeps_static_grid_detail_between_keyframes() {
+        let mut options = Dictionary::new();
+        configure_amf_quality(&mut options);
+
+        assert_eq!(options.get("usage"), Some("lowlatency_high_quality"));
+        assert_eq!(options.get("quality"), Some("quality"));
+        assert_eq!(options.get("rc"), Some("cbr"));
+        assert_eq!(options.get("vbaq"), Some("1"));
+        assert_eq!(options.get("preanalysis"), Some("0"));
+        assert_eq!(options.get("forced_idr"), Some("1"));
     }
 
     #[test]

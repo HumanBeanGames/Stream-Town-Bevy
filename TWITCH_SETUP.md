@@ -174,7 +174,10 @@ Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
 keyframe interval; the game sets those details internally. The AMD AMF path
 also enables HRD enforcement and filler packets so low-motion or static scenes
 remain at the configured transport bitrate instead of collapsing to a nominal
-CBR stream with almost no data. Higher presets may be selected as follows,
+CBR stream with almost no data. It uses the quality preset with variance-based
+adaptive quantization and disables AMF preanalysis so static, high-frequency
+terrain detail is not periodically reclassified and softened between IDR
+frames. Higher presets may be selected as follows,
 subject to Twitch's current guidance and the available upload bandwidth:
 
 - 1920×1080 30 FPS: 4500 Kbps

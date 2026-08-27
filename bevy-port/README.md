@@ -978,7 +978,10 @@ still about 12s and is the dominant remaining startup cost.
 The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/
 play-time counters, and four-season gauge are loaded from the converted catalog
-and updated from authoritative ECS state. Optional runtime diagnostics remain
+and updated from authoritative ECS state. Fixed-height metric rows keep every
+icon and value on the same vertical center, while the docked sliced tab at the
+right shows the current technology and its first incomplete objective instead
+of the non-functional `TECH TREE` label. Optional runtime diagnostics remain
 available for migration testing without becoming an interactive HUD.
 
 The authoritative object-selection model remains available for future automatic
@@ -993,9 +996,11 @@ through the stable chat grammar and its typed command queues.
 Active technology and governance votes use the shipping voting-menu art.
 A generated world automatically opens its first technology ballot after Unity's
 authored 20-second delay. Up to three eligible options show converted icons,
-numbered `!vote` commands, live shares and tallies; as in Unity, the 60-second
-countdown begins with the first vote. Completing the winning technology's goal
-queues the next ballot. Ruler elections and
+numbered `!vote` commands, every converted objective requirement, live shares
+and tallies; as in Unity, the 60-second countdown begins with the first vote.
+Closing a ballot explicitly resets its child rows and slider fills as well as
+hiding the sliced frame. Completing the winning technology's goal queues the
+next ballot. Ruler elections and
 retention votes show the Unity prompt, deterministic top-five/yes-no tally, and
 the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|keep`
 opens reproducible visual-acceptance fixtures without bypassing the real vote
