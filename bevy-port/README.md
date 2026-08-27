@@ -979,10 +979,12 @@ The in-game HUD uses the shipping top-bar artwork rather than a full-width debug
 text block. Its dark/gold background, food/gold/ore/wood icons, player/building/
 play-time counters, and four-season gauge are loaded from the converted catalog
 and updated from authoritative ECS state. Fixed-height metric rows keep every
-icon and value on the same vertical center, while the docked sliced tab at the
-right shows the current technology and its first incomplete objective instead
-of the non-functional `TECH TREE` label. Optional runtime diagnostics remain
-available for migration testing without becoming an interactive HUD.
+icon and value on the same vertical center. The complete header uses the shared
+nine-slice frame; its right-hand technology region is part of that header rather
+than an independently framed tab. It shows the active technology, first
+incomplete requirement, exact progress, and the packaged objective slider in
+place of the non-functional `TECH TREE` label. Optional runtime diagnostics
+remain available for migration testing without becoming an interactive HUD.
 
 The authoritative object-selection model remains available for future automatic
 camera targeting. Pointer selection is not enabled in the shipping game, so its
@@ -996,8 +998,14 @@ through the stable chat grammar and its typed command queues.
 Active technology and governance votes use the shipping voting-menu art.
 A generated world automatically opens its first technology ballot after Unity's
 authored 20-second delay. Up to three eligible options show converted icons,
-numbered `!vote` commands, every converted objective requirement, live shares
-and tallies; as in Unity, the 60-second countdown begins with the first vote.
+their technology names directly over the live vote-share bars, and every
+converted objective requirement on its own line. A single Twitch-chat
+announcement maps the numbered options to `!vote 1`, `!vote 2`, and `!vote 3`,
+keeping command instructions out of the compact panel; as in Unity, the
+60-second countdown begins with the first vote.
+Building-cap technologies are labelled `Max Lv` in this surface: Unity's
+`Level3TownHall` and `Level3Stonemason` nodes raise the permitted maximum to
+three after their initially unlocked roots; they do not skip a level-up action.
 Closing a ballot explicitly resets its child rows and slider fills as well as
 hiding the sliced frame. Completing the winning technology's goal queues the
 next ballot. Ruler elections and
@@ -1006,13 +1014,13 @@ the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|kee
 opens reproducible visual-acceptance fixtures without bypassing the real vote
 state or timer systems.
 
-Accepted technology votes that create objective-backed town goals now open the
-shipping objective tracker. It renders the converted technology icon and title,
-Unity-equivalent requirement labels, exact authoritative current/required
-amounts, and the packaged objective progress slider; it rebuilds after native
-save load and yields temporarily while a new technology ballot occupies the
-same screen region. `STREAM_TOWN_SMOKE_GOAL=1` starts a reproducible real-catalog
-goal fixture for visual acceptance.
+Accepted technology votes that create objective-backed town goals update the
+integrated top-bar tracker. It renders a compact technology title,
+Unity-equivalent requirement label, exact authoritative current/required
+amounts, and the packaged objective progress slider without opening a second
+free-floating window. It updates after native save load as well as live
+progress. `STREAM_TOWN_SMOKE_GOAL=1` starts a reproducible real-catalog goal
+fixture for visual acceptance.
 
 Reachable Fish God and raid events now open Unity's shared current-event panel
 using the three packaged CurrentEvent sprites. Fish God shows the live praise

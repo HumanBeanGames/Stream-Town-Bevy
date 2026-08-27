@@ -2307,26 +2307,31 @@ struct HudStatsStrip;
 struct HudMetricRow;
 
 #[derive(Component)]
-struct HudTechnologyObjective;
+struct HudTopBar;
+
+#[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
+enum HudTechnologyTextKind {
+    Title,
+    Requirement,
+}
 
 #[derive(Component)]
 struct HudTechnologyObjectivePanel;
+
+#[derive(Component)]
+struct HudTechnologyProgressFill;
 
 type HudMetricTextQuery<'w, 's> = Query<
     'w,
     's,
     (&'static HudMetric, &'static mut Text),
-    (Without<Hud>, Without<HudTechnologyObjective>),
+    (Without<Hud>, Without<HudTechnologyTextKind>),
 >;
-type HudTechnologyObjectiveText<'w, 's> = Single<
+type HudTechnologyTextQuery<'w, 's> = Query<
     'w,
     's,
-    &'static mut Text,
-    (
-        With<HudTechnologyObjective>,
-        Without<Hud>,
-        Without<HudMetric>,
-    ),
+    (&'static HudTechnologyTextKind, &'static mut Text),
+    (Without<Hud>, Without<HudMetric>),
 >;
 
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
@@ -2398,7 +2403,6 @@ enum VoteTextKind {
     TechnologyTimer,
     TechnologyOptionTitle(u8),
     TechnologyOptionRequirements(u8),
-    TechnologyOptionCount(u8),
     RulerDescription,
     RulerTimer,
 }
@@ -2418,9 +2422,6 @@ struct TechnologyVoteIcon(u8);
 
 #[derive(Component, Clone, Copy)]
 struct TechnologyVoteOptionRow(u8);
-
-#[derive(Component)]
-struct TownGoalPanel;
 
 #[derive(Component)]
 struct CurrentEventPanel;
@@ -3639,10 +3640,12 @@ impl Plugin for StreamTownGamePlugin {
                     update_selection_panel.after(select_grid_cell),
                     announce_ruler_vote_result.after(move_agents),
                     start_scheduled_technology_vote.after(move_agents),
+                    announce_technology_vote
+                        .after(start_scheduled_technology_vote)
+                        .after(process_injected_commands),
                     update_vote_panels
                         .after(announce_ruler_vote_result)
-                        .after(start_scheduled_technology_vote),
-                    update_town_goal_panel.after(move_agents),
+                        .after(announce_technology_vote),
                     update_current_event_panel.after(update_enemy_encounters),
                 )
                     .in_set(GameplaySimulationSet)
@@ -9626,7 +9629,7 @@ fn spawn_technology_vote_option_row(
     render: &RenderAssets,
     index: u8,
 ) {
-    let top = 62.0 + f32::from(index) * 116.0;
+    let top = 58.0 + f32::from(index) * 102.0;
     panel
         .spawn((
             TechnologyVoteOptionRow(index),
@@ -9634,62 +9637,14 @@ fn spawn_technology_vote_option_row(
             Node {
                 position_type: PositionType::Absolute,
                 top: px(top),
-                left: px(24),
-                right: px(24),
-                height: px(108),
+                left: px(30),
+                right: px(30),
+                height: px(96),
                 overflow: Overflow::clip(),
                 ..default()
             },
         ))
         .with_children(|row| {
-            row.spawn((
-                TechnologyVoteIcon(index),
-                ImageNode::default(),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(0),
-                    top: px(7),
-                    width: px(58),
-                    height: px(58),
-                    ..default()
-                },
-            ));
-            row.spawn((
-                VoteTextKind::TechnologyOptionTitle(index),
-                UiDisplayFont,
-                Text::new(format!("{}. Technology", index + 1)),
-                TextFont {
-                    font_size: FontSize::Px(17.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.97, 0.88, 0.58)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(1),
-                    left: px(72),
-                    right: px(164),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-            ));
-            row.spawn((
-                VoteTextKind::TechnologyOptionRequirements(index),
-                Text::new("Requirements"),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.91, 0.89, 0.81)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(29),
-                    left: px(72),
-                    right: px(8),
-                    height: px(34),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-            ));
             spawn_vote_track(
                 row,
                 render,
@@ -9698,27 +9653,67 @@ fn spawn_technology_vote_option_row(
                 VOTE_TEXTURE_PATHS[5],
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(66),
-                    left: px(72),
-                    right: px(168),
+                    top: px(0),
+                    left: px(0),
+                    right: px(0),
                     height: px(28),
                     ..default()
                 },
             );
+            // The title deliberately follows the track in draw order so the
+            // filled vote bar never covers it.
             row.spawn((
-                VoteTextKind::TechnologyOptionCount(index),
-                Text::new("!vote 1    0% (0)"),
+                VoteTextKind::TechnologyOptionTitle(index),
+                UiDisplayFont,
+                Text::new(format!("{}. Technology", index + 1)),
                 TextFont {
-                    font_size: FontSize::Px(15.0),
+                    font_size: FontSize::Px(13.5),
                     ..default()
                 },
-                TextLayout::justify(Justify::Right),
-                TextColor(Color::WHITE),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                TextColor(Color::srgb(0.98, 0.94, 0.78)),
+                TextShadow {
+                    offset: Vec2::splat(1.0),
+                    color: Color::linear_rgba(0.0, 0.0, 0.0, 0.95),
+                },
+                ZIndex(2),
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(69),
-                    right: px(4),
-                    width: px(156),
+                    top: px(6),
+                    left: px(10),
+                    right: px(10),
+                    height: px(20),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+            ));
+            row.spawn((
+                TechnologyVoteIcon(index),
+                ImageNode::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(4),
+                    top: px(38),
+                    width: px(42),
+                    height: px(42),
+                    ..default()
+                },
+            ));
+            row.spawn((
+                VoteTextKind::TechnologyOptionRequirements(index),
+                Text::new("Requirements"),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.91, 0.89, 0.81)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(35),
+                    left: px(56),
+                    right: px(6),
+                    height: px(58),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
             ));
@@ -9742,9 +9737,8 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 position_type: PositionType::Absolute,
                 top: px(96),
                 right: px(18),
-                width: px(720),
-                height: px(520),
-                padding: UiRect::all(px(22)),
+                width: px(520),
+                height: px(435),
                 ..default()
             },
         ))
@@ -9754,16 +9748,16 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 UiDisplayFont,
                 Text::new("Town technology vote"),
                 TextFont {
-                    font_size: FontSize::Px(23.0),
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
                 TextLayout::justify(Justify::Center),
                 TextColor(Color::srgb(0.97, 0.88, 0.58)),
                 Node {
                     position_type: PositionType::Absolute,
-                    top: px(28),
-                    left: px(22),
-                    right: px(22),
+                    top: px(17),
+                    left: px(32),
+                    right: px(32),
                     ..default()
                 },
             ));
@@ -9776,10 +9770,10 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[3])),
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(27),
-                    bottom: px(43),
-                    width: px(32),
-                    height: px(32),
+                    left: px(30),
+                    bottom: px(22),
+                    width: px(28),
+                    height: px(28),
                     ..default()
                 },
             ));
@@ -9791,10 +9785,10 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VOTE_TEXTURE_PATHS[1],
                 Node {
                     position_type: PositionType::Absolute,
-                    left: px(69),
-                    bottom: px(47),
-                    right: px(108),
-                    height: px(24),
+                    left: px(68),
+                    bottom: px(25),
+                    right: px(88),
+                    height: px(20),
                     ..default()
                 },
             );
@@ -9802,31 +9796,14 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 VoteTextKind::TechnologyTimer,
                 Text::new("00:30"),
                 TextFont {
-                    font_size: FontSize::Px(18.0),
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextColor(Color::WHITE),
                 Node {
                     position_type: PositionType::Absolute,
-                    right: px(24),
-                    bottom: px(44),
-                    ..default()
-                },
-            ));
-            panel.spawn((
-                Text::new("Vote through chat: !vote 1, !vote 2, or !vote 3"),
-                TextFont {
-                    font_size: FontSize::Px(16.0),
-                    ..default()
-                },
-                TextLayout::justify(Justify::Center),
-                TextColor(Color::srgb(0.97, 0.88, 0.58)),
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(24),
-                    right: px(24),
-                    bottom: px(82),
+                    right: px(26),
+                    bottom: px(24),
                     ..default()
                 },
             ));
@@ -9979,37 +9956,6 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 },
             ));
         });
-}
-
-fn spawn_town_goal_panel(commands: &mut Commands, render: &RenderAssets) {
-    commands.spawn((
-        WorldEntity,
-        TownGoalPanel,
-        Name::new("Town goal tracker"),
-        ImageNode::new(objective_texture(render, OBJECTIVE_TEXTURE_PATHS[0]))
-            .with_mode(NodeImageMode::Tiled {
-                tile_x: false,
-                tile_y: true,
-                stretch_value: 1.0,
-            })
-            .with_color(Color::srgb(0.055, 0.075, 0.14)),
-        GlobalZIndex(23),
-        Visibility::Hidden,
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(118),
-            right: px(18),
-            width: px(360),
-            min_height: px(150),
-            max_height: px(480),
-            padding: UiRect::all(px(18)),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(9),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.035, 0.055, 0.11, 0.9)),
-    ));
 }
 
 fn spawn_current_event_panel(commands: &mut Commands, render: &RenderAssets) {
@@ -10180,13 +10126,18 @@ fn spawn_hud_metric(
 }
 
 fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_hash: &str) {
-    let background = top_bar_texture(render, TOP_BAR_TEXTURE_PATHS[0]);
     let complete_art = TOP_BAR_TEXTURE_PATHS
         .iter()
         .all(|path| render.top_bar_textures.contains_key(*path));
     let mut root = commands.spawn((
         WorldEntity,
+        HudTopBar,
         Name::new("Shipping top bar"),
+        authored_ui_image(
+            render,
+            VOTE_TEXTURE_PATHS[0],
+            vote_texture(render, VOTE_TEXTURE_PATHS[0]),
+        ),
         GlobalZIndex(20),
         Node {
             position_type: PositionType::Absolute,
@@ -10200,13 +10151,6 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
         },
         BackgroundColor(Color::srgba(0.025, 0.05, 0.035, 0.88)),
     ));
-    if let Some(background) = background {
-        root.insert(ImageNode::new(background).with_mode(NodeImageMode::Tiled {
-            tile_x: true,
-            tile_y: false,
-            stretch_value: 1.0,
-        }));
-    }
     root.with_children(|parent| {
         parent
             .spawn((
@@ -10237,9 +10181,9 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                 HudStatsStrip,
                 Node {
                     position_type: PositionType::Absolute,
-                    right: percent(0.0),
+                    right: px(10),
                     top: percent(0.0),
-                    width: percent(38.4),
+                    width: percent(40.5),
                     height: percent(100.0),
                     align_items: AlignItems::Center,
                     overflow: Overflow::clip(),
@@ -10252,27 +10196,27 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                     render,
                     HudMetric::Players,
                     TOP_BAR_TEXTURE_PATHS[5],
-                    percent(19.0),
+                    percent(14.5),
                 );
                 spawn_hud_metric(
                     stats,
                     render,
                     HudMetric::Buildings,
                     TOP_BAR_TEXTURE_PATHS[6],
-                    percent(19.0),
+                    percent(14.5),
                 );
                 spawn_hud_metric(
                     stats,
                     render,
                     HudMetric::PlayTime,
                     TOP_BAR_TEXTURE_PATHS[7],
-                    percent(36.6),
+                    percent(23.0),
                 );
                 stats
                     .spawn((
                         HudTechnologyObjectivePanel,
                         Node {
-                            width: percent(25.4),
+                            width: percent(48.0),
                             height: percent(100.0),
                             align_self: AlignSelf::Center,
                             overflow: Overflow::clip(),
@@ -10280,33 +10224,39 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                         },
                     ))
                     .with_children(|objective| {
-                        // Crop the top, right, and bottom of a real nine-slice
-                        // vote prompt at the screen edge. Only its left frame
-                        // remains visible, matching a docked Unity HUD tab.
                         objective.spawn((
-                            authored_ui_image(
-                                render,
-                                VOTE_TEXTURE_PATHS[0],
-                                vote_texture(render, VOTE_TEXTURE_PATHS[0]),
-                            ),
+                            HudTechnologyTextKind::Title,
+                            UiDisplayFont,
+                            Text::new("TECHNOLOGY"),
+                            TextFont {
+                                font_size: FontSize::Px(11.5),
+                                ..default()
+                            },
+                            TextLayout::no_wrap(),
+                            TextColor(Color::srgb(0.97, 0.88, 0.58)),
+                            TextShadow {
+                                offset: Vec2::splat(1.0),
+                                color: Color::linear_rgba(0.0, 0.0, 0.0, 0.9),
+                            },
                             Pickable::IGNORE,
                             Node {
                                 position_type: PositionType::Absolute,
-                                top: px(-40),
-                                right: px(-40),
-                                bottom: px(-40),
-                                left: px(0),
+                                top: px(8),
+                                right: px(20),
+                                left: px(10),
+                                height: px(16),
+                                overflow: Overflow::clip(),
                                 ..default()
                             },
                         ));
                         objective.spawn((
-                            HudTechnologyObjective,
-                            Text::new("TECHNOLOGY\nWaiting for ballot"),
+                            HudTechnologyTextKind::Requirement,
+                            Text::new("Ballot pending"),
                             TextFont {
-                                font_size: FontSize::Px(12.5),
+                                font_size: FontSize::Px(10.5),
                                 ..default()
                             },
-                            TextLayout::justify(Justify::Center),
+                            TextLayout::no_wrap(),
                             TextColor(Color::srgb(0.91, 0.89, 0.81)),
                             TextShadow {
                                 offset: Vec2::splat(1.0),
@@ -10315,14 +10265,48 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
                             Pickable::IGNORE,
                             Node {
                                 position_type: PositionType::Absolute,
-                                top: px(8),
-                                right: px(4),
-                                bottom: px(6),
-                                left: px(14),
+                                top: px(26),
+                                right: px(20),
+                                left: px(10),
+                                height: px(15),
                                 overflow: Overflow::clip(),
                                 ..default()
                             },
                         ));
+                        objective
+                            .spawn((
+                                authored_ui_image(
+                                    render,
+                                    OBJECTIVE_TEXTURE_PATHS[1],
+                                    objective_texture(render, OBJECTIVE_TEXTURE_PATHS[1]),
+                                ),
+                                Pickable::IGNORE,
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: px(10),
+                                    right: px(20),
+                                    bottom: px(5),
+                                    height: px(13),
+                                    overflow: Overflow::clip_x(),
+                                    ..default()
+                                },
+                            ))
+                            .with_children(|track| {
+                                track.spawn((
+                                    HudTechnologyProgressFill,
+                                    authored_ui_image(
+                                        render,
+                                        OBJECTIVE_TEXTURE_PATHS[2],
+                                        objective_texture(render, OBJECTIVE_TEXTURE_PATHS[2]),
+                                    ),
+                                    Pickable::IGNORE,
+                                    Node {
+                                        width: percent(0.0),
+                                        height: percent(100.0),
+                                        ..default()
+                                    },
+                                ));
+                            });
                     });
             });
         if let (Some(gauge), Some(meter)) = (
@@ -10470,7 +10454,6 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
     });
 
     spawn_vote_panels(commands, render);
-    spawn_town_goal_panel(commands, render);
     spawn_current_event_panel(commands, render);
 }
 
@@ -27581,15 +27564,8 @@ fn technology_vote_requirements(content: &ContentCatalog, technology: &StableId)
         .collect::<Vec<_>>();
     if requirements.is_empty() {
         "No additional requirements".to_owned()
-    } else if requirements.len() > 2 {
-        let split = requirements.len().div_ceil(2);
-        format!(
-            "Requires: {}\n{}",
-            requirements[..split].join("  •  "),
-            requirements[split..].join("  •  ")
-        )
     } else {
-        format!("Requires: {}", requirements.join("  •  "))
+        requirements.join("\n")
     }
 }
 
@@ -27794,17 +27770,6 @@ fn update_vote_panels(
                     .get(usize::from(*index))
                     .map(|technology| technology_vote_requirements(&content.0, technology))
                     .unwrap_or_default(),
-                VoteTextKind::TechnologyOptionCount(index) => options
-                    .get(usize::from(*index))
-                    .map(|technology| {
-                        let votes = technology_vote_option_tally(vote, technology);
-                        format!(
-                            "!vote {}    {:.0}% ({votes})",
-                            index + 1,
-                            vote_ratio(votes, total) * 100.0
-                        )
-                    })
-                    .unwrap_or_default(),
                 _ => continue,
             };
         }
@@ -27864,7 +27829,6 @@ fn update_vote_panels(
                     | VoteTextKind::TechnologyTimer
                     | VoteTextKind::TechnologyOptionTitle(_)
                     | VoteTextKind::TechnologyOptionRequirements(_)
-                    | VoteTextKind::TechnologyOptionCount(_)
             ) {
                 text.0.clear();
             }
@@ -28011,158 +27975,6 @@ fn objective_display_label(definition: &stream_town_domain::ObjectiveDef) -> Str
         ),
         ObjectiveKind::BuyAny => "Buy Resources".to_owned(),
     }
-}
-
-fn town_goal_signature(simulation: &WorldSimulation) -> String {
-    simulation
-        .active_goals
-        .first()
-        .map_or_else(|| "closed".to_owned(), |goal| format!("{goal:?}"))
-        + if simulation.active_vote.is_some() {
-            ":ballot"
-        } else {
-            ":visible"
-        }
-}
-
-fn update_town_goal_panel(
-    mut commands: Commands,
-    simulation: Res<SimulationRuntime>,
-    content: Res<RuntimeContent>,
-    presentation: Res<RuntimePresentation>,
-    render: Res<RenderAssets>,
-    asset_server: Option<Res<AssetServer>>,
-    mut signature: Local<String>,
-    panels: Query<Entity, With<TownGoalPanel>>,
-) {
-    if !simulation.is_changed() && !content.is_changed() {
-        return;
-    }
-    let current_signature = town_goal_signature(&simulation.0);
-    if *signature == current_signature {
-        return;
-    }
-    *signature = current_signature;
-    let Ok(panel) = panels.single() else {
-        return;
-    };
-    commands.entity(panel).despawn_children();
-    let Some(goal) = simulation
-        .0
-        .active_goals
-        .first()
-        .filter(|_| simulation.0.active_vote.is_none())
-    else {
-        commands.entity(panel).insert(Visibility::Hidden);
-        return;
-    };
-    let technology = content.0.technology.nodes.get(&goal.technology);
-    commands
-        .entity(panel)
-        .insert(Visibility::Visible)
-        .with_children(|root| {
-            root.spawn(Node {
-                width: percent(100.0),
-                height: px(72),
-                flex_shrink: 0.0,
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: px(12),
-                ..default()
-            })
-            .with_children(|header| {
-                let icon = technology
-                    .and_then(|technology| {
-                        presentation_texture_handle(
-                            &presentation.0,
-                            asset_server.as_deref(),
-                            &technology.icon_path,
-                        )
-                    })
-                    .map_or_else(ImageNode::default, ImageNode::new);
-                header.spawn((
-                    icon,
-                    Node {
-                        width: px(64),
-                        height: px(64),
-                        ..default()
-                    },
-                ));
-                header.spawn((
-                    Text::new(technology.map_or_else(
-                        || goal.technology.to_string(),
-                        |technology| {
-                            compact_technology_label(&technology.display_name).replace('\n', " ")
-                        },
-                    )),
-                    TextFont {
-                        font_size: FontSize::Px(24.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.97, 0.88, 0.58)),
-                    Node {
-                        flex_grow: 1.0,
-                        ..default()
-                    },
-                ));
-            });
-            for objective in &goal.objectives {
-                let definition = content.0.objectives.get(&objective.objective);
-                let label = definition
-                    .map_or_else(|| objective.objective.to_string(), objective_display_label);
-                let progress =
-                    objective_progress_ratio(objective.amount, objective.required_amount);
-                root.spawn(Node {
-                    width: percent(100.0),
-                    height: px(58),
-                    flex_shrink: 0.0,
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(3),
-                    ..default()
-                })
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new(format!(
-                            "{label}   {} / {}",
-                            objective.amount.min(objective.required_amount),
-                            objective.required_amount
-                        )),
-                        TextFont {
-                            font_size: FontSize::Px(17.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                    row.spawn((
-                        authored_ui_image(
-                            &render,
-                            OBJECTIVE_TEXTURE_PATHS[1],
-                            objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[1]),
-                        ),
-                        Node {
-                            width: percent(100.0),
-                            height: px(26),
-                            overflow: Overflow::clip_x(),
-                            ..default()
-                        },
-                    ))
-                    .with_children(|track| {
-                        track.spawn((
-                            authored_ui_image(
-                                &render,
-                                OBJECTIVE_TEXTURE_PATHS[2],
-                                objective_texture(&render, OBJECTIVE_TEXTURE_PATHS[2]),
-                            ),
-                            Node {
-                                width: percent((progress * 100.0).clamp(0.0, 100.0)),
-                                height: percent(100.0),
-                                ..default()
-                            },
-                        ));
-                    });
-                });
-            }
-        });
 }
 
 fn current_event_panel_state(
@@ -28392,7 +28204,7 @@ fn pointer_is_over_button<'a>(mut interactions: impl Iterator<Item = &'a Interac
 }
 
 fn compact_technology_label(display_name: &str) -> String {
-    for (prefix, suffix) in [("Unlock", "Unlock"), ("Level", "Lv"), ("Upgrade", "Up")] {
+    for (prefix, suffix) in [("Unlock", "Unlock"), ("Level", "Max Lv"), ("Upgrade", "Up")] {
         let Some(remainder) = display_name.strip_prefix(prefix) else {
             continue;
         };
@@ -29812,6 +29624,54 @@ fn start_scheduled_technology_vote(
     {
         warn!(%error, "scheduled technology vote could not start");
     }
+}
+
+fn technology_vote_announcement(
+    content: &ContentCatalog,
+    vote: &stream_town_domain::TechVote,
+) -> String {
+    let options = technology_vote_options(vote);
+    let labels = options
+        .iter()
+        .enumerate()
+        .map(|(index, technology)| {
+            let label = content.technology.nodes.get(*technology).map_or_else(
+                || technology.to_string(),
+                |node| compact_technology_label(&node.display_name).replace('\n', " "),
+            );
+            format!("{}: {label}", index + 1)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let commands = (1..=options.len())
+        .map(|index| format!("!vote {index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Technology vote started! {labels}. Vote with {commands}.")
+}
+
+fn announce_technology_vote(
+    simulation: Res<SimulationRuntime>,
+    content: Res<RuntimeContent>,
+    connection: Res<TwitchConnection>,
+    mut announced_vote: Local<Option<String>>,
+) {
+    let Some(vote) = simulation.0.active_vote.as_ref() else {
+        *announced_vote = None;
+        return;
+    };
+    let signature = technology_vote_options(vote)
+        .iter()
+        .map(|technology| technology.as_str())
+        .collect::<Vec<_>>()
+        .join("|");
+    if announced_vote.as_deref() == Some(signature.as_str()) || connection.transport.is_none() {
+        return;
+    }
+    let message = technology_vote_announcement(&content.0, vote);
+    info!(announcement = %message, "technology vote announced");
+    send_command_feedback(&connection, message);
+    *announced_vote = Some(signature);
 }
 
 fn unlock_reachable_technologies(
@@ -32894,8 +32754,12 @@ fn update_hud(
     agents: Query<&Agent>,
     mut hud: Single<&mut Text, With<Hud>>,
     mut metrics: HudMetricTextQuery,
-    mut technology_objective: HudTechnologyObjectiveText,
-    mut season_meters: Query<&mut Node, With<SeasonMeter>>,
+    mut technology_texts: HudTechnologyTextQuery,
+    mut technology_progress: Single<
+        &mut Node,
+        (With<HudTechnologyProgressFill>, Without<SeasonMeter>),
+    >,
+    mut season_meters: Query<&mut Node, (With<SeasonMeter>, Without<HudTechnologyProgressFill>)>,
 ) {
     if !stats.is_changed()
         && !twitch.is_changed()
@@ -32968,7 +32832,14 @@ fn update_hud(
             HudMetric::PlayTime => hud_play_time(stats.elapsed_seconds),
         };
     }
-    technology_objective.0 = hud_technology_objective_text(&content.0, &simulation.0);
+    let technology_summary = hud_technology_summary(&content.0, &simulation.0);
+    for (kind, mut text) in &mut technology_texts {
+        text.0 = match kind {
+            HudTechnologyTextKind::Title => technology_summary.title.clone(),
+            HudTechnologyTextKind::Requirement => technology_summary.requirement.clone(),
+        };
+    }
+    technology_progress.width = percent(technology_summary.progress * 100.0);
     let season_progress = hud_season_meter_percent(simulation.0.day);
     for mut meter in &mut season_meters {
         meter.left = percent(season_progress);
@@ -33028,12 +32899,30 @@ fn town_goal_status(content: &ContentCatalog, simulation: &WorldSimulation) -> S
     format!("{name} [{progress}]")
 }
 
-fn hud_technology_objective_text(content: &ContentCatalog, simulation: &WorldSimulation) -> String {
+#[derive(Debug, PartialEq)]
+struct HudTechnologySummary {
+    title: String,
+    requirement: String,
+    progress: f32,
+}
+
+fn hud_technology_summary(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> HudTechnologySummary {
     let Some(goal) = simulation.active_goals.first() else {
         return if simulation.active_vote.is_some() {
-            "NEXT TECHNOLOGY\nVote in chat now".to_owned()
+            HudTechnologySummary {
+                title: "NEXT TECHNOLOGY".to_owned(),
+                requirement: "Vote in chat now".to_owned(),
+                progress: 0.0,
+            }
         } else {
-            "TECHNOLOGY\nBallot pending".to_owned()
+            HudTechnologySummary {
+                title: "TECHNOLOGY".to_owned(),
+                requirement: "Ballot pending".to_owned(),
+                progress: 0.0,
+            }
         };
     };
     let technology = content.technology.nodes.get(&goal.technology).map_or_else(
@@ -33046,19 +32935,26 @@ fn hud_technology_objective_text(content: &ContentCatalog, simulation: &WorldSim
         .find(|objective| objective.amount < objective.required_amount)
         .or_else(|| goal.objectives.first());
     let Some(objective) = objective else {
-        return format!("{}\nComplete", fit_hud_label(&technology, 24));
+        return HudTechnologySummary {
+            title: fit_hud_label(&technology, 34),
+            requirement: "Complete".to_owned(),
+            progress: 1.0,
+        };
     };
     let label = content
         .objectives
         .get(&objective.objective)
         .map_or_else(|| "Complete objective".to_owned(), objective_display_label);
-    format!(
-        "{}\n{} {}/{}",
-        fit_hud_label(&technology, 24),
-        fit_hud_label(&label, 20),
-        objective.amount.min(objective.required_amount),
-        objective.required_amount
-    )
+    HudTechnologySummary {
+        title: fit_hud_label(&technology, 34),
+        requirement: format!(
+            "{} {}/{}",
+            fit_hud_label(&label, 26),
+            objective.amount.min(objective.required_amount),
+            objective.required_amount
+        ),
+        progress: objective_progress_ratio(objective.amount, objective.required_amount),
+    }
 }
 
 fn fit_hud_label(label: &str, max_chars: usize) -> String {
@@ -42372,8 +42268,12 @@ mod tests {
         let content = embedded_content();
         let mut simulation = WorldSimulation::new(17);
         assert_eq!(
-            hud_technology_objective_text(&content, &simulation),
-            "TECHNOLOGY\nBallot pending"
+            hud_technology_summary(&content, &simulation),
+            HudTechnologySummary {
+                title: "TECHNOLOGY".to_owned(),
+                requirement: "Ballot pending".to_owned(),
+                progress: 0.0,
+            }
         );
         let (technology_id, technology) = content
             .technology
@@ -42385,8 +42285,12 @@ mod tests {
             .start_technology_vote(technology_id.clone(), TECHNOLOGY_VOTE_DURATION_SECONDS)
             .unwrap();
         assert_eq!(
-            hud_technology_objective_text(&content, &simulation),
-            "NEXT TECHNOLOGY\nVote in chat now"
+            hud_technology_summary(&content, &simulation),
+            HudTechnologySummary {
+                title: "NEXT TECHNOLOGY".to_owned(),
+                requirement: "Vote in chat now".to_owned(),
+                progress: 0.0,
+            }
         );
         simulation.active_vote = None;
         assert!(simulation.start_technology_goal(
@@ -42395,9 +42299,40 @@ mod tests {
             &content.objectives,
             MAX_TOWN_GOALS,
         ));
-        let objective = hud_technology_objective_text(&content, &simulation);
-        assert_eq!(objective.lines().count(), 2);
-        assert!(objective.contains("0/"));
+        let objective = hud_technology_summary(&content, &simulation);
+        assert!(objective.requirement.contains("0/"));
+        assert!(objective.progress.abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn level_three_technologies_are_authored_max_level_caps_after_unlocked_roots() {
+        let content = embedded_content();
+        for (display_name, building) in [
+            ("Level3Stonemason", "building:stonemason"),
+            ("Level3TownHall", "building:townhall"),
+        ] {
+            let building = StableId::new(building).unwrap();
+            let technology = content
+                .technology
+                .nodes
+                .values()
+                .find(|technology| technology.display_name == display_name)
+                .expect("shipping max-level technology");
+            assert_eq!(technology.building_level_caps.get(&building), Some(&3));
+            assert_eq!(technology.prerequisites.len(), 1);
+            assert!(content.technology.nodes[&technology.prerequisites[0]].initially_unlocked);
+            assert!(
+                !content
+                    .technology
+                    .nodes
+                    .values()
+                    .any(|technology| technology.building_level_caps.get(&building) == Some(&2))
+            );
+        }
+        assert_eq!(
+            compact_technology_label("Level3Stonemason").replace('\n', " "),
+            "Stonemason Max Lv 3"
+        );
     }
 
     #[test]
@@ -42411,8 +42346,18 @@ mod tests {
             );
         }
 
+        let mut render = RenderAssets::default();
+        render.ui_slicers.insert(
+            VOTE_TEXTURE_PATHS[0].to_owned(),
+            TextureSlicer {
+                border: BorderRect::all(158.0),
+                center_scale_mode: default(),
+                sides_scale_mode: default(),
+                max_corner_scale: 1.0,
+            },
+        );
         let mut app = App::new();
-        app.insert_resource(RenderAssets::default())
+        app.insert_resource(render)
             .add_systems(Startup, spawn_test_hud);
         app.update();
 
@@ -42446,19 +42391,29 @@ mod tests {
             .single(app.world())
             .unwrap();
         assert_eq!(resource_strip.left, px(18));
-        let objective_panel = app
+        let (objective_panel, objective_panel_image) = app
             .world_mut()
-            .query_filtered::<&Node, With<HudTechnologyObjectivePanel>>()
+            .query_filtered::<(&Node, Option<&ImageNode>), With<HudTechnologyObjectivePanel>>()
             .single(app.world())
             .unwrap();
-        assert_eq!(objective_panel.width, percent(25.4));
+        assert_eq!(objective_panel.width, percent(48.0));
         assert_eq!(objective_panel.overflow, Overflow::clip());
-        let objective_text = app
+        assert!(objective_panel_image.is_none());
+        let top_bar_image = app
             .world_mut()
-            .query_filtered::<&Text, With<HudTechnologyObjective>>()
+            .query_filtered::<&ImageNode, With<HudTopBar>>()
             .single(app.world())
             .unwrap();
-        assert_eq!(objective_text.0, "TECHNOLOGY\nWaiting for ballot");
+        assert!(matches!(top_bar_image.image_mode, NodeImageMode::Sliced(_)));
+        let mut technology_texts = app.world_mut().query::<(&HudTechnologyTextKind, &Text)>();
+        let technology_texts = technology_texts.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(technology_texts.len(), 2);
+        assert!(technology_texts.iter().any(|(kind, text)| {
+            **kind == HudTechnologyTextKind::Title && text.0 == "TECHNOLOGY"
+        }));
+        assert!(technology_texts.iter().any(|(kind, text)| {
+            **kind == HudTechnologyTextKind::Requirement && text.0 == "Ballot pending"
+        }));
     }
 
     #[test]
@@ -42527,7 +42482,7 @@ mod tests {
         simulation.tick(1.0, seconds_per_day);
 
         let mut app = App::new();
-        app.insert_resource(RuntimeContent(content))
+        app.insert_resource(RuntimeContent(content.clone()))
             .insert_resource(SimulationRuntime(simulation))
             .insert_resource(RuntimePresentation(embedded_presentation()))
             .insert_resource(RenderAssets::default())
@@ -42549,6 +42504,12 @@ mod tests {
         assert_eq!(vote.technology, vote.options[0]);
         assert!(vote.option_votes.is_empty());
         assert!((vote.remaining_seconds - TECHNOLOGY_VOTE_DURATION_SECONDS).abs() <= f32::EPSILON);
+        let vote_options = vote.options.clone();
+        let announcement = technology_vote_announcement(&content, vote);
+        assert!(announcement.starts_with("Technology vote started! 1:"));
+        for index in 1..=TECHNOLOGY_VOTE_OPTION_COUNT {
+            assert!(announcement.contains(&format!("!vote {index}")));
+        }
         let mut panels = app
             .world_mut()
             .query_filtered::<
@@ -42558,8 +42519,8 @@ mod tests {
         assert!(panels.iter(app.world()).any(|(kind, visibility, node)| {
             *kind == VotePanelKind::Technology
                 && *visibility == Visibility::Visible
-                && node.width == px(720)
-                && node.height == px(520)
+                && node.width == px(520)
+                && node.height == px(435)
         }));
         let mut rows = app
             .world_mut()
@@ -42570,19 +42531,31 @@ mod tests {
                 .count(),
             TECHNOLOGY_VOTE_OPTION_COUNT
         );
-        let mut requirements = app.world_mut().query::<(&VoteTextKind, &Text)>();
-        let requirements = requirements
+        let mut vote_texts = app.world_mut().query::<(&VoteTextKind, &Text)>();
+        let requirements = vote_texts
             .iter(app.world())
             .filter_map(|(kind, text)| {
-                matches!(kind, VoteTextKind::TechnologyOptionRequirements(_))
-                    .then_some(text.0.as_str())
+                let VoteTextKind::TechnologyOptionRequirements(index) = kind else {
+                    return None;
+                };
+                Some((*index, text.0.as_str()))
             })
             .collect::<Vec<_>>();
         assert_eq!(requirements.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
+        for (index, text) in requirements {
+            let objective_count = vote_options
+                .get(usize::from(index))
+                .and_then(|technology| content.technology.nodes.get(technology))
+                .map_or(0, |technology| technology.objectives.len());
+            assert_eq!(text.lines().count(), objective_count.max(1));
+            assert!(!text.contains("Requires:"));
+            assert!(!text.contains('•'));
+        }
+        let mut all_text = app.world_mut().query::<&Text>();
         assert!(
-            requirements
-                .iter()
-                .all(|text| text.starts_with("Requires:"))
+            all_text
+                .iter(app.world())
+                .all(|text| { !text.0.contains("Vote through chat") && !text.0.contains("!vote") })
         );
 
         {
@@ -42647,7 +42620,7 @@ mod tests {
     }
 
     #[test]
-    fn shipping_town_goal_tracker_uses_objective_art_and_unity_labels() {
+    fn shipping_top_bar_technology_progress_uses_objective_art_and_unity_labels() {
         let content = embedded_content();
         let presentation = embedded_presentation();
         for source_path in OBJECTIVE_TEXTURE_PATHS {
@@ -42683,12 +42656,10 @@ mod tests {
             &content.objectives,
             MAX_TOWN_GOALS,
         ));
-        let visible_signature = town_goal_signature(&simulation);
-        assert!(visible_signature.ends_with(":visible"));
-        simulation
-            .start_technology_vote(StableId::new("tech:other_vote").unwrap(), 60.0)
-            .unwrap();
-        assert!(town_goal_signature(&simulation).ends_with(":ballot"));
+        let summary = hud_technology_summary(&content, &simulation);
+        assert_ne!(summary.title, "TECHNOLOGY");
+        assert!(summary.requirement.contains("0/"));
+        assert!(summary.progress.abs() <= f32::EPSILON);
     }
 
     #[test]
