@@ -248,54 +248,55 @@ audio, and FFmpeg's FLV muxer publishes directly to Twitch RTMP. No OBS
 installation, desktop capture, virtual audio device, `ffmpeg.exe` subprocess,
 serialized stream key, or unbounded frame queue is involved. Automatic reconnect
 and five-second health reports expose captured/output FPS, encoder/ingest,
-separate video/audio drops, queue depth, and capture/encode latency. The
+capture replacements, cadence skips, actual rejected video/audio frames, queue
+depth, and capture/encode latency. Auto encoder selection prefers AMD AMF on a
+compatible Radeon GPU, falls back to forced-hardware Windows Media Foundation,
+and uses OpenH264 only as the software fallback. The
 independently stored broadcaster token and fetched stream key are always redacted.
 The encoder worker owns the constant-rate video clock and repeats the latest
 completed GPU frame if the game thread stalls. Audio starts against the first
 video frame and continues on its 48 kHz capture clock, preventing loading work
 from advancing audio while leaving video timestamps behind.
-Every Windows launch also creates a small, always-on-top local status window
-showing `GO LIVE`, `LIVE`, `NOT LIVE`, `NOT SET UP`, test, connecting, or error
-state. Active/prepared states are clickable everywhere so the operator can end a
-session even from the stream-only dashboard. Clicking `GO LIVE` authorizes and
-prepares the destination, but does not open RTMP, start media clocks, or capture
-audio/video until the truthful world-reveal gate has retired the loading cover
-and inserted `GameplayReady`. The Esc menu is rendered only to the operator
-camera in stream-only mode and retains its End Stream and Settings controls. It
-is a separate opaque render surface for broad driver compatibility, follows the
-primary window, and is deliberately absent from the primary-window frames sent
-to Twitch. Automated capture scripts forcibly disable direct broadcasting so a
-visual regression run can never publish its diagnostic frames.
+New/Load Town requires an explicit confirmation that the internal stream may go
+live. Yes authorizes the destination while loading, but does not open RTMP,
+start media clocks, or capture audio/video until the truthful world-reveal gate
+has retired the loading cover and inserted `GameplayReady`. Gameplay then owns a
+separate local operator panel with the sole Live/Not Live toggle and detailed
+health telemetry. Stream-only mode adds a 320x180 preview, redirects the town to
+the full-resolution offscreen target, and hides the original game window;
+headed mode leaves the full game visible. The operator surface is deliberately
+absent from frames sent to Twitch. There is no floating status badge or in-game
+Escape menu. Automated capture scripts forcibly disable direct broadcasting so
+a visual regression run can never publish its diagnostic frames.
 The protected Main Menu > Secrets screen also reports credential presence, live
 bot connection state, and the direct encoder phase with advancing media-frame
 counts. Its Restart stream control reapplies the visible settings and rebuilds
 the in-process Twitch connection without restarting the game. Save and apply
 restarts only a connection whose client ID or login actually changed; a no-op
 save preserves the live bot connection and broadcast worker. The application
-always starts offline; an explicit Go Live or Restart stream action prepares the
-session and gameplay readiness starts it. New/Load Town opens the protected Secrets setup prompt
-until the bot is connected and both account authorizations are stored.
+always starts offline. New/Load Town opens the protected Secrets setup prompt
+until the bot is connected and both account authorizations are stored, then
+opens the go-live confirmation. Yes prepares the session and gameplay readiness
+starts it; the operator toggle can subsequently end or restart it.
 The ordinary Settings menu includes a Streaming tab for direct-stream enablement,
 output resolution, frame rate, video/audio bitrate, encoder preference,
 bandwidth-test mode, and stream-only/headed rendering. These controls are visibly locked from authorization through
 shutdown while a broadcast session is active; end the stream before changing or
-applying them. Saved values take effect on the next Go Live action.
+applying them. Saved values take effect on the next confirmed stream start.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.
 
 In-game gameplay interaction is text-command only. Keyboard, edge, and
 middle-mouse panning are disabled, pointer selection is opt-in for future
-automatic-camera work, and the pointer is hidden until Escape opens the game
-menu or one of its Settings children. Mouse-wheel zoom is disabled; Q/E remains
+automatic-camera work, and the pointer remains hidden in the town. Mouse-wheel zoom is disabled; Q/E remains
 the view-only keyboard zoom control and F12 remains a diagnostic screenshot shortcut. Gameplay uses
 the shipping `MainCamera.prefab` contract directly: a 60-degree perspective
 lens with 0.3/1000 clipping planes, the authored 45-degree downward view from
 the town's negative-X side and physical 11-60 height zoom. The pose is translated to the generated
 Town Hall so different deterministic terrain seeds retain Unity's opening
-composition. Use
-arrow keys and Enter to select Save Game, Load Game, Settings, Go Live, Exit Game, or
-Idle Mode. On the Main Menu and Credits, Tab/Shift+Tab moves
+composition. There is no in-game Escape menu; local stream control lives in the
+operator panel. On the Main Menu and Credits, Tab/Shift+Tab moves
 focus, arrow keys continue from visible keyboard focus, and Enter or Space
 activates the focused control. Settings retain keyboard control: Tab/Shift+Tab changes category,
 arrow keys select or change values, Enter confirms, and Escape invokes the same

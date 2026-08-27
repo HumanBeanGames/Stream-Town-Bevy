@@ -53,7 +53,20 @@ namespace World.Generation
 			hash = Mix(hash, unchecked((uint)Mathf.RoundToInt(position.x * CoordinatePrecision)));
 			hash = Mix(hash, unchecked((uint)Mathf.RoundToInt(position.z * CoordinatePrecision)));
 			hash = Mix(hash, unchecked((uint)salt));
+			hash = Avalanche(hash);
 			return (int)(hash % (uint)count);
+		}
+
+		private static uint Avalanche(uint hash)
+		{
+			unchecked
+			{
+				hash ^= hash >> 16;
+				hash *= 0x7FEB352Du;
+				hash ^= hash >> 15;
+				hash *= 0x846CA68Bu;
+				return hash ^ (hash >> 16);
+			}
 		}
 
 		private static int StableStringHash(string value)

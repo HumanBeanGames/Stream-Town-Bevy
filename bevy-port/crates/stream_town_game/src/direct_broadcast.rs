@@ -26,7 +26,7 @@ use bevy::{
         gpu_readback::{Readback, ReadbackComplete},
         render_resource::{TextureFormat, TextureUsages},
     },
-    window::{PrimaryWindow, WindowRef, WindowResolution},
+    window::{CursorOptions, PrimaryWindow, WindowRef, WindowResolution},
     winit::{UpdateMode, WinitSettings},
 };
 use ffmpeg::{
@@ -94,6 +94,7 @@ impl DirectBroadcastPhase {
 pub struct DirectBroadcastSnapshot {
     pub phase: DirectBroadcastPhase,
     pub encoder: Option<String>,
+    pub encoder_rejections: Vec<String>,
     pub ingest: Option<String>,
     pub captured_video_frames: u64,
     pub encoded_video_frames: u64,
@@ -116,6 +117,7 @@ pub struct DirectBroadcastSnapshot {
 pub struct DirectBroadcastRuntime {
     phase: DirectBroadcastPhase,
     encoder: Option<String>,
+    encoder_rejections: Vec<String>,
     ingest: Option<String>,
     authorization: Option<Arc<Mutex<Receiver<AuthorizationEvent>>>>,
     pending_target: Option<BroadcastTarget>,
@@ -151,11 +153,27 @@ pub(crate) struct StreamOperatorWindow;
 #[derive(Component)]
 struct StreamOperatorInfoText;
 
+#[derive(Component)]
+struct StreamOperatorLiveButton;
+
+#[derive(Component)]
+struct StreamOperatorLiveButtonText;
+
 type StreamCameraTargetQuery<'w, 's> = Query<
     'w,
     's,
     (Entity, &'static mut RenderTarget),
     (With<Camera>, Without<StreamOperatorCamera>),
+>;
+type StreamOperatorLiveButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static mut BackgroundColor,
+        &'static mut BorderColor,
+    ),
+    (With<StreamOperatorLiveButton>, Changed<Interaction>),
 >;
 
 impl Default for DirectBroadcastRuntime {
@@ -163,6 +181,7 @@ impl Default for DirectBroadcastRuntime {
         Self {
             phase: DirectBroadcastPhase::Disabled,
             encoder: None,
+            encoder_rejections: Vec::new(),
             ingest: None,
             authorization: None,
             pending_target: None,
@@ -190,6 +209,7 @@ impl DirectBroadcastRuntime {
         DirectBroadcastSnapshot {
             phase: self.phase.clone(),
             encoder: self.encoder.clone(),
+            encoder_rejections: self.encoder_rejections.clone(),
             ingest: self.ingest.clone(),
             captured_video_frames: metrics.captured_video,
             encoded_video_frames: metrics.encoded_video,
@@ -274,6 +294,11 @@ impl DirectBroadcastControl {
     pub(crate) const fn stop_requested_for_test(&self) -> bool {
         self.stop_requested
     }
+
+    #[cfg(test)]
+    pub(crate) const fn restart_requested_for_test(&self) -> bool {
+        self.restart_requested
+    }
 }
 
 pub struct DirectTwitchBroadcastPlugin;
@@ -292,6 +317,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     start_prepared_broadcast_when_gameplay_ready,
                     poll_direct_broadcast_worker,
                     sync_stream_only_capture,
+                    stream_operator_live_button,
                     update_stream_operator_info,
                     capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
                 )
@@ -527,8 +553,12 @@ fn poll_direct_broadcast_worker(
     for event in events {
         match event {
             WorkerEvent::Connecting => runtime.phase = DirectBroadcastPhase::Connecting,
-            WorkerEvent::Broadcasting { encoder } => {
+            WorkerEvent::Broadcasting {
+                encoder,
+                rejected_encoders,
+            } => {
                 runtime.encoder = Some(encoder);
+                runtime.encoder_rejections = rejected_encoders;
                 runtime.phase = DirectBroadcastPhase::Broadcasting;
                 let now = Instant::now();
                 runtime.broadcast_started.get_or_insert(now);
@@ -589,6 +619,12 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
     let new_video_drops = metrics
         .dropped_video
         .saturating_sub(runtime.health_reported_metrics.dropped_video);
+    let new_video_replacements = metrics
+        .replaced_video
+        .saturating_sub(runtime.health_reported_metrics.replaced_video);
+    let new_video_skips = metrics
+        .skipped_video
+        .saturating_sub(runtime.health_reported_metrics.skipped_video);
     let new_audio_drops = metrics
         .dropped_audio
         .saturating_sub(runtime.health_reported_metrics.dropped_audio);
@@ -605,6 +641,8 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
     let minimum_healthy_fps = f64::from(target_fps) * 0.9;
     let unhealthy = captured_fps < minimum_healthy_fps
         || encoded_fps < minimum_healthy_fps
+        || new_video_drops > 0
+        || new_video_skips > 0
         || new_audio_drops > 0;
     if unhealthy {
         warn!(
@@ -613,6 +651,8 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
             encoded_fps,
             audio_fps,
             new_video_drops,
+            new_video_replacements,
+            new_video_skips,
             new_audio_drops,
             audio_queue_depth = metrics.queued_audio,
             average_encode_ms,
@@ -626,6 +666,8 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
             encoded_fps,
             audio_fps,
             new_video_drops,
+            new_video_replacements,
+            new_video_skips,
             new_audio_drops,
             audio_queue_depth = metrics.queued_audio,
             average_encode_ms,
@@ -639,6 +681,7 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
 fn sync_stream_only_capture(
     mut commands: Commands,
     config: Res<RuntimeConfig>,
+    gameplay_ready: Option<Res<crate::GameplayReady>>,
     runtime: Res<DirectBroadcastRuntime>,
     mut state: ResMut<StreamOnlyCaptureState>,
     mut images: Option<ResMut<Assets<Image>>>,
@@ -646,8 +689,11 @@ fn sync_stream_only_capture(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     mut winit: Option<ResMut<WinitSettings>>,
 ) {
-    let stream_only_active = config.0.twitch.broadcast.render_mode
-        == BroadcastRenderMode::StreamOnly
+    let stream_only_configured =
+        config.0.twitch.broadcast.render_mode == BroadcastRenderMode::StreamOnly;
+    let operator_required = gameplay_ready.is_some();
+    let target_required = operator_required && stream_only_configured;
+    let stream_only_active = stream_only_configured
         && runtime.controller.is_some()
         && matches!(
             runtime.phase,
@@ -656,59 +702,69 @@ fn sync_stream_only_capture(
                 | DirectBroadcastPhase::Reconnecting
         );
 
+    if target_required && state.target.is_none() {
+        let Some(images) = images.as_deref_mut() else {
+            return;
+        };
+        let width = u32::from(config.0.twitch.broadcast.width);
+        let height = u32::from(config.0.twitch.broadcast.height);
+        let mut target =
+            Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None);
+        target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+        let target = images.add(target);
+        let readback_entity = commands
+            .spawn(Readback::texture(target.clone()))
+            .observe(publish_stream_only_frame)
+            .id();
+        state.target = Some(target);
+        state.readback_entity = Some(readback_entity);
+        state.width = width;
+        state.height = height;
+        info!(width, height, "stream-only offscreen target ready");
+    }
+
+    if operator_required && state.operator_window.is_none() {
+        let operator_window = commands
+            .spawn((
+                StreamOperatorWindow,
+                Window {
+                    title: "Stream Town — Operator".to_owned(),
+                    resolution: WindowResolution::new(
+                        OPERATOR_WINDOW_WIDTH,
+                        OPERATOR_WINDOW_HEIGHT,
+                    ),
+                    resizable: false,
+                    ..default()
+                },
+                CursorOptions {
+                    visible: true,
+                    hit_test: true,
+                    ..default()
+                },
+            ))
+            .id();
+        let operator_camera = commands
+            .spawn((
+                StreamOperatorCamera,
+                Camera2d,
+                Camera {
+                    order: 1_000,
+                    ..default()
+                },
+                RenderTarget::Window(WindowRef::Entity(operator_window)),
+            ))
+            .id();
+        let operator_root =
+            spawn_stream_operator_view(&mut commands, operator_camera, state.target.as_ref());
+        state.operator_window = Some(operator_window);
+        state.operator_camera = Some(operator_camera);
+        state.operator_root = Some(operator_root);
+        info!(stream_only_configured, "local stream operator panel ready");
+    }
+
     if stream_only_active {
         if state.target.is_none() {
-            let Some(images) = images.as_deref_mut() else {
-                return;
-            };
-            let width = u32::from(config.0.twitch.broadcast.width);
-            let height = u32::from(config.0.twitch.broadcast.height);
-            let mut target =
-                Image::new_target_texture(width, height, TextureFormat::Bgra8UnormSrgb, None);
-            target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
-            let target = images.add(target);
-            let readback_entity = commands
-                .spawn(Readback::texture(target.clone()))
-                .observe(publish_stream_only_frame)
-                .id();
-            state.target = Some(target);
-            state.readback_entity = Some(readback_entity);
-            state.width = width;
-            state.height = height;
-            let operator_window = commands
-                .spawn((
-                    StreamOperatorWindow,
-                    Window {
-                        title: "Stream Town — Operator".to_owned(),
-                        resolution: WindowResolution::new(
-                            OPERATOR_WINDOW_WIDTH,
-                            OPERATOR_WINDOW_HEIGHT,
-                        ),
-                        resizable: false,
-                        ..default()
-                    },
-                ))
-                .id();
-            let operator_camera = commands
-                .spawn((
-                    StreamOperatorCamera,
-                    Camera2d,
-                    Camera {
-                        order: 1_000,
-                        ..default()
-                    },
-                    RenderTarget::Window(WindowRef::Entity(operator_window)),
-                ))
-                .id();
-            let operator_root = spawn_stream_operator_view(
-                &mut commands,
-                operator_camera,
-                state.target.as_ref().expect("target was just installed"),
-            );
-            state.operator_window = Some(operator_window);
-            state.operator_camera = Some(operator_camera);
-            state.operator_root = Some(operator_root);
-            info!(width, height, "stream-only offscreen render target enabled");
+            return;
         }
         let Some(target) = state.target.clone() else {
             return;
@@ -740,9 +796,6 @@ fn sync_stream_only_capture(
         return;
     }
 
-    if state.target.is_none() {
-        return;
-    }
     for (entity, previous_target) in state.previous_camera_targets.drain() {
         if let Ok((_, mut camera_target)) = camera_targets.get_mut(entity) {
             *camera_target = previous_target;
@@ -758,32 +811,39 @@ fn sync_stream_only_capture(
     {
         winit.unfocused_mode = previous;
     }
-    if let Some(entity) = state.readback_entity.take() {
-        commands.entity(entity).despawn();
+    if !target_required && state.target.is_some() {
+        if let Some(entity) = state.readback_entity.take() {
+            commands.entity(entity).despawn();
+        }
+        if let Some(target) = state.target.take()
+            && let Some(images) = images.as_deref_mut()
+        {
+            images.remove(target.id());
+        }
+        state.width = 0;
+        state.height = 0;
+        info!("stream-only offscreen render target disabled; local preview restored");
     }
-    if let Some(entity) = state.operator_root.take() {
-        commands.entity(entity).despawn();
+    if operator_required {
+        return;
     }
-    if let Some(entity) = state.operator_camera.take() {
-        commands.entity(entity).despawn();
-    }
-    if let Some(entity) = state.operator_window.take() {
-        commands.entity(entity).despawn();
-    }
-    if let Some(target) = state.target.take()
-        && let Some(images) = images.as_deref_mut()
+    for entity in [
+        state.operator_root.take(),
+        state.operator_camera.take(),
+        state.operator_window.take(),
+    ]
+    .into_iter()
+    .flatten()
     {
-        images.remove(target.id());
+        commands.entity(entity).despawn();
     }
-    state.width = 0;
-    state.height = 0;
-    info!("stream-only offscreen render target disabled; local preview restored");
+    info!("local stream operator panel closed");
 }
 
 fn spawn_stream_operator_view(
     commands: &mut Commands,
     camera: Entity,
-    stream_target: &Handle<Image>,
+    stream_target: Option<&Handle<Image>>,
 ) -> Entity {
     commands
         .spawn((
@@ -830,6 +890,34 @@ fn spawn_stream_operator_view(
                 },
             ));
             root.spawn((
+                StreamOperatorLiveButton,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(48),
+                    top: px(324),
+                    width: px(230),
+                    height: px(58),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(10)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.08, 0.31, 0.18)),
+                BorderColor::all(Color::srgb(0.31, 0.78, 0.46)),
+            ))
+            .with_child((
+                StreamOperatorLiveButtonText,
+                Text::new("● GO LIVE"),
+                TextFont {
+                    font_size: FontSize::Px(20.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+            let mut preview = root.spawn((
                 Node {
                     position_type: PositionType::Absolute,
                     right: px(42),
@@ -842,22 +930,46 @@ fn spawn_stream_operator_view(
                 },
                 BackgroundColor(Color::srgb(0.035, 0.045, 0.06)),
                 BorderColor::all(Color::srgb(0.22, 0.35, 0.48)),
-            ))
-            .with_children(|preview| {
-                preview.spawn((
-                    Name::new("Low-resolution stream preview"),
-                    ImageNode::new(stream_target.clone()),
-                    Node {
-                        width: percent(100),
-                        height: percent(100),
-                        ..default()
-                    },
-                ));
-            });
+            ));
+            if let Some(stream_target) = stream_target {
+                preview.with_children(|preview| {
+                    preview.spawn((
+                        Name::new("Low-resolution stream preview"),
+                        ImageNode::new(stream_target.clone()),
+                        Node {
+                            width: percent(100),
+                            height: percent(100),
+                            ..default()
+                        },
+                    ));
+                });
+            } else {
+                preview.with_children(|preview| {
+                    preview.spawn((
+                        Name::new("Low-resolution stream preview"),
+                        Text::new("HEADED MODE\nThe full game remains in the primary window"),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::srgb(0.58, 0.68, 0.78)),
+                        Node {
+                            width: percent(100),
+                            height: percent(100),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                    ));
+                });
+            }
             root.spawn((
-                Text::new(
-                    "Preview · 320 × 180\nUse the local LIVE control or Esc menu to end the stream",
-                ),
+                Text::new(if stream_target.is_some() {
+                    "Preview · 320 × 180\nThis local operator panel is excluded from the stream"
+                } else {
+                    "Headed capture mode\nThis local operator panel is excluded from the stream"
+                }),
                 TextFont {
                     font_size: FontSize::Px(14.0),
                     ..default()
@@ -874,6 +986,53 @@ fn spawn_stream_operator_view(
         .id()
 }
 
+fn stream_operator_live_button(
+    runtime: Res<DirectBroadcastRuntime>,
+    mut control: ResMut<DirectBroadcastControl>,
+    mut buttons: StreamOperatorLiveButtonQuery,
+    mut labels: Query<&mut Text, With<StreamOperatorLiveButtonText>>,
+) {
+    let phase = runtime.snapshot().phase;
+    let active = phase.is_active();
+    let broadcasting = phase == DirectBroadcastPhase::Broadcasting;
+    if let Ok(mut label) = labels.single_mut() {
+        if broadcasting {
+            "● LIVE · END STREAM"
+        } else if active {
+            "● NOT LIVE · CANCEL START"
+        } else {
+            "● NOT LIVE · GO LIVE"
+        }
+        .clone_into(&mut **label);
+    }
+    for (interaction, mut background, mut border) in &mut buttons {
+        let hovered = *interaction == Interaction::Hovered;
+        background.0 = if broadcasting {
+            if hovered {
+                Color::srgb(0.47, 0.08, 0.07)
+            } else {
+                Color::srgb(0.34, 0.045, 0.04)
+            }
+        } else if hovered {
+            Color::srgb(0.11, 0.42, 0.24)
+        } else {
+            Color::srgb(0.08, 0.31, 0.18)
+        };
+        *border = BorderColor::all(if broadcasting {
+            Color::srgb(1.0, 0.32, 0.28)
+        } else {
+            Color::srgb(0.31, 0.78, 0.46)
+        });
+        if *interaction == Interaction::Pressed {
+            if active {
+                control.request_stop();
+            } else {
+                control.request_restart();
+            }
+        }
+    }
+}
+
 fn update_stream_operator_info(
     runtime: Res<DirectBroadcastRuntime>,
     mut text: Query<&mut Text, With<StreamOperatorInfoText>>,
@@ -882,12 +1041,23 @@ fn update_stream_operator_info(
         return;
     };
     let snapshot = runtime.snapshot();
+    let fallback = if snapshot.encoder_rejections.is_empty() {
+        "Auto selected its first usable backend".to_owned()
+    } else {
+        format!(
+            "Auto fallbacks: {}",
+            snapshot.encoder_rejections.join(" | ")
+        )
+    };
     **text = format!(
-        "Status: {:?}\nEncoder: {}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nVideo drops: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
+        "Status: {:?}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nCapture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
         snapshot.phase,
         snapshot.encoder.as_deref().unwrap_or("starting"),
+        fallback,
         snapshot.captured_video_fps,
         snapshot.encoded_video_fps,
+        snapshot.replaced_video_frames,
+        snapshot.skipped_video_frames,
         snapshot.dropped_video_frames,
         snapshot.dropped_audio_frames,
         snapshot.average_encode_ms,
@@ -1203,7 +1373,10 @@ enum AudioInput {
 #[derive(Clone, Debug)]
 enum WorkerEvent {
     Connecting,
-    Broadcasting { encoder: String },
+    Broadcasting {
+        encoder: String,
+        rejected_encoders: Vec<String>,
+    },
     Reconnecting(String),
     Stopped,
     Error(String),
@@ -1402,7 +1575,6 @@ fn publish_latest_video(
     frame: VideoFrame,
 ) -> bool {
     if stop.load(Ordering::Relaxed) {
-        metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
         return false;
     }
     let Ok(mut latest) = video.lock() else {
@@ -1411,7 +1583,6 @@ fn publish_latest_video(
     };
     if latest.replace(frame).is_some() {
         metrics.replaced_video.fetch_add(1, Ordering::Relaxed);
-        metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
     }
     metrics.captured_video.fetch_add(1, Ordering::Relaxed);
     true
@@ -1755,6 +1926,33 @@ struct BroadcastEncoder {
     audio_pts_base: Option<i64>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VideoEncoderSelection {
+    name: String,
+    hardware: bool,
+    rejections: Vec<String>,
+}
+
+impl VideoEncoderSelection {
+    fn display_name(&self) -> String {
+        format!(
+            "{} ({})",
+            self.name,
+            if self.hardware {
+                "hardware"
+            } else {
+                "software"
+            }
+        )
+    }
+}
+
+impl fmt::Display for VideoEncoderSelection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.display_name())
+    }
+}
+
 fn encode_broadcast_session(
     target: &BroadcastTarget,
     config: &BroadcastConfig,
@@ -1766,13 +1964,14 @@ fn encode_broadcast_session(
 ) -> Result<SessionEnd> {
     ffmpeg::init().context("could not initialize the linked FFmpeg libraries")?;
     ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
-    let (mut encoder, encoder_name) = BroadcastEncoder::open(target, config)?;
+    let (mut encoder, encoder_selection) = BroadcastEncoder::open(target, config)?;
     if discard_pending_audio(receiver, metrics) {
         encoder.finish()?;
         return Ok(SessionEnd::Stopped);
     }
     let _ = events.send(WorkerEvent::Broadcasting {
-        encoder: encoder_name,
+        encoder: encoder_selection.display_name(),
+        rejected_encoders: encoder_selection.rejections,
     });
     let mut cadence = VideoCadence::new(config.frames_per_second);
     let mut latest_video = take_latest_video(video_mailbox);
@@ -1796,9 +1995,6 @@ fn encode_broadcast_session(
             if tick.skipped > 0 {
                 metrics
                     .skipped_video
-                    .fetch_add(tick.skipped, Ordering::Relaxed);
-                metrics
-                    .dropped_video
                     .fetch_add(tick.skipped, Ordering::Relaxed);
             }
             let encode_started = Instant::now();
@@ -1851,7 +2047,10 @@ fn discard_pending_audio(receiver: &Receiver<AudioInput>, metrics: &BroadcastMet
 }
 
 impl BroadcastEncoder {
-    fn open(target: &BroadcastTarget, config: &BroadcastConfig) -> Result<(Self, String)> {
+    fn open(
+        target: &BroadcastTarget,
+        config: &BroadcastConfig,
+    ) -> Result<(Self, VideoEncoderSelection)> {
         let mut output_options = Dictionary::new();
         // FFmpeg protocol timeout is in microseconds. Keep a dead ingest from
         // pinning the encoder worker indefinitely; reconnect owns the retry.
@@ -1862,7 +2061,7 @@ impl BroadcastEncoder {
             .format()
             .flags()
             .contains(format::Flags::GLOBAL_HEADER);
-        let (video, video_codec, encoder_name, video_input_format) =
+        let (video, video_codec, encoder_selection, video_input_format) =
             open_video_encoder(config, global_header)?;
         let (audio, audio_codec) = open_audio_encoder(config, global_header)?;
 
@@ -1919,7 +2118,7 @@ impl BroadcastEncoder {
                 video_input_format,
                 audio_pts_base: None,
             },
-            encoder_name,
+            encoder_selection,
         ))
     }
 
@@ -2063,12 +2262,13 @@ fn open_video_encoder(
 ) -> Result<(
     encoder::video::Encoder,
     Codec,
-    String,
+    VideoEncoderSelection,
     ffmpeg::format::Pixel,
 )> {
     let mut failures = Vec::new();
     for &name in encoder_candidates(config.encoder) {
         let Some(codec) = encoder::find_by_name(name) else {
+            failures.push(format!("{name}: not included in the linked FFmpeg build"));
             continue;
         };
         let input_format = encoder_input_format(name);
@@ -2129,7 +2329,14 @@ fn open_video_encoder(
                 .with_context(|| format!("could not open {name}"))
         })();
         match outcome {
-            Ok(video) => return Ok((video, codec, name.to_owned(), input_format)),
+            Ok(video) => {
+                let selection = VideoEncoderSelection {
+                    name: name.to_owned(),
+                    hardware: encoder_is_hardware(name),
+                    rejections: failures,
+                };
+                return Ok((video, codec, selection, input_format));
+            }
             Err(error) => failures.push(format!("{name}: {error:#}")),
         }
     }
@@ -2137,6 +2344,10 @@ fn open_video_encoder(
         "no requested H.264 encoder could be opened ({})",
         failures.join("; ")
     )
+}
+
+fn encoder_is_hardware(name: &str) -> bool {
+    matches!(name, "h264_nvenc" | "h264_qsv" | "h264_amf" | "h264_mf")
 }
 
 fn encoder_input_format(name: &str) -> ffmpeg::format::Pixel {
@@ -2198,6 +2409,7 @@ fn encoder_candidates(preference: BroadcastEncoderPreference) -> &'static [&'sta
 pub struct BroadcastPrerequisites {
     pub available_encoders: Vec<String>,
     pub selected_encoder: String,
+    pub rejected_encoders: Vec<String>,
     pub process_audio_capture_available: bool,
 }
 
@@ -2264,7 +2476,8 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
         AudioClient::new_application_loopback_client(std::process::id(), true).is_ok();
     Ok(BroadcastPrerequisites {
         available_encoders,
-        selected_encoder,
+        selected_encoder: selected_encoder.display_name(),
+        rejected_encoders: selected_encoder.rejections,
         process_audio_capture_available,
     })
 }
@@ -2539,7 +2752,7 @@ mod tests {
         assert!(controller.send_video(second));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.replaced_video, 1);
-        assert_eq!(snapshot.dropped_video, 1);
+        assert_eq!(snapshot.dropped_video, 0);
         assert_eq!(
             take_latest_video(&controller.video).unwrap().pixels,
             [5, 6, 7, 8]
@@ -2587,8 +2800,13 @@ mod tests {
         let elapsed = started.elapsed().as_secs_f64();
         let frames_per_second = f64::from(frame_count) / elapsed;
         eprintln!(
-            "1080p60 local encoder diagnostic: {selected}, {frames_per_second:.1} FPS, {:.2} ms/frame",
-            elapsed * 1_000.0 / f64::from(frame_count)
+            "1080p60 local encoder diagnostic: {selected}, {frames_per_second:.1} FPS, {:.2} ms/frame; rejected before selection: {}",
+            elapsed * 1_000.0 / f64::from(frame_count),
+            if selected.rejections.is_empty() {
+                "none".to_owned()
+            } else {
+                selected.rejections.join(" | ")
+            }
         );
         assert!(
             frames_per_second >= 60.0,
@@ -2616,7 +2834,7 @@ mod tests {
         ffmpeg::init().unwrap();
         ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
         let (mut encoder, selected) = BroadcastEncoder::open(&target, &config).unwrap();
-        assert!(!selected.is_empty());
+        assert!(!selected.name.is_empty());
         let rgba = (0..u32::from(config.height))
             .flat_map(|y| {
                 (0..u32::from(config.width)).flat_map(move |x| {

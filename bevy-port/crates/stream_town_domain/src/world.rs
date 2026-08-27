@@ -531,21 +531,14 @@ fn generate_foliage(
                 unity_clamped_i16((world_x - centre_world[0]) / config.cell_size * 1_000.0),
                 unity_clamped_i16((world_z - centre_world[1]) / config.cell_size * 1_000.0),
             ];
-            let variant = u16::try_from(unity_instance_index(
+            let variant = u16::try_from(foliage_visual_variant(
                 world_x,
                 world_z,
-                0x31_C4_D2_u32 ^ stable_string_hash(layer.id.as_str()),
+                &layer.id,
                 layer.variants.len(),
             ))
             .expect("foliage variant count fits u16");
-            let quarter_turn = unity_instance_index(
-                world_x,
-                world_z,
-                0x7B_29_F3_u32 ^ stable_string_hash(layer.id.as_str()),
-                4,
-            );
-            let yaw_milliradians =
-                u16::try_from(quarter_turn * 1_571).expect("four authored quarter turns fit u16");
+            let yaw_milliradians = foliage_visual_yaw_milliradians(world_x, world_z, &layer.id);
             foliage.push(GeneratedFoliage {
                 id: StableId::new(format!("foliage:{layer_index}:{source_x}:{source_z}"))
                     .expect("generated stable foliage ID"),
@@ -915,6 +908,27 @@ fn stable_string_hash(value: &str) -> u32 {
     })
 }
 
+#[must_use]
+pub fn foliage_visual_variant(world_x: f32, world_z: f32, layer: &StableId, count: usize) -> usize {
+    unity_instance_index(
+        world_x,
+        world_z,
+        0x31_C4_D2_u32 ^ stable_string_hash(layer.as_str()),
+        count,
+    )
+}
+
+#[must_use]
+pub fn foliage_visual_yaw_milliradians(world_x: f32, world_z: f32, layer: &StableId) -> u16 {
+    let quarter_turn = unity_instance_index(
+        world_x,
+        world_z,
+        0x7B_29_F3_u32 ^ stable_string_hash(layer.as_str()),
+        4,
+    );
+    u16::try_from(quarter_turn * 1_571).expect("four authored quarter turns fit u16")
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn unity_instance_index(world_x: f32, world_z: f32, salt: u32, count: usize) -> usize {
     if count == 0 {
@@ -922,8 +936,19 @@ fn unity_instance_index(world_x: f32, world_z: f32, salt: u32, count: usize) -> 
     }
     let x = ((world_x * 1_000.0).round() as i32).cast_unsigned();
     let z = ((world_z * 1_000.0).round() as i32).cast_unsigned();
-    let hash = fnv_mix(fnv_mix(fnv_mix(2_166_136_261, x), z), salt);
+    let hash = avalanche_instance_hash(fnv_mix(fnv_mix(fnv_mix(2_166_136_261, x), z), salt));
     usize::try_from(hash).expect("u32 instance hash fits the target platform") % count
+}
+
+fn avalanche_instance_hash(mut hash: u32) -> u32 {
+    // FNV's low bit mirrors regular coordinate parity, which made two-variant
+    // foliage form diagonal checkerboard rows. Preserve the coordinate/salt
+    // inputs shared with Unity, then avalanche every bit before modulo.
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7FEB_352D);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x846C_A68B);
+    hash ^ (hash >> 16)
 }
 
 fn cell_hash(seed: u64, x: u16, z: u16) -> u64 {
@@ -1186,6 +1211,33 @@ mod tests {
         let second = generate_world(&config);
         assert_eq!(first.deterministic_hash, second.deterministic_hash);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn two_variant_foliage_hash_does_not_form_coordinate_parity_rows() {
+        let layer = StableId::new("foliage:land:0").unwrap();
+        let mut counts = [0_usize; 2];
+        let mut equal_diagonal_neighbours = 0_usize;
+        let mut different_diagonal_neighbours = 0_usize;
+        let coordinate = |value: usize| f32::from(u16::try_from(value).unwrap()) * 0.5;
+        for z in 0..32 {
+            for x in 0..32 {
+                let variant = foliage_visual_variant(coordinate(x), coordinate(z), &layer, 2);
+                counts[variant] += 1;
+                if x > 0 && z > 0 {
+                    let diagonal =
+                        foliage_visual_variant(coordinate(x - 1), coordinate(z - 1), &layer, 2);
+                    if variant == diagonal {
+                        equal_diagonal_neighbours += 1;
+                    } else {
+                        different_diagonal_neighbours += 1;
+                    }
+                }
+            }
+        }
+        assert!(counts.into_iter().all(|count| (400..=624).contains(&count)));
+        assert!(equal_diagonal_neighbours > 250);
+        assert!(different_diagonal_neighbours > 250);
     }
 
     #[test]

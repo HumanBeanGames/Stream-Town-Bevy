@@ -2960,9 +2960,14 @@ fn poll_twitch_tool_events(state: &mut ToolState) {
                 prerequisites,
             } => {
                 state.status = format!(
-                    "Direct broadcast ready for '{}': {ingest_count} Twitch ingests; selected encoder: {}; available: {}; process audio: {}",
+                    "Direct broadcast ready for '{}': {ingest_count} Twitch ingests; selected encoder: {}; rejected before selection: {}; available: {}; process audio: {}",
                     validation.login,
                     prerequisites.selected_encoder,
+                    if prerequisites.rejected_encoders.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        prerequisites.rejected_encoders.join(" | ")
+                    },
                     prerequisites.available_encoders.join(", "),
                     if prerequisites.process_audio_capture_available {
                         "ready"

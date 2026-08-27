@@ -35,8 +35,8 @@ use bevy::{
     app::AnimationSystems,
     asset::{AssetId, AssetPlugin, LoadState, RenderAssetUsages, UntypedAssetId, UntypedHandle},
     audio::{AudioSink, AudioSinkPlayback, AudioSource, SpatialScale, Volume},
-    camera::primitives::Aabb,
-    camera::{Hdr, RenderTarget, ScalingMode},
+    camera::{Hdr, ScalingMode},
+    camera::{primitives::Aabb, visibility::NoFrustumCulling},
     color::LinearRgba,
     core_pipeline::tonemapping::Tonemapping,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
@@ -76,8 +76,8 @@ use bevy::{
     transform::TransformSystems,
     ui_widgets::SelectAllOnFocus,
     window::{
-        CompositeAlphaMode, CursorOptions, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow,
-        WindowLevel, WindowMode, WindowMoved, WindowPosition, WindowRef, WindowResolution,
+        CursorOptions, MonitorSelection, OnMonitor, PresentMode, PrimaryWindow, WindowMode,
+        WindowResolution,
     },
     winit::{UpdateMode, WinitSettings},
     world_serialization::{WorldInstance, WorldInstanceReady},
@@ -100,7 +100,8 @@ use stream_town_domain::{
     RuntimeConsoleStatus, RuntimeConsoleStore, SavedActor, SavedTerrainMesh, Season, StableId,
     StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
-    generate_world_with_content, generate_world_with_content_observed, unity_command_usage,
+    foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world_with_content,
+    generate_world_with_content_observed, unity_command_usage,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -538,6 +539,7 @@ enum MenuPage {
     #[default]
     Closed,
     Game,
+    GoLiveConfirmation,
     Settings,
     SecretsDisclaimer,
     Secrets,
@@ -621,6 +623,7 @@ struct MenuRuntime {
     draft: PlayerSettings,
     streaming_draft: BroadcastConfig,
     feedback: String,
+    pending_town_start: Option<PendingTownStart>,
 }
 
 impl Default for MenuRuntime {
@@ -634,8 +637,15 @@ impl Default for MenuRuntime {
             draft: PlayerSettings::default(),
             streaming_draft: BroadcastConfig::default(),
             feedback: String::new(),
+            pending_town_start: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingTownStart {
+    NewGame,
+    LoadGame,
 }
 
 #[derive(Resource, Default)]
@@ -658,6 +668,7 @@ struct AccessibilityHighContrastText;
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 enum AccessibleButtonScope {
     MainMenu,
+    GoLiveConfirmation,
     GameMenu,
     Settings,
     SettingsConfirm,
@@ -1406,6 +1417,18 @@ enum MainMenuAction {
     Credits,
     Quit,
 }
+
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+enum GoLiveConfirmationAction {
+    No,
+    Yes,
+}
+
+#[derive(Component)]
+struct GoLiveConfirmationRoot;
+
+#[derive(Component)]
+struct GoLiveConfirmationBody;
 
 #[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
 enum GameMenuAction {
@@ -2171,6 +2194,7 @@ struct MainMenuCloudPrism {
     wrap_max_x: f32,
     fade_delay_seconds: f32,
     fade_elapsed_seconds: f32,
+    entrance_fade_distance: f32,
     target_alpha: f32,
 }
 
@@ -2386,15 +2410,6 @@ type GameMenuIdleToggleQuery<'w, 's> = Query<
     (&'static Interaction, &'static mut BackgroundColor),
     (With<GameMenuIdleToggle>, Without<GameMenuAction>),
 >;
-#[cfg(target_os = "windows")]
-type LocalBroadcastStatusButtonQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static Interaction, &'static mut BackgroundColor),
-    (With<LocalBroadcastStatusButton>, Changed<Interaction>),
->;
-type MenuOverlayEntityQuery<'w, 's> =
-    Query<'w, 's, Entity, Or<(With<MenuOverlay>, With<GameMenuRoot>, With<SettingsRoot>)>>;
 type TownCameraMutQuery<'w, 's> = Query<
     'w,
     's,
@@ -2472,6 +2487,20 @@ type WorldAssetRootQuery<'w, 's> = Query<
 
 #[derive(Component)]
 struct MenuOverlay;
+
+type MenuOverlayEntityQuery<'w, 's> = Query<
+    'w,
+    's,
+    Entity,
+    Or<(
+        With<MenuOverlay>,
+        With<GameMenuRoot>,
+        With<SettingsRoot>,
+        With<SecretsDisclaimerRoot>,
+        With<SecretsRoot>,
+        With<GoLiveConfirmationRoot>,
+    )>,
+>;
 
 #[derive(Component)]
 struct TownHall;
@@ -2748,24 +2777,6 @@ struct BuildingPresentation {
 
 #[derive(Component)]
 struct TownCamera;
-
-#[cfg(target_os = "windows")]
-#[derive(Component)]
-struct LocalBroadcastStatusWindow;
-
-#[cfg(target_os = "windows")]
-#[derive(Component)]
-struct LocalBroadcastStatusText;
-
-#[cfg(target_os = "windows")]
-#[derive(Component)]
-struct LocalBroadcastStatusButton;
-
-#[cfg(target_os = "windows")]
-#[derive(Resource, Default)]
-struct LocalBroadcastStatusAnchor {
-    primary_origin: IVec2,
-}
 
 #[derive(Component, Clone)]
 struct TownCameraControllerRuntime {
@@ -3142,250 +3153,11 @@ struct BuildingMaterialInstanced;
 
 pub struct StreamTownGamePlugin;
 
-#[cfg(target_os = "windows")]
-struct LocalBroadcastStatusPlugin;
-
-#[cfg(not(target_os = "windows"))]
-struct LocalBroadcastStatusPlugin;
-
-#[cfg(not(target_os = "windows"))]
-impl Plugin for LocalBroadcastStatusPlugin {
-    fn build(&self, _app: &mut App) {}
-}
-
-#[cfg(target_os = "windows")]
-impl Plugin for LocalBroadcastStatusPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<LocalBroadcastStatusAnchor>()
-            .add_systems(Startup, spawn_local_broadcast_status)
-            .add_systems(
-                Update,
-                (
-                    anchor_local_broadcast_status,
-                    update_local_broadcast_status,
-                    local_broadcast_status_button,
-                ),
-            );
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_local_broadcast_status(mut commands: Commands) {
-    let window = commands
-        .spawn((
-            LocalBroadcastStatusWindow,
-            Window {
-                title: "Stream Town broadcast status".to_owned(),
-                name: Some("stream-town-local-broadcast-status".to_owned()),
-                resolution: WindowResolution::new(142, 32).with_scale_factor_override(1.0),
-                position: WindowPosition::At(IVec2::new(0, 0)),
-                present_mode: PresentMode::AutoVsync,
-                resizable: false,
-                decorations: false,
-                // Keep the local-only status surface opaque. Some Windows GPU
-                // and remote-session surfaces advertise only Opaque alpha;
-                // requesting PostMultiplied made the entire game fail before
-                // the primary window could render.
-                transparent: false,
-                composite_alpha_mode: CompositeAlphaMode::Auto,
-                focused: false,
-                window_level: WindowLevel::AlwaysOnTop,
-                skip_taskbar: true,
-                ..default()
-            },
-            CursorOptions {
-                visible: false,
-                hit_test: false,
-                ..default()
-            },
-        ))
-        .id();
-    let camera = commands
-        .spawn((
-            Camera2d,
-            Camera {
-                clear_color: bevy::camera::ClearColorConfig::Custom(Color::srgb(
-                    0.02, 0.025, 0.035,
-                )),
-                ..default()
-            },
-            RenderTarget::Window(WindowRef::Entity(window)),
-        ))
-        .id();
-    commands
-        .spawn((
-            LocalBroadcastStatusButton,
-            UiTargetCamera(camera),
-            Button,
-            Node {
-                width: percent(100.0),
-                height: percent(100.0),
-                padding: UiRect::horizontal(px(8.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border_radius: BorderRadius::all(px(7.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.02, 0.025, 0.035, 0.92)),
-        ))
-        .with_child((
-            LocalBroadcastStatusText,
-            Text::new("● NOT LIVE"),
-            TextFont {
-                font_size: FontSize::Px(13.0),
-                ..default()
-            },
-            TextLayout::no_wrap().with_justify(Justify::Center),
-            TextColor(Color::srgb(0.78, 0.80, 0.84)),
-            TextShadow {
-                offset: Vec2::splat(1.0),
-                color: Color::BLACK,
-            },
-        ));
-}
-
-#[cfg(target_os = "windows")]
-fn anchor_local_broadcast_status(
-    mut moved: MessageReader<WindowMoved>,
-    mut anchor: ResMut<LocalBroadcastStatusAnchor>,
-    primary: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut status: Query<&mut Window, (With<LocalBroadcastStatusWindow>, Without<PrimaryWindow>)>,
-) {
-    let Ok((primary_entity, primary)) = primary.single() else {
-        return;
-    };
-    for event in moved.read() {
-        if event.window == primary_entity {
-            anchor.primary_origin = event.position;
-        }
-    }
-    if let WindowPosition::At(position) = primary.position {
-        anchor.primary_origin = position;
-    }
-    let Ok(mut status) = status.single_mut() else {
-        return;
-    };
-    let right_margin = 14_i32;
-    let desired = IVec2::new(
-        anchor.primary_origin.x + i32::try_from(primary.physical_width()).unwrap_or(i32::MAX)
-            - i32::try_from(status.physical_width()).unwrap_or(i32::MAX)
-            - right_margin,
-        anchor.primary_origin.y + 114,
-    );
-    if status.position != WindowPosition::At(desired) {
-        status.position = WindowPosition::At(desired);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn local_broadcast_status_label(
-    config: &GameConfig,
-    phase: &direct_broadcast::DirectBroadcastPhase,
-    state: GameState,
-    accounts_ready: bool,
-) -> (&'static str, Color) {
-    use direct_broadcast::DirectBroadcastPhase;
-    match phase {
-        DirectBroadcastPhase::Broadcasting if !config.twitch.broadcast.bandwidth_test => {
-            ("● LIVE", Color::srgb(1.0, 0.28, 0.25))
-        }
-        DirectBroadcastPhase::Broadcasting => ("● NOT LIVE · TEST", Color::srgb(0.98, 0.78, 0.28)),
-        DirectBroadcastPhase::WaitingForGameplay => {
-            ("● READY · STARTS IN GAME", Color::srgb(0.48, 0.86, 1.0))
-        }
-        DirectBroadcastPhase::WaitingForBroadcasterAuthorization
-        | DirectBroadcastPhase::ResolvingIngest
-        | DirectBroadcastPhase::Connecting
-        | DirectBroadcastPhase::Reconnecting => {
-            ("● NOT LIVE · CONNECTING", Color::srgb(0.98, 0.78, 0.28))
-        }
-        DirectBroadcastPhase::Error(_) if accounts_ready => {
-            ("● NOT LIVE · ERROR", Color::srgb(1.0, 0.42, 0.38))
-        }
-        _ if !accounts_ready && state == GameState::MainMenu => {
-            ("● NOT SET UP", Color::srgb(0.98, 0.78, 0.28))
-        }
-        DirectBroadcastPhase::Disabled | DirectBroadcastPhase::Stopped
-            if state == GameState::MainMenu =>
-        {
-            ("● GO LIVE", Color::srgb(0.48, 0.94, 0.58))
-        }
-        DirectBroadcastPhase::Disabled
-        | DirectBroadcastPhase::Stopping
-        | DirectBroadcastPhase::Stopped
-        | DirectBroadcastPhase::Error(_) => ("● NOT LIVE", Color::srgb(0.78, 0.80, 0.84)),
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn update_local_broadcast_status(
-    config: Res<RuntimeConfig>,
-    broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
-    state: Res<State<GameState>>,
-    secrets: Res<SecretsRuntime>,
-    connection: Res<TwitchConnection>,
-    mut text: Query<(&mut Text, &mut TextColor), With<LocalBroadcastStatusText>>,
-) {
-    let Ok((mut text, mut color)) = text.single_mut() else {
-        return;
-    };
-    let snapshot = broadcast.snapshot();
-    let accounts_ready = twitch_accounts_connected(&config.0, &secrets, &connection);
-    let (label, next_color) =
-        local_broadcast_status_label(&config.0, &snapshot.phase, *state.get(), accounts_ready);
-    label.clone_into(&mut **text);
-    color.0 = next_color;
-}
-
-#[cfg(target_os = "windows")]
-fn local_broadcast_status_button(
-    state: Res<State<GameState>>,
-    config: Res<RuntimeConfig>,
-    secrets: Res<SecretsRuntime>,
-    connection: Res<TwitchConnection>,
-    broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
-    mut control: ResMut<direct_broadcast::DirectBroadcastControl>,
-    mut menu: ResMut<MenuRuntime>,
-    mut windows: Query<
-        &mut CursorOptions,
-        (With<LocalBroadcastStatusWindow>, Without<PrimaryWindow>),
-    >,
-    mut buttons: LocalBroadcastStatusButtonQuery,
-) {
-    let phase = broadcast.snapshot().phase;
-    let clickable =
-        phase.is_active() || (*state.get() == GameState::MainMenu && menu.page == MenuPage::Closed);
-    for mut cursor in &mut windows {
-        cursor.visible = clickable;
-        cursor.hit_test = clickable;
-    }
-    let accounts_ready = twitch_accounts_connected(&config.0, &secrets, &connection);
-    for (interaction, mut background) in &mut buttons {
-        background.0 = if clickable && *interaction == Interaction::Hovered {
-            Color::srgba(0.07, 0.09, 0.12, 0.98)
-        } else {
-            Color::srgba(0.02, 0.025, 0.035, 0.92)
-        };
-        if !clickable || *interaction != Interaction::Pressed {
-            continue;
-        }
-        if phase.is_active() {
-            control.request_stop();
-        } else if !accounts_ready {
-            open_twitch_setup_required(&mut menu);
-        } else {
-            control.request_restart();
-        }
-    }
-}
-
 impl Plugin for StreamTownGamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((UnityColorFilterPlugin, TabNavigationPlugin));
         #[cfg(target_os = "windows")]
         app.add_plugins(direct_broadcast::DirectTwitchBroadcastPlugin);
-        #[cfg(target_os = "windows")]
-        app.add_systems(Update, sync_stream_only_operator_menus);
         let render_schedule_available = app.get_sub_app(RenderApp).is_some();
         let presented_frames = PresentedRenderFrames::new(render_schedule_available);
         let gpu_readiness = GpuReadinessProbe::default();
@@ -3587,6 +3359,16 @@ impl Plugin for StreamTownGamePlugin {
                         .after(hide_main_menu_inactive_model_nodes),
                 )
                     .chain()
+                    .run_if(in_state(GameState::MainMenu)),
+            )
+            .add_systems(
+                Update,
+                (
+                    go_live_confirmation_buttons.in_set(AccessibilityActionDispatch),
+                    update_go_live_confirmation_ui,
+                )
+                    .chain()
+                    .after(main_menu_buttons)
                     .run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(
@@ -3964,31 +3746,6 @@ impl Plugin for StreamTownGamePlugin {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn sync_stream_only_operator_menus(
-    mut commands: Commands,
-    menu: Res<MenuRuntime>,
-    operator_camera: Query<Entity, With<direct_broadcast::StreamOperatorCamera>>,
-    mut operator_windows: Query<&mut CursorOptions, With<direct_broadcast::StreamOperatorWindow>>,
-    roots: MenuOverlayEntityQuery,
-    mut previous_operator_camera: Local<Option<Entity>>,
-) {
-    if let Ok(camera) = operator_camera.single() {
-        *previous_operator_camera = Some(camera);
-        for mut cursor in &mut operator_windows {
-            cursor.visible = menu.page != MenuPage::Closed;
-            cursor.hit_test = true;
-        }
-        for entity in &roots {
-            commands.entity(entity).insert(UiTargetCamera(camera));
-        }
-    } else if previous_operator_camera.take().is_some() {
-        for entity in &roots {
-            commands.entity(entity).remove::<UiTargetCamera>();
-        }
-    }
-}
-
 pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
     if std::env::var_os("STREAM_TOWN_SMOKE_OVERLAYS").is_some() {
         player_settings.interface.display_names = NameDisplayMode::AllPlayers;
@@ -4043,7 +3800,6 @@ pub fn run(config: GameConfig, mut player_settings: PlayerSettings) {
                     ..default()
                 }),
         )
-        .add_plugins(LocalBroadcastStatusPlugin)
         .add_plugins(tidal_music::tidal_plugin(&asset_root))
         .add_plugins(PhysicsPlugins::default())
         .add_plugins(FrameTimeDiagnosticsPlugin::new(600))
@@ -6718,7 +6474,15 @@ fn main_menu_preload_paths(content: &ContentCatalog, asset_root: &Path) -> BTree
                 .foliage
                 .iter()
                 .find(|layer| layer.id == foliage.layer)
-                .and_then(|layer| layer.variants.get(usize::from(foliage.variant)))
+                .and_then(|layer| {
+                    let position = Vec3::from_array(foliage.position);
+                    layer.variants.get(foliage_visual_variant(
+                        position.x,
+                        position.z,
+                        &layer.id,
+                        layer.variants.len(),
+                    ))
+                })
                 .filter(|variant| converted_asset_exists(asset_root, &variant.asset_path))
             {
                 paths.insert(variant.asset_path.clone());
@@ -9110,7 +8874,9 @@ fn spawn_main_menu_baked_foliage(
     else {
         return;
     };
-    let Some(variant) = layer.variants.get(usize::from(foliage.variant)) else {
+    let variant_index =
+        foliage_visual_variant(position.x, position.z, &layer.id, layer.variants.len());
+    let Some(variant) = layer.variants.get(variant_index) else {
         return;
     };
     if !converted_asset_exists(asset_root, &variant.asset_path) {
@@ -9139,8 +8905,11 @@ fn spawn_main_menu_baked_foliage(
         Mesh3d(mesh),
         Transform::from_translation(position)
             .with_rotation(
-                Quat::from_rotation_y(f32::from(foliage.yaw_milliradians) / 1_000.0)
-                    * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+                Quat::from_rotation_y(
+                    f32::from(foliage_visual_yaw_milliradians(
+                        position.x, position.z, &layer.id,
+                    )) / 1_000.0,
+                ) * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
             )
             .with_scale(scale),
     ));
@@ -9359,24 +9128,22 @@ fn enforce_main_menu_building_shadow_casters(
 fn spawn_authored_main_menu_clouds(
     commands: &mut Commands,
     render: &RenderAssets,
-    materials: Option<&mut Assets<StandardMaterial>>,
+    mut materials: Option<&mut Assets<StandardMaterial>>,
 ) {
-    let material = materials
-        .and_then(|materials| {
-            materials
-                .get(&render.menu_cloud)
-                .cloned()
-                .map(|base| (materials, base))
-        })
-        .map_or_else(
-            || render.menu_cloud.clone(),
-            |(materials, mut material)| {
+    let base_material = materials
+        .as_deref()
+        .and_then(|materials| materials.get(&render.menu_cloud))
+        .cloned();
+    for layer in 0..MAIN_MENU_CLOUD_COLUMNS * MAIN_MENU_CLOUD_ROWS {
+        let material = match (materials.as_deref_mut(), base_material.as_ref()) {
+            (Some(materials), Some(base)) => {
+                let mut material = base.clone();
                 material.base_color.set_alpha(0.0);
                 material.alpha_mode = AlphaMode::Blend;
                 materials.add(material)
-            },
-        );
-    for layer in 0..MAIN_MENU_CLOUD_COLUMNS * MAIN_MENU_CLOUD_ROWS {
+            }
+            _ => render.menu_cloud.clone(),
+        };
         commands.spawn((
             StateEntity,
             Name::new(format!("Menu cloud prism {layer:02}")),
@@ -9386,6 +9153,7 @@ fn spawn_authored_main_menu_clouds(
                 wrap_max_x: 330.0,
                 fade_delay_seconds: 0.0,
                 fade_elapsed_seconds: 0.0,
+                entrance_fade_distance: 56.0,
                 target_alpha: 0.82,
             },
             Mesh3d(render.cube.clone()),
@@ -9393,6 +9161,7 @@ fn spawn_authored_main_menu_clouds(
             main_menu_cloud_prism_transform(layer),
             bevy::light::NotShadowCaster,
             bevy::light::NotShadowReceiver,
+            NoFrustumCulling,
         ));
     }
 }
@@ -9434,22 +9203,31 @@ fn animate_main_menu_clouds(
     let reduced_motion = settings.is_some_and(|settings| settings.0.interface.reduced_motion);
     for (mut cloud, material, mut transform) in &mut clouds {
         cloud.fade_elapsed_seconds += time.delta_secs();
-        let fade = ((cloud.fade_elapsed_seconds - cloud.fade_delay_seconds) / 1.8).clamp(0.0, 1.0);
+        if !reduced_motion {
+            transform.translation += cloud.drift_per_second * time.delta_secs();
+            if transform.translation.x > cloud.wrap_max_x {
+                transform.translation.x = cloud.wrap_min_x;
+                cloud.fade_elapsed_seconds = 0.0;
+            }
+        }
+        let smooth_fade = main_menu_cloud_fade(&cloud, transform.translation.x);
         if let Some(materials) = materials.as_deref_mut()
             && let Some(mut material) = materials.get_mut(material)
         {
             material
                 .base_color
-                .set_alpha(cloud.target_alpha * fade * fade * (3.0 - 2.0 * fade));
-        }
-        if reduced_motion {
-            continue;
-        }
-        transform.translation += cloud.drift_per_second * time.delta_secs();
-        if transform.translation.x > cloud.wrap_max_x {
-            transform.translation.x = cloud.wrap_min_x;
+                .set_alpha(cloud.target_alpha * smooth_fade);
         }
     }
+}
+
+fn main_menu_cloud_fade(cloud: &MainMenuCloudPrism, position_x: f32) -> f32 {
+    let lifetime_fade =
+        ((cloud.fade_elapsed_seconds - cloud.fade_delay_seconds) / 1.8).clamp(0.0, 1.0);
+    let entrance_fade =
+        ((position_x - cloud.wrap_min_x) / cloud.entrance_fade_distance.max(0.001)).clamp(0.0, 1.0);
+    let fade = lifetime_fade.min(entrance_fade);
+    fade * fade * (3.0 - 2.0 * fade)
 }
 
 fn spawn_cloud_field(commands: &mut Commands, render: &RenderAssets, base_height: f32) {
@@ -10528,7 +10306,6 @@ fn spawn_hud(commands: &mut Commands, render: &RenderAssets, agents: u16, world_
 }
 
 fn main_menu_input(
-    mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     config: Res<RuntimeConfig>,
     secrets: Res<SecretsRuntime>,
@@ -10543,7 +10320,7 @@ fn main_menu_input(
     }
     if keyboard.just_pressed(KeyCode::Enter) && focus.get().is_none() {
         if twitch_accounts_connected(&config.0, &secrets, &connection) {
-            queue_world_loading(&mut commands);
+            request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
         } else {
             open_twitch_setup_required(&mut menu);
         }
@@ -10562,14 +10339,12 @@ fn main_menu_action_enabled(action: MainMenuAction, has_save: bool) -> bool {
 }
 
 fn main_menu_buttons(
-    mut commands: Commands,
     save: Res<SaveRuntime>,
     settings: Res<RuntimePlayerSettings>,
     config: Res<RuntimeConfig>,
     secrets: Res<SecretsRuntime>,
     connection: Res<TwitchConnection>,
     mut menu: ResMut<MenuRuntime>,
-    mut io: ResMut<MenuIoRequest>,
     buttons: Query<(&Interaction, &MainMenuAction), Changed<Interaction>>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
@@ -10585,16 +10360,14 @@ fn main_menu_buttons(
         match action {
             MainMenuAction::NewGame => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    io.load = false;
-                    queue_world_loading(&mut commands);
+                    request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
             }
             MainMenuAction::LoadGame => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    io.load = true;
-                    queue_world_loading(&mut commands);
+                    request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
@@ -10621,6 +10394,88 @@ fn main_menu_buttons(
     }
 }
 
+fn request_go_live_confirmation(menu: &mut MenuRuntime, start: PendingTownStart) {
+    menu.page = MenuPage::GoLiveConfirmation;
+    menu.return_page = MenuPage::Closed;
+    menu.selected = 1;
+    menu.pending_town_start = Some(start);
+    menu.feedback.clear();
+}
+
+fn cancel_go_live_confirmation(menu: &mut MenuRuntime) {
+    menu.page = MenuPage::Closed;
+    menu.return_page = MenuPage::Closed;
+    menu.selected = 0;
+    menu.pending_town_start = None;
+    menu.feedback.clear();
+}
+
+fn confirm_go_live_and_start_town(
+    commands: &mut Commands,
+    menu: &mut MenuRuntime,
+    io: &mut MenuIoRequest,
+    #[cfg(target_os = "windows")] broadcast: &mut direct_broadcast::DirectBroadcastControl,
+) {
+    let Some(start) = menu.pending_town_start.take() else {
+        cancel_go_live_confirmation(menu);
+        return;
+    };
+    io.load = start == PendingTownStart::LoadGame;
+    menu.page = MenuPage::Closed;
+    menu.return_page = MenuPage::Closed;
+    menu.selected = 0;
+    menu.feedback.clear();
+    #[cfg(target_os = "windows")]
+    broadcast.request_restart();
+    queue_world_loading(commands);
+}
+
+fn go_live_confirmation_buttons(
+    mut commands: Commands,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut menu: ResMut<MenuRuntime>,
+    mut io: ResMut<MenuIoRequest>,
+    buttons: Query<(&Interaction, &GoLiveConfirmationAction), Changed<Interaction>>,
+    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
+) {
+    if menu.page != MenuPage::GoLiveConfirmation {
+        return;
+    }
+    if keyboard.just_pressed(KeyCode::ArrowLeft)
+        || keyboard.just_pressed(KeyCode::ArrowRight)
+        || keyboard.just_pressed(KeyCode::Tab)
+    {
+        menu.selected = usize::from(menu.selected == 0);
+    }
+    let mut action = if keyboard.just_pressed(KeyCode::Escape) {
+        Some(GoLiveConfirmationAction::No)
+    } else if keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space) {
+        Some(if menu.selected == 0 {
+            GoLiveConfirmationAction::No
+        } else {
+            GoLiveConfirmationAction::Yes
+        })
+    } else {
+        None
+    };
+    for (interaction, pressed) in &buttons {
+        if *interaction == Interaction::Pressed {
+            action = Some(*pressed);
+        }
+    }
+    match action {
+        Some(GoLiveConfirmationAction::No) => cancel_go_live_confirmation(&mut menu),
+        Some(GoLiveConfirmationAction::Yes) => confirm_go_live_and_start_town(
+            &mut commands,
+            &mut menu,
+            &mut io,
+            #[cfg(target_os = "windows")]
+            &mut broadcast,
+        ),
+        None => {}
+    }
+}
+
 fn update_main_menu_buttons(
     save: Res<SaveRuntime>,
     menu: Res<MenuRuntime>,
@@ -10643,6 +10498,47 @@ fn update_main_menu_buttons(
         } else {
             Color::srgba(0.78, 0.78, 0.78, 0.5)
         };
+    }
+}
+
+fn update_go_live_confirmation_ui(
+    menu: Res<MenuRuntime>,
+    config: Res<RuntimeConfig>,
+    render: Res<RenderAssets>,
+    mut root: Query<&mut Visibility, With<GoLiveConfirmationRoot>>,
+    mut body: Query<&mut Text, With<GoLiveConfirmationBody>>,
+    mut buttons: Query<(&Interaction, &GoLiveConfirmationAction, &mut ImageNode)>,
+) {
+    if let Ok(mut visibility) = root.single_mut() {
+        *visibility = if menu.page == MenuPage::GoLiveConfirmation {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Ok(mut text) = body.single_mut() {
+        if config.0.twitch.broadcast.bandwidth_test {
+            "Starting this town will begin Twitch bandwidth-test output once loading is complete. The test is not publicly listed, but it uses the full stream path. Do you agree to start it?"
+        } else {
+            "Starting this town will begin the internal Twitch stream once loading is complete. Do you agree to go live?"
+        }
+        .clone_into(&mut **text);
+    }
+    for (interaction, action, mut image) in &mut buttons {
+        let index = usize::from(*action == GoLiveConfirmationAction::Yes);
+        let enabled = menu.page == MenuPage::GoLiveConfirmation;
+        let highlighted = enabled
+            && (menu.selected == index
+                || *interaction == Interaction::Hovered
+                || *interaction == Interaction::Pressed);
+        let source = if !enabled {
+            MAIN_MENU_TEXTURE_PATHS[2]
+        } else if highlighted {
+            MAIN_MENU_TEXTURE_PATHS[1]
+        } else {
+            MAIN_MENU_TEXTURE_PATHS[0]
+        };
+        image.image = main_menu_texture(&render, source);
     }
 }
 
@@ -10794,6 +10690,7 @@ fn tag_accessible_buttons(
         (
             Entity,
             Option<&MainMenuAction>,
+            Option<&GoLiveConfirmationAction>,
             Option<&GameMenuAction>,
             Option<&GameMenuIdleToggle>,
             Option<&SettingsTabButton>,
@@ -10804,9 +10701,11 @@ fn tag_accessible_buttons(
         (With<Button>, Without<AccessibleButtonScope>),
     >,
 ) {
-    for (entity, main, game, idle, tab, value, settings, credits) in &buttons {
+    for (entity, main, go_live, game, idle, tab, value, settings, credits) in &buttons {
         let scope = if main.is_some() {
             Some(AccessibleButtonScope::MainMenu)
+        } else if go_live.is_some() {
+            Some(AccessibleButtonScope::GoLiveConfirmation)
         } else if game.is_some() || idle.is_some() {
             Some(AccessibleButtonScope::GameMenu)
         } else if settings.is_some_and(|action| {
@@ -10876,6 +10775,9 @@ fn accessibility_scope_active(
     match scope {
         AccessibleButtonScope::MainMenu => {
             state == GameState::MainMenu && menu.page == MenuPage::Closed
+        }
+        AccessibleButtonScope::GoLiveConfirmation => {
+            state == GameState::MainMenu && menu.page == MenuPage::GoLiveConfirmation
         }
         AccessibleButtonScope::GameMenu => {
             state == GameState::InGame && menu.page == MenuPage::Game
@@ -11330,6 +11232,9 @@ fn announce_accessibility_state(
         ),
         GameState::MainMenu if menu.page == MenuPage::SecretsDisclaimer => {
             "Sensitive Twitch setup disclaimer. Choose Yes to continue or No to return.".to_owned()
+        }
+        GameState::MainMenu if menu.page == MenuPage::GoLiveConfirmation => {
+            "Go-live confirmation. Choose Yes to start the town and begin streaming after loading, or No to remain on the main menu.".to_owned()
         }
         GameState::MainMenu if menu.page == MenuPage::Secrets => {
             "Twitch secrets setup. Internal Twitch video is blacked out. Bot and broadcaster accounts are authorized separately.".to_owned()
@@ -12621,6 +12526,143 @@ fn spawn_menu_overlay(
                 });
         });
     spawn_secrets_overlays(&mut commands, &render, &config.0);
+    spawn_go_live_confirmation(&mut commands, &render);
+}
+
+fn spawn_go_live_confirmation(commands: &mut Commands, render: &RenderAssets) {
+    commands
+        .spawn((
+            StateEntity,
+            GoLiveConfirmationRoot,
+            Name::new("Go-live town-start confirmation"),
+            Visibility::Hidden,
+            GlobalZIndex(190),
+            BackgroundColor(Color::srgba(0.004, 0.006, 0.012, 0.86)),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                top: px(0),
+                width: percent(100.0),
+                height: percent(100.0),
+                padding: UiRect::all(px(24)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn((
+                    Name::new("Go-live confirmation panel"),
+                    TabGroup::default(),
+                    Node {
+                        width: percent(54.0),
+                        max_width: px(860),
+                        min_height: px(330),
+                        border: UiRect::all(px(3)),
+                        border_radius: BorderRadius::all(px(30)),
+                        padding: UiRect::all(px(42)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(24),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.035, 0.046, 0.09)),
+                    BorderColor::all(Color::srgb(0.827, 0.745, 0.498)),
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        Name::new("Go-live confirmation nine-slice surface"),
+                        settings_panel_ui_image(
+                            render,
+                            SETTINGS_BACKGROUND_TEXTURE_PATH,
+                            main_menu_texture(render, SETTINGS_BACKGROUND_TEXTURE_PATH),
+                        ),
+                        Pickable::IGNORE,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(3),
+                            top: px(3),
+                            right: px(3),
+                            bottom: px(3),
+                            ..default()
+                        },
+                    ));
+                    panel.spawn((
+                        Text::new("GO LIVE WITH THIS TOWN?"),
+                        TextFont {
+                            font_size: FontSize::Px(32.0),
+                            ..default()
+                        },
+                        TextLayout::justify(Justify::Center),
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                    panel.spawn((
+                        GoLiveConfirmationBody,
+                        Text::new("Starting this town will begin the internal Twitch stream once loading is complete. Do you agree to go live?"),
+                        TextFont {
+                            font_size: FontSize::Px(21.0),
+                            ..default()
+                        },
+                        TextLayout {
+                            justify: Justify::Center,
+                            linebreak: LineBreak::WordBoundary,
+                        },
+                        TextColor(Color::srgb(0.94, 0.94, 0.91)),
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(92.0),
+                            ..default()
+                        },
+                    ));
+                    panel
+                        .spawn(Node {
+                            width: percent(74.0),
+                            height: px(56),
+                            column_gap: px(24),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            for (action, label, tab_index) in [
+                                (GoLiveConfirmationAction::No, "No — stay offline", 0),
+                                (GoLiveConfirmationAction::Yes, "Yes — go live", 1),
+                            ] {
+                                buttons
+                                    .spawn((
+                                        action,
+                                        Button,
+                                        TabIndex(tab_index),
+                                        authored_ui_image(
+                                            render,
+                                            MAIN_MENU_TEXTURE_PATHS[0],
+                                            main_menu_texture(render, MAIN_MENU_TEXTURE_PATHS[0]),
+                                        ),
+                                        Node {
+                                            flex_grow: 1.0,
+                                            height: percent(100.0),
+                                            padding: UiRect::horizontal(px(14)),
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            ..default()
+                                        },
+                                    ))
+                                    .with_child((
+                                        Text::new(label),
+                                        TextFont {
+                                            font_size: FontSize::Px(17.0),
+                                            ..default()
+                                        },
+                                        TextLayout::justify(Justify::Center),
+                                        TextColor(Color::srgb(0.827, 0.745, 0.498)),
+                                        Pickable::IGNORE,
+                                    ));
+                            }
+                        });
+                });
+        });
 }
 
 fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config: &GameConfig) {
@@ -13978,7 +14020,11 @@ fn update_menu_overlay(
     }
     if matches!(
         menu.page,
-        MenuPage::Closed | MenuPage::Settings | MenuPage::SecretsDisclaimer | MenuPage::Secrets
+        MenuPage::Closed
+            | MenuPage::GoLiveConfirmation
+            | MenuPage::Settings
+            | MenuPage::SecretsDisclaimer
+            | MenuPage::Secrets
     ) || image_game_menu_visible
     {
         *visibility = Visibility::Hidden;
@@ -13992,7 +14038,10 @@ fn update_menu_overlay(
             menu.selected,
             &menu.feedback,
         ),
-        MenuPage::Closed | MenuPage::SecretsDisclaimer | MenuPage::Secrets => String::new(),
+        MenuPage::Closed
+        | MenuPage::GoLiveConfirmation
+        | MenuPage::SecretsDisclaimer
+        | MenuPage::Secrets => String::new(),
     };
     *visibility = Visibility::Visible;
 }
@@ -14142,7 +14191,6 @@ fn volume_percent(value: f32) -> u8 {
 }
 
 fn menu_input(
-    mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     state: Res<State<GameState>>,
     save: Res<SaveRuntime>,
@@ -14167,7 +14215,7 @@ fn menu_input(
     let shift_escape = keyboard.just_pressed(KeyCode::Escape)
         && (keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight));
     let open_key = if *state.get() == GameState::InGame {
-        keyboard.just_pressed(KeyCode::Escape)
+        false
     } else {
         shift_escape || keyboard.just_pressed(KeyCode::KeyS)
     };
@@ -14180,7 +14228,10 @@ fn menu_input(
         }
         return;
     }
-    if matches!(menu.page, MenuPage::SecretsDisclaimer | MenuPage::Secrets) {
+    if matches!(
+        menu.page,
+        MenuPage::GoLiveConfirmation | MenuPage::SecretsDisclaimer | MenuPage::Secrets
+    ) {
         return;
     }
     if keyboard.just_pressed(KeyCode::Escape) {
@@ -14367,17 +14418,14 @@ fn menu_input(
         match menu.selected {
             0 => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    menu.page = MenuPage::Closed;
-                    queue_world_loading(&mut commands);
+                    request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
             }
             1 if save.store.path().is_file() => {
                 if twitch_accounts_connected(&config.0, &secrets, &connection) {
-                    io.load = true;
-                    menu.page = MenuPage::Closed;
-                    queue_world_loading(&mut commands);
+                    request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
                 } else {
                     open_twitch_setup_required(&mut menu);
                 }
@@ -35604,6 +35652,7 @@ mod tests {
         let snapshot = DirectBroadcastSnapshot {
             phase: DirectBroadcastPhase::Broadcasting,
             encoder: Some("h264_mf".to_owned()),
+            encoder_rejections: Vec::new(),
             ingest: Some("US East".to_owned()),
             captured_video_frames: 12,
             encoded_video_frames: 10,
@@ -35633,67 +35682,6 @@ mod tests {
             broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
         assert!(status.contains("● LIVE"));
         assert_eq!(tone, SecretsStatusTone::Good);
-        assert_eq!(
-            local_broadcast_status_label(
-                &config,
-                &DirectBroadcastPhase::Broadcasting,
-                GameState::MainMenu,
-                true,
-            )
-            .0,
-            "● LIVE"
-        );
-        config.twitch.broadcast.bandwidth_test = true;
-        assert_eq!(
-            local_broadcast_status_label(
-                &config,
-                &DirectBroadcastPhase::Broadcasting,
-                GameState::MainMenu,
-                true,
-            )
-            .0,
-            "● NOT LIVE · TEST"
-        );
-        assert!(
-            local_broadcast_status_label(
-                &config,
-                &DirectBroadcastPhase::Connecting,
-                GameState::MainMenu,
-                true,
-            )
-            .0
-            .starts_with("● NOT LIVE")
-        );
-        assert_eq!(
-            local_broadcast_status_label(
-                &config,
-                &DirectBroadcastPhase::Disabled,
-                GameState::MainMenu,
-                true,
-            )
-            .0,
-            "● GO LIVE"
-        );
-        assert_eq!(
-            local_broadcast_status_label(
-                &config,
-                &DirectBroadcastPhase::Disabled,
-                GameState::InGame,
-                true,
-            )
-            .0,
-            "● NOT LIVE"
-        );
-        assert_eq!(
-            local_broadcast_status_label(
-                &config,
-                &DirectBroadcastPhase::Disabled,
-                GameState::MainMenu,
-                false,
-            )
-            .0,
-            "● NOT SET UP"
-        );
     }
 
     #[test]
@@ -35989,6 +35977,58 @@ mod tests {
         assert_eq!(
             app.world().resource::<MenuRuntime>().return_page,
             MenuPage::Closed
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn town_start_consent_prepares_stream_and_loading_only_after_yes() {
+        let mut app = App::new();
+        let mut menu = MenuRuntime::default();
+        request_go_live_confirmation(&mut menu, PendingTownStart::LoadGame);
+        app.insert_resource(menu)
+            .init_resource::<MenuIoRequest>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<direct_broadcast::DirectBroadcastControl>()
+            .add_systems(Update, go_live_confirmation_buttons);
+
+        app.world_mut()
+            .spawn((Interaction::Pressed, GoLiveConfirmationAction::Yes));
+        app.update();
+
+        let menu = app.world().resource::<MenuRuntime>();
+        assert_eq!(menu.page, MenuPage::Closed);
+        assert_eq!(menu.pending_town_start, None);
+        assert!(app.world().resource::<MenuIoRequest>().load);
+        assert!(app.world().contains_resource::<WorldLoadingCoverRuntime>());
+        assert!(
+            app.world()
+                .resource::<direct_broadcast::DirectBroadcastControl>()
+                .restart_requested_for_test()
+        );
+    }
+
+    #[test]
+    fn main_menu_clouds_fade_from_the_wrap_edge_instead_of_popping() {
+        let mut cloud = MainMenuCloudPrism {
+            drift_per_second: Vec3::X,
+            wrap_min_x: -100.0,
+            wrap_max_x: 100.0,
+            fade_delay_seconds: 0.0,
+            fade_elapsed_seconds: 0.0,
+            entrance_fade_distance: 40.0,
+            target_alpha: 0.82,
+        };
+        assert!(main_menu_cloud_fade(&cloud, cloud.wrap_min_x).abs() <= f32::EPSILON);
+
+        cloud.fade_elapsed_seconds = 1.8;
+        assert!(main_menu_cloud_fade(&cloud, cloud.wrap_min_x).abs() <= f32::EPSILON);
+        let halfway = main_menu_cloud_fade(&cloud, cloud.wrap_min_x + 20.0);
+        assert!(halfway > 0.0 && halfway < 1.0);
+        assert!(
+            (main_menu_cloud_fade(&cloud, cloud.wrap_min_x + cloud.entrance_fade_distance) - 1.0)
+                .abs()
+                <= f32::EPSILON
         );
     }
 
@@ -42292,7 +42332,7 @@ mod tests {
         assert_eq!(first.deterministic_hash, second.deterministic_hash);
         assert_eq!(first_keys, second_keys);
         assert_eq!(first.foliage.len(), 16_581);
-        assert_eq!(first_keys.len(), 281);
+        assert_eq!(first_keys.len(), 283);
         assert_eq!(gpu_batches.len(), 12);
         assert!(first_keys.len() * 8 < first.foliage.len());
         assert!(first_keys.iter().all(|key| {

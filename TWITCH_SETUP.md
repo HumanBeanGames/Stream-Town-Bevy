@@ -138,21 +138,21 @@ the runtime console.
 Start in Main Menu > **Secrets**:
 
 1. Set **Direct stream** to **Enabled**. Keep **Bandwidth test** enabled for the
-   first test, then choose **Restart stream** or leave Secrets and click the local
-   **GO LIVE** badge.
-   The status progresses through authorization and ingest selection, then shows
-   **READY · STARTS IN GAME**. This preparation does not open RTMP or start the
-   media clocks. The encoder starts only after New/Load Town has completed every
-   loading/GPU-readiness leaf, retired the loading cover, and unpaused gameplay.
+   first test, then save the settings. Choose New Town or Load Town and answer
+   **Yes** to the go-live confirmation. Authorization and ingest selection begin
+   during loading, but this preparation does not open RTMP or start the media
+   clocks. The encoder starts only after every loading/GPU-readiness leaf has
+   completed, the loading cover has retired, and gameplay has unpaused.
 2. Exit the Secrets screen and open **Settings > Streaming**. Start with
    **1280×720, 30 FPS, 3000 Kbps video, 160 Kbps audio**, with **Stream-only
    rendering** enabled. Streaming settings are
    read-only while a session is connecting, live, reconnecting, or stopping;
-   use **End Stream** first. Automatic
-   encoder selection tries hardware paths first, Windows Media Foundation next,
-   and the OpenH264 CPU encoder last. Select a specific encoder only when
-   diagnosing hardware support. The external Tools > **Twitch** tab remains
-   available for detailed prerequisite diagnostics.
+   use the operator panel's **End Stream** control first. Automatic encoder
+   selection prefers AMD AMF, then tries other available hardware paths and
+   forced-hardware Windows Media Foundation before the OpenH264 CPU fallback.
+   Select a specific encoder only when diagnosing hardware support. The external
+   Tools > **Twitch** tab reports the selected backend and rejected fallback
+   candidates.
 3. Leave **Preferred ingest** empty for Twitch's default, or enter a region name
    substring such as `Sydney`.
 4. With **Bandwidth test** enabled, launch the game. It will send
@@ -161,13 +161,14 @@ Start in Main Menu > **Secrets**:
    signed in as the broadcaster and confirm that the test session is stable.
    Let gameplay run for at least five minutes. The local operator dashboard and
    Runtime tab report rolling captured/output FPS, selected encoder/ingest,
-   separate audio/video drops, queue depth, and encode latency. Stream-only mode
+   capture replacements, cadence skips, actual audio/video rejection counts,
+   queue depth, and encode latency. Stream-only mode
    hides the original game window and opens a lightweight 960×540 operator window
-   with a 320×180 preview; Escape/settings are local and are not sent to Twitch.
-5. End the test from the local status badge or Escape menu, return to Main Menu >
-   **Secrets**, accept the warning, and turn **Bandwidth test** off. Choose
-   **Restart stream** to prepare the real session, start/load a town, and wait for
-   the local status to show **LIVE** after loading completes.
+   with a 320×180 preview. The operator surface is never sent to Twitch.
+5. End the test with **End Stream** in the operator panel. Relaunch to the Main
+   Menu, open **Secrets**, accept the warning, and turn **Bandwidth test** off.
+   Start/load a town, answer **Yes**, and wait for the operator panel to show
+   **LIVE** after loading completes.
 
 Twitch requires H.264 video, AAC audio, constant bitrate, and a two-second
 keyframe interval; the game sets those details internally. Higher presets may
@@ -189,17 +190,16 @@ render stalls without allowing latency to accumulate.
 ## 8. Go live without OBS
 
 1. Verify **Bandwidth-test mode** is off.
-2. Launch `stream_town_game.exe`. It always starts offline. Wait for the local
-   main-menu badge to read **GO LIVE**, then click it. If it reads **NOT SET UP**,
-   click it to return to Secrets and finish both account grants. The badge reads
-   **READY · STARTS IN GAME** after authorization. Start/load the town; no media
-   is sent until the final loading cover has retired. From an already-ready town,
-   Escape > **Go Live** starts immediately. While active, that control changes to
-   **End Stream**.
+2. Launch `stream_town_game.exe`; it always starts offline. Choose New Town or
+   Load Town. If setup is incomplete, the game directs you to Secrets. Otherwise,
+   answer **Yes** to the go-live confirmation. No media is sent until the final
+   loading cover has retired. The local operator panel appears with gameplay and
+   changes its toggle from the starting state to **LIVE · END STREAM**.
 3. Check Twitch's Stream Manager/Inspector from another device. To stop the
-   broadcast, click the local **LIVE** badge or choose Escape > **End Stream** in
-   the operator window. The encoder flushes the stream trailer, restores the
-   ordinary game window, and closes RTMP without exiting the game.
+   broadcast, click **LIVE · END STREAM** in the operator panel. The encoder
+   flushes the stream trailer, restores the ordinary game window in stream-only
+   mode, and closes RTMP without exiting the game. The same toggle can start a
+   new session from the already-loaded town.
 
 WASAPI capture is scoped to the Stream Town process tree, so both the Bevy sound
 engine and Bevy Tidal music are included while unrelated desktop/application
@@ -216,18 +216,17 @@ switcher; they are not silently captured from the desktop.
 - Direct-broadcast diagnostic success: validated broadcaster identity, non-empty
   Helix stream-key response, usable ingest list, linked H.264 encoder, and
   process-scoped WASAPI availability.
-- Main-menu status success: the bot card says **Connected** and the local badge
-  changes from **GO LIVE** to **READY · STARTS IN GAME**, then to either **NOT
-  LIVE · TEST** or **LIVE** only after gameplay readiness. Encoded video and audio
-  frame counts then increase. Yellow is transitional/locked, grey is
-  disabled, green is connected, and red includes the actionable runtime error.
+- Main-menu status success: the bot card says **Connected** and New/Load Town
+  opens the explicit go-live confirmation. After Yes, the operator panel appears
+  only with gameplay and changes to **LIVE · END STREAM** after gameplay
+  readiness. Encoded video and audio frame counts then increase.
 - **Restart stream** saves the visible public settings, stops the current
   in-process encoder if one exists, revalidates the broadcaster grant, fetches a
   fresh stream key and ingest list, and starts a new encoder connection.
-- In-game HUD state: `Twitch: Connected`; the local-only badge reports **NOT LIVE**
-  until Escape > **Go Live** starts the encoder, then the menu action becomes
-  **End Stream** until shutdown completes. In stream-only mode the HUD is sent to
-  Twitch while the operator sees the separate diagnostics/preview window.
+- In-game HUD state: `Twitch: Connected`; the local-only operator toggle reports
+  **NOT LIVE · GO LIVE**, a transitional starting state, or **LIVE · END STREAM**.
+  In stream-only mode the HUD is sent to Twitch while the operator sees the
+  separate diagnostics/preview window.
 - A wrong-account authorization is rejected before IRC is started.
 - If authorization is revoked, the app registration changes, or the refresh token has expired from inactivity, reopen the Bevy tools **Twitch** tab, click **Forget token**, authorize again, and rerun the end-to-end diagnostic.
 - `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.

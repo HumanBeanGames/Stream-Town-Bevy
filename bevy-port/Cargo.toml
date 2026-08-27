@@ -28,6 +28,7 @@ bevy-inspector-egui = "0.37.0"
 bevy_egui = "0.41.1"
 bevy_hanabi = { version = "0.19.0", default-features = false, features = ["2d", "3d"] }
 clap = { version = "4.5.54", features = ["derive"] }
+dunce = "1.0.5"
 flate2 = "1.1.5"
 ffmpeg-next = { version = "=8.1.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
 hex = "0.4.3"

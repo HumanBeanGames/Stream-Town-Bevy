@@ -113,6 +113,10 @@ jobs:
             "cisco-openh264-v2.6.0.tar.gz" `
             "https://github.com/cisco/openh264/archive/refs/tags/v2.6.0.tar.gz" `
             "26a03acde7153a6b40b99f00641772433a244c72a3cc4bca6d903cf3b770174d028369a2fb73b2f0774e1124db0e269758eed6d88975347a815e0366c820d247"
+          Ensure-SourceArchive `
+            "AMF-headers-v1.5.2.tar.gz" `
+            "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.2/AMF-headers-v1.5.2.tar.gz" `
+            "b992d4a1f59f7b1c789d03e7bd9876417a569fb239bfe2e2178f2434ae18653bbacc912de2b8a5f8ff0a85fad28b0c1091c2a8d3417407a37c22c1e907e4c159"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bevy-port
