@@ -31,7 +31,7 @@
         mouse_controls: true,
     ),
     interface: (
-        display_names: None,
+        display_names: AllPlayers,
         display_building_health: DamagedOnly,
         ui_scale_percent: 100,
         high_contrast: false,

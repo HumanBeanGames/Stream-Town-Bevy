@@ -357,8 +357,9 @@ The registered Unity game-master surface is also live: `!tbuildcosts`,
 `!levelup`, `!givepet`, `!qevent`, `!stopevent`, `!cobj`, `!randtech`,
 `!techvote`, `!gaction`, `!unlockall`, `!unlockage2`, and `!resetid`. Build-cost
 and role-limit toggles plus unique queued events persist in native saves.
-Technology administration chooses stable catalog order instead of Unity's
-process-global random state. `!resetid` reports the stable-ID state because Bevy
+Technology ballots rank eligible options from the world seed, progression state,
+and stable technology IDs instead of Unity's unrepeatable process-global random
+state. `!resetid` reports the stable-ID state because Bevy
 does not have Unity's pooled per-type counter to repair. `!stdiscord` preserves
 the remaining registered no-character utility command.
 The IRC parser also retains Unity's complete `!create`/`!join` typo-alias set,
@@ -672,6 +673,8 @@ repeatable axis and retargeting checks.
 `STREAM_TOWN_SMOKE_OVERLAYS=1` frames the Town Hall and starting actors while
 temporarily forcing all player-name and building-health overlays visible; it
 does not modify the saved player settings.
+Player nameplates default to all viewers and are restricted to `twitch:` actors;
+starting and recruited NPCs never receive viewer-name overlays.
 The developer status block is hidden in shipping presentation by default;
 set `STREAM_TOWN_RUNTIME_DIAGNOSTICS=1` when its route, simulation, and input
 telemetry is needed during local debugging.
@@ -988,8 +991,11 @@ Building placement, recruitment, and technology voting are reached exclusively
 through the stable chat grammar and its typed command queues.
 
 Active technology and governance votes use the shipping voting-menu art.
-Technology votes show their converted icon, live approval share, total votes,
-countdown, and a text-command reminder. Ruler elections and
+A generated world automatically opens its first technology ballot after Unity's
+authored 20-second delay. Up to three eligible options show converted icons,
+numbered `!vote` commands, live shares and tallies; as in Unity, the 60-second
+countdown begins with the first vote. Completing the winning technology's goal
+queues the next ballot. Ruler elections and
 retention votes show the Unity prompt, deterministic top-five/yes-no tally, and
 the persisted 120-second countdown. `STREAM_TOWN_SMOKE_VOTE=technology|ruler|keep`
 opens reproducible visual-acceptance fixtures without bypassing the real vote

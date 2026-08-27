@@ -30,7 +30,7 @@ masters as appropriate.
 | `!sell <amount> <resource>` | Sell a town resource. |
 | `!revive [player]` | Revive yourself, or another player when your role permits it. |
 | `!praise` | Praise the Fish God. |
-| `!vote <option>` | Vote in the active ruler or technology vote. |
+| `!vote <option>` | Vote in the active ruler vote, or use the displayed `1`-`3` option in a technology vote. |
 | `!townstats` | Show town statistics. |
 | `!buildings` | List building types. |
 | `!bid <building>` | List instance IDs for a building type. |
@@ -89,7 +89,7 @@ Twitch user IDs explicitly configured in Stream Town’s Twitch settings.
 | `!givepet <player> <pet>` | Unlock a pet for a player. |
 | `!cobj` | Complete the first active technology objective. |
 | `!randtech` | Start an eligible technology goal. |
-| `!techvote` | Start a technology vote. |
+| `!techvote` | Start a three-option, 60-second technology vote. |
 | `!gaction` | Perform the active game-master event action. |
 | `!unlockall` | Unlock all reachable technologies. |
 | `!unlockage2` | Unlock the technologies leading into Age 2. |

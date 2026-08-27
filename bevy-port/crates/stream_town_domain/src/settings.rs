@@ -141,7 +141,7 @@ impl Default for PlayerSettings {
                 mouse_controls: true,
             },
             interface: InterfaceSettings {
-                display_names: NameDisplayMode::None,
+                display_names: NameDisplayMode::AllPlayers,
                 display_building_health: BuildingHealthDisplayMode::DamagedOnly,
                 ui_scale_percent: default_ui_scale_percent(),
                 high_contrast: false,

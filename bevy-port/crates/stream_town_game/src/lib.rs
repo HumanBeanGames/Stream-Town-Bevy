@@ -108,6 +108,7 @@ const MAX_TOWN_GOALS: usize = 2;
 const TWITCH_COMMAND_HELP_URL: &str = "https://github.com/HumanBeanGames/Stream-Town-Bevy/blob/codex/bevy-migration/TWITCH_COMMANDS.md";
 const INVALID_TWITCH_COMMAND_REPLY: &str = "Invalid Command! Type !help for the list of commands!";
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
+const TECHNOLOGY_VOTE_OPTION_COUNT: usize = 3;
 const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
 const MAIN_MENU_SCENE_PATH: &str = "Assets/Scenes/Menu/Main_Menu_02.unity";
@@ -2372,7 +2373,8 @@ enum VotePanelKind {
 enum VoteTextKind {
     TechnologyTitle,
     TechnologyTimer,
-    TechnologyCount,
+    TechnologyOptionTitle(u8),
+    TechnologyOptionCount(u8),
     RulerDescription,
     RulerTimer,
 }
@@ -2383,12 +2385,15 @@ struct RulerOptionsContainer;
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 enum VoteFillKind {
     TechnologyTimer,
-    TechnologyApproval,
+    TechnologyOption(u8),
     RulerTimer,
 }
 
-#[derive(Component)]
-struct TechnologyVoteIcon;
+#[derive(Component, Clone, Copy)]
+struct TechnologyVoteIcon(u8);
+
+#[derive(Component, Clone, Copy)]
+struct TechnologyVoteOptionRow(u8);
 
 #[derive(Component)]
 struct TownGoalPanel;
@@ -2407,7 +2412,7 @@ enum CurrentEventText {
 struct CurrentEventFill;
 
 type TechnologyVoteIconQuery<'w, 's> =
-    Query<'w, 's, &'static mut ImageNode, With<TechnologyVoteIcon>>;
+    Query<'w, 's, (&'static TechnologyVoteIcon, &'static mut ImageNode)>;
 type TownCameraMutQuery<'w, 's> = Query<
     'w,
     's,
@@ -3609,7 +3614,10 @@ impl Plugin for StreamTownGamePlugin {
                     sync_selection_outline.after(select_grid_cell),
                     update_selection_panel.after(select_grid_cell),
                     announce_ruler_vote_result.after(move_agents),
-                    update_vote_panels.after(announce_ruler_vote_result),
+                    start_scheduled_technology_vote.after(move_agents),
+                    update_vote_panels
+                        .after(announce_ruler_vote_result)
+                        .after(start_scheduled_technology_vote),
                     update_town_goal_panel.after(move_agents),
                     update_current_event_panel.after(update_enemy_encounters),
                 )
@@ -9589,6 +9597,90 @@ fn spawn_vote_track(
         });
 }
 
+fn spawn_technology_vote_option_row(
+    panel: &mut ChildSpawnerCommands,
+    render: &RenderAssets,
+    index: u8,
+) {
+    let top = 58.0 + f32::from(index) * 82.0;
+    panel
+        .spawn((
+            TechnologyVoteOptionRow(index),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(top),
+                left: px(24),
+                right: px(24),
+                height: px(74),
+                ..default()
+            },
+        ))
+        .with_children(|row| {
+            row.spawn((
+                TechnologyVoteIcon(index),
+                ImageNode::default(),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(0),
+                    top: px(5),
+                    width: px(62),
+                    height: px(62),
+                    ..default()
+                },
+            ));
+            row.spawn((
+                VoteTextKind::TechnologyOptionTitle(index),
+                UiDisplayFont,
+                Text::new(format!("{}. Technology", index + 1)),
+                TextFont {
+                    font_size: FontSize::Px(19.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.97, 0.88, 0.58)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(1),
+                    left: px(76),
+                    right: px(18),
+                    ..default()
+                },
+            ));
+            spawn_vote_track(
+                row,
+                render,
+                VoteFillKind::TechnologyOption(index),
+                VOTE_TEXTURE_PATHS[6],
+                VOTE_TEXTURE_PATHS[5],
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(34),
+                    left: px(76),
+                    width: px(322),
+                    height: px(30),
+                    ..default()
+                },
+            );
+            row.spawn((
+                VoteTextKind::TechnologyOptionCount(index),
+                Text::new("!vote 1    0% (0)"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextLayout::justify(Justify::Right),
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(37),
+                    right: px(4),
+                    width: px(166),
+                    ..default()
+                },
+            ));
+        });
+}
+
 fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
     commands
         .spawn((
@@ -9606,8 +9698,8 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 position_type: PositionType::Absolute,
                 top: px(126),
                 right: px(24),
-                width: px(420),
-                height: px(280),
+                width: px(560),
+                height: px(390),
                 padding: UiRect::all(px(22)),
                 ..default()
             },
@@ -9631,55 +9723,17 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     ..default()
                 },
             ));
-            panel.spawn((
-                TechnologyVoteIcon,
-                ImageNode::default(),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(61),
-                    left: px(26),
-                    width: px(82),
-                    height: px(82),
-                    ..default()
-                },
-            ));
-            panel.spawn((
-                VoteTextKind::TechnologyCount,
-                Text::new("0% (0 votes)"),
-                TextFont {
-                    font_size: FontSize::Px(21.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(71),
-                    left: px(126),
-                    right: px(22),
-                    ..default()
-                },
-            ));
-            spawn_vote_track(
-                panel,
-                render,
-                VoteFillKind::TechnologyApproval,
-                VOTE_TEXTURE_PATHS[6],
-                VOTE_TEXTURE_PATHS[5],
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(107),
-                    left: px(126),
-                    width: px(258),
-                    height: px(44),
-                    ..default()
-                },
-            );
+            for index in 0..u8::try_from(TECHNOLOGY_VOTE_OPTION_COUNT)
+                .expect("technology vote option count fits u8")
+            {
+                spawn_technology_vote_option_row(panel, render, index);
+            }
             panel.spawn((
                 ImageNode::new(vote_texture(render, VOTE_TEXTURE_PATHS[3])),
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(27),
-                    bottom: px(73),
+                    bottom: px(43),
                     width: px(32),
                     height: px(32),
                     ..default()
@@ -9694,8 +9748,8 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(69),
-                    bottom: px(77),
-                    width: px(254),
+                    bottom: px(47),
+                    width: px(382),
                     height: px(24),
                     ..default()
                 },
@@ -9711,12 +9765,12 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                 Node {
                     position_type: PositionType::Absolute,
                     right: px(24),
-                    bottom: px(74),
+                    bottom: px(44),
                     ..default()
                 },
             ));
             panel.spawn((
-                Text::new("Vote through chat: !vote <technology>"),
+                Text::new("Vote through chat: !vote 1, !vote 2, or !vote 3"),
                 TextFont {
                     font_size: FontSize::Px(16.0),
                     ..default()
@@ -9728,7 +9782,7 @@ fn spawn_vote_panels(commands: &mut Commands, render: &RenderAssets) {
                     position_type: PositionType::Absolute,
                     left: px(24),
                     right: px(24),
-                    bottom: px(25),
+                    bottom: px(12),
                     ..default()
                 },
             ));
@@ -15210,12 +15264,10 @@ fn generate_and_spawn_world(
     if let Ok(smoke_vote) = std::env::var("STREAM_TOWN_SMOKE_VOTE") {
         match smoke_vote.to_ascii_lowercase().as_str() {
             "technology" | "tech" => {
-                if let Some(technology) = eligible_technology_ids(&content.0, &simulation)
-                    .into_iter()
-                    .next()
-                {
+                let options = technology_ballot_options(&content.0, &simulation);
+                if !options.is_empty() {
                     let _ = simulation
-                        .start_technology_vote(technology, TECHNOLOGY_VOTE_DURATION_SECONDS);
+                        .start_technology_ballot(options, TECHNOLOGY_VOTE_DURATION_SECONDS);
                 }
             }
             "ruler" | "election" => {
@@ -20587,7 +20639,7 @@ fn move_agents(
         .active_vote
         .as_ref()
         .filter(|vote| vote.remaining_seconds <= f32::EPSILON)
-        .map(|vote| vote.technology.clone())
+        .map(technology_vote_leader)
     {
         let objectives = content
             .0
@@ -27391,18 +27443,62 @@ fn vote_timer_text(remaining_seconds: f32) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
+#[cfg(test)]
 fn technology_vote_tally(simulation: &WorldSimulation) -> Option<(usize, usize, f32)> {
     let vote = simulation.active_vote.as_ref()?;
-    let approvals = vote.votes.values().filter(|approve| **approve).count();
-    let total = vote.votes.len();
-    let ratio = if total == 0 {
+    let approvals = if vote.options.len() > 1 || !vote.option_votes.is_empty() {
+        technology_vote_option_tally(vote, &vote.technology)
+    } else {
+        vote.votes.values().filter(|approve| **approve).count()
+    };
+    let total = vote.votes.len() + vote.option_votes.len();
+    let ratio = vote_ratio(approvals, total);
+    Some((approvals, total, ratio))
+}
+
+fn vote_ratio(votes: usize, total: usize) -> f32 {
+    if total == 0 {
         0.0
     } else {
-        let approvals = u16::try_from(approvals).unwrap_or(u16::MAX);
+        let votes = u16::try_from(votes).unwrap_or(u16::MAX);
         let total = u16::try_from(total).unwrap_or(u16::MAX);
-        f32::from(approvals) / f32::from(total)
-    };
-    Some((approvals, total, ratio))
+        f32::from(votes) / f32::from(total)
+    }
+}
+
+fn technology_vote_options(vote: &stream_town_domain::TechVote) -> Vec<&StableId> {
+    if vote.options.is_empty() {
+        vec![&vote.technology]
+    } else {
+        vote.options.iter().collect()
+    }
+}
+
+fn technology_vote_option_tally(
+    vote: &stream_town_domain::TechVote,
+    technology: &StableId,
+) -> usize {
+    if vote.options.len() <= 1 && vote.option_votes.is_empty() {
+        return vote.votes.values().filter(|approve| **approve).count();
+    }
+    vote.option_votes
+        .values()
+        .filter(|option| *option == technology)
+        .count()
+}
+
+fn technology_vote_leader(vote: &stream_town_domain::TechVote) -> StableId {
+    technology_vote_options(vote)
+        .into_iter()
+        .cloned()
+        .fold(None::<(StableId, usize)>, |winner, option| {
+            let tally = technology_vote_option_tally(vote, &option);
+            match winner {
+                Some((_, best_tally)) if best_tally >= tally => winner,
+                _ => Some((option, tally)),
+            }
+        })
+        .map_or_else(|| vote.technology.clone(), |(winner, _)| winner)
 }
 
 fn ruler_vote_option_lines(simulation: &WorldSimulation) -> Vec<String> {
@@ -27531,10 +27627,11 @@ fn update_vote_panels(
     presentation: Res<RuntimePresentation>,
     render: Res<RenderAssets>,
     asset_server: Option<Res<AssetServer>>,
-    mut panels: Query<(&VotePanelKind, &mut Visibility)>,
+    mut panels: Query<(&VotePanelKind, &mut Visibility), Without<TechnologyVoteOptionRow>>,
     mut texts: Query<(&VoteTextKind, &mut Text)>,
     mut fills: Query<(&VoteFillKind, &mut Node)>,
     mut technology_icons: TechnologyVoteIconQuery,
+    mut technology_rows: Query<(&TechnologyVoteOptionRow, &mut Visibility), Without<VotePanelKind>>,
     ruler_options: Query<(Entity, Option<&Children>), With<RulerOptionsContainer>>,
 ) {
     if !simulation.is_changed() {
@@ -27551,19 +27648,40 @@ fn update_vote_panels(
     }
 
     if let Some(vote) = &simulation.0.active_vote {
-        let technology = content.0.technology.nodes.get(&vote.technology);
-        let (approvals, total, ratio) =
-            technology_vote_tally(&simulation.0).expect("active technology vote has a tally");
+        let options = technology_vote_options(vote);
+        let total = vote.votes.len() + vote.option_votes.len();
+        for (row, mut visibility) in &mut technology_rows {
+            *visibility = if options.get(usize::from(row.0)).is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+        }
         for (kind, mut text) in &mut texts {
             text.0 = match kind {
-                VoteTextKind::TechnologyTitle => technology.map_or_else(
-                    || vote.technology.to_string(),
-                    |node| compact_technology_label(&node.display_name).replace('\n', " "),
-                ),
+                VoteTextKind::TechnologyTitle => "Choose the town's next technology".to_owned(),
                 VoteTextKind::TechnologyTimer => vote_timer_text(vote.remaining_seconds),
-                VoteTextKind::TechnologyCount => {
-                    format!("{:.0}% ({approvals}/{total} votes)", ratio * 100.0)
-                }
+                VoteTextKind::TechnologyOptionTitle(index) => options
+                    .get(usize::from(*index))
+                    .map(|technology| {
+                        let label = content.0.technology.nodes.get(*technology).map_or_else(
+                            || technology.to_string(),
+                            |node| compact_technology_label(&node.display_name).replace('\n', " "),
+                        );
+                        format!("{}. {label}", index + 1)
+                    })
+                    .unwrap_or_default(),
+                VoteTextKind::TechnologyOptionCount(index) => options
+                    .get(usize::from(*index))
+                    .map(|technology| {
+                        let votes = technology_vote_option_tally(vote, technology);
+                        format!(
+                            "!vote {}    {:.0}% ({votes})",
+                            index + 1,
+                            vote_ratio(votes, total) * 100.0
+                        )
+                    })
+                    .unwrap_or_default(),
                 _ => continue,
             };
         }
@@ -27575,18 +27693,30 @@ fn update_vote_panels(
                             .clamp(0.0, 100.0),
                     );
                 }
-                VoteFillKind::TechnologyApproval => {
+                VoteFillKind::TechnologyOption(index) => {
+                    let ratio = options.get(usize::from(*index)).map_or(0.0, |technology| {
+                        vote_ratio(technology_vote_option_tally(vote, technology), total)
+                    });
                     node.width = percent((ratio * 100.0).clamp(0.0, 100.0));
                 }
                 VoteFillKind::RulerTimer => {}
             }
         }
-        if let Some(icon_path) = technology.map(|node| node.icon_path.as_str())
-            && let Some(handle) =
-                presentation_texture_handle(&presentation.0, asset_server.as_deref(), icon_path)
-        {
-            for mut icon in &mut technology_icons {
-                icon.image = handle.clone();
+        for (marker, mut icon) in &mut technology_icons {
+            let Some(technology) = options.get(usize::from(marker.0)) else {
+                icon.image = Handle::default();
+                continue;
+            };
+            if let Some(icon_path) = content
+                .0
+                .technology
+                .nodes
+                .get(*technology)
+                .map(|node| node.icon_path.as_str())
+                && let Some(handle) =
+                    presentation_texture_handle(&presentation.0, asset_server.as_deref(), icon_path)
+            {
+                icon.image = handle;
             }
         }
     }
@@ -29423,6 +29553,24 @@ fn resolve_technology_id(content: &ContentCatalog, requested: &StableId) -> Opti
         .map(|(id, _)| id.clone())
 }
 
+fn resolve_active_technology_vote_option(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    requested: &StableId,
+) -> Option<StableId> {
+    let vote = simulation.active_vote.as_ref()?;
+    let options = technology_vote_options(vote);
+    if let Ok(index) = requested.as_str().parse::<usize>() {
+        return index
+            .checked_sub(1)
+            .and_then(|index| options.get(index))
+            .copied()
+            .cloned();
+    }
+    let technology = resolve_technology_id(content, requested)?;
+    options.contains(&&technology).then_some(technology)
+}
+
 fn eligible_technology_ids(
     content: &ContentCatalog,
     simulation: &WorldSimulation,
@@ -29441,7 +29589,7 @@ fn eligible_technology_ids(
                 && simulation
                     .active_vote
                     .as_ref()
-                    .is_none_or(|vote| vote.technology != **id)
+                    .is_none_or(|vote| !technology_vote_options(vote).contains(id))
                 && node
                     .prerequisites
                     .iter()
@@ -29449,6 +29597,68 @@ fn eligible_technology_ids(
         })
         .map(|(id, _)| id.clone())
         .collect()
+}
+
+fn technology_ballot_rank(world_seed: u64, unlocked_count: usize, id: &StableId) -> u64 {
+    let mut hash = world_seed
+        ^ u64::try_from(unlocked_count)
+            .unwrap_or(u64::MAX)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    for byte in id.as_str().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    hash
+}
+
+fn technology_ballot_options(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+) -> Vec<StableId> {
+    let mut eligible = eligible_technology_ids(content, simulation);
+    eligible.sort_by_key(|technology| {
+        (
+            technology_ballot_rank(
+                simulation.world_seed,
+                simulation.unlocked_technology.len(),
+                technology,
+            ),
+            technology.clone(),
+        )
+    });
+    eligible.truncate(TECHNOLOGY_VOTE_OPTION_COUNT);
+    eligible
+}
+
+fn start_scheduled_technology_vote(
+    mut simulation: ResMut<SimulationRuntime>,
+    content: Res<RuntimeContent>,
+) {
+    if simulation.0.active_vote.is_some()
+        || !simulation.0.active_goals.is_empty()
+        || simulation.0.ruler_vote.is_some()
+        || simulation.0.active_event.is_some()
+    {
+        return;
+    }
+    if !simulation
+        .0
+        .technology_vote_cooldown_seconds
+        .is_some_and(|remaining| remaining <= f32::EPSILON)
+    {
+        return;
+    }
+    let options = technology_ballot_options(&content.0, &simulation.0);
+    simulation.0.technology_vote_cooldown_seconds = None;
+    if options.is_empty() {
+        return;
+    }
+    if let Err(error) = simulation
+        .0
+        .start_technology_ballot(options, TECHNOLOGY_VOTE_DURATION_SECONDS)
+    {
+        warn!(%error, "scheduled technology vote could not start");
+    }
 }
 
 fn unlock_reachable_technologies(
@@ -31665,47 +31875,25 @@ fn process_injected_commands(
                                 })
                                 .map_err(|error| error.to_string())
                         })
-                    } else {
-                        let technology = resolve_technology_id(&content.0, requested)
-                            .ok_or_else(|| format!("unknown technology {}", requested.as_str()));
+                    } else if simulation.0.active_vote.is_some() {
+                        let technology = resolve_active_technology_vote_option(
+                            &content.0,
+                            &simulation.0,
+                            requested,
+                        )
+                        .ok_or_else(|| {
+                            format!("unknown technology vote option {}", requested.as_str())
+                        });
                         technology.and_then(|technology| {
-                            let node = &content.0.technology.nodes[&technology];
-                            if node.unavailable {
-                                return Err(format!("{} is unavailable", node.display_name));
-                            }
-                            if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
-                                return Err(
-                                    "the town already has the maximum active goals".to_owned()
-                                );
-                            }
-                            if simulation.0.unlocked_technology.contains(&technology) {
-                                return Err(format!("{} is already unlocked", node.display_name));
-                            }
-                            if let Some(prerequisite) = node.prerequisites.iter().find(|required| {
-                                !simulation.0.unlocked_technology.contains(*required)
-                            }) {
-                                return Err(format!("missing prerequisite {prerequisite}"));
-                            }
-                            if simulation
-                                .0
-                                .active_vote
-                                .as_ref()
-                                .is_some_and(|vote| vote.technology != technology)
-                            {
-                                return Err("another technology vote is active".to_owned());
-                            }
-                            if simulation.0.active_vote.is_none() {
-                                let _ = simulation.0.start_technology_vote(
-                                    technology.clone(),
-                                    TECHNOLOGY_VOTE_DURATION_SECONDS,
-                                );
-                            }
+                            let name = content.0.technology.nodes[&technology].display_name.clone();
                             simulation
                                 .0
-                                .cast_vote(&actor_id, true)
-                                .map(|()| format!("voted for {}", node.display_name))
+                                .cast_technology_vote(&actor_id, technology)
+                                .map(|()| format!("voted for {name}"))
                                 .map_err(|error| error.to_string())
                         })
+                    } else {
+                        Err("there is no active technology vote".to_owned())
                     }
                 }
                 ChatCommand::Recruit { role, amount } => {
@@ -32291,16 +32479,18 @@ fn process_injected_commands(
                 }
                 ChatCommand::TechnologyVote => {
                     require_game_master(&config.0, &pending)?;
-                    let technology = eligible_technology_ids(&content.0, &simulation.0)
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| "there are no eligible technologies".to_owned())?;
-                    let name = content.0.technology.nodes[&technology].display_name.clone();
+                    let options = technology_ballot_options(&content.0, &simulation.0);
+                    if options.is_empty() {
+                        return Err("there are no eligible technologies".to_owned());
+                    }
+                    let option_count = options.len();
                     simulation
                         .0
-                        .start_technology_vote(technology, 60.0)
+                        .start_technology_ballot(options, TECHNOLOGY_VOTE_DURATION_SECONDS)
                         .map_err(|error| error.to_string())?;
-                    Ok(format!("started a 60-second technology vote for {name}"))
+                    Ok(format!(
+                        "started a 60-second technology vote with {option_count} options"
+                    ))
                 }
                 ChatCommand::GameEventAction => {
                     require_game_master(&config.0, &pending)?;
@@ -33553,6 +33743,10 @@ fn should_show_actor_name(mode: NameDisplayMode, user_type: StreamUserType) -> b
     }
 }
 
+fn is_stream_player_actor(actor_id: &StableId) -> bool {
+    actor_id.as_str().starts_with("twitch:")
+}
+
 fn stream_user_color(user_type: StreamUserType) -> Color {
     match user_type {
         StreamUserType::GameMaster => Color::srgb(1.0, 0.22, 0.0),
@@ -33619,7 +33813,7 @@ fn sync_actor_name_overlays(
     };
     let actor_positions: BTreeMap<_, _> = agents
         .iter()
-        .filter(|(agent, _)| agent.kind == ActorKind::Player)
+        .filter(|(agent, _)| agent.kind == ActorKind::Player && is_stream_player_actor(&agent.id))
         .map(|(agent, transform)| (agent.id.clone(), transform.translation()))
         .collect();
     let mut existing = BTreeSet::new();
@@ -36193,10 +36387,7 @@ mod tests {
         assert!((draft.audio.master - 0.95).abs() < f32::EPSILON);
         assert!((draft.camera.zoom_sensitivity - 11.0).abs() < f32::EPSILON);
         assert_eq!(draft.camera.field_of_view_degrees, 65);
-        assert_eq!(
-            draft.interface.display_names,
-            NameDisplayMode::StaffAndSubscribers
-        );
+        assert_eq!(draft.interface.display_names, NameDisplayMode::None);
         assert_eq!(draft.autosave_minutes, 60);
         assert_eq!(draft.interface.ui_scale_percent, 110);
         assert!(draft.interface.high_contrast);
@@ -42045,6 +42236,85 @@ mod tests {
     }
 
     #[test]
+    fn generated_world_starts_numbered_technology_vote_after_unity_delay() {
+        fn spawn_test_vote_panels(mut commands: Commands, render: Res<RenderAssets>) {
+            spawn_vote_panels(&mut commands, &render);
+        }
+
+        let content = embedded_content();
+        let mut simulation = WorldSimulation::new(17);
+        simulation.unlocked_technology.extend(
+            content
+                .technology
+                .nodes
+                .iter()
+                .filter(|(_, technology)| technology.initially_unlocked)
+                .map(|(id, _)| id.clone()),
+        );
+        let seconds_per_day = GameConfig::default().time.seconds_per_day;
+        simulation.tick(19.0, seconds_per_day);
+        assert!(simulation.active_vote.is_none());
+        assert_eq!(simulation.technology_vote_cooldown_seconds, Some(1.0));
+        simulation.tick(1.0, seconds_per_day);
+
+        let mut app = App::new();
+        app.insert_resource(RuntimeContent(content))
+            .insert_resource(SimulationRuntime(simulation))
+            .insert_resource(RuntimePresentation(embedded_presentation()))
+            .insert_resource(RenderAssets::default())
+            .add_systems(Startup, spawn_test_vote_panels)
+            .add_systems(
+                Update,
+                (start_scheduled_technology_vote, update_vote_panels).chain(),
+            );
+        app.update();
+
+        let vote = app
+            .world()
+            .resource::<SimulationRuntime>()
+            .0
+            .active_vote
+            .as_ref()
+            .expect("the generated-world technology ballot starts after Unity's delay");
+        assert_eq!(vote.options.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
+        assert_eq!(vote.technology, vote.options[0]);
+        assert!(vote.option_votes.is_empty());
+        assert!((vote.remaining_seconds - TECHNOLOGY_VOTE_DURATION_SECONDS).abs() <= f32::EPSILON);
+        let mut panels = app
+            .world_mut()
+            .query_filtered::<(&VotePanelKind, &Visibility), Without<TechnologyVoteOptionRow>>();
+        assert!(panels.iter(app.world()).any(|(kind, visibility)| {
+            *kind == VotePanelKind::Technology && *visibility == Visibility::Visible
+        }));
+        let mut rows = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<TechnologyVoteOptionRow>>();
+        assert_eq!(
+            rows.iter(app.world())
+                .filter(|visibility| **visibility == Visibility::Visible)
+                .count(),
+            TECHNOLOGY_VOTE_OPTION_COUNT
+        );
+    }
+
+    #[test]
+    fn actor_nameplates_identify_twitch_players_without_tagging_npcs() {
+        assert!(is_stream_player_actor(
+            &StableId::new("twitch:human_bean").unwrap()
+        ));
+        assert!(!is_stream_player_actor(
+            &StableId::new("npc:starting_defender").unwrap()
+        ));
+        assert!(!is_stream_player_actor(
+            &StableId::new("npc:recruit_1").unwrap()
+        ));
+        assert_eq!(
+            PlayerSettings::default().interface.display_names,
+            NameDisplayMode::AllPlayers
+        );
+    }
+
+    #[test]
     fn ruler_vote_results_produce_the_chat_announcement_that_tick_discards() {
         let mut simulation = WorldSimulation::new(17);
         let winner = StableId::new("viewer:winner").unwrap();
@@ -44739,24 +45009,6 @@ mod tests {
             assert!(simulation.active_event.is_none());
         }
 
-        let eligible_technology = {
-            let content = &app.world().resource::<RuntimeContent>().0;
-            let simulation = &app.world().resource::<SimulationRuntime>().0;
-            content
-                .technology
-                .nodes
-                .iter()
-                .find(|(id, node)| {
-                    !simulation.unlocked_technology.contains(*id)
-                        && !node.unavailable
-                        && node
-                            .prerequisites
-                            .iter()
-                            .all(|required| simulation.unlocked_technology.contains(required))
-                })
-                .map(|(id, _)| id.clone())
-                .expect("converted catalog has a vote-eligible technology")
-        };
         let available_building = {
             let content = &app.world().resource::<RuntimeContent>().0;
             let simulation = &app.world().resource::<SimulationRuntime>().0;
@@ -44819,7 +45071,8 @@ mod tests {
                 direction: CameraDirection::In,
                 amount: 1,
             }]),
-            ChatCommand::Vote(eligible_technology.clone()),
+            ChatCommand::TechnologyVote,
+            ChatCommand::Vote(StableId::new("1").unwrap()),
             ChatCommand::TriggerEvent(StableId::new("festival").unwrap()),
             ChatCommand::Ping,
             ChatCommand::Ping,
@@ -44918,10 +45171,12 @@ mod tests {
                     5_000 - available_building.2[&resource_id]
                 );
             }
-            assert_eq!(
-                simulation.active_vote.as_ref().map(|vote| &vote.technology),
-                Some(&eligible_technology)
-            );
+            let vote = simulation
+                .active_vote
+                .as_ref()
+                .expect("technology vote active");
+            assert_eq!(vote.options.len(), TECHNOLOGY_VOTE_OPTION_COUNT);
+            assert_eq!(vote.option_votes.get(&actor_id), vote.options.first());
             assert_eq!(simulation.active_event, Some(TownEvent::Festival));
             let saved_building_id = placed_building.id.clone();
             (

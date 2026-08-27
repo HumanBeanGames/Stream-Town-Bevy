@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::{GridPos, ObjectiveDef, ObjectiveKind, StableId};
 
 pub const BUILDING_MAX_HEALTH: i32 = 500;
-pub const CURRENT_SIMULATION_SCHEMA: u32 = 2;
+pub const CURRENT_SIMULATION_SCHEMA: u32 = 3;
+pub const INITIAL_TECHNOLOGY_VOTE_DELAY_SECONDS: f32 = 20.0;
 pub const MAX_ROLE_LEVEL: u16 = 99;
 pub const RULER_VOTE_DURATION_SECONDS: f32 = 120.0;
 pub const RULER_VOTE_INTERVAL_SECONDS: f32 = 3_600.0;
@@ -177,9 +178,17 @@ pub struct FishGodState {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TechVote {
+    /// The first option, retained for schema-one/two save compatibility.
     pub technology: StableId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<StableId>,
     pub remaining_seconds: f32,
+    /// Legacy single-option approval votes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub votes: BTreeMap<StableId, bool>,
+    /// Unity-compatible numbered-option votes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub option_votes: BTreeMap<StableId, StableId>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -240,6 +249,10 @@ pub struct WorldSimulation {
     pub enemy_camps: BTreeMap<StableId, EnemyCampState>,
     pub unlocked_technology: BTreeSet<StableId>,
     pub active_vote: Option<TechVote>,
+    /// A generated world requests its first ballot after Unity's authored delay.
+    /// Older Bevy saves without an active goal or vote are repaired as due now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub technology_vote_cooldown_seconds: Option<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_goals: Vec<TownGoalState>,
     pub active_event: Option<TownEvent>,
@@ -301,6 +314,10 @@ pub enum SimulationError {
     NoVote,
     #[error("actor {0} has already voted")]
     AlreadyVoted(StableId),
+    #[error("a technology ballot requires at least one option")]
+    NoTechnologyOptions,
+    #[error("{0} is not a valid technology vote option")]
+    InvalidTechnologyVoteOption(StableId),
     #[error("trade amount must be non-zero")]
     EmptyTrade,
     #[error("resource {0} cannot be traded")]
@@ -339,6 +356,7 @@ impl WorldSimulation {
             enemy_camps: BTreeMap::new(),
             unlocked_technology: BTreeSet::new(),
             active_vote: None,
+            technology_vote_cooldown_seconds: Some(INITIAL_TECHNOLOGY_VOTE_DELAY_SECONDS),
             active_goals: Vec::new(),
             active_event: None,
             queued_events: VecDeque::new(),
@@ -1089,14 +1107,31 @@ impl WorldSimulation {
         technology: StableId,
         duration_seconds: f32,
     ) -> Result<(), SimulationError> {
+        self.start_technology_ballot(vec![technology], duration_seconds)
+    }
+
+    pub fn start_technology_ballot(
+        &mut self,
+        mut options: Vec<StableId>,
+        duration_seconds: f32,
+    ) -> Result<(), SimulationError> {
         if self.active_vote.is_some() {
             return Err(SimulationError::VoteActive);
         }
+        let mut seen = BTreeSet::new();
+        options.retain(|option| seen.insert(option.clone()));
+        let technology = options
+            .first()
+            .cloned()
+            .ok_or(SimulationError::NoTechnologyOptions)?;
         self.active_vote = Some(TechVote {
             technology,
+            options,
             remaining_seconds: duration_seconds.max(0.0),
             votes: BTreeMap::new(),
+            option_votes: BTreeMap::new(),
         });
+        self.technology_vote_cooldown_seconds = None;
         Ok(())
     }
 
@@ -1105,9 +1140,34 @@ impl WorldSimulation {
             return Err(SimulationError::MissingActor(actor.clone()));
         }
         let vote = self.active_vote.as_mut().ok_or(SimulationError::NoVote)?;
-        if vote.votes.insert(actor.clone(), approve).is_some() {
+        if vote.votes.contains_key(actor) || vote.option_votes.contains_key(actor) {
             return Err(SimulationError::AlreadyVoted(actor.clone()));
         }
+        vote.votes.insert(actor.clone(), approve);
+        Ok(())
+    }
+
+    pub fn cast_technology_vote(
+        &mut self,
+        actor: &StableId,
+        technology: StableId,
+    ) -> Result<(), SimulationError> {
+        if !self.actors.contains_key(actor) {
+            return Err(SimulationError::MissingActor(actor.clone()));
+        }
+        let vote = self.active_vote.as_mut().ok_or(SimulationError::NoVote)?;
+        if vote.votes.contains_key(actor) || vote.option_votes.contains_key(actor) {
+            return Err(SimulationError::AlreadyVoted(actor.clone()));
+        }
+        let valid = if vote.options.is_empty() {
+            vote.technology == technology
+        } else {
+            vote.options.contains(&technology)
+        };
+        if !valid {
+            return Err(SimulationError::InvalidTechnologyVoteOption(technology));
+        }
+        vote.option_votes.insert(actor.clone(), technology);
         Ok(())
     }
 
@@ -1123,21 +1183,42 @@ impl WorldSimulation {
         if vote.remaining_seconds > f32::EPSILON {
             return None;
         }
+        let technology = if vote.options.len() > 1 || !vote.option_votes.is_empty() {
+            let mut tallies = BTreeMap::<StableId, usize>::new();
+            for option in vote.option_votes.values() {
+                *tallies.entry(option.clone()).or_default() += 1;
+            }
+            vote.options
+                .iter()
+                .cloned()
+                .fold(None::<(StableId, usize)>, |winner, option| {
+                    let tally = tallies.get(&option).copied().unwrap_or_default();
+                    match winner {
+                        Some((_, best_tally)) if best_tally >= tally => winner,
+                        _ => Some((option, tally)),
+                    }
+                })?
+                .0
+        } else {
+            vote.technology.clone()
+        };
         let approvals = vote.votes.values().filter(|approve| **approve).count();
         let rejections = vote.votes.len().saturating_sub(approvals);
-        let technology = vote.technology.clone();
-        if approvals > rejections
+        let numbered_ballot = vote.options.len() > 1 || !vote.option_votes.is_empty();
+        if (numbered_ballot || approvals > rejections)
             && !objective_ids.is_empty()
             && self.active_goals.len() >= max_goals
         {
             return None;
         }
         self.active_vote = None;
-        if approvals <= rejections {
+        if !numbered_ballot && approvals <= rejections {
+            self.technology_vote_cooldown_seconds = Some(0.0);
             return None;
         }
         if objective_ids.is_empty() {
             self.unlocked_technology.insert(technology.clone());
+            self.technology_vote_cooldown_seconds = Some(0.0);
             return Some(technology);
         }
         self.active_goals.push(TownGoalState {
@@ -1155,6 +1236,7 @@ impl WorldSimulation {
                 })
                 .collect(),
         });
+        self.technology_vote_cooldown_seconds = None;
         Some(technology)
     }
 
@@ -1175,7 +1257,11 @@ impl WorldSimulation {
             return false;
         }
         if objective_ids.is_empty() {
-            return self.unlocked_technology.insert(technology);
+            let inserted = self.unlocked_technology.insert(technology);
+            if inserted {
+                self.technology_vote_cooldown_seconds = Some(0.0);
+            }
+            return inserted;
         }
         if self.active_goals.len() >= max_goals {
             return false;
@@ -1199,6 +1285,7 @@ impl WorldSimulation {
             technology,
             objectives,
         });
+        self.technology_vote_cooldown_seconds = None;
         true
     }
 
@@ -1208,6 +1295,7 @@ impl WorldSimulation {
         }
         let technology = self.active_goals.remove(0).technology;
         self.unlocked_technology.insert(technology.clone());
+        self.technology_vote_cooldown_seconds = Some(0.0);
         Some(technology)
     }
 
@@ -1244,6 +1332,7 @@ impl WorldSimulation {
             self.active_goals
                 .retain(|goal| !completed.contains(&goal.technology));
             self.unlocked_technology.extend(completed.iter().cloned());
+            self.technology_vote_cooldown_seconds = Some(0.0);
         }
         completed
     }
@@ -1370,8 +1459,18 @@ impl WorldSimulation {
         self.elapsed_seconds += f64::from(delta_seconds);
         self.recalculate_calendar(seconds_per_day);
 
-        if let Some(vote) = &mut self.active_vote {
+        if let Some(vote) = &mut self.active_vote
+            && (!vote.votes.is_empty() || !vote.option_votes.is_empty())
+        {
             vote.remaining_seconds = (vote.remaining_seconds - delta_seconds).max(0.0);
+        }
+        if self.active_vote.is_none()
+            && self.active_goals.is_empty()
+            && self.ruler_vote.is_none()
+            && self.active_event.is_none()
+            && let Some(cooldown) = &mut self.technology_vote_cooldown_seconds
+        {
+            *cooldown = (*cooldown - delta_seconds).max(0.0);
         }
         if self.ruler_vote.is_none() && self.ruler_vote_scheduled {
             self.ruler_vote_cooldown_seconds =
@@ -1411,11 +1510,17 @@ impl WorldSimulation {
         }
     }
 
-    /// Reinterprets clocks written before the shipping Unity day length was
-    /// restored. Timed gameplay state is preserved; only derived calendar data
-    /// changes from the authoritative elapsed time.
+    /// Upgrades persisted simulation state without advancing gameplay clocks.
+    /// Schema-three repairs the technology cycle omitted by earlier Bevy saves.
     pub fn upgrade_time_schema(&mut self, seconds_per_day: u32) {
         if self.schema_version < CURRENT_SIMULATION_SCHEMA {
+            if self.schema_version < 3
+                && self.active_vote.is_none()
+                && self.active_goals.is_empty()
+                && self.technology_vote_cooldown_seconds.is_none()
+            {
+                self.technology_vote_cooldown_seconds = Some(0.0);
+            }
             self.schema_version = CURRENT_SIMULATION_SCHEMA;
             self.recalculate_calendar(seconds_per_day);
         }
@@ -1788,10 +1893,44 @@ mod tests {
     }
 
     #[test]
+    fn numbered_technology_ballot_waits_for_a_vote_and_resolves_the_winner() {
+        let mut simulation = WorldSimulation::new(42);
+        let first = id("twitch:first");
+        let second = id("twitch:second");
+        let options = vec![id("tech:one"), id("tech:two"), id("tech:three")];
+        assert!(simulation.join_player(first.clone(), GridPos { x: 0, z: 0 }));
+        assert!(simulation.join_player(second.clone(), GridPos { x: 1, z: 0 }));
+        simulation
+            .start_technology_ballot(options.clone(), 60.0)
+            .unwrap();
+
+        simulation.tick(30.0, SHIPPING_SECONDS_PER_DAY);
+        assert!(
+            (simulation.active_vote.as_ref().unwrap().remaining_seconds - 60.0).abs()
+                <= f32::EPSILON
+        );
+        simulation
+            .cast_technology_vote(&first, options[1].clone())
+            .unwrap();
+        simulation
+            .cast_technology_vote(&second, options[1].clone())
+            .unwrap();
+        simulation.tick(60.0, SHIPPING_SECONDS_PER_DAY);
+
+        assert_eq!(
+            simulation.resolve_technology_vote(&[], &BTreeMap::new(), 2),
+            Some(options[1].clone())
+        );
+        assert!(simulation.unlocked_technology.contains(&options[1]));
+        assert_eq!(simulation.technology_vote_cooldown_seconds, Some(0.0));
+    }
+
+    #[test]
     fn legacy_simulation_calendar_upgrades_without_advancing_timers() {
         let actor = id("actor:legacy_clock");
         let mut simulation = WorldSimulation::new(71);
         simulation.schema_version = 1;
+        simulation.technology_vote_cooldown_seconds = None;
         simulation.elapsed_seconds = 3_650.0;
         simulation.day = 30;
         simulation.season = Season::Winter;
@@ -1802,9 +1941,10 @@ mod tests {
 
         simulation.upgrade_time_schema(SHIPPING_SECONDS_PER_DAY);
 
-        assert_eq!(simulation.schema_version, 2);
+        assert_eq!(simulation.schema_version, CURRENT_SIMULATION_SCHEMA);
         assert_eq!(simulation.day, 1);
         assert_eq!(simulation.season, Season::Spring);
+        assert_eq!(simulation.technology_vote_cooldown_seconds, Some(0.0));
         assert_eq!(
             simulation.actors[&actor].respawn_remaining_seconds,
             Some(45.0)
