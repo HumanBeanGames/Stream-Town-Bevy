@@ -58,6 +58,12 @@ cargo run -p stream_town_migrate -- export-world-oracle StreamTownSave.stsave --
 cargo run -p xtask -- package-windows --output dist
 ```
 
+If the game panics, it writes the panic message, thread, and captured backtrace
+to `.stream-town/crashes/crash-<timestamp>.log` before forwarding to Rust's
+normal console panic handler. Direct-broadcast phase logs identify broadcaster
+authorization, the selected encoder, and worker failures without recording the
+stream key or OAuth tokens.
+
 Run the deterministic in-game foliage acceptance sweep (stationary plus moving
 and zooming camera, exact-transform duplicate audit, and shadow-policy audit)
 with:

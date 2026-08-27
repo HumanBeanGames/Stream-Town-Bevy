@@ -500,11 +500,13 @@ fn poll_direct_broadcast_authorization(mut runtime: ResMut<DirectBroadcastRuntim
     runtime.authorization = None;
     match event {
         AuthorizationEvent::Ready(target) => {
+            info!(ingest = %target.ingest_name, "Twitch broadcast authorization ready");
             runtime.ingest = Some(target.ingest_name.clone());
             runtime.pending_target = Some(target);
             runtime.phase = DirectBroadcastPhase::WaitingForGameplay;
         }
         AuthorizationEvent::Error(error) => {
+            error!(%error, "Twitch broadcast authorization failed");
             runtime.phase = DirectBroadcastPhase::Error(error);
         }
     }
@@ -557,6 +559,7 @@ fn poll_direct_broadcast_worker(
                 encoder,
                 rejected_encoders,
             } => {
+                info!(%encoder, "direct Twitch broadcast encoder active");
                 runtime.encoder = Some(encoder);
                 runtime.encoder_rejections = rejected_encoders;
                 runtime.phase = DirectBroadcastPhase::Broadcasting;
@@ -573,6 +576,7 @@ fn poll_direct_broadcast_worker(
                 runtime.controller = None;
             }
             WorkerEvent::Error(error) => {
+                error!(%error, "direct Twitch broadcast worker stopped");
                 runtime.phase = DirectBroadcastPhase::Error(error);
             }
         }
@@ -827,17 +831,18 @@ fn sync_stream_only_capture(
     if operator_required {
         return;
     }
-    for entity in [
+    let operator_entities = [
         state.operator_root.take(),
         state.operator_camera.take(),
         state.operator_window.take(),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    ];
+    let operator_was_open = operator_entities.iter().any(Option::is_some);
+    for entity in operator_entities.into_iter().flatten() {
         commands.entity(entity).despawn();
     }
-    info!("local stream operator panel closed");
+    if operator_was_open {
+        info!("local stream operator panel closed");
+    }
 }
 
 fn spawn_stream_operator_view(

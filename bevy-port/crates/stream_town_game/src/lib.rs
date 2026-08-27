@@ -6667,6 +6667,9 @@ fn smoke_start_new_game_after_menu_reveal(
     time: Res<Time>,
     reveal: Option<Res<MenuRevealRuntime>>,
     cover: Option<Res<WorldLoadingCoverRuntime>>,
+    mut menu: ResMut<MenuRuntime>,
+    mut io: ResMut<MenuIoRequest>,
+    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
     mut requested: Local<bool>,
     mut ready_seconds: Local<f32>,
 ) {
@@ -6687,7 +6690,14 @@ fn smoke_start_new_game_after_menu_reveal(
         return;
     }
     *requested = true;
-    queue_world_loading(&mut commands);
+    menu.pending_town_start = Some(PendingTownStart::NewGame);
+    confirm_go_live_and_start_town(
+        &mut commands,
+        &mut menu,
+        &mut io,
+        #[cfg(target_os = "windows")]
+        &mut broadcast,
+    );
 }
 
 fn world_loading_cover_requested(cover: Option<Res<WorldLoadingCoverRuntime>>) -> bool {
