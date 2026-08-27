@@ -131,6 +131,15 @@ Run these in order and record the result before changing behavior:
   - User result: `accepted` — the user confirmed, “That worked!”
   - Reuse rule: require both named-limb deformation and multiple monotonically counted loop completions in the same run before changing this source policy again.
 
+- [ ] **`0b9a6f2` — preserve stationary role actions across one-second simulation replanning ticks**
+  - Changed: action-state selection only; a living stationary actor with an action goal remains in its authored action animation while the simulation refreshes the action cooldown. Rig binding, clip sources, loop repair, facing, visibility, materials, and shadows are unchanged.
+  - Fixed seed/actor/camera: deterministic unit fixture; `npc:starting_miner`; no render camera required.
+  - Player elapsed delta: not yet measured in an ordinary GPU run.
+  - Named joint transform delta: not applicable to this controller-state-only change; the accepted native-rig deformation path remains unchanged.
+  - Visible skin result: automated regression proves `Mining` remains selected through a zero-cooldown replanning boundary; moving runtime confirmation is still required.
+  - User result: `not checked`.
+  - Reuse rule: if the mining loop still visibly restarts, capture the miner controller heartbeat across two consecutive action ticks before changing clip timing, sources, or rig binding.
+
 ## Attempt record template
 
 Append every future attempt here before claiming completion:
