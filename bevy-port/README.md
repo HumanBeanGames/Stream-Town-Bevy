@@ -215,7 +215,7 @@ The Connection tab reports runtime Twitch status while OAuth and secret storage
 remain in the focused tools application.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
-all camera controls/sensitivities, name/building-health overlays, the Unity
+the authored camera projection, name/building-health overlays, the Unity
 0/5/10/30/60-minute autosave choices, UI scale, high contrast, and reduced
 motion are applied by the runtime. Schema-2 settings upgrade without changing
 their existing appearance; the three new accessibility fields use neutral
@@ -226,8 +226,9 @@ fullscreen compatibility. This mode is selected before DX12 surface creation,
 avoiding Bevy's missing-current-monitor panic and driver-dependent device loss
 from switching into exclusive fullscreen after renderer initialization.
 Because the Unity repository contains no redistributable soundtrack files, the
-runtime synthesizes four seasonal day/night music beds and an in-game-only,
-seamless band-limited ambient wind/bird loop. Unity's separate master, music,
+runtime authors eight seasonal day/night patterns through the native
+`bevy_tidal` engine and synthesizes an in-game-only, seamless band-limited
+ambient wind/bird loop. Unity's separate master, music,
 ambience, and sound-effect gains,
 fade behavior, day/night and season reselection, and deterministic 600–900 second
 inter-track waits are preserved without adding licensed media.
@@ -243,14 +244,19 @@ the IRC connection after token rotation, and enables text commands as soon as th
 authorized bot has joined the configured channel. The Twitch tab can verify a real channel join, resolve
 operator logins to stable numeric IDs, and capture a live Channel Points reward
 ID. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
+The bot's `!help` response links to the complete, versioned
+[`TWITCH_COMMANDS.md`](../TWITCH_COMMANDS.md) reference. Invalid command attempts
+receive a concise reminder to use `!help`; ordinary non-command chat is ignored.
 On Windows, the same Twitch tab can separately authorize the configured channel
 with `channel:read:stream_key` and enable direct broadcasting. The default
 stream-only mode renders the town once into a full-resolution offscreen target,
 moves that GPU readback allocation directly into a latest-frame mailbox, and
 replaces the local game window with a separate 960x540 operator dashboard and a
 320x180 preview. The optional headed mode uses Windows Graphics Capture instead.
-WASAPI application loopback captures only Stream Town's Bevy and Bevy Tidal
-audio, and FFmpeg's FLV muxer publishes directly to Twitch RTMP. No OBS
+WASAPI application loopback captures only Stream Town's Bevy audio. In
+stream-only mode, Bevy Tidal's bounded pre-monitor PCM tap feeds music directly
+into that encoder mix while its local monitor is silent. FFmpeg's FLV muxer
+publishes directly to Twitch RTMP. No OBS
 installation, desktop capture, virtual audio device, `ffmpeg.exe` subprocess,
 serialized stream key, or unbounded frame queue is involved. Automatic reconnect
 and five-second health reports expose captured/output FPS, encoder/ingest,

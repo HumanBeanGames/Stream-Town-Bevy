@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use accesskit::{Action as AccessAction, Live, Node as AccessibleNode, Role, Toggled};
+use accesskit::{Action as AccessAction, Live, Node as AccessibleNode, Role};
 use anyhow::{Context, Result as AnyResult};
 use avian3d::prelude::{Collider, PhysicsPlugins, RigidBody, SpatialQuery, SpatialQueryFilter};
 #[cfg(target_os = "windows")]
@@ -101,10 +101,12 @@ use stream_town_domain::{
     StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
     foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world_with_content,
-    generate_world_with_content_observed, resource_visual_variant, unity_command_usage,
+    generate_world_with_content_observed, resource_visual_variant,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
+const TWITCH_COMMAND_HELP_URL: &str = "https://github.com/HumanBeanGames/Stream-Town-Bevy/blob/codex/bevy-migration/TWITCH_COMMANDS.md";
+const INVALID_TWITCH_COMMAND_REPLY: &str = "Invalid Command! Type !help for the list of commands!";
 const TECHNOLOGY_VOTE_DURATION_SECONDS: f32 = 60.0;
 const UNITY_NUMBERED_LABEL_SECONDS: f32 = 15.0;
 const WORLD_SCENE_PATH: &str = "Assets/Scenes/Worlds/World_Town.unity";
@@ -690,9 +692,6 @@ struct MenuIoRequest {
     save: bool,
     load: bool,
 }
-
-#[derive(Resource, Default)]
-struct CameraIdleMode(bool);
 
 #[derive(Resource)]
 struct RuntimeConsoleRuntime {
@@ -1534,12 +1533,6 @@ struct SettingsFeedbackText;
 
 #[derive(Component)]
 struct GameMenuRoot;
-
-#[derive(Component)]
-struct GameMenuIdleToggle;
-
-#[derive(Component)]
-struct GameMenuIdleCheckmark;
 
 #[derive(Component)]
 struct GameMenuActionLabel(GameMenuAction);
@@ -2404,12 +2397,6 @@ struct CurrentEventFill;
 
 type TechnologyVoteIconQuery<'w, 's> =
     Query<'w, 's, &'static mut ImageNode, With<TechnologyVoteIcon>>;
-type GameMenuIdleToggleQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static Interaction, &'static mut BackgroundColor),
-    (With<GameMenuIdleToggle>, Without<GameMenuAction>),
->;
 type TownCameraMutQuery<'w, 's> = Query<
     'w,
     's,
@@ -3212,7 +3199,6 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<InputFocus>()
             .init_resource::<InputFocusVisible>()
             .init_resource::<MenuIoRequest>()
-            .init_resource::<CameraIdleMode>()
             .init_resource::<RuntimeConsoleRuntime>()
             .init_resource::<RuntimeCaptureRequest>()
             .init_resource::<CameraCommandQueue>()
@@ -3644,7 +3630,6 @@ impl Plugin for StreamTownGamePlugin {
                 (
                     menu_input,
                     game_menu_buttons.in_set(AccessibilityActionDispatch),
-                    game_menu_idle_toggle.in_set(AccessibilityActionDispatch),
                     update_game_menu_controls,
                     settings_tab_buttons.in_set(AccessibilityActionDispatch),
                     settings_value_buttons.in_set(AccessibilityActionDispatch),
@@ -10672,22 +10657,6 @@ fn game_menu_buttons(
     }
 }
 
-fn game_menu_idle_toggle(
-    menu: Res<MenuRuntime>,
-    mut idle: ResMut<CameraIdleMode>,
-    toggles: Query<&Interaction, (Changed<Interaction>, With<GameMenuIdleToggle>)>,
-) {
-    if menu.page != MenuPage::Game {
-        return;
-    }
-    if toggles
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        idle.0 = !idle.0;
-    }
-}
-
 fn setup_accessibility(mut commands: Commands) {
     let mut announcement = AccessibleNode::new(Role::Status);
     announcement.set_label("Stream Town status");
@@ -10709,7 +10678,6 @@ fn tag_accessible_buttons(
             Option<&MainMenuAction>,
             Option<&GoLiveConfirmationAction>,
             Option<&GameMenuAction>,
-            Option<&GameMenuIdleToggle>,
             Option<&SettingsTabButton>,
             Option<&SettingsValueButton>,
             Option<&SettingsAction>,
@@ -10718,12 +10686,12 @@ fn tag_accessible_buttons(
         (With<Button>, Without<AccessibleButtonScope>),
     >,
 ) {
-    for (entity, main, go_live, game, idle, tab, value, settings, credits) in &buttons {
+    for (entity, main, go_live, game, tab, value, settings, credits) in &buttons {
         let scope = if main.is_some() {
             Some(AccessibleButtonScope::MainMenu)
         } else if go_live.is_some() {
             Some(AccessibleButtonScope::GoLiveConfirmation)
-        } else if game.is_some() || idle.is_some() {
+        } else if game.is_some() {
             Some(AccessibleButtonScope::GameMenu)
         } else if settings.is_some_and(|action| {
             matches!(
@@ -10831,7 +10799,6 @@ struct AccessibleButtonNodeQuery {
     inherited_visibility: Option<&'static InheritedVisibility>,
     main: Option<&'static MainMenuAction>,
     game: Option<&'static GameMenuAction>,
-    idle_toggle: Option<&'static GameMenuIdleToggle>,
     settings_tab: Option<&'static SettingsTabButton>,
     settings_value: Option<&'static SettingsValueButton>,
     settings_action: Option<&'static SettingsAction>,
@@ -10843,7 +10810,6 @@ fn enhance_accessible_buttons(
     state: Res<State<GameState>>,
     menu: Res<MenuRuntime>,
     save: Res<SaveRuntime>,
-    idle: Res<CameraIdleMode>,
     #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
     mut buttons: Query<AccessibleButtonNodeQuery>,
 ) {
@@ -10880,14 +10846,6 @@ fn enhance_accessible_buttons(
             set_accessibility_label(node, main_menu_action_label(*action));
         } else if let Some(action) = button.game {
             set_accessibility_label(node, game_menu_action_label(*action, broadcast_active));
-        } else if button.idle_toggle.is_some() {
-            node.set_role(Role::CheckBox);
-            set_accessibility_label(node, "Idle Mode");
-            node.set_toggled(if idle.0 {
-                Toggled::True
-            } else {
-                Toggled::False
-            });
         } else if let Some(tab) = button.settings_tab {
             node.set_role(Role::Tab);
             set_accessibility_label(node, settings_tab_label(tab.0));
@@ -11284,13 +11242,10 @@ fn announce_accessibility_state(
 fn update_game_menu_controls(
     save: Res<SaveRuntime>,
     menu: Res<MenuRuntime>,
-    idle: Res<CameraIdleMode>,
     render: Res<RenderAssets>,
     #[cfg(target_os = "windows")] broadcast: Res<direct_broadcast::DirectBroadcastRuntime>,
     mut buttons: Query<(&Interaction, &GameMenuAction, &mut ImageNode)>,
     mut labels: Query<(&GameMenuActionLabel, &mut Text)>,
-    mut idle_toggle: GameMenuIdleToggleQuery,
-    mut checkmarks: Query<&mut Visibility, With<GameMenuIdleCheckmark>>,
 ) {
     let has_save = save.store.path().is_file();
     #[cfg(target_os = "windows")]
@@ -11322,24 +11277,6 @@ fn update_game_menu_controls(
             Color::WHITE
         } else {
             Color::srgba(0.78, 0.78, 0.78, 0.5)
-        };
-    }
-    if let Ok((interaction, mut background)) = idle_toggle.single_mut() {
-        background.0 = if menu.page == MenuPage::Game
-            && (menu.selected == 5
-                || *interaction == Interaction::Hovered
-                || *interaction == Interaction::Pressed)
-        {
-            Color::srgba(0.62, 0.55, 0.31, 0.24)
-        } else {
-            Color::NONE
-        };
-    }
-    for mut visibility in &mut checkmarks {
-        *visibility = if idle.0 {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
         };
     }
 }
@@ -12069,12 +12006,10 @@ fn spawn_menu_overlay(
     mut menu: ResMut<MenuRuntime>,
     config: Res<RuntimeConfig>,
     settings: Res<RuntimePlayerSettings>,
-    mut idle: ResMut<CameraIdleMode>,
     render: Res<RenderAssets>,
     mut settings_ui: ResMut<SettingsUiCache>,
 ) {
     settings_ui.signature.clear();
-    idle.0 = false;
     if std::env::var_os("STREAM_TOWN_AUTOSTART_GAME_MENU").is_some()
         && *state.get() == GameState::InGame
     {
@@ -12210,62 +12145,6 @@ fn spawn_menu_overlay(
                             ));
                         });
                 }
-                controls
-                    .spawn((
-                        GameMenuIdleToggle,
-                        Button,
-                        BackgroundColor(Color::NONE),
-                        Node {
-                            width: percent(100.0),
-                            flex_grow: 0.75,
-                            justify_content: JustifyContent::SpaceBetween,
-                            align_items: AlignItems::Center,
-                            padding: UiRect::horizontal(percent(4.0)),
-                            ..default()
-                        },
-                    ))
-                    .with_children(|toggle| {
-                        toggle.spawn((
-                            Text::new("Idle Mode"),
-                            TextFont {
-                                font_size: FontSize::Px(17.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgb(0.827_451, 0.745_098_05, 0.498_039_22)),
-                            Pickable::IGNORE,
-                        ));
-                        toggle
-                            .spawn((
-                                ImageNode::new(main_menu_texture(
-                                    &render,
-                                    MAIN_MENU_TEXTURE_PATHS[1],
-                                )),
-                                Pickable::IGNORE,
-                                Node {
-                                    width: px(28),
-                                    height: px(28),
-                                    justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
-                                    ..default()
-                                },
-                            ))
-                            .with_children(|box_node| {
-                                box_node.spawn((
-                                    GameMenuIdleCheckmark,
-                                    ImageNode::new(main_menu_texture(
-                                        &render,
-                                        GAME_MENU_TEXTURE_PATHS[2],
-                                    )),
-                                    Pickable::IGNORE,
-                                    Visibility::Hidden,
-                                    Node {
-                                        width: percent(72.0),
-                                        height: percent(72.0),
-                                        ..default()
-                                    },
-                                ));
-                            });
-                    });
             });
             root.spawn((
                 GameMenuAction::Close,
@@ -14104,7 +13983,6 @@ fn game_menu_text(state: GameState, selected: usize, has_save: bool) -> String {
             ("Settings", true),
             ("Go Live", true),
             ("Exit Game", true),
-            ("Idle Mode", true),
         ]
     } else {
         &[
@@ -14228,7 +14106,6 @@ fn menu_input(
     connection: Res<TwitchConnection>,
     mut menu: ResMut<MenuRuntime>,
     mut io: ResMut<MenuIoRequest>,
-    mut idle: ResMut<CameraIdleMode>,
     mut player_settings: ResMut<RuntimePlayerSettings>,
     mut next_state: ResMut<NextState<GameState>>,
     mut exit: MessageWriter<AppExit>,
@@ -14313,8 +14190,6 @@ fn menu_input(
     }
     let item_count = if menu.page == MenuPage::Settings {
         SETTINGS_MENU_ITEM_COUNT
-    } else if *state.get() == GameState::InGame {
-        6
     } else {
         5
     };
@@ -14431,15 +14306,6 @@ fn menu_input(
             4 => {
                 menu.page = MenuPage::Closed;
                 next_state.set(GameState::MainMenu);
-            }
-            5 => {
-                idle.0 = !idle.0;
-                if idle.0 {
-                    "Idle Mode enabled"
-                } else {
-                    "Idle Mode disabled"
-                }
-                .clone_into(&mut menu.feedback);
             }
             _ => "No native save exists yet".clone_into(&mut menu.feedback),
         }
@@ -25135,9 +25001,12 @@ fn agent_action_animation(
     agent: &Agent,
     actor: &ActorState,
 ) -> Option<String> {
-    let acting =
-        !agent_is_moving(agent) && agent.action_cooldown_seconds > f32::EPSILON && actor.alive;
-    if !acting {
+    // Unity remains in its action state and ticks DoAction repeatedly while a
+    // target remains valid. Bevy replans after each gameplay tick, leaving a
+    // one-frame zero-cooldown gap that used to exit and restart the animation.
+    // Base visual state on the stationary action goal so looping clips (most
+    // visibly the two-second mining cycle) continue across one-second ticks.
+    if agent_is_moving(agent) || !actor.alive {
         return None;
     }
     match agent.goal {
@@ -26386,9 +26255,7 @@ fn capture_foliage_acceptance(
 fn camera_zoom_and_commands(
     time: Res<Time>,
     config: Res<RuntimeConfig>,
-    keyboard: Res<ButtonInput<KeyCode>>,
     menu: Res<MenuRuntime>,
-    idle: Res<CameraIdleMode>,
     settings: Res<RuntimePlayerSettings>,
     mut requests: ResMut<CameraCommandQueue>,
     mut cameras: Query<
@@ -26419,9 +26286,7 @@ fn camera_zoom_and_commands(
         perspective.fov = f32::from(settings.0.camera.field_of_view_degrees).to_radians();
     }
 
-    if idle.0
-        && let Some(request) = requests.0.pop_front()
-    {
+    if let Some(request) = requests.0.pop_front() {
         if request.reset {
             controller.reset(&mut transform);
         } else {
@@ -26459,19 +26324,6 @@ fn camera_zoom_and_commands(
             transform.translation.x = controller.move_target.x;
             transform.translation.z = controller.move_target.z;
         }
-    }
-
-    if !idle.0 {
-        let keyboard_zoom = if keyboard.pressed(KeyCode::KeyQ) {
-            1.0
-        } else if keyboard.pressed(KeyCode::KeyE) {
-            -1.0
-        } else {
-            0.0
-        };
-        controller.zoom_target_height = (controller.zoom_target_height
-            + keyboard_zoom * settings.0.camera.zoom_sensitivity * delta_seconds)
-            .clamp(UNITY_TOWN_CAMERA_MIN_HEIGHT, UNITY_TOWN_CAMERA_MAX_HEIGHT);
     }
 
     transform.translation.y = transform.translation.y.lerp(
@@ -28386,18 +28238,22 @@ fn handle_twitch_event(
                 }),
                 Err(parse_error) => {
                     debug!(user = %message.login, %parse_error, "ignored invalid Twitch command");
-                    if let Some(usage) = unity_command_usage(&message.message)
+                    if let Some(reply) = invalid_twitch_command_reply(&message.message)
                         && let Some(transport) = &connection.transport
                     {
-                        let _ = transport.send(TwitchControl::SendMessage(format!(
-                            "{}: Invalid arguments. Usage: {usage}",
-                            message.display_name
-                        )));
+                        let _ = transport.send(TwitchControl::SendMessage(reply.to_owned()));
                     }
                 }
             }
         }
     }
+}
+
+fn invalid_twitch_command_reply(message: &str) -> Option<&'static str> {
+    message
+        .trim_start()
+        .starts_with('!')
+        .then_some(INVALID_TWITCH_COMMAND_REPLY)
 }
 
 fn process_runtime_console(
@@ -31066,10 +30922,13 @@ fn shift_grid_position(
     let mut rotation = 0_i32;
     for action in actions {
         match action.direction {
-            BuildingDirection::Up => z = z.saturating_add(action.amount),
-            BuildingDirection::Down => z = z.saturating_sub(action.amount),
-            BuildingDirection::Left => x = x.saturating_sub(action.amount),
-            BuildingDirection::Right => x = x.saturating_add(action.amount),
+            // The authored gameplay camera looks toward +X, so command names
+            // describe the viewer's on-screen directions rather than raw grid
+            // axes: screen up/down is +/-X and screen left/right is +/-Z.
+            BuildingDirection::Up => x = x.saturating_add(action.amount),
+            BuildingDirection::Down => x = x.saturating_sub(action.amount),
+            BuildingDirection::Left => z = z.saturating_add(action.amount),
+            BuildingDirection::Right => z = z.saturating_sub(action.amount),
             BuildingDirection::Rotate => rotation = rotation.saturating_add(action.amount),
         }
     }
@@ -31190,323 +31049,329 @@ fn process_injected_commands(
         }
         let result = (|| -> Result<String, String> {
             match &command {
-            ChatCommand::Join => {
-                if simulation.0.actors.contains_key(&actor_id) {
-                    Ok("you are already in town".to_owned())
-                } else {
-                    let desired = GridPos {
-                        x: world.generated.navigation.width() / 2,
-                        z: world.generated.navigation.height() / 2,
-                    };
-                    if let Some(position) = nearest_walkable(&world.generated, desired) {
-                        let target = nearest_walkable(
-                            &world.generated,
-                            GridPos {
-                                x: position.x.saturating_sub(8),
-                                z: position.z.saturating_sub(8),
-                            },
-                        )
-                        .unwrap_or(position);
-                        let world_position =
-                            grid_to_world_on_surface(position, &config.0, &world.generated);
-                        simulation.0.join_player(actor_id.clone(), position);
-                        let player_archetype = archetype_id_by_source(
-                            &content.0,
-                            ArchetypeKind::Player,
-                            "Player_Character.prefab",
-                        )
-                        .unwrap_or_else(|| {
-                            StableId::new("archetype:viewer").expect("static ID")
-                        });
-                        if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
-                            actor.archetype = Some(player_archetype.clone());
-                            actor.display_name = Some(pending.display_name.clone());
-                            actor.login_name = Some(pending.login_name.clone());
-                            actor.user_type = user_type;
-                            if matches!(
-                                user_type,
-                                StreamUserType::Subscriber | StreamUserType::GameMaster
-                            ) {
-                                let red_panda =
-                                    StableId::new("pet:red_panda").expect("static pet ID");
-                                actor.unlocked_pets.insert(red_panda.clone());
-                                actor.active_pet.get_or_insert(red_panda);
-                            }
-                        }
-                        let base_scale = Vec3::new(
-                            config.0.world.cell_size * 0.3,
-                            config.0.world.cell_size * 0.55,
-                            config.0.world.cell_size * 0.3,
-                        );
-                        ecs.spawn((
-                            WorldEntity,
-                            GridLocation(position),
-                            Agent {
-                                id: actor_id.clone(),
-                                kind: ActorKind::Player,
-                                archetype: player_archetype,
-                                goal: AgentGoal::Wander,
-                                spawn: position,
-                                origin: position,
-                                path: Vec::new(),
-                                path_index: 0,
-                                target,
-                                action_cooldown_seconds: 0.0,
-                                action_started: false,
-                                health_regen_accumulator: 0.0,
-                                wander_sequence: 0,
-                                previous_wander_origin: None,
-                            },
-                            AgentLocomotion::default(),
-                            AgentAnimation {
-                                base_scale,
-                                ..default()
-                            },
-                            Mesh3d(render.actor_lod.clone()),
-                            MeshMaterial3d(actor_material(&render, &ActorKind::Player, false)),
-                            Transform::from_xyz(
-                                world_position.x,
-                                world_position.y + base_scale.y * 0.5,
-                                world_position.z,
-                            )
-                            .with_scale(base_scale),
-                        ));
-                        Ok("welcome to Stream Town".to_owned())
+                ChatCommand::Join => {
+                    if simulation.0.actors.contains_key(&actor_id) {
+                        Ok("you are already in town".to_owned())
                     } else {
-                        Err("no walkable join position is available".to_owned())
+                        let desired = GridPos {
+                            x: world.generated.navigation.width() / 2,
+                            z: world.generated.navigation.height() / 2,
+                        };
+                        if let Some(position) = nearest_walkable(&world.generated, desired) {
+                            let target = nearest_walkable(
+                                &world.generated,
+                                GridPos {
+                                    x: position.x.saturating_sub(8),
+                                    z: position.z.saturating_sub(8),
+                                },
+                            )
+                            .unwrap_or(position);
+                            let world_position =
+                                grid_to_world_on_surface(position, &config.0, &world.generated);
+                            simulation.0.join_player(actor_id.clone(), position);
+                            let player_archetype = archetype_id_by_source(
+                                &content.0,
+                                ArchetypeKind::Player,
+                                "Player_Character.prefab",
+                            )
+                            .unwrap_or_else(|| {
+                                StableId::new("archetype:viewer").expect("static ID")
+                            });
+                            if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+                                actor.archetype = Some(player_archetype.clone());
+                                actor.display_name = Some(pending.display_name.clone());
+                                actor.login_name = Some(pending.login_name.clone());
+                                actor.user_type = user_type;
+                                if matches!(
+                                    user_type,
+                                    StreamUserType::Subscriber | StreamUserType::GameMaster
+                                ) {
+                                    let red_panda =
+                                        StableId::new("pet:red_panda").expect("static pet ID");
+                                    actor.unlocked_pets.insert(red_panda.clone());
+                                    actor.active_pet.get_or_insert(red_panda);
+                                }
+                            }
+                            let base_scale = Vec3::new(
+                                config.0.world.cell_size * 0.3,
+                                config.0.world.cell_size * 0.55,
+                                config.0.world.cell_size * 0.3,
+                            );
+                            ecs.spawn((
+                                WorldEntity,
+                                GridLocation(position),
+                                Agent {
+                                    id: actor_id.clone(),
+                                    kind: ActorKind::Player,
+                                    archetype: player_archetype,
+                                    goal: AgentGoal::Wander,
+                                    spawn: position,
+                                    origin: position,
+                                    path: Vec::new(),
+                                    path_index: 0,
+                                    target,
+                                    action_cooldown_seconds: 0.0,
+                                    action_started: false,
+                                    health_regen_accumulator: 0.0,
+                                    wander_sequence: 0,
+                                    previous_wander_origin: None,
+                                },
+                                AgentLocomotion::default(),
+                                AgentAnimation {
+                                    base_scale,
+                                    ..default()
+                                },
+                                Mesh3d(render.actor_lod.clone()),
+                                MeshMaterial3d(actor_material(&render, &ActorKind::Player, false)),
+                                Transform::from_xyz(
+                                    world_position.x,
+                                    world_position.y + base_scale.y * 0.5,
+                                    world_position.z,
+                                )
+                                .with_scale(base_scale),
+                            ));
+                            Ok("welcome to Stream Town".to_owned())
+                        } else {
+                            Err("no walkable join position is available".to_owned())
+                        }
                     }
                 }
-            }
-            ChatCommand::SelectRole(role) => {
-                let role = prefixed_id(role, "role:")
-                    .filter(|role| content.0.roles.contains_key(role))
-                    .ok_or_else(|| format!("unknown role {}", role.as_str()));
-                role.and_then(|role| {
-                    if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&actor_id) {
-                        return Err("the Ruler role is assigned by election".to_owned());
+                ChatCommand::SelectRole(role) => {
+                    let role = prefixed_id(role, "role:")
+                        .filter(|role| content.0.roles.contains_key(role))
+                        .ok_or_else(|| format!("unknown role {}", role.as_str()));
+                    role.and_then(|role| {
+                        if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&actor_id) {
+                            return Err("the Ruler role is assigned by election".to_owned());
+                        }
+                        if !role_is_available(&content.0, &simulation.0, &role, Some(&actor_id)) {
+                            return Err(format!("the {role} role is full"));
+                        }
+                        simulation
+                            .0
+                            .assign_role(&actor_id, role.clone())
+                            .map(|()| format!("role changed to {role}"))
+                            .map_err(|error| error.to_string())
+                    })
+                }
+                ChatCommand::Role => simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before checking your role".to_owned())
+                    .map(|actor| {
+                        let progress = actor
+                            .role_progression
+                            .get(&actor.role)
+                            .copied()
+                            .unwrap_or_default();
+                        let role = content
+                            .0
+                            .roles
+                            .get(&actor.role)
+                            .map_or(actor.role.as_str(), |role| role.display_name.as_str());
+                        format!("you are currently a level {} {role}", progress.level)
+                    }),
+                ChatCommand::Health => simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before checking health".to_owned())
+                    .map(|actor| {
+                        format!("your health is: ({}/{})", actor.health, actor.max_health)
+                    }),
+                ChatCommand::Buildings => {
+                    let names = content
+                        .0
+                        .buildings
+                        .iter()
+                        .filter(|(id, building)| {
+                            building.placeable
+                                && building_is_unlocked(&content.0, &simulation.0, id)
+                        })
+                        .map(|(_, building)| building.display_name.as_str())
+                        .collect::<Vec<_>>();
+                    Ok(format!("unlocked buildings: {}", names.join(", ")))
+                }
+                ChatCommand::BuildingIds(requested) => {
+                    let building_id = prefixed_id(requested, "building:")
+                        .filter(|id| content.0.buildings.contains_key(id))
+                        .ok_or_else(|| format!("unknown building {requested}"))?;
+                    let definition = &content.0.buildings[&building_id];
+                    let ids = simulation
+                        .0
+                        .buildings
+                        .values()
+                        .filter(|building| building.archetype == definition.archetype)
+                        .enumerate()
+                        .map(|(index, building)| format!("{}={}", index + 1, building.id))
+                        .collect::<Vec<_>>();
+                    Ok(if ids.is_empty() {
+                        format!("no {} buildings", definition.display_name)
+                    } else {
+                        format!("{} IDs: {}", definition.display_name, ids.join(", "))
+                    })
+                }
+                ChatCommand::Build(requested) => {
+                    let building_id = building_definition_id(&content.0, requested);
+                    building_id.and_then(|building_id| {
+                        let building = &content.0.buildings[&building_id];
+                        if queues.placers.0.contains_key(&actor_id) {
+                            return Err(
+                                "already placing a building; use !confirm or !cancel".to_owned()
+                            );
+                        }
+                        if !building.placeable {
+                            return Err(format!(
+                                "{} cannot be player-placed",
+                                building.display_name
+                            ));
+                        }
+                        if !building_is_unlocked(&content.0, &simulation.0, &building_id) {
+                            return Err(format!("{} is not unlocked", building.display_name));
+                        }
+                        let actor = simulation
+                            .0
+                            .actors
+                            .get(&actor_id)
+                            .ok_or_else(|| "join before building".to_owned())?;
+                        let cost = building_construction_cost(
+                            &content.0,
+                            &simulation.0,
+                            &building_id,
+                            building,
+                        );
+                        if simulation.0.building_costs_enabled && !can_afford(&simulation.0, &cost)
+                        {
+                            return Err(format!("cannot afford {}", building.display_name));
+                        }
+                        let rotation = actor.building_rotation_quarter_turns;
+                        let near = actor
+                            .last_building_position
+                            .or(selected.0)
+                            .unwrap_or(actor.position);
+                        queues.placers.0.insert(
+                            actor_id.clone(),
+                            BuildingPlacement {
+                                building: building_id,
+                                position: near,
+                                rotation_quarter_turns: rotation,
+                            },
+                        );
+                        Ok(format!(
+                            "placing {} at {},{}; use !move, !rotate, !confirm, or !cancel",
+                            building.display_name, near.x, near.z
+                        ))
+                    })
+                }
+                ChatCommand::MoveBuilding(actions) => {
+                    let placement = queues
+                        .placers
+                        .0
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "not in building placement mode".to_owned())?;
+                    let (position, rotation_delta) =
+                        shift_grid_position(placement.position, actions, &world.generated);
+                    placement.position = position;
+                    placement.rotation_quarter_turns = placement
+                        .rotation_quarter_turns
+                        .saturating_add(rotation_delta);
+                    if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+                        actor.building_rotation_quarter_turns = actor
+                            .building_rotation_quarter_turns
+                            .saturating_add(rotation_delta);
                     }
-                    if !role_is_available(&content.0, &simulation.0, &role, Some(&actor_id)) {
-                        return Err(format!("the {role} role is full"));
+                    let definition = &content.0.buildings[&placement.building];
+                    let footprint =
+                        rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+                    let validity = if building_site_is_available(
+                        &world.generated,
+                        placement.position,
+                        footprint,
+                    ) {
+                        "valid"
+                    } else {
+                        "blocked"
+                    };
+                    Ok(format!(
+                        "{} placer moved to {},{} at {} degrees ({validity})",
+                        definition.display_name,
+                        placement.position.x,
+                        placement.position.z,
+                        placement.rotation_quarter_turns.rem_euclid(4) * 90
+                    ))
+                }
+                ChatCommand::ConfirmBuilding => {
+                    let placement = queues
+                        .placers
+                        .0
+                        .get(&actor_id)
+                        .cloned()
+                        .ok_or_else(|| "not in building placement mode".to_owned())?;
+                    let building = &content.0.buildings[&placement.building];
+                    if !building.placeable
+                        || !building_is_unlocked(&content.0, &simulation.0, &placement.building)
+                    {
+                        return Err(format!("{} can no longer be placed", building.display_name));
                     }
+                    let footprint =
+                        rotated_footprint(building.footprint, placement.rotation_quarter_turns);
+                    if !building_site_is_available(&world.generated, placement.position, footprint)
+                    {
+                        return Err("building placement is blocked or outside the world".to_owned());
+                    }
+                    let cost = if simulation.0.building_costs_enabled {
+                        building_construction_cost(
+                            &content.0,
+                            &simulation.0,
+                            &placement.building,
+                            building,
+                        )
+                    } else {
+                        BTreeMap::new()
+                    };
+                    let runtime_id = runtime_building_id(&simulation.0);
+                    let region =
+                        building_region(placement.position, footprint, &world.generated)
+                            .ok_or_else(|| "building placement is outside the world".to_owned())?;
                     simulation
                         .0
-                        .assign_role(&actor_id, role.clone())
-                        .map(|()| format!("role changed to {role}"))
-                        .map_err(|error| error.to_string())
-                })
-            }
-            ChatCommand::Role => simulation
-                .0
-                .actors
-                .get(&actor_id)
-                .ok_or_else(|| "join before checking your role".to_owned())
-                .map(|actor| {
-                    let progress = actor.role_progression.get(&actor.role).copied().unwrap_or_default();
-                    let role = content
-                        .0
-                        .roles
-                        .get(&actor.role)
-                        .map_or(actor.role.as_str(), |role| role.display_name.as_str());
-                    format!("you are currently a level {} {role}", progress.level)
-                }),
-            ChatCommand::Health => simulation
-                .0
-                .actors
-                .get(&actor_id)
-                .ok_or_else(|| "join before checking health".to_owned())
-                .map(|actor| format!("your health is: ({}/{})", actor.health, actor.max_health)),
-            ChatCommand::Buildings => {
-                let names = content
-                    .0
-                    .buildings
-                    .iter()
-                    .filter(|(id, building)| {
-                        building.placeable && building_is_unlocked(&content.0, &simulation.0, id)
-                    })
-                    .map(|(_, building)| building.display_name.as_str())
-                    .collect::<Vec<_>>();
-                Ok(format!("unlocked buildings: {}", names.join(", ")))
-            }
-            ChatCommand::BuildingIds(requested) => {
-                let building_id = prefixed_id(requested, "building:")
-                    .filter(|id| content.0.buildings.contains_key(id))
-                    .ok_or_else(|| format!("unknown building {requested}"))?;
-                let definition = &content.0.buildings[&building_id];
-                let ids = simulation
-                    .0
-                    .buildings
-                    .values()
-                    .filter(|building| building.archetype == definition.archetype)
-                    .enumerate()
-                    .map(|(index, building)| format!("{}={}", index + 1, building.id))
-                    .collect::<Vec<_>>();
-                Ok(if ids.is_empty() {
-                    format!("no {} buildings", definition.display_name)
-                } else {
-                    format!("{} IDs: {}", definition.display_name, ids.join(", "))
-                })
-            }
-            ChatCommand::Build(requested) => {
-                let building_id = building_definition_id(&content.0, requested);
-                building_id.and_then(|building_id| {
-                    let building = &content.0.buildings[&building_id];
-                    if queues.placers.0.contains_key(&actor_id) {
-                        return Err("already placing a building; use !confirm or !cancel".to_owned());
+                        .construct_rotated(
+                            runtime_id.clone(),
+                            building.archetype.clone(),
+                            placement.position,
+                            placement.rotation_quarter_turns,
+                            building_base_max_health(&content.0, building),
+                            &cost,
+                        )
+                        .map_err(|error| error.to_string())?;
+                    world
+                        .generated
+                        .navigation
+                        .set_blocked(region, true)
+                        .map_err(|error| error.to_string())?;
+                    if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
+                        actor.last_building_position = Some(placement.position);
                     }
-                    if !building.placeable {
-                        return Err(format!("{} cannot be player-placed", building.display_name));
-                    }
-                    if !building_is_unlocked(&content.0, &simulation.0, &building_id) {
-                        return Err(format!("{} is not unlocked", building.display_name));
-                    }
-                    let actor = simulation
-                        .0
-                        .actors
-                        .get(&actor_id)
-                        .ok_or_else(|| "join before building".to_owned())?;
-                    let cost = building_construction_cost(
-                        &content.0,
-                        &simulation.0,
-                        &building_id,
+                    queues.placers.0.remove(&actor_id);
+                    spawn_runtime_building(
+                        &mut ecs,
+                        &config.0,
+                        &world.generated,
+                        &presentation.0,
+                        asset_server.as_deref(),
+                        &asset_root.0,
+                        &render,
+                        &simulation.0.buildings[&runtime_id],
                         building,
-                    );
-                    if simulation.0.building_costs_enabled
-                        && !can_afford(&simulation.0, &cost)
-                    {
-                        return Err(format!("cannot afford {}", building.display_name));
-                    }
-                    let rotation = actor.building_rotation_quarter_turns;
-                    let near = actor
-                        .last_building_position
-                        .or(selected.0)
-                        .unwrap_or(actor.position);
-                    queues.placers.0.insert(
-                        actor_id.clone(),
-                        BuildingPlacement {
-                            building: building_id,
-                            position: near,
-                            rotation_quarter_turns: rotation,
-                        },
-                    );
-                    Ok(format!(
-                        "placing {} at {},{}; use !move, !rotate, !confirm, or !cancel",
-                        building.display_name, near.x, near.z
-                    ))
-                })
-            }
-            ChatCommand::MoveBuilding(actions) => {
-                let placement = queues
-                    .placers
-                    .0
-                    .get_mut(&actor_id)
-                    .ok_or_else(|| "not in building placement mode".to_owned())?;
-                let (position, rotation_delta) =
-                    shift_grid_position(placement.position, actions, &world.generated);
-                placement.position = position;
-                placement.rotation_quarter_turns = placement
-                    .rotation_quarter_turns
-                    .saturating_add(rotation_delta);
-                if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
-                    actor.building_rotation_quarter_turns = actor
-                        .building_rotation_quarter_turns
-                        .saturating_add(rotation_delta);
-                }
-                let definition = &content.0.buildings[&placement.building];
-                let footprint = rotated_footprint(
-                    definition.footprint,
-                    placement.rotation_quarter_turns,
-                );
-                let validity = if building_site_is_available(
-                    &world.generated,
-                    placement.position,
-                    footprint,
-                ) {
-                    "valid"
-                } else {
-                    "blocked"
-                };
-                Ok(format!(
-                    "{} placer moved to {},{} at {} degrees ({validity})",
-                    definition.display_name,
-                    placement.position.x,
-                    placement.position.z,
-                    placement.rotation_quarter_turns.rem_euclid(4) * 90
-                ))
-            }
-            ChatCommand::ConfirmBuilding => {
-                let placement = queues
-                    .placers
-                    .0
-                    .get(&actor_id)
-                    .cloned()
-                    .ok_or_else(|| "not in building placement mode".to_owned())?;
-                let building = &content.0.buildings[&placement.building];
-                if !building.placeable
-                    || !building_is_unlocked(&content.0, &simulation.0, &placement.building)
-                {
-                    return Err(format!("{} can no longer be placed", building.display_name));
-                }
-                let footprint =
-                    rotated_footprint(building.footprint, placement.rotation_quarter_turns);
-                if !building_site_is_available(
-                    &world.generated,
-                    placement.position,
-                    footprint,
-                ) {
-                    return Err("building placement is blocked or outside the world".to_owned());
-                }
-                let cost = if simulation.0.building_costs_enabled {
-                    building_construction_cost(
-                        &content.0,
-                        &simulation.0,
-                        &placement.building,
-                        building,
-                    )
-                } else {
-                    BTreeMap::new()
-                };
-                let runtime_id = runtime_building_id(&simulation.0);
-                let region = building_region(placement.position, footprint, &world.generated)
-                    .ok_or_else(|| "building placement is outside the world".to_owned())?;
-                simulation
-                    .0
-                    .construct_rotated(
-                        runtime_id.clone(),
-                        building.archetype.clone(),
+                        &content.0.archetypes[&building.archetype],
                         placement.position,
-                        placement.rotation_quarter_turns,
-                        building_base_max_health(&content.0, building),
-                        &cost,
-                    )
-                    .map_err(|error| error.to_string())?;
-                world
-                    .generated
-                    .navigation
-                    .set_blocked(region, true)
-                    .map_err(|error| error.to_string())?;
-                if let Some(actor) = simulation.0.actors.get_mut(&actor_id) {
-                    actor.last_building_position = Some(placement.position);
+                        building.footprint,
+                        building_age(&content.0, &simulation.0, &placement.building),
+                    );
+                    Ok(format!("placed {} construction", building.display_name))
                 }
-                queues.placers.0.remove(&actor_id);
-                spawn_runtime_building(
-                    &mut ecs,
-                    &config.0,
-                    &world.generated,
-                    &presentation.0,
-                    asset_server.as_deref(),
-                    &asset_root.0,
-                    &render,
-                    &simulation.0.buildings[&runtime_id],
-                    building,
-                    &content.0.archetypes[&building.archetype],
-                    placement.position,
-                    building.footprint,
-                    building_age(&content.0, &simulation.0, &placement.building),
-                );
-                Ok(format!("placed {} construction", building.display_name))
-            }
-            ChatCommand::CancelBuilding => {
-                queues
+                ChatCommand::CancelBuilding => queues
                     .placers
                     .0
                     .remove(&actor_id)
@@ -31516,969 +31381,733 @@ fn process_injected_commands(
                             content.0.buildings[&placement.building].display_name
                         )
                     })
-                    .ok_or_else(|| "not in building placement mode".to_owned())
-            }
-            ChatCommand::Upgrade(requested) => {
-                let building_id = building_definition_id(&content.0, requested);
-                building_id.and_then(|building_id| {
-                    let definition = &content.0.buildings[&building_id];
-                    let candidate = simulation
-                        .0
-                        .buildings
-                        .values()
-                        .filter(|building| {
-                            building.archetype == definition.archetype && building.complete
+                    .ok_or_else(|| "not in building placement mode".to_owned()),
+                ChatCommand::Upgrade(requested) => {
+                    let building_id = building_definition_id(&content.0, requested);
+                    building_id.and_then(|building_id| {
+                        let definition = &content.0.buildings[&building_id];
+                        let candidate = simulation
+                            .0
+                            .buildings
+                            .values()
+                            .filter(|building| {
+                                building.archetype == definition.archetype && building.complete
+                            })
+                            .min_by_key(|building| (building.level, building.id.clone()))
+                            .map(|building| building.id.clone())
+                            .ok_or_else(|| {
+                                format!("no completed {} is available", definition.display_name)
+                            })?;
+                        upgrade_building_instance(
+                            &content.0,
+                            &mut simulation.0,
+                            &building_id,
+                            &candidate,
+                        )
+                        .map(|level| {
+                            format!("upgraded {} to level {level}", definition.display_name)
                         })
-                        .min_by_key(|building| (building.level, building.id.clone()))
-                        .map(|building| building.id.clone())
-                        .ok_or_else(|| {
-                            format!("no completed {} is available", definition.display_name)
-                        })?;
-                    upgrade_building_instance(
-                        &content.0,
-                        &mut simulation.0,
-                        &building_id,
-                        &candidate,
-                    )
-                        .map(|level| format!("upgraded {} to level {level}", definition.display_name))
-                })
-            }
-            ChatCommand::Level(requested) => {
-                let role = prefixed_id(requested, "role:")
-                    .filter(|role| content.0.roles.contains_key(role))
-                    .ok_or_else(|| format!("unknown role {requested}"))?;
-                let actor = simulation
-                    .0
-                    .actors
-                    .get(&actor_id)
-                    .ok_or_else(|| "join before checking role progression".to_owned())?;
-                let progress = actor
-                    .role_progression
-                    .get(&role)
-                    .copied()
-                    .ok_or_else(|| format!("you have no progression for {role}"))?;
-                let role_name = content.0.roles[&role].display_name.as_str();
-                Ok(format!(
-                    "you are a level ({}/100) {role_name}. Current Exp: ({}/{}).",
-                    progress.level,
-                    progress.experience,
-                    stream_town_domain::required_role_experience(progress.level)
-                ))
-            }
-            ChatCommand::LevelBuilding {
-                building,
-                index,
-                iterations,
-            } => {
-                let building_id = building_definition_id(&content.0, building)?;
-                let definition = &content.0.buildings[&building_id];
-                let instances = building_instance_ids(&content.0, &simulation.0, &building_id);
-                let runtime_id = instances
-                    .get(usize::from(index.saturating_sub(1)))
-                    .cloned()
-                    .ok_or_else(|| format!("{} building ID {index} does not exist", definition.display_name))?;
-                let mut successful = 0_u16;
-                let mut last_error = None;
-                for _ in 0..*iterations {
-                    match upgrade_building_instance(
-                        &content.0,
-                        &mut simulation.0,
-                        &building_id,
-                        &runtime_id,
-                    ) {
-                        Ok(_) => successful = successful.saturating_add(1),
-                        Err(error) => {
-                            last_error = Some(error);
-                            break;
-                        }
-                    }
+                    })
                 }
-                if successful == 0 {
-                    Err(last_error.unwrap_or_else(|| "building could not be leveled".to_owned()))
-                } else {
+                ChatCommand::Level(requested) => {
+                    let role = prefixed_id(requested, "role:")
+                        .filter(|role| content.0.roles.contains_key(role))
+                        .ok_or_else(|| format!("unknown role {requested}"))?;
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get(&actor_id)
+                        .ok_or_else(|| "join before checking role progression".to_owned())?;
+                    let progress = actor
+                        .role_progression
+                        .get(&role)
+                        .copied()
+                        .ok_or_else(|| format!("you have no progression for {role}"))?;
+                    let role_name = content.0.roles[&role].display_name.as_str();
                     Ok(format!(
-                        "Successfully Leveled Building {successful} {}",
-                        if successful > 1 { "Times" } else { "Time" }
+                        "you are a level ({}/100) {role_name}. Current Exp: ({}/{}).",
+                        progress.level,
+                        progress.experience,
+                        stream_town_domain::required_role_experience(progress.level)
                     ))
                 }
-            }
-            ChatCommand::LevelAll {
-                building,
-                target_level,
-            } => {
-                let building_id = building_definition_id(&content.0, building)?;
-                let definition = &content.0.buildings[&building_id];
-                let mut successful = 0_u32;
-                loop {
-                    let mut instances = building_instance_ids(&content.0, &simulation.0, &building_id);
-                    instances.sort_by_key(|runtime_id| {
-                        (simulation.0.buildings[runtime_id].level, runtime_id.clone())
-                    });
-                    let mut advanced = false;
-                    for runtime_id in instances {
-                        if simulation.0.buildings[&runtime_id].level >= *target_level {
-                            continue;
-                        }
-                        if upgrade_building_instance(
+                ChatCommand::LevelBuilding {
+                    building,
+                    index,
+                    iterations,
+                } => {
+                    let building_id = building_definition_id(&content.0, building)?;
+                    let definition = &content.0.buildings[&building_id];
+                    let instances = building_instance_ids(&content.0, &simulation.0, &building_id);
+                    let runtime_id = instances
+                        .get(usize::from(index.saturating_sub(1)))
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "{} building ID {index} does not exist",
+                                definition.display_name
+                            )
+                        })?;
+                    let mut successful = 0_u16;
+                    let mut last_error = None;
+                    for _ in 0..*iterations {
+                        match upgrade_building_instance(
                             &content.0,
                             &mut simulation.0,
                             &building_id,
                             &runtime_id,
-                        )
-                        .is_ok()
-                        {
-                            successful = successful.saturating_add(1);
-                            advanced = true;
+                        ) {
+                            Ok(_) => successful = successful.saturating_add(1),
+                            Err(error) => {
+                                last_error = Some(error);
+                                break;
+                            }
                         }
                     }
-                    if !advanced {
-                        break;
+                    if successful == 0 {
+                        Err(last_error
+                            .unwrap_or_else(|| "building could not be leveled".to_owned()))
+                    } else {
+                        Ok(format!(
+                            "Successfully Leveled Building {successful} {}",
+                            if successful > 1 { "Times" } else { "Time" }
+                        ))
                     }
                 }
-                if successful == 0 {
-                    Err(format!(
-                        "no {} buildings could be leveled toward level {target_level}",
-                        definition.display_name
-                    ))
-                } else {
-                    Ok(format!("Successfully leveled {successful} times!"))
+                ChatCommand::LevelAll {
+                    building,
+                    target_level,
+                } => {
+                    let building_id = building_definition_id(&content.0, building)?;
+                    let definition = &content.0.buildings[&building_id];
+                    let mut successful = 0_u32;
+                    loop {
+                        let mut instances =
+                            building_instance_ids(&content.0, &simulation.0, &building_id);
+                        instances.sort_by_key(|runtime_id| {
+                            (simulation.0.buildings[runtime_id].level, runtime_id.clone())
+                        });
+                        let mut advanced = false;
+                        for runtime_id in instances {
+                            if simulation.0.buildings[&runtime_id].level >= *target_level {
+                                continue;
+                            }
+                            if upgrade_building_instance(
+                                &content.0,
+                                &mut simulation.0,
+                                &building_id,
+                                &runtime_id,
+                            )
+                            .is_ok()
+                            {
+                                successful = successful.saturating_add(1);
+                                advanced = true;
+                            }
+                        }
+                        if !advanced {
+                            break;
+                        }
+                    }
+                    if successful == 0 {
+                        Err(format!(
+                            "no {} buildings could be leveled toward level {target_level}",
+                            definition.display_name
+                        ))
+                    } else {
+                        Ok(format!("Successfully leveled {successful} times!"))
+                    }
                 }
-            }
-            ChatCommand::RemoveBuilding { building, index } => {
-                let building_id = building_definition_id(&content.0, building)?;
-                if building_id.as_str() == "building:townhall" {
-                    return Err("the Town Hall cannot be removed".to_owned());
+                ChatCommand::RemoveBuilding { building, index } => {
+                    let building_id = building_definition_id(&content.0, building)?;
+                    if building_id.as_str() == "building:townhall" {
+                        return Err("the Town Hall cannot be removed".to_owned());
+                    }
+                    let definition = &content.0.buildings[&building_id];
+                    let instances = building_instance_ids(&content.0, &simulation.0, &building_id);
+                    let runtime_id = instances
+                        .get(usize::from(index.saturating_sub(1)))
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!(
+                                "{} building ID {index} does not exist",
+                                definition.display_name
+                            )
+                        })?;
+                    remove_selected_building(
+                        &runtime_id,
+                        &content.0,
+                        &mut world.generated,
+                        &mut simulation.0,
+                    )?;
+                    queues
+                        .building
+                        .0
+                        .push_back(BuildingRuntimeCommand::Despawn(runtime_id));
+                    Ok("Successfully Removed Building".to_owned())
                 }
-                let definition = &content.0.buildings[&building_id];
-                let instances = building_instance_ids(&content.0, &simulation.0, &building_id);
-                let runtime_id = instances
-                    .get(usize::from(index.saturating_sub(1)))
-                    .cloned()
-                    .ok_or_else(|| format!("{} building ID {index} does not exist", definition.display_name))?;
-                remove_selected_building(
-                    &runtime_id,
-                    &content.0,
-                    &mut world.generated,
-                    &mut simulation.0,
-                )?;
-                queues
-                    .building
-                    .0
-                    .push_back(BuildingRuntimeCommand::Despawn(runtime_id));
-                Ok("Successfully Removed Building".to_owned())
-            }
-            ChatCommand::Sell { amount, resource } => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let resource = prefixed_id(resource, "resource:")
-                    .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
-                resource.and_then(|resource| {
-                    simulation
-                        .0
-                        .sell_resource(&resource, *amount)
-                        .map(|(sold, gold)| {
-                            let _ = simulation.0.record_objective_event(
-                                &content.0.objectives,
-                                &ObjectiveEvent::ResourceGained {
-                                    resource: StableId::new("resource:gold")
-                                        .expect("static stable ID"),
-                                    amount: gold,
-                                },
-                            );
-                            let _ = simulation.0.record_objective_event(
-                                &content.0.objectives,
-                                &ObjectiveEvent::ResourceSold {
-                                    resource: resource.clone(),
-                                    amount: sold,
-                                },
-                            );
-                            format!("sold {sold} {resource} for {gold} gold")
-                        })
-                        .map_err(|error| error.to_string())
-                })
-            }
-            ChatCommand::Buy { amount, resource } => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let resource = prefixed_id(resource, "resource:")
-                    .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
-                resource.and_then(|resource| {
-                    let capacity =
-                        resource_storage_capacity(&config.0, &content.0, &simulation.0, &resource);
-                    simulation
-                        .0
-                        .buy_resource(resource.clone(), *amount, capacity)
-                        .map(|(bought, gold)| {
-                            let _ = simulation.0.record_objective_event(
-                                &content.0.objectives,
-                                &ObjectiveEvent::ResourceGained {
-                                    resource: resource.clone(),
-                                    amount: bought,
-                                },
-                            );
-                            let _ = simulation.0.record_objective_event(
-                                &content.0.objectives,
-                                &ObjectiveEvent::ResourceBought {
-                                    resource: resource.clone(),
-                                    amount: bought,
-                                },
-                            );
-                            format!("bought {bought} {resource} for {gold} gold")
-                        })
-                        .map_err(|error| error.to_string())
-                })
-            }
-            ChatCommand::Vote(requested) => {
-                if simulation.0.ruler_vote.is_some() {
-                    let option = resolve_ruler_vote_option(&simulation.0, requested)
-                        .ok_or_else(|| format!("unknown ruler candidate {}", requested.as_str()));
-                    option.and_then(|option| {
+                ChatCommand::Sell { amount, resource } => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let resource = prefixed_id(resource, "resource:")
+                        .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
+                    resource.and_then(|resource| {
                         simulation
                             .0
-                            .cast_ruler_vote(&actor_id, option.clone())
-                            .map(|()| {
-                                let label = simulation
-                                    .0
-                                    .actors
-                                    .get(&option)
-                                    .and_then(|actor| actor.display_name.as_deref())
-                                    .unwrap_or(option.as_str());
-                                format!("ruler vote for {label} accepted")
+                            .sell_resource(&resource, *amount)
+                            .map(|(sold, gold)| {
+                                let _ = simulation.0.record_objective_event(
+                                    &content.0.objectives,
+                                    &ObjectiveEvent::ResourceGained {
+                                        resource: StableId::new("resource:gold")
+                                            .expect("static stable ID"),
+                                        amount: gold,
+                                    },
+                                );
+                                let _ = simulation.0.record_objective_event(
+                                    &content.0.objectives,
+                                    &ObjectiveEvent::ResourceSold {
+                                        resource: resource.clone(),
+                                        amount: sold,
+                                    },
+                                );
+                                format!("sold {sold} {resource} for {gold} gold")
                             })
                             .map_err(|error| error.to_string())
                     })
-                } else {
-                let technology = resolve_technology_id(&content.0, requested)
-                    .ok_or_else(|| format!("unknown technology {}", requested.as_str()));
-                technology.and_then(|technology| {
-                    let node = &content.0.technology.nodes[&technology];
-                    if node.unavailable {
-                        return Err(format!("{} is unavailable", node.display_name));
-                    }
-                    if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
-                        return Err("the town already has the maximum active goals".to_owned());
-                    }
-                    if simulation.0.unlocked_technology.contains(&technology) {
-                        return Err(format!("{} is already unlocked", node.display_name));
-                    }
-                    if let Some(prerequisite) = node
-                        .prerequisites
-                        .iter()
-                        .find(|required| !simulation.0.unlocked_technology.contains(*required))
-                    {
-                        return Err(format!("missing prerequisite {prerequisite}"));
-                    }
-                    if simulation
-                        .0
-                        .active_vote
-                        .as_ref()
-                        .is_some_and(|vote| vote.technology != technology)
-                    {
-                        return Err("another technology vote is active".to_owned());
-                    }
-                if simulation.0.active_vote.is_none() {
-                    let _ = simulation.0.start_technology_vote(
-                        technology.clone(),
-                        TECHNOLOGY_VOTE_DURATION_SECONDS,
-                    );
                 }
-                    simulation
-                        .0
-                        .cast_vote(&actor_id, true)
-                        .map(|()| format!("voted for {}", node.display_name))
-                        .map_err(|error| error.to_string())
-                })
-                }
-            }
-            ChatCommand::Recruit { role, amount } => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let role = prefixed_id(role, "role:")
-                    .filter(|role| content.0.roles.contains_key(role))
-                    .ok_or_else(|| format!("unknown role {}", role.as_str()))?;
-                if role.as_str() == "role:ruler" {
-                    Err("Ruler cannot be recruited".to_owned())
-                } else {
-                    recruit_npcs(
-                        &mut ecs,
-                        &config.0,
-                        &content.0,
-                        &world.generated,
-                        &render,
-                        &mut simulation.0,
-                        &role,
-                        *amount,
-                    )
-                }
-            }
-            ChatCommand::RecruitCount => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let recruits = recruited_actor_ids(&simulation.0).len();
-                Ok(format!("The town has {recruits} recruits!"))
-            }
-            ChatCommand::RecruitIds => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let recruit_ids = recruited_actor_ids(&simulation.0);
-                let recruits = recruit_ids
-                    .iter()
-                    .enumerate()
-                    .map(|(index, id)| format!("{}={id}", index + 1))
-                    .collect::<Vec<_>>();
-                spawn_numbered_world_labels(&mut ecs, &recruit_ids);
-                Ok(if recruits.is_empty() {
-                    "the town has no recruited NPCs".to_owned()
-                } else {
-                    format!("recruit IDs: {}", recruits.join(", "))
-                })
-            }
-            ChatCommand::RecruitInfo(index) => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let id = recruit_id(&simulation.0, *index)
-                    .ok_or_else(|| format!("unknown recruit ID {index}"))?;
-                let recruit = &simulation.0.actors[&id];
-                let progress = recruit
-                    .role_progression
-                    .get(&recruit.role)
-                    .copied()
-                    .unwrap_or_default();
-                let role = content
-                    .0
-                    .roles
-                    .get(&recruit.role)
-                    .map_or(recruit.role.as_str(), |role| role.display_name.as_str());
-                Ok(format!(
-                    "----- Recruit {index} | Current role {role} |  Health: {} / {} |  Level: {} / 100 |  Experience: {} / {}",
-                    recruit.health,
-                    recruit.max_health,
-                    progress.level,
-                    progress.experience,
-                    stream_town_domain::required_role_experience(progress.level)
-                ))
-            }
-            ChatCommand::RecruitRole { recruit, role } => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let id = recruit_id(&simulation.0, *recruit)
-                    .ok_or_else(|| format!("unknown recruit ID {recruit}"))?;
-                let role = prefixed_id(role, "role:")
-                    .filter(|role| content.0.roles.contains_key(role))
-                    .ok_or_else(|| format!("unknown role {role}"))?;
-                if role.as_str() == "role:ruler" {
-                    return Err("Ruler cannot be assigned to a recruit".to_owned());
-                }
-                if !role_is_available(&content.0, &simulation.0, &role, Some(&id)) {
-                    return Err(format!("the {role} role is full"));
-                }
-                simulation
-                    .0
-                    .assign_role(&id, role.clone())
-                    .map_err(|error| error.to_string())?;
-                let role_name = content.0.roles[&role].display_name.as_str();
-                Ok(format!("Successfully changed recruit {recruit} to {role_name}!"))
-            }
-            ChatCommand::DismissRecruit(index) => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let id = recruit_id(&simulation.0, *index)
-                    .ok_or_else(|| format!("unknown recruit ID {index}"))?;
-                simulation.0.actors.remove(&id);
-                let resource = StableId::new("resource:recruit").expect("static ID");
-                let current = simulation.0.town_resources.get(&resource).copied().unwrap_or_default();
-                simulation.0.town_resources.insert(resource, current.saturating_sub(1));
-                queues.agent.0.push_back(AgentCommand::Despawn(id));
-                Ok(format!("Successfully Dismissed recruit {index}!"))
-            }
-            ChatCommand::StartRulerVote => {
-                require_staff(&pending)?;
-                let kind = if simulation.0.current_ruler.is_some() {
-                    RulerVoteKind::KeepRuler
-                } else {
-                    RulerVoteKind::NewRuler
-                };
-                simulation
-                    .0
-                    .start_ruler_vote(kind)
-                    .map(|()| "ruler vote started".to_owned())
-                    .map_err(|error| error.to_string())
-            }
-            ChatCommand::Resign => simulation
-                .0
-                .resign_ruler(&actor_id)
-                .map(|()| "you have been succesfully resigned!".to_owned())
-                .map_err(|error| error.to_string()),
-            ChatCommand::Station(index) => {
-                let actor = simulation
-                    .0
-                    .actors
-                    .get(&actor_id)
-                    .ok_or_else(|| "join before selecting a station".to_owned())?;
-                let stations = compatible_station_ids(&content.0, &simulation.0, &config.0, actor);
-                if let Some(index) = index {
-                    let station = stations
-                        .get(usize::from(index.saturating_sub(1)))
-                        .cloned()
-                        .ok_or_else(|| format!("unknown station ID {index}"))?;
-                    simulation.0.actors.get_mut(&actor_id).expect("validated actor").station =
-                        Some(station.clone());
-                    Ok(format!("station changed to {station}"))
-                } else {
-                    spawn_numbered_world_labels(&mut ecs, &stations);
-                    Ok(if stations.is_empty() {
-                        "no compatible stations are available".to_owned()
-                    } else {
-                        format!(
-                            "station IDs: {}",
-                            stations
-                                .iter()
-                                .enumerate()
-                                .map(|(index, id)| format!("{}={id}", index + 1))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
+                ChatCommand::Buy { amount, resource } => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let resource = prefixed_id(resource, "resource:")
+                        .ok_or_else(|| format!("invalid resource {}", resource.as_str()));
+                    resource.and_then(|resource| {
+                        let capacity = resource_storage_capacity(
+                            &config.0,
+                            &content.0,
+                            &simulation.0,
+                            &resource,
+                        );
+                        simulation
+                            .0
+                            .buy_resource(resource.clone(), *amount, capacity)
+                            .map(|(bought, gold)| {
+                                let _ = simulation.0.record_objective_event(
+                                    &content.0.objectives,
+                                    &ObjectiveEvent::ResourceGained {
+                                        resource: resource.clone(),
+                                        amount: bought,
+                                    },
+                                );
+                                let _ = simulation.0.record_objective_event(
+                                    &content.0.objectives,
+                                    &ObjectiveEvent::ResourceBought {
+                                        resource: resource.clone(),
+                                        amount: bought,
+                                    },
+                                );
+                                format!("bought {bought} {resource} for {gold} gold")
+                            })
+                            .map_err(|error| error.to_string())
                     })
                 }
-            }
-            ChatCommand::Target(index) => {
-                let actor = simulation
-                    .0
-                    .actors
-                    .get(&actor_id)
-                    .ok_or_else(|| "join before selecting a target".to_owned())?;
-                let targets = compatible_target_ids_with_station_runtime(
-                    &content.0,
-                    &simulation.0,
-                    &world.generated,
-                    &config.0,
-                    &station_targets,
-                    actor,
-                );
-                if let Some(index) = index {
-                    let target = targets
-                        .get(usize::from(index.saturating_sub(1)))
-                        .cloned()
-                        .ok_or_else(|| format!("unknown target ID {index}"))?;
+                ChatCommand::Vote(requested) => {
+                    if simulation.0.ruler_vote.is_some() {
+                        let option = resolve_ruler_vote_option(&simulation.0, requested)
+                            .ok_or_else(|| {
+                                format!("unknown ruler candidate {}", requested.as_str())
+                            });
+                        option.and_then(|option| {
+                            simulation
+                                .0
+                                .cast_ruler_vote(&actor_id, option.clone())
+                                .map(|()| {
+                                    let label = simulation
+                                        .0
+                                        .actors
+                                        .get(&option)
+                                        .and_then(|actor| actor.display_name.as_deref())
+                                        .unwrap_or(option.as_str());
+                                    format!("ruler vote for {label} accepted")
+                                })
+                                .map_err(|error| error.to_string())
+                        })
+                    } else {
+                        let technology = resolve_technology_id(&content.0, requested)
+                            .ok_or_else(|| format!("unknown technology {}", requested.as_str()));
+                        technology.and_then(|technology| {
+                            let node = &content.0.technology.nodes[&technology];
+                            if node.unavailable {
+                                return Err(format!("{} is unavailable", node.display_name));
+                            }
+                            if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
+                                return Err(
+                                    "the town already has the maximum active goals".to_owned()
+                                );
+                            }
+                            if simulation.0.unlocked_technology.contains(&technology) {
+                                return Err(format!("{} is already unlocked", node.display_name));
+                            }
+                            if let Some(prerequisite) = node.prerequisites.iter().find(|required| {
+                                !simulation.0.unlocked_technology.contains(*required)
+                            }) {
+                                return Err(format!("missing prerequisite {prerequisite}"));
+                            }
+                            if simulation
+                                .0
+                                .active_vote
+                                .as_ref()
+                                .is_some_and(|vote| vote.technology != technology)
+                            {
+                                return Err("another technology vote is active".to_owned());
+                            }
+                            if simulation.0.active_vote.is_none() {
+                                let _ = simulation.0.start_technology_vote(
+                                    technology.clone(),
+                                    TECHNOLOGY_VOTE_DURATION_SECONDS,
+                                );
+                            }
+                            simulation
+                                .0
+                                .cast_vote(&actor_id, true)
+                                .map(|()| format!("voted for {}", node.display_name))
+                                .map_err(|error| error.to_string())
+                        })
+                    }
+                }
+                ChatCommand::Recruit { role, amount } => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let role = prefixed_id(role, "role:")
+                        .filter(|role| content.0.roles.contains_key(role))
+                        .ok_or_else(|| format!("unknown role {}", role.as_str()))?;
+                    if role.as_str() == "role:ruler" {
+                        Err("Ruler cannot be recruited".to_owned())
+                    } else {
+                        recruit_npcs(
+                            &mut ecs,
+                            &config.0,
+                            &content.0,
+                            &world.generated,
+                            &render,
+                            &mut simulation.0,
+                            &role,
+                            *amount,
+                        )
+                    }
+                }
+                ChatCommand::RecruitCount => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let recruits = recruited_actor_ids(&simulation.0).len();
+                    Ok(format!("The town has {recruits} recruits!"))
+                }
+                ChatCommand::RecruitIds => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let recruit_ids = recruited_actor_ids(&simulation.0);
+                    let recruits = recruit_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| format!("{}={id}", index + 1))
+                        .collect::<Vec<_>>();
+                    spawn_numbered_world_labels(&mut ecs, &recruit_ids);
+                    Ok(if recruits.is_empty() {
+                        "the town has no recruited NPCs".to_owned()
+                    } else {
+                        format!("recruit IDs: {}", recruits.join(", "))
+                    })
+                }
+                ChatCommand::RecruitInfo(index) => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let id = recruit_id(&simulation.0, *index)
+                        .ok_or_else(|| format!("unknown recruit ID {index}"))?;
+                    let recruit = &simulation.0.actors[&id];
+                    let progress = recruit
+                        .role_progression
+                        .get(&recruit.role)
+                        .copied()
+                        .unwrap_or_default();
+                    let role = content
+                        .0
+                        .roles
+                        .get(&recruit.role)
+                        .map_or(recruit.role.as_str(), |role| role.display_name.as_str());
+                    Ok(format!(
+                        "----- Recruit {index} | Current role {role} |  Health: {} / {} |  Level: {} / 100 |  Experience: {} / {}",
+                        recruit.health,
+                        recruit.max_health,
+                        progress.level,
+                        progress.experience,
+                        stream_town_domain::required_role_experience(progress.level)
+                    ))
+                }
+                ChatCommand::RecruitRole { recruit, role } => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let id = recruit_id(&simulation.0, *recruit)
+                        .ok_or_else(|| format!("unknown recruit ID {recruit}"))?;
+                    let role = prefixed_id(role, "role:")
+                        .filter(|role| content.0.roles.contains_key(role))
+                        .ok_or_else(|| format!("unknown role {role}"))?;
+                    if role.as_str() == "role:ruler" {
+                        return Err("Ruler cannot be assigned to a recruit".to_owned());
+                    }
+                    if !role_is_available(&content.0, &simulation.0, &role, Some(&id)) {
+                        return Err(format!("the {role} role is full"));
+                    }
                     simulation
+                        .0
+                        .assign_role(&id, role.clone())
+                        .map_err(|error| error.to_string())?;
+                    let role_name = content.0.roles[&role].display_name.as_str();
+                    Ok(format!(
+                        "Successfully changed recruit {recruit} to {role_name}!"
+                    ))
+                }
+                ChatCommand::DismissRecruit(index) => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let id = recruit_id(&simulation.0, *index)
+                        .ok_or_else(|| format!("unknown recruit ID {index}"))?;
+                    simulation.0.actors.remove(&id);
+                    let resource = StableId::new("resource:recruit").expect("static ID");
+                    let current = simulation
+                        .0
+                        .town_resources
+                        .get(&resource)
+                        .copied()
+                        .unwrap_or_default();
+                    simulation
+                        .0
+                        .town_resources
+                        .insert(resource, current.saturating_sub(1));
+                    queues.agent.0.push_back(AgentCommand::Despawn(id));
+                    Ok(format!("Successfully Dismissed recruit {index}!"))
+                }
+                ChatCommand::StartRulerVote => {
+                    require_staff(&pending)?;
+                    let kind = if simulation.0.current_ruler.is_some() {
+                        RulerVoteKind::KeepRuler
+                    } else {
+                        RulerVoteKind::NewRuler
+                    };
+                    simulation
+                        .0
+                        .start_ruler_vote(kind)
+                        .map(|()| "ruler vote started".to_owned())
+                        .map_err(|error| error.to_string())
+                }
+                ChatCommand::Resign => simulation
+                    .0
+                    .resign_ruler(&actor_id)
+                    .map(|()| "you have been succesfully resigned!".to_owned())
+                    .map_err(|error| error.to_string()),
+                ChatCommand::Station(index) => {
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get(&actor_id)
+                        .ok_or_else(|| "join before selecting a station".to_owned())?;
+                    let stations =
+                        compatible_station_ids(&content.0, &simulation.0, &config.0, actor);
+                    if let Some(index) = index {
+                        let station = stations
+                            .get(usize::from(index.saturating_sub(1)))
+                            .cloned()
+                            .ok_or_else(|| format!("unknown station ID {index}"))?;
+                        simulation
+                            .0
+                            .actors
+                            .get_mut(&actor_id)
+                            .expect("validated actor")
+                            .station = Some(station.clone());
+                        Ok(format!("station changed to {station}"))
+                    } else {
+                        spawn_numbered_world_labels(&mut ecs, &stations);
+                        Ok(if stations.is_empty() {
+                            "no compatible stations are available".to_owned()
+                        } else {
+                            format!(
+                                "station IDs: {}",
+                                stations
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, id)| format!("{}={id}", index + 1))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })
+                    }
+                }
+                ChatCommand::Target(index) => {
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get(&actor_id)
+                        .ok_or_else(|| "join before selecting a target".to_owned())?;
+                    let targets = compatible_target_ids_with_station_runtime(
+                        &content.0,
+                        &simulation.0,
+                        &world.generated,
+                        &config.0,
+                        &station_targets,
+                        actor,
+                    );
+                    if let Some(index) = index {
+                        let target = targets
+                            .get(usize::from(index.saturating_sub(1)))
+                            .cloned()
+                            .ok_or_else(|| format!("unknown target ID {index}"))?;
+                        simulation
+                            .0
+                            .actors
+                            .get_mut(&actor_id)
+                            .expect("validated actor")
+                            .preferred_target = Some(target.clone());
+                        Ok(format!("target changed to {target}"))
+                    } else {
+                        spawn_numbered_world_labels(&mut ecs, &targets);
+                        Ok(if targets.is_empty() {
+                            "no compatible targets are available".to_owned()
+                        } else {
+                            format!(
+                                "target IDs: {}",
+                                targets
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, id)| format!("{}={id}", index + 1))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        })
+                    }
+                }
+                ChatCommand::Unstuck => {
+                    let town_hall =
+                        restored_town_hall_position(&content.0, &simulation.0, &config.0);
+                    let spawn = nearest_walkable(&world.generated, town_hall)
+                        .ok_or_else(|| "the Town Hall has no walkable spawn cell".to_owned())?;
+                    let actor = simulation
                         .0
                         .actors
                         .get_mut(&actor_id)
-                        .expect("validated actor")
-                        .preferred_target = Some(target.clone());
-                    Ok(format!("target changed to {target}"))
-                } else {
-                    spawn_numbered_world_labels(&mut ecs, &targets);
-                    Ok(if targets.is_empty() {
-                        "no compatible targets are available".to_owned()
+                        .ok_or_else(|| "join before using !stuck".to_owned())?;
+                    actor.position = spawn;
+                    actor.preferred_target = None;
+                    queues.agent.0.push_back(AgentCommand::Teleport {
+                        actor: actor_id.clone(),
+                        position: spawn,
+                    });
+                    Ok("returned to the Town Hall".to_owned())
+                }
+                ChatCommand::Ping => {
+                    let position = simulation
+                        .0
+                        .actors
+                        .get(&actor_id)
+                        .map(|actor| actor.position)
+                        .ok_or_else(|| "join before using !ping".to_owned())?;
+                    queues
+                        .agent
+                        .0
+                        .push_back(AgentCommand::Ping(actor_id.clone()));
+                    Ok(format!("pinged at grid {},{}", position.x, position.z))
+                }
+                ChatCommand::Customize { kind, index } => {
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "join before customizing your character".to_owned())?;
+                    let adjusted = index.saturating_sub(1);
+                    let (name, maximum, field) = match kind {
+                        CustomizationKind::Hair => ("hair", 7, &mut actor.customization.hair),
+                        CustomizationKind::Eyes => ("eyes", 10, &mut actor.customization.eyes),
+                        CustomizationKind::FacialHair => {
+                            ("facial hair", 2, &mut actor.customization.facial_hair)
+                        }
+                        CustomizationKind::Body => ("body", 3, &mut actor.customization.body_type),
+                        CustomizationKind::HairColor => {
+                            ("hair color", 6, &mut actor.customization.hair_color)
+                        }
+                        CustomizationKind::EyeColor => {
+                            ("eye color", 5, &mut actor.customization.eye_color)
+                        }
+                    };
+                    if *index > maximum {
+                        return Err(format!("{name} index must be between 1 and {maximum}"));
+                    }
+                    *field = adjusted;
+                    Ok(format!("{name} changed to {index}"))
+                }
+                ChatCommand::Pets | ChatCommand::Pet(None) => {
+                    let actor = simulation
+                        .0
+                        .actors
+                        .get(&actor_id)
+                        .ok_or_else(|| "join before checking pets".to_owned())?;
+                    Ok(if actor.unlocked_pets.is_empty() {
+                        "You have no pets".to_owned()
                     } else {
                         format!(
-                            "target IDs: {}",
-                            targets
+                            "Pets: {}, ",
+                            actor
+                                .unlocked_pets
                                 .iter()
-                                .enumerate()
-                                .map(|(index, id)| format!("{}={id}", index + 1))
+                                .map(|pet| twitch_pascal_case(
+                                    pet.as_str().trim_start_matches("pet:")
+                                ))
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         )
                     })
                 }
-            }
-            ChatCommand::Unstuck => {
-                let town_hall =
-                    restored_town_hall_position(&content.0, &simulation.0, &config.0);
-                let spawn = nearest_walkable(&world.generated, town_hall)
-                    .ok_or_else(|| "the Town Hall has no walkable spawn cell".to_owned())?;
-                let actor = simulation
-                    .0
-                    .actors
-                    .get_mut(&actor_id)
-                    .ok_or_else(|| "join before using !stuck".to_owned())?;
-                actor.position = spawn;
-                actor.preferred_target = None;
-                queues.agent.0.push_back(AgentCommand::Teleport {
-                    actor: actor_id.clone(),
-                    position: spawn,
-                });
-                Ok("returned to the Town Hall".to_owned())
-            }
-            ChatCommand::Ping => {
-                let position = simulation
-                    .0
-                    .actors
-                    .get(&actor_id)
-                    .map(|actor| actor.position)
-                    .ok_or_else(|| "join before using !ping".to_owned())?;
-                queues
-                    .agent
-                    .0
-                    .push_back(AgentCommand::Ping(actor_id.clone()));
-                Ok(format!("pinged at grid {},{}", position.x, position.z))
-            }
-            ChatCommand::Customize { kind, index } => {
-                let actor = simulation
-                    .0
-                    .actors
-                    .get_mut(&actor_id)
-                    .ok_or_else(|| "join before customizing your character".to_owned())?;
-                let adjusted = index.saturating_sub(1);
-                let (name, maximum, field) = match kind {
-                    CustomizationKind::Hair => ("hair", 7, &mut actor.customization.hair),
-                    CustomizationKind::Eyes => ("eyes", 10, &mut actor.customization.eyes),
-                    CustomizationKind::FacialHair => {
-                        ("facial hair", 2, &mut actor.customization.facial_hair)
-                    }
-                    CustomizationKind::Body => ("body", 3, &mut actor.customization.body_type),
-                    CustomizationKind::HairColor => {
-                        ("hair color", 6, &mut actor.customization.hair_color)
-                    }
-                    CustomizationKind::EyeColor => {
-                        ("eye color", 5, &mut actor.customization.eye_color)
-                    }
-                };
-                if *index > maximum {
-                    return Err(format!("{name} index must be between 1 and {maximum}"));
-                }
-                *field = adjusted;
-                Ok(format!("{name} changed to {index}"))
-            }
-            ChatCommand::Pets | ChatCommand::Pet(None) => {
-                let actor = simulation
-                    .0
-                    .actors
-                    .get(&actor_id)
-                    .ok_or_else(|| "join before checking pets".to_owned())?;
-                Ok(if actor.unlocked_pets.is_empty() {
-                    "You have no pets".to_owned()
-                } else {
-                    format!(
-                        "Pets: {}, ",
-                        actor
-                            .unlocked_pets
-                            .iter()
-                            .map(|pet| twitch_pascal_case(pet.as_str().trim_start_matches("pet:")))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })
-            }
-            ChatCommand::Pet(Some(requested)) => {
-                let requested = prefixed_id(requested, "pet:")
-                    .ok_or_else(|| format!("invalid pet {requested}"))?;
-                let actor = simulation
-                    .0
-                    .actors
-                    .get_mut(&actor_id)
-                    .ok_or_else(|| "join before selecting a pet".to_owned())?;
-                if requested.as_str() == "pet:none" {
-                    actor.active_pet = None;
-                    Ok("pet deactivated".to_owned())
-                } else if actor.unlocked_pets.contains(&requested) {
-                    actor.active_pet = Some(requested.clone());
-                    Ok(format!("active pet changed to {requested}"))
-                } else {
-                    Err(format!("{requested} is not unlocked"))
-                }
-            }
-            ChatCommand::Camera(actions) => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                queues.camera.0.push_back(CameraRequest {
-                    reset: false,
-                    actions: actions.clone(),
-                });
-                Ok("camera request queued".to_owned())
-            }
-            ChatCommand::ResetCamera => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                queues.camera.0.push_back(CameraRequest {
-                    reset: true,
-                    actions: Vec::new(),
-                });
-                Ok("camera reset queued".to_owned())
-            }
-            ChatCommand::ModRole { player, role } => {
-                require_staff(&pending)?;
-                let player = resolve_player_id(&simulation.0, player)
-                    .ok_or_else(|| format!("unknown player {player}"))?;
-                let role = prefixed_id(role, "role:")
-                    .filter(|role| content.0.roles.contains_key(role))
-                    .ok_or_else(|| format!("unknown role {role}"))?;
-                if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&player) {
-                    return Err("the Ruler role is assigned by election".to_owned());
-                }
-                if !role_is_available(&content.0, &simulation.0, &role, Some(&player)) {
-                    return Err(format!("the {role} role is full"));
-                }
-                simulation.0.assign_role(&player, role.clone()).map_err(|error| error.to_string())?;
-                Ok(format!("changed {player} to {role}"))
-            }
-            ChatCommand::Roles => {
-                let roles = content
-                    .0
-                    .roles
-                    .iter()
-                    .filter(|(id, _)| id.as_str() != "role:ruler")
-                    .filter(|(id, _)| role_is_available(&content.0, &simulation.0, id, None))
-                    .map(|(_, role)| role.display_name.as_str())
-                    .collect::<Vec<_>>();
-                let role_list = if roles.is_empty() {
-                    "none currently available".to_owned()
-                } else {
-                    roles.join(", ")
-                };
-                Ok(format!(
-                    "Available roles: {role_list}. Use !role <role> after joining; use !info <role> for details."
-                ))
-            }
-            ChatCommand::TownStats => Ok(format!(
-                "town: {} players, {} recruits, {} buildings, day {}, {:?}/{:?}, resources {}",
-                simulation
-                    .0
-                    .actors
-                    .values()
-                    .filter(|actor| actor.id.as_str().starts_with("twitch:"))
-                    .count(),
-                recruited_actor_ids(&simulation.0).len(),
-                simulation.0.buildings.len(),
-                simulation.0.day,
-                simulation.0.season,
-                simulation.0.weather,
-                simulation
-                    .0
-                    .town_resources
-                    .iter()
-                    .map(|(resource, amount)| format!("{resource}={amount}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-            ChatCommand::Discord => {
-                Ok("Stream Town Discord: https://discord.gg/By4jvks".to_owned())
-            }
-            ChatCommand::Info(requested) => item_info(&content.0, &simulation.0, requested),
-            ChatCommand::ToggleBuildCosts => {
-                require_game_master(&config.0, &pending)?;
-                let enabled = simulation.0.toggle_building_costs();
-                Ok(format!(
-                    "Buildings Cost Resources: {}",
-                    if enabled { "True" } else { "False" }
-                ))
-            }
-            ChatCommand::ToggleRoleLimits => {
-                require_game_master(&config.0, &pending)?;
-                let enabled = simulation.0.toggle_role_limits();
-                Ok(format!(
-                    "Player Role Limits: {}",
-                    if enabled { "True" } else { "False" }
-                ))
-            }
-            ChatCommand::AddResource { resource, amount } => {
-                require_game_master(&config.0, &pending)?;
-                let resource = prefixed_id(resource, "resource:")
-                    .filter(|resource| {
-                        matches!(
-                            resource.as_str(),
-                            "resource:wood"
-                                | "resource:ore"
-                                | "resource:food"
-                                | "resource:gold"
-                                | "resource:recruit"
-                        )
-                    })
-                    .ok_or_else(|| format!("unknown town resource {resource}"))?;
-                let total = simulation.0.adjust_town_resource(resource.clone(), *amount);
-                Ok(format!("{resource} changed by {amount}; total {total}"))
-            }
-            ChatCommand::KillPlayer(requested) => {
-                require_game_master(&config.0, &pending)?;
-                let target = resolve_player_id(&simulation.0, requested)
-                    .ok_or_else(|| format!("unknown player {requested}"))?;
-                simulation
-                    .0
-                    .damage_actor(&target, u32::MAX)
-                    .map_err(|error| error.to_string())?;
-                Ok(format!("killed {target}"))
-            }
-            ChatCommand::GameMasterRevive(requested) => {
-                require_game_master(&config.0, &pending)?;
-                let target = resolve_player_id(&simulation.0, requested)
-                    .ok_or_else(|| format!("unknown player {requested}"))?;
-                let position = simulation.0.actors[&target].position;
-                let spawn = nearest_walkable(&world.generated, position).unwrap_or(position);
-                simulation
-                    .0
-                    .respawn_actor(&target, spawn)
-                    .map_err(|error| error.to_string())?;
-                queues.agent.0.push_back(AgentCommand::Teleport {
-                    actor: target.clone(),
-                    position: spawn,
-                });
-                spawn_healing_effect(
-                    &mut ecs,
-                    &presentation.0,
-                    &render,
-                    grid_to_world_on_surface(spawn, &config.0, &world.generated),
-                    HealingEffectKind::Revive,
-                    config.0.world.cell_size,
-                );
-                Ok(format!("revived {target} without a food cost"))
-            }
-            ChatCommand::GiveExperience { player, amount } => {
-                require_game_master(&config.0, &pending)?;
-                let target = resolve_player_id(&simulation.0, player)
-                    .ok_or_else(|| format!("unknown player {player}"))?;
-                let multiplier = simulation
-                    .0
-                    .actors
-                    .get(&target)
-                    .and_then(|actor| content.0.roles.get(&actor.role))
-                    .map_or(1_000, |role| role.experience_multiplier_per_thousand);
-                let levels = simulation
-                    .0
-                    .grant_role_experience(&target, *amount, multiplier)
-                    .map_err(|error| error.to_string())?;
-                Ok(format!("gave {target} {amount} experience; {levels} levels gained"))
-            }
-            ChatCommand::GiveExperienceAll(amount) => {
-                require_game_master(&config.0, &pending)?;
-                let players = simulation
-                    .0
-                    .actors
-                    .values()
-                    .filter(|actor| actor.role.as_str() != "role:enemy")
-                    .map(|actor| actor.id.clone())
-                    .collect::<Vec<_>>();
-                for player in &players {
-                    let multiplier = simulation
+                ChatCommand::Pet(Some(requested)) => {
+                    let requested = prefixed_id(requested, "pet:")
+                        .ok_or_else(|| format!("invalid pet {requested}"))?;
+                    let actor = simulation
                         .0
                         .actors
-                        .get(player)
-                        .and_then(|actor| content.0.roles.get(&actor.role))
-                        .map_or(1_000, |role| role.experience_multiplier_per_thousand);
+                        .get_mut(&actor_id)
+                        .ok_or_else(|| "join before selecting a pet".to_owned())?;
+                    if requested.as_str() == "pet:none" {
+                        actor.active_pet = None;
+                        Ok("pet deactivated".to_owned())
+                    } else if actor.unlocked_pets.contains(&requested) {
+                        actor.active_pet = Some(requested.clone());
+                        Ok(format!("active pet changed to {requested}"))
+                    } else {
+                        Err(format!("{requested} is not unlocked"))
+                    }
+                }
+                ChatCommand::Camera(actions) => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    queues.camera.0.push_back(CameraRequest {
+                        reset: false,
+                        actions: actions.clone(),
+                    });
+                    Ok("camera request queued".to_owned())
+                }
+                ChatCommand::ResetCamera => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    queues.camera.0.push_back(CameraRequest {
+                        reset: true,
+                        actions: Vec::new(),
+                    });
+                    Ok("camera reset queued".to_owned())
+                }
+                ChatCommand::ModRole { player, role } => {
+                    require_staff(&pending)?;
+                    let player = resolve_player_id(&simulation.0, player)
+                        .ok_or_else(|| format!("unknown player {player}"))?;
+                    let role = prefixed_id(role, "role:")
+                        .filter(|role| content.0.roles.contains_key(role))
+                        .ok_or_else(|| format!("unknown role {role}"))?;
+                    if role.as_str() == "role:ruler" && !simulation.0.is_ruler(&player) {
+                        return Err("the Ruler role is assigned by election".to_owned());
+                    }
+                    if !role_is_available(&content.0, &simulation.0, &role, Some(&player)) {
+                        return Err(format!("the {role} role is full"));
+                    }
                     simulation
                         .0
-                        .grant_role_experience(player, *amount, multiplier)
+                        .assign_role(&player, role.clone())
                         .map_err(|error| error.to_string())?;
+                    Ok(format!("changed {player} to {role}"))
                 }
-                Ok(format!("gave {} players {amount} experience", players.len()))
-            }
-            ChatCommand::LevelUpPlayer { player, amount } => {
-                require_game_master(&config.0, &pending)?;
-                let target = resolve_player_id(&simulation.0, player)
-                    .ok_or_else(|| format!("unknown player {player}"))?;
-                let gained = simulation
-                    .0
-                    .grant_role_levels(&target, *amount)
-                    .map_err(|error| error.to_string())?;
-                Ok(format!("leveled {target} by {gained}"))
-            }
-            ChatCommand::GivePet { player, pet } => {
-                require_game_master(&config.0, &pending)?;
-                let target = resolve_player_id(&simulation.0, player)
-                    .ok_or_else(|| format!("unknown player {player}"))?;
-                let pet = prefixed_id(pet, "pet:")
-                    .filter(|pet| {
-                        matches!(
-                            pet.as_str(),
-                            "pet:none"
-                                | "pet:redpanda"
-                                | "pet:red_panda"
-                                | "pet:fishgod"
-                                | "pet:fish_god"
-                                | "pet:giraffe"
-                                | "pet:duck"
-                                | "pet:butterfly"
-                        )
-                    })
-                    .map(|pet| match pet.as_str() {
-                        "pet:redpanda" => StableId::new("pet:red_panda").expect("static ID"),
-                        "pet:fishgod" => StableId::new("pet:fish_god").expect("static ID"),
-                        _ => pet,
-                    })
-                    .ok_or_else(|| format!("unknown pet {pet}"))?;
-                simulation
-                    .0
-                    .unlock_pet(&target, pet.clone())
-                    .map_err(|error| error.to_string())?;
-                Ok(format!("unlocked {pet} for {target}"))
-            }
-            ChatCommand::QueueEvent(requested) => {
-                require_game_master(&config.0, &pending)?;
-                let event = match requested.as_str().trim_start_matches("event:") {
-                    "fishgod" | "fish_god" => TownEvent::FishGod,
-                    "monsterraid" | "monster_raid" | "raid" => TownEvent::EnemyRaid,
-                    _ => return Err(format!("unsupported Unity queue event {requested}")),
-                };
-                if !simulation.0.queue_event(event.clone()) {
-                    return Err(format!("{event:?} is already active or queued"));
+                ChatCommand::Roles => {
+                    let roles = content
+                        .0
+                        .roles
+                        .iter()
+                        .filter(|(id, _)| id.as_str() != "role:ruler")
+                        .filter(|(id, _)| role_is_available(&content.0, &simulation.0, id, None))
+                        .map(|(_, role)| role.display_name.as_str())
+                        .collect::<Vec<_>>();
+                    let role_list = if roles.is_empty() {
+                        "none currently available".to_owned()
+                    } else {
+                        roles.join(", ")
+                    };
+                    Ok(format!(
+                        "Available roles: {role_list}. Use !role <role> after joining; use !info <role> for details."
+                    ))
                 }
-                Ok(format!("queued {event:?}"))
-            }
-            ChatCommand::StopEvent => {
-                require_game_master(&config.0, &pending)?;
-                if simulation.0.active_event.is_none() {
-                    return Err("there is no active event".to_owned());
-                }
-                for enemy in simulation.0.stop_active_event() {
-                    simulation.0.actors.remove(&enemy);
-                    queues.agent.0.push_back(AgentCommand::Despawn(enemy));
-                }
-                Ok("stopped the current event".to_owned())
-            }
-            ChatCommand::CompleteObjective => {
-                require_game_master(&config.0, &pending)?;
-                simulation
-                    .0
-                    .force_complete_first_goal()
-                    .map(|technology| format!("completed the goal for {technology}"))
-                    .ok_or_else(|| "there is no active technology goal".to_owned())
-            }
-            ChatCommand::RandomTechnology => {
-                require_game_master(&config.0, &pending)?;
-                if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
-                    return Err("the town already has the maximum active goals".to_owned());
-                }
-                let technology = eligible_technology_ids(&content.0, &simulation.0)
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| "there are no eligible technologies".to_owned())?;
-                let node = &content.0.technology.nodes[&technology];
-                if !simulation.0.start_technology_goal(
-                    technology.clone(),
-                    &node.objectives,
-                    &content.0.objectives,
-                    MAX_TOWN_GOALS,
-                ) {
-                    return Err(format!("could not start {}", node.display_name));
-                }
-                Ok(format!("started technology goal {}", node.display_name))
-            }
-            ChatCommand::TechnologyVote => {
-                require_game_master(&config.0, &pending)?;
-                let technology = eligible_technology_ids(&content.0, &simulation.0)
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| "there are no eligible technologies".to_owned())?;
-                let name = content.0.technology.nodes[&technology].display_name.clone();
-                simulation
-                    .0
-                    .start_technology_vote(technology, 60.0)
-                    .map_err(|error| error.to_string())?;
-                Ok(format!("started a 60-second technology vote for {name}"))
-            }
-            ChatCommand::GameEventAction => {
-                require_game_master(&config.0, &pending)?;
-                if simulation.0.fish_god.is_none() {
-                    return Err("the current event has no game-master action".to_owned());
-                }
-                simulation
-                    .0
-                    .action_fish_god()
-                    .map(|completed| {
-                        if completed {
-                            "completed the Fish God event action".to_owned()
-                        } else {
-                            let event = simulation.0.fish_god.as_ref().expect("event remains active");
-                            format!(
-                                "Fish God action {}/{}",
-                                event.praises_given, event.praises_required
-                            )
-                        }
-                    })
-                    .map_err(|error| error.to_string())
-            }
-            ChatCommand::UnlockAllTechnology => {
-                require_game_master(&config.0, &pending)?;
-                let count = unlock_reachable_technologies(&content.0, &mut simulation.0, false);
-                Ok(format!("unlocked {count} reachable technologies"))
-            }
-            ChatCommand::UnlockAgeTwo => {
-                require_game_master(&config.0, &pending)?;
-                let count = unlock_reachable_technologies(&content.0, &mut simulation.0, true);
-                Ok(format!("unlocked {count} Age 1 technologies"))
-            }
-            ChatCommand::ResetId { kind, value } => {
-                require_game_master(&config.0, &pending)?;
-                if kind.as_str() != "building" {
-                    return Err("Unity resetid supports only building IDs".to_owned());
-                }
-                let building = building_definition_id(&content.0, value)?;
-                let count = building_instance_ids(&content.0, &simulation.0, &building).len();
-                Ok(format!(
-                    "{count} {} instances already use stable IDs; no counter reset was required",
-                    content.0.buildings[&building].display_name
-                ))
-            }
-            ChatCommand::TriggerEvent(event) => {
-                require_staff(&pending)?;
-                town_event_from_id(event)
-                    .ok_or_else(|| format!("unknown event {}", event.as_str()))
-                    .and_then(|event| {
-                        if event == TownEvent::EnemyRaid {
-                            if simulation.0.active_raid.is_some() {
-                                return Err("a raid is already active".to_owned());
-                            }
-                            let enemy = archetype_id_by_source(
-                                &content.0,
-                                ArchetypeKind::Enemy,
-                                "Enemy_Minotaur.prefab",
-                            )
-                            .ok_or_else(|| "raid enemy archetype is unavailable".to_owned())?;
-                            let boss = archetype_id_by_source(
-                                &content.0,
-                                ArchetypeKind::Enemy,
-                                "Enemy_MinotaurBoss.prefab",
-                            )
-                            .ok_or_else(|| "raid boss archetype is unavailable".to_owned())?;
-                            if !simulation.0.start_raid(5, 50, enemy, boss) {
-                                return Err("raid settings are invalid".to_owned());
-                            }
-                        } else if event == TownEvent::FishGod {
-                            if !simulation.0.start_fish_god(true) {
-                                return Err("another event is active".to_owned());
-                            }
-                        } else {
-                            simulation.0.trigger_event(event);
-                        }
-                        Ok("event started".to_owned())
-                    })
-            }
-            ChatCommand::Revive(requested) => {
-                let self_revive = requested.is_none();
-                let target_id = requested
-                    .as_ref()
-                    .map_or_else(|| Some(actor_id.clone()), |requested| prefixed_id(requested, "twitch:"))
-                    .ok_or_else(|| "invalid revive target".to_owned());
-                target_id.and_then(|target_id| {
-                    if !self_revive {
-                        let role = simulation
-                            .0
-                            .actors
-                            .get(&actor_id)
-                            .map(|actor| actor.role.as_str())
-                            .ok_or_else(|| "join before reviving another player".to_owned())?;
-                        if !matches!(role, "role:priest" | "role:paladin") {
-                            return Err(
-                                "only a Priest or Paladin can revive another player".to_owned(),
-                            );
-                        }
-                        if target_id == actor_id {
-                            return Err("use !revive without a target to revive yourself".to_owned());
-                        }
-                    }
-                    let position = simulation
+                ChatCommand::TownStats => Ok(format!(
+                    "town: {} players, {} recruits, {} buildings, day {}, {:?}/{:?}, resources {}",
+                    simulation
                         .0
                         .actors
-                        .get(&target_id)
-                        .map(|actor| actor.position)
-                        .ok_or_else(|| format!("unknown player {target_id}"))?;
+                        .values()
+                        .filter(|actor| actor.id.as_str().starts_with("twitch:"))
+                        .count(),
+                    recruited_actor_ids(&simulation.0).len(),
+                    simulation.0.buildings.len(),
+                    simulation.0.day,
+                    simulation.0.season,
+                    simulation.0.weather,
+                    simulation
+                        .0
+                        .town_resources
+                        .iter()
+                        .map(|(resource, amount)| format!("{resource}={amount}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+                ChatCommand::Discord => {
+                    Ok("Stream Town Discord: https://discord.gg/By4jvks".to_owned())
+                }
+                ChatCommand::Info(requested) => item_info(&content.0, &simulation.0, requested),
+                ChatCommand::ToggleBuildCosts => {
+                    require_game_master(&config.0, &pending)?;
+                    let enabled = simulation.0.toggle_building_costs();
+                    Ok(format!(
+                        "Buildings Cost Resources: {}",
+                        if enabled { "True" } else { "False" }
+                    ))
+                }
+                ChatCommand::ToggleRoleLimits => {
+                    require_game_master(&config.0, &pending)?;
+                    let enabled = simulation.0.toggle_role_limits();
+                    Ok(format!(
+                        "Player Role Limits: {}",
+                        if enabled { "True" } else { "False" }
+                    ))
+                }
+                ChatCommand::AddResource { resource, amount } => {
+                    require_game_master(&config.0, &pending)?;
+                    let resource = prefixed_id(resource, "resource:")
+                        .filter(|resource| {
+                            matches!(
+                                resource.as_str(),
+                                "resource:wood"
+                                    | "resource:ore"
+                                    | "resource:food"
+                                    | "resource:gold"
+                                    | "resource:recruit"
+                            )
+                        })
+                        .ok_or_else(|| format!("unknown town resource {resource}"))?;
+                    let total = simulation.0.adjust_town_resource(resource.clone(), *amount);
+                    Ok(format!("{resource} changed by {amount}; total {total}"))
+                }
+                ChatCommand::KillPlayer(requested) => {
+                    require_game_master(&config.0, &pending)?;
+                    let target = resolve_player_id(&simulation.0, requested)
+                        .ok_or_else(|| format!("unknown player {requested}"))?;
+                    simulation
+                        .0
+                        .damage_actor(&target, u32::MAX)
+                        .map_err(|error| error.to_string())?;
+                    Ok(format!("killed {target}"))
+                }
+                ChatCommand::GameMasterRevive(requested) => {
+                    require_game_master(&config.0, &pending)?;
+                    let target = resolve_player_id(&simulation.0, requested)
+                        .ok_or_else(|| format!("unknown player {requested}"))?;
+                    let position = simulation.0.actors[&target].position;
                     let spawn = nearest_walkable(&world.generated, position).unwrap_or(position);
-                    let maximum_health = simulation
-                        .0
-                        .actors
-                        .get(&target_id)
-                        .map_or(0, |actor| {
-                            u32::try_from(actor.max_health.max(0)).unwrap_or(u32::MAX)
-                        });
                     simulation
                         .0
-                        .revive_actor_with_food_cost(
-                            &target_id,
-                            spawn,
-                            if self_revive { 400 } else { 200 },
-                        )
+                        .respawn_actor(&target, spawn)
                         .map_err(|error| error.to_string())?;
+                    queues.agent.0.push_back(AgentCommand::Teleport {
+                        actor: target.clone(),
+                        position: spawn,
+                    });
                     spawn_healing_effect(
                         &mut ecs,
                         &presentation.0,
@@ -32487,90 +32116,377 @@ fn process_injected_commands(
                         HealingEffectKind::Revive,
                         config.0.world.cell_size,
                     );
-                    if !self_revive {
-                        let experience_multiplier = content
+                    Ok(format!("revived {target} without a food cost"))
+                }
+                ChatCommand::GiveExperience { player, amount } => {
+                    require_game_master(&config.0, &pending)?;
+                    let target = resolve_player_id(&simulation.0, player)
+                        .ok_or_else(|| format!("unknown player {player}"))?;
+                    let multiplier = simulation
+                        .0
+                        .actors
+                        .get(&target)
+                        .and_then(|actor| content.0.roles.get(&actor.role))
+                        .map_or(1_000, |role| role.experience_multiplier_per_thousand);
+                    let levels = simulation
+                        .0
+                        .grant_role_experience(&target, *amount, multiplier)
+                        .map_err(|error| error.to_string())?;
+                    Ok(format!(
+                        "gave {target} {amount} experience; {levels} levels gained"
+                    ))
+                }
+                ChatCommand::GiveExperienceAll(amount) => {
+                    require_game_master(&config.0, &pending)?;
+                    let players = simulation
+                        .0
+                        .actors
+                        .values()
+                        .filter(|actor| actor.role.as_str() != "role:enemy")
+                        .map(|actor| actor.id.clone())
+                        .collect::<Vec<_>>();
+                    for player in &players {
+                        let multiplier = simulation
                             .0
-                            .roles
-                            .get(&simulation.0.actors[&actor_id].role)
+                            .actors
+                            .get(player)
+                            .and_then(|actor| content.0.roles.get(&actor.role))
                             .map_or(1_000, |role| role.experience_multiplier_per_thousand);
-                        let _ = simulation.0.grant_role_experience(
-                            &actor_id,
-                            maximum_health,
-                            experience_multiplier,
-                        );
-                    }
-                    Ok(format!("revived {target_id}"))
-                })
-            }
-            ChatCommand::Praise => {
-                if !simulation.0.actors.contains_key(&actor_id) {
-                    Err("join before praising the Fish God".to_owned())
-                } else if simulation.0.fish_god.is_none() {
-                    if simulation.0.start_fish_god(false) {
                         simulation
                             .0
-                            .praise_fish_god(&actor_id)
-                            .map(|_| "the Fish God answered; praise accepted (1/20)".to_owned())
-                            .map_err(|error| error.to_string())
-                    } else if simulation.0.active_event.is_some() {
-                        Err("another event is active".to_owned())
-                    } else {
-                        Ok("the Fish God did not answer this praise".to_owned())
+                            .grant_role_experience(player, *amount, multiplier)
+                            .map_err(|error| error.to_string())?;
                     }
-                } else {
+                    Ok(format!(
+                        "gave {} players {amount} experience",
+                        players.len()
+                    ))
+                }
+                ChatCommand::LevelUpPlayer { player, amount } => {
+                    require_game_master(&config.0, &pending)?;
+                    let target = resolve_player_id(&simulation.0, player)
+                        .ok_or_else(|| format!("unknown player {player}"))?;
+                    let gained = simulation
+                        .0
+                        .grant_role_levels(&target, *amount)
+                        .map_err(|error| error.to_string())?;
+                    Ok(format!("leveled {target} by {gained}"))
+                }
+                ChatCommand::GivePet { player, pet } => {
+                    require_game_master(&config.0, &pending)?;
+                    let target = resolve_player_id(&simulation.0, player)
+                        .ok_or_else(|| format!("unknown player {player}"))?;
+                    let pet = prefixed_id(pet, "pet:")
+                        .filter(|pet| {
+                            matches!(
+                                pet.as_str(),
+                                "pet:none"
+                                    | "pet:redpanda"
+                                    | "pet:red_panda"
+                                    | "pet:fishgod"
+                                    | "pet:fish_god"
+                                    | "pet:giraffe"
+                                    | "pet:duck"
+                                    | "pet:butterfly"
+                            )
+                        })
+                        .map(|pet| match pet.as_str() {
+                            "pet:redpanda" => StableId::new("pet:red_panda").expect("static ID"),
+                            "pet:fishgod" => StableId::new("pet:fish_god").expect("static ID"),
+                            _ => pet,
+                        })
+                        .ok_or_else(|| format!("unknown pet {pet}"))?;
                     simulation
                         .0
-                        .praise_fish_god(&actor_id)
+                        .unlock_pet(&target, pet.clone())
+                        .map_err(|error| error.to_string())?;
+                    Ok(format!("unlocked {pet} for {target}"))
+                }
+                ChatCommand::QueueEvent(requested) => {
+                    require_game_master(&config.0, &pending)?;
+                    let event = match requested.as_str().trim_start_matches("event:") {
+                        "fishgod" | "fish_god" => TownEvent::FishGod,
+                        "monsterraid" | "monster_raid" | "raid" => TownEvent::EnemyRaid,
+                        _ => return Err(format!("unsupported Unity queue event {requested}")),
+                    };
+                    if !simulation.0.queue_event(event.clone()) {
+                        return Err(format!("{event:?} is already active or queued"));
+                    }
+                    Ok(format!("queued {event:?}"))
+                }
+                ChatCommand::StopEvent => {
+                    require_game_master(&config.0, &pending)?;
+                    if simulation.0.active_event.is_none() {
+                        return Err("there is no active event".to_owned());
+                    }
+                    for enemy in simulation.0.stop_active_event() {
+                        simulation.0.actors.remove(&enemy);
+                        queues.agent.0.push_back(AgentCommand::Despawn(enemy));
+                    }
+                    Ok("stopped the current event".to_owned())
+                }
+                ChatCommand::CompleteObjective => {
+                    require_game_master(&config.0, &pending)?;
+                    simulation
+                        .0
+                        .force_complete_first_goal()
+                        .map(|technology| format!("completed the goal for {technology}"))
+                        .ok_or_else(|| "there is no active technology goal".to_owned())
+                }
+                ChatCommand::RandomTechnology => {
+                    require_game_master(&config.0, &pending)?;
+                    if simulation.0.active_goals.len() >= MAX_TOWN_GOALS {
+                        return Err("the town already has the maximum active goals".to_owned());
+                    }
+                    let technology = eligible_technology_ids(&content.0, &simulation.0)
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| "there are no eligible technologies".to_owned())?;
+                    let node = &content.0.technology.nodes[&technology];
+                    if !simulation.0.start_technology_goal(
+                        technology.clone(),
+                        &node.objectives,
+                        &content.0.objectives,
+                        MAX_TOWN_GOALS,
+                    ) {
+                        return Err(format!("could not start {}", node.display_name));
+                    }
+                    Ok(format!("started technology goal {}", node.display_name))
+                }
+                ChatCommand::TechnologyVote => {
+                    require_game_master(&config.0, &pending)?;
+                    let technology = eligible_technology_ids(&content.0, &simulation.0)
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| "there are no eligible technologies".to_owned())?;
+                    let name = content.0.technology.nodes[&technology].display_name.clone();
+                    simulation
+                        .0
+                        .start_technology_vote(technology, 60.0)
+                        .map_err(|error| error.to_string())?;
+                    Ok(format!("started a 60-second technology vote for {name}"))
+                }
+                ChatCommand::GameEventAction => {
+                    require_game_master(&config.0, &pending)?;
+                    if simulation.0.fish_god.is_none() {
+                        return Err("the current event has no game-master action".to_owned());
+                    }
+                    simulation
+                        .0
+                        .action_fish_god()
                         .map(|completed| {
                             if completed {
-                                "the Fish God was pleased: the town received 1,000 food".to_owned()
+                                "completed the Fish God event action".to_owned()
                             } else {
                                 let event = simulation
                                     .0
                                     .fish_god
                                     .as_ref()
-                                    .expect("incomplete praise retains event");
+                                    .expect("event remains active");
                                 format!(
-                                    "Fish God praise {}/{}",
+                                    "Fish God action {}/{}",
                                     event.praises_given, event.praises_required
                                 )
                             }
                         })
                         .map_err(|error| error.to_string())
                 }
-            }
-            ChatCommand::Experience => simulation
-                .0
-                .actors
-                .get(&actor_id)
-                .ok_or_else(|| "join before checking experience".to_owned())
-                .and_then(|actor| {
-                    effective_role_stats(&content.0, &simulation.0, actor)
-                        .map(|stats| {
-                            let role = content
+                ChatCommand::UnlockAllTechnology => {
+                    require_game_master(&config.0, &pending)?;
+                    let count = unlock_reachable_technologies(&content.0, &mut simulation.0, false);
+                    Ok(format!("unlocked {count} reachable technologies"))
+                }
+                ChatCommand::UnlockAgeTwo => {
+                    require_game_master(&config.0, &pending)?;
+                    let count = unlock_reachable_technologies(&content.0, &mut simulation.0, true);
+                    Ok(format!("unlocked {count} Age 1 technologies"))
+                }
+                ChatCommand::ResetId { kind, value } => {
+                    require_game_master(&config.0, &pending)?;
+                    if kind.as_str() != "building" {
+                        return Err("Unity resetid supports only building IDs".to_owned());
+                    }
+                    let building = building_definition_id(&content.0, value)?;
+                    let count = building_instance_ids(&content.0, &simulation.0, &building).len();
+                    Ok(format!(
+                        "{count} {} instances already use stable IDs; no counter reset was required",
+                        content.0.buildings[&building].display_name
+                    ))
+                }
+                ChatCommand::TriggerEvent(event) => {
+                    require_staff(&pending)?;
+                    town_event_from_id(event)
+                        .ok_or_else(|| format!("unknown event {}", event.as_str()))
+                        .and_then(|event| {
+                            if event == TownEvent::EnemyRaid {
+                                if simulation.0.active_raid.is_some() {
+                                    return Err("a raid is already active".to_owned());
+                                }
+                                let enemy = archetype_id_by_source(
+                                    &content.0,
+                                    ArchetypeKind::Enemy,
+                                    "Enemy_Minotaur.prefab",
+                                )
+                                .ok_or_else(|| "raid enemy archetype is unavailable".to_owned())?;
+                                let boss = archetype_id_by_source(
+                                    &content.0,
+                                    ArchetypeKind::Enemy,
+                                    "Enemy_MinotaurBoss.prefab",
+                                )
+                                .ok_or_else(|| "raid boss archetype is unavailable".to_owned())?;
+                                if !simulation.0.start_raid(5, 50, enemy, boss) {
+                                    return Err("raid settings are invalid".to_owned());
+                                }
+                            } else if event == TownEvent::FishGod {
+                                if !simulation.0.start_fish_god(true) {
+                                    return Err("another event is active".to_owned());
+                                }
+                            } else {
+                                simulation.0.trigger_event(event);
+                            }
+                            Ok("event started".to_owned())
+                        })
+                }
+                ChatCommand::Revive(requested) => {
+                    let self_revive = requested.is_none();
+                    let target_id = requested
+                        .as_ref()
+                        .map_or_else(
+                            || Some(actor_id.clone()),
+                            |requested| prefixed_id(requested, "twitch:"),
+                        )
+                        .ok_or_else(|| "invalid revive target".to_owned());
+                    target_id.and_then(|target_id| {
+                        if !self_revive {
+                            let role = simulation
+                                .0
+                                .actors
+                                .get(&actor_id)
+                                .map(|actor| actor.role.as_str())
+                                .ok_or_else(|| "join before reviving another player".to_owned())?;
+                            if !matches!(role, "role:priest" | "role:paladin") {
+                                return Err(
+                                    "only a Priest or Paladin can revive another player".to_owned()
+                                );
+                            }
+                            if target_id == actor_id {
+                                return Err(
+                                    "use !revive without a target to revive yourself".to_owned()
+                                );
+                            }
+                        }
+                        let position = simulation
+                            .0
+                            .actors
+                            .get(&target_id)
+                            .map(|actor| actor.position)
+                            .ok_or_else(|| format!("unknown player {target_id}"))?;
+                        let spawn =
+                            nearest_walkable(&world.generated, position).unwrap_or(position);
+                        let maximum_health =
+                            simulation.0.actors.get(&target_id).map_or(0, |actor| {
+                                u32::try_from(actor.max_health.max(0)).unwrap_or(u32::MAX)
+                            });
+                        simulation
+                            .0
+                            .revive_actor_with_food_cost(
+                                &target_id,
+                                spawn,
+                                if self_revive { 400 } else { 200 },
+                            )
+                            .map_err(|error| error.to_string())?;
+                        spawn_healing_effect(
+                            &mut ecs,
+                            &presentation.0,
+                            &render,
+                            grid_to_world_on_surface(spawn, &config.0, &world.generated),
+                            HealingEffectKind::Revive,
+                            config.0.world.cell_size,
+                        );
+                        if !self_revive {
+                            let experience_multiplier = content
                                 .0
                                 .roles
-                                .get(&actor.role)
-                                .map_or(actor.role.as_str(), |role| role.display_name.as_str());
-                            format!(
-                                "you are a level ({}/100) {role}. Current Exp: ({}/{}).",
-                                stats.level, stats.experience, stats.required_experience
-                            )
-                        })
-                        .ok_or_else(|| format!("{} has no authored progression", actor.role))
-                }),
-            ChatCommand::Save => {
-                require_ruler_or_staff(&simulation.0, &pending)?;
-                let snapshot = snapshot_world(&world, &stats, &simulation);
-                save.store
-                    .write(&snapshot)
-                    .map(|()| "town saved".to_owned())
-                    .map_err(|error| format!("save failed: {error}"))
-            }
-            ChatCommand::Help => Ok(
-                " type !create to start your character, then you can choose a role. type !roles to learn more"
-                    .to_owned(),
-            ),
+                                .get(&simulation.0.actors[&actor_id].role)
+                                .map_or(1_000, |role| role.experience_multiplier_per_thousand);
+                            let _ = simulation.0.grant_role_experience(
+                                &actor_id,
+                                maximum_health,
+                                experience_multiplier,
+                            );
+                        }
+                        Ok(format!("revived {target_id}"))
+                    })
+                }
+                ChatCommand::Praise => {
+                    if !simulation.0.actors.contains_key(&actor_id) {
+                        Err("join before praising the Fish God".to_owned())
+                    } else if simulation.0.fish_god.is_none() {
+                        if simulation.0.start_fish_god(false) {
+                            simulation
+                                .0
+                                .praise_fish_god(&actor_id)
+                                .map(|_| "the Fish God answered; praise accepted (1/20)".to_owned())
+                                .map_err(|error| error.to_string())
+                        } else if simulation.0.active_event.is_some() {
+                            Err("another event is active".to_owned())
+                        } else {
+                            Ok("the Fish God did not answer this praise".to_owned())
+                        }
+                    } else {
+                        simulation
+                            .0
+                            .praise_fish_god(&actor_id)
+                            .map(|completed| {
+                                if completed {
+                                    "the Fish God was pleased: the town received 1,000 food"
+                                        .to_owned()
+                                } else {
+                                    let event = simulation
+                                        .0
+                                        .fish_god
+                                        .as_ref()
+                                        .expect("incomplete praise retains event");
+                                    format!(
+                                        "Fish God praise {}/{}",
+                                        event.praises_given, event.praises_required
+                                    )
+                                }
+                            })
+                            .map_err(|error| error.to_string())
+                    }
+                }
+                ChatCommand::Experience => simulation
+                    .0
+                    .actors
+                    .get(&actor_id)
+                    .ok_or_else(|| "join before checking experience".to_owned())
+                    .and_then(|actor| {
+                        effective_role_stats(&content.0, &simulation.0, actor)
+                            .map(|stats| {
+                                let role = content
+                                    .0
+                                    .roles
+                                    .get(&actor.role)
+                                    .map_or(actor.role.as_str(), |role| role.display_name.as_str());
+                                format!(
+                                    "you are a level ({}/100) {role}. Current Exp: ({}/{}).",
+                                    stats.level, stats.experience, stats.required_experience
+                                )
+                            })
+                            .ok_or_else(|| format!("{} has no authored progression", actor.role))
+                    }),
+                ChatCommand::Save => {
+                    require_ruler_or_staff(&simulation.0, &pending)?;
+                    let snapshot = snapshot_world(&world, &stats, &simulation);
+                    save.store
+                        .write(&snapshot)
+                        .map(|()| "town saved".to_owned())
+                        .map_err(|error| format!("save failed: {error}"))
+                }
+                ChatCommand::Help => Ok(format!(
+                    "All Stream Town commands: {TWITCH_COMMAND_HELP_URL}"
+                )),
             }
         })();
         let succeeded = result.is_ok();
@@ -34970,6 +34886,40 @@ mod tests {
     }
 
     #[test]
+    fn queued_camera_command_executes_without_legacy_idle_gate() {
+        let home = Transform::from_xyz(0.0, 120.0, 0.0);
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default())
+            .insert_resource(RuntimeConfig(GameConfig::default()))
+            .insert_resource(RuntimePlayerSettings(PlayerSettings::default()))
+            .insert_resource(MenuRuntime::default())
+            .insert_resource(CameraCommandQueue(VecDeque::from([CameraRequest {
+                reset: false,
+                actions: vec![CameraAction {
+                    direction: CameraDirection::Up,
+                    amount: 2,
+                }],
+            }])))
+            .add_systems(Update, camera_zoom_and_commands);
+        let camera = app
+            .world_mut()
+            .spawn((
+                TownCamera,
+                home,
+                Projection::Perspective(PerspectiveProjection::default()),
+                TownCameraControllerRuntime::new(home),
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().resource::<CameraCommandQueue>().0.is_empty());
+        let transform = app.world().entity(camera).get::<Transform>().unwrap();
+        assert!((transform.translation.x - (home.translation.x + 24.0)).abs() < 0.001);
+        assert!((transform.translation.z - home.translation.z).abs() < 0.001);
+    }
+
+    #[test]
     fn foliage_acceptance_camera_holds_then_orbits_zooms_and_returns() {
         let focus = Vec3::new(3.0, 1.0, -7.0);
         let starting = Transform::from_translation(focus + Vec3::new(30.0, 35.0, 30.0))
@@ -35294,7 +35244,7 @@ mod tests {
         assert!(in_game.contains("Load Game  [No save]"));
         assert!(in_game.contains("> Settings"));
         assert!(in_game.contains("Exit Game"));
-        assert!(in_game.contains("Idle Mode"));
+        assert!(!in_game.contains("Idle Mode"));
 
         let main_menu = game_menu_text(GameState::MainMenu, 1, true);
         assert!(main_menu.contains("New town"));
@@ -35304,7 +35254,7 @@ mod tests {
     }
 
     #[test]
-    fn shipping_game_menu_preserves_art_actions_and_idle_control() {
+    fn shipping_game_menu_preserves_operator_actions_without_legacy_idle_control() {
         let presentation = embedded_presentation();
         for source_path in GAME_MENU_TEXTURE_PATHS {
             assert!(
@@ -35409,23 +35359,6 @@ mod tests {
             app.world().resource::<MenuRuntime>().return_page,
             MenuPage::Game
         );
-    }
-
-    #[test]
-    fn game_menu_idle_toggle_changes_camera_mode() {
-        let mut app = App::new();
-        app.insert_resource(MenuRuntime {
-            page: MenuPage::Game,
-            ..default()
-        })
-        .init_resource::<CameraIdleMode>()
-        .add_systems(Update, game_menu_idle_toggle);
-        app.world_mut()
-            .spawn((Interaction::Pressed, GameMenuIdleToggle));
-
-        app.update();
-
-        assert!(app.world().resource::<CameraIdleMode>().0);
     }
 
     #[test]
@@ -37533,6 +37466,11 @@ mod tests {
                 "WoodCutting",
             ),
             (
+                "role:miner",
+                AgentGoal::Gather(StableId::new("resource:test").unwrap()),
+                "Mining",
+            ),
+            (
                 "role:builder",
                 AgentGoal::Construct(StableId::new("building:test").unwrap()),
                 "Build",
@@ -37564,6 +37502,23 @@ mod tests {
         assert_eq!(
             agent_action_animation(&content, &moving, &simulation.actors[&actor_id]),
             None
+        );
+        simulation
+            .assign_role(&actor_id, StableId::new("role:miner").unwrap())
+            .unwrap();
+        let mut between_mining_ticks =
+            agent_for(AgentGoal::Gather(StableId::new("resource:test").unwrap()));
+        between_mining_ticks.action_cooldown_seconds = 0.0;
+        between_mining_ticks.action_started = false;
+        assert_eq!(
+            agent_action_animation(
+                &content,
+                &between_mining_ticks,
+                &simulation.actors[&actor_id]
+            )
+            .as_deref(),
+            Some("Mining"),
+            "the Unity action state must survive Bevy's per-tick replanning gap"
         );
         assert_eq!(deterministic_animation_variant(&actor_id, "BowShoot", 1), 0);
         assert_eq!(
@@ -43539,6 +43494,26 @@ mod tests {
     }
 
     #[test]
+    fn invalid_command_feedback_only_targets_command_attempts() {
+        assert_eq!(invalid_twitch_command_reply("hello town"), None);
+        assert_eq!(invalid_twitch_command_reply("   hello town"), None);
+        assert_eq!(
+            invalid_twitch_command_reply("!not-a-command"),
+            Some("Invalid Command! Type !help for the list of commands!")
+        );
+        assert_eq!(
+            invalid_twitch_command_reply("  !cam sideways"),
+            Some("Invalid Command! Type !help for the list of commands!")
+        );
+    }
+
+    #[test]
+    fn help_points_to_the_versioned_complete_command_reference() {
+        assert!(TWITCH_COMMAND_HELP_URL.starts_with("https://github.com/HumanBeanGames/"));
+        assert!(TWITCH_COMMAND_HELP_URL.ends_with("/TWITCH_COMMANDS.md"));
+    }
+
+    #[test]
     fn fish_god_channel_reward_dispatches_praise_without_command_text() {
         let mut connection = TwitchConnection {
             fish_god_reward_id: Some(stream_town_domain::SHIPPING_FISH_GOD_REWARD_ID.to_owned()),
@@ -44898,7 +44873,7 @@ mod tests {
             app.world()
                 .resource::<CommandFeedback>()
                 .0
-                .contains("type !create to start your character")
+                .contains(TWITCH_COMMAND_HELP_URL)
         );
         app.world_mut()
             .resource_mut::<SimulationRuntime>()
@@ -45262,7 +45237,30 @@ mod tests {
             ],
             &world,
         );
-        assert_eq!(position, GridPos { x: 0, z: 4 });
+        assert_eq!(position, GridPos { x: 4, z: 5 });
         assert_eq!(rotation, -2);
+    }
+
+    #[test]
+    fn building_direction_commands_follow_the_visible_town_axes() {
+        let world = generate_world(&GameConfig::default().world);
+        let origin = GridPos { x: 10, z: 10 };
+        for (direction, expected) in [
+            (BuildingDirection::Up, GridPos { x: 11, z: 10 }),
+            (BuildingDirection::Down, GridPos { x: 9, z: 10 }),
+            (BuildingDirection::Left, GridPos { x: 10, z: 11 }),
+            (BuildingDirection::Right, GridPos { x: 10, z: 9 }),
+        ] {
+            let (actual, rotation) = shift_grid_position(
+                origin,
+                &[BuildingAction {
+                    direction,
+                    amount: 1,
+                }],
+                &world,
+            );
+            assert_eq!(actual, expected, "{direction:?}");
+            assert_eq!(rotation, 0);
+        }
     }
 }

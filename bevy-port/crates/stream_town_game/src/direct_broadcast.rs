@@ -2,9 +2,11 @@
 //!
 //! Video comes either from Windows Graphics Capture of the game preview or from
 //! an asynchronous Bevy offscreen-target readback in stream-only mode. Process
-//! audio is captured with WASAPI application loopback, and dynamically linked
-//! `FFmpeg` libraries encode/mux H.264 + AAC into Twitch's RTMP ingest. No
-//! subprocess, virtual cable, or OBS installation is involved.
+//! audio is captured with WASAPI application loopback. Stream-only Tidal music
+//! is mixed from the library's pre-monitor PCM tap so it remains on-stream while
+//! silent at the operator output. Dynamically linked `FFmpeg` libraries
+//! encode/mux H.264 + AAC into Twitch's RTMP ingest. No subprocess, virtual
+//! cable, or OBS installation is involved.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -29,6 +31,7 @@ use bevy::{
     window::{CursorOptions, PrimaryWindow, WindowRef, WindowResolution},
     winit::{UpdateMode, WinitSettings},
 };
+use bevy_tidal::{NativeAudioFrame, NativeAudioRouting};
 use ffmpeg::{
     ChannelLayout, Codec, Dictionary, Packet, Rational, codec, encoder, format, frame, software,
 };
@@ -351,6 +354,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
 fn start_local_broadcast_diagnostic(
     config: Res<RuntimeConfig>,
     gameplay_ready: Option<Res<crate::GameplayReady>>,
+    tidal_routing: Option<Res<NativeAudioRouting>>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     if runtime.phase != DirectBroadcastPhase::Disabled
@@ -391,6 +395,7 @@ fn start_local_broadcast_diagnostic(
         target,
         config.0.twitch.broadcast.clone(),
         config.0.window.title.clone(),
+        tidal_routing.as_ref().map(AsRef::as_ref),
     ) {
         Ok(controller) => runtime.controller = Some(controller),
         Err(error) => {
@@ -550,6 +555,7 @@ fn poll_direct_broadcast_authorization(mut runtime: ResMut<DirectBroadcastRuntim
 fn start_prepared_broadcast_when_gameplay_ready(
     config: Res<RuntimeConfig>,
     gameplay_ready: Option<Res<crate::GameplayReady>>,
+    tidal_routing: Option<Res<NativeAudioRouting>>,
     mut runtime: ResMut<DirectBroadcastRuntime>,
 ) {
     if !prepared_broadcast_can_start(&runtime.phase, gameplay_ready.is_some()) {
@@ -566,6 +572,7 @@ fn start_prepared_broadcast_when_gameplay_ready(
         target,
         config.0.twitch.broadcast.clone(),
         config.0.window.title.clone(),
+        tidal_routing.as_ref().map(AsRef::as_ref),
     ) {
         Ok(controller) => runtime.controller = Some(controller),
         Err(error) => {
@@ -822,6 +829,7 @@ fn sync_stream_only_capture(
     config: Res<RuntimeConfig>,
     gameplay_ready: Option<Res<crate::GameplayReady>>,
     runtime: Res<DirectBroadcastRuntime>,
+    tidal_routing: Option<Res<NativeAudioRouting>>,
     mut state: ResMut<StreamOnlyCaptureState>,
     mut images: Option<ResMut<Assets<Image>>>,
     mut camera_targets: StreamCameraTargetQuery,
@@ -843,6 +851,9 @@ fn sync_stream_only_capture(
                 | DirectBroadcastPhase::Reconnecting
                 | DirectBroadcastPhase::Stopping
         );
+    if let Some(routing) = tidal_routing {
+        routing.set_local_monitor_enabled(!stream_only_active);
+    }
 
     if target_required && state.target.is_none() {
         let Some(images) = images.as_deref_mut() else {
@@ -1897,6 +1908,7 @@ impl BroadcastController {
         target: BroadcastTarget,
         config: BroadcastConfig,
         window_title: String,
+        tidal_routing: Option<&NativeAudioRouting>,
     ) -> Result<Self> {
         let (audio, receiver) = mpsc::sync_channel(AUDIO_QUEUE_CAPACITY);
         let (event_sender, event_receiver) = mpsc::channel();
@@ -1906,6 +1918,9 @@ impl BroadcastController {
         let sensitive_screen = Arc::new(AtomicBool::new(false));
         let capture_fps = config.frames_per_second;
         let stream_only = config.render_mode == BroadcastRenderMode::StreamOnly;
+        let tidal_audio = stream_only
+            .then(|| tidal_routing.map(NativeAudioRouting::subscribe))
+            .flatten();
 
         let worker_stop = Arc::clone(&stop);
         let worker_metrics = Arc::clone(&metrics);
@@ -1949,7 +1964,8 @@ impl BroadcastController {
         let audio_spawn = thread::Builder::new()
             .name("stream-town-wasapi".to_owned())
             .spawn(move || {
-                if let Err(error) = capture_process_audio(audio_sender, &audio_stop, &audio_metrics)
+                if let Err(error) =
+                    capture_process_audio(audio_sender, &audio_stop, &audio_metrics, tidal_audio)
                 {
                     audio_stop.store(true, Ordering::Relaxed);
                     let message = format!("game-process audio capture stopped: {error:#}");
@@ -2016,6 +2032,7 @@ fn capture_process_audio(
     audio: SyncSender<AudioInput>,
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
+    tidal_audio: Option<Receiver<NativeAudioFrame>>,
 ) -> Result<()> {
     initialize_mta()
         .ok()
@@ -2049,6 +2066,7 @@ fn capture_process_audio(
         .get_audiocaptureclient()
         .map_err(|error| anyhow!("could not get WASAPI capture client: {error}"))?;
     let mut bytes = VecDeque::new();
+    let mut tidal_mix = TidalPcmMix::new(tidal_audio);
     let chunk_bytes = AUDIO_FRAME_SAMPLES * block_align;
     let mut pts = 0_i64;
     client
@@ -2069,10 +2087,11 @@ fn capture_process_audio(
         }
         while bytes.len() >= chunk_bytes {
             let raw = bytes.drain(..chunk_bytes).collect::<Vec<_>>();
-            let samples = raw
+            let mut samples = raw
                 .chunks_exact(4)
                 .map(|sample| f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]))
                 .collect::<Vec<_>>();
+            tidal_mix.mix_into(&mut samples);
             if !queue_audio_frame(&audio, metrics, AudioFrame { pts, samples }) {
                 let _ = client.stop_stream();
                 return Ok(());
@@ -2082,6 +2101,77 @@ fn capture_process_audio(
     }
     let _ = client.stop_stream();
     Ok(())
+}
+
+struct TidalPcmMix {
+    receiver: Option<Receiver<NativeAudioFrame>>,
+    source: VecDeque<[f32; 2]>,
+    sample_rate: u32,
+    source_position: f32,
+}
+
+impl TidalPcmMix {
+    fn new(receiver: Option<Receiver<NativeAudioFrame>>) -> Self {
+        Self {
+            receiver,
+            source: VecDeque::new(),
+            sample_rate: AUDIO_SAMPLE_RATE,
+            source_position: 0.0,
+        }
+    }
+
+    fn receive(&mut self) {
+        let Some(receiver) = &self.receiver else {
+            return;
+        };
+        while let Ok(frame) = receiver.try_recv() {
+            if frame.sample_rate == 0 {
+                continue;
+            }
+            if frame.sample_rate != self.sample_rate {
+                self.source.clear();
+                self.source_position = 0.0;
+                self.sample_rate = frame.sample_rate;
+            }
+            self.source.extend(
+                frame
+                    .samples
+                    .chunks_exact(AUDIO_CHANNELS)
+                    .map(|sample| [sample[0], sample[1]]),
+            );
+        }
+        // A stalled encoder should recover at the current music position, not
+        // replay an arbitrarily old local-monitor buffer.
+        let maximum_frames = usize::try_from(self.sample_rate / 2).unwrap_or(usize::MAX);
+        if self.source.len() > maximum_frames {
+            let stale = self.source.len() - maximum_frames;
+            self.source.drain(..stale);
+            self.source_position = 0.0;
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn mix_into(&mut self, output: &mut [f32]) {
+        self.receive();
+        let source_step = self.sample_rate as f32 / AUDIO_SAMPLE_RATE as f32;
+        for output_frame in output.chunks_exact_mut(AUDIO_CHANNELS) {
+            let (Some(current), Some(next)) = (self.source.front(), self.source.get(1)) else {
+                break;
+            };
+            let fraction = self.source_position;
+            let music = [
+                current[0] + (next[0] - current[0]) * fraction,
+                current[1] + (next[1] - current[1]) * fraction,
+            ];
+            output_frame[0] = (output_frame[0] + music[0]).clamp(-1.0, 1.0);
+            output_frame[1] = (output_frame[1] + music[1]).clamp(-1.0, 1.0);
+            self.source_position += source_step;
+            while self.source_position >= 1.0 && self.source.len() > 1 {
+                self.source.pop_front();
+                self.source_position -= 1.0;
+            }
+        }
+    }
 }
 
 fn queue_audio_frame(
@@ -2830,6 +2920,40 @@ mod tests {
             url,
         };
         assert!(!format!("{target:?}").contains(key));
+    }
+
+    #[test]
+    fn stream_only_music_tap_mixes_pre_monitor_pcm_into_wasapi_audio() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(NativeAudioFrame {
+                sample_rate: AUDIO_SAMPLE_RATE,
+                samples: vec![0.25, -0.5, 0.5, -0.25, 0.75, 0.25].into(),
+            })
+            .unwrap();
+        let mut mix = TidalPcmMix::new(Some(receiver));
+        let mut output = vec![0.1; 4];
+
+        mix.mix_into(&mut output);
+
+        assert_eq!(output, vec![0.35, -0.4, 0.6, -0.15]);
+    }
+
+    #[test]
+    fn stream_only_music_tap_resamples_to_the_twitch_clock() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(NativeAudioFrame {
+                sample_rate: 24_000,
+                samples: vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0].into(),
+            })
+            .unwrap();
+        let mut mix = TidalPcmMix::new(Some(receiver));
+        let mut output = vec![0.0; 6];
+
+        mix.mix_into(&mut output);
+
+        assert_eq!(output, vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]);
     }
 
     #[test]

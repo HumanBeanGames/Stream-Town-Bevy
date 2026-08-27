@@ -22,7 +22,7 @@ avian3d = { version = "0.7.0", default-features = false, features = ["3d", "f32"
 bevy = { version = "0.19.1", features = ["system_clipboard", "tga", "wav"] }
 bevy_tidal = {
     git = "https://github.com/HumanBeanGames/bevy-tidal.git",
-    rev = "f9decb648f26d9fb7ff797707e06c0370676252a",
+    rev = "d4e0f954a44df59da11435d030ec7ceebb60388d",
 }
 bevy-inspector-egui = "0.37.0"
 bevy_egui = "0.41.1"
