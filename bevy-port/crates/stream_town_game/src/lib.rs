@@ -101,7 +101,7 @@ use stream_town_domain::{
     StationDef, StationUpdateMode, StorageModelDef, StreamUserType, TargetingScoreDef, TownEvent,
     VfxGradientDef, Weather, WorldGenerationStage, WorldSimulation, WorldSnapshot,
     foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world_with_content,
-    generate_world_with_content_observed, unity_command_usage,
+    generate_world_with_content_observed, resource_visual_variant, unity_command_usage,
 };
 
 const MAX_TOWN_GOALS: usize = 2;
@@ -3375,6 +3375,7 @@ impl Plugin for StreamTownGamePlugin {
                 Update,
                 smoke_start_new_game_after_menu_reveal
                     .after(finish_menu_reveal)
+                    .before(go_live_confirmation_buttons)
                     .run_if(in_state(GameState::MainMenu)),
             )
             .add_systems(
@@ -6663,17 +6664,25 @@ fn queue_world_loading(commands: &mut Commands) {
 }
 
 fn smoke_start_new_game_after_menu_reveal(
-    mut commands: Commands,
     time: Res<Time>,
     reveal: Option<Res<MenuRevealRuntime>>,
     cover: Option<Res<WorldLoadingCoverRuntime>>,
     mut menu: ResMut<MenuRuntime>,
-    mut io: ResMut<MenuIoRequest>,
-    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
-    mut requested: Local<bool>,
+    mut buttons: Query<(&GoLiveConfirmationAction, &mut Interaction)>,
+    mut stage: Local<u8>,
     mut ready_seconds: Local<f32>,
 ) {
-    if *requested || std::env::var_os("STREAM_TOWN_SMOKE_NEW_GAME_TRANSITION").is_none() {
+    if *stage >= 2 || std::env::var_os("STREAM_TOWN_SMOKE_NEW_GAME_TRANSITION").is_none() {
+        return;
+    }
+    if *stage == 1 {
+        if let Some((_, mut interaction)) = buttons
+            .iter_mut()
+            .find(|(action, _)| **action == GoLiveConfirmationAction::Yes)
+        {
+            *interaction = Interaction::Pressed;
+            *stage = 2;
+        }
         return;
     }
     if reveal.is_some() || cover.is_some() {
@@ -6689,15 +6698,8 @@ fn smoke_start_new_game_after_menu_reveal(
     if *ready_seconds < delay_seconds {
         return;
     }
-    *requested = true;
-    menu.pending_town_start = Some(PendingTownStart::NewGame);
-    confirm_go_live_and_start_town(
-        &mut commands,
-        &mut menu,
-        &mut io,
-        #[cfg(target_os = "windows")]
-        &mut broadcast,
-    );
+    request_go_live_confirmation(&mut menu, PendingTownStart::NewGame);
+    *stage = 1;
 }
 
 fn world_loading_cover_requested(cover: Option<Res<WorldLoadingCoverRuntime>>) -> bool {
@@ -8834,9 +8836,14 @@ fn spawn_main_menu_baked_resource(
             .and_then(|id| render.presentation_materials.get(id))
     });
     if let Some(scene) = visual {
+        let mesh_index = if resource.kind.as_str() == "resource:food" {
+            0
+        } else {
+            resource_visual_variant(position.x, position.z, &resource.kind, 2)
+        };
         let mesh = asset_server.load(
             GltfAssetLabel::Primitive {
-                mesh: usize::from(resource.mesh_index),
+                mesh: mesh_index,
                 primitive: 0,
             }
             .from_asset(scene.asset_path.clone()),
@@ -10735,7 +10742,7 @@ fn tag_accessible_buttons(
         if let Some(scope) = scope {
             commands
                 .entity(entity)
-                .insert((scope, Outline::new(px(0), px(0), Color::NONE)));
+                .try_insert((scope, Outline::new(px(0), px(0), Color::NONE)));
         }
     }
 }
@@ -10760,7 +10767,7 @@ fn tag_accessible_text(
             }
         }
         if !inside_button {
-            commands.entity(entity).insert(Label);
+            commands.entity(entity).try_insert(Label);
         }
     }
 }
@@ -10773,7 +10780,7 @@ fn prune_decorative_accessibility_nodes(
     images: DecorativeAccessibilityImageQuery,
 ) {
     for entity in &images {
-        commands.entity(entity).remove::<AccessibilityNode>();
+        commands.entity(entity).try_remove::<AccessibilityNode>();
     }
 }
 
@@ -15097,7 +15104,7 @@ fn generate_and_spawn_world(
                     &asset_root.0,
                     resource,
                     position,
-                    config.0.world.cell_size,
+                    &config.0,
                 );
             }
             end += 1;
@@ -15887,12 +15894,18 @@ fn locational_visual_offset(
     Vec2::new(axis(X_SALT), axis(Z_SALT))
 }
 
-fn resource_mesh_index(resource: &stream_town_domain::GeneratedResource) -> usize {
+fn resource_mesh_index(
+    resource: &stream_town_domain::GeneratedResource,
+    config: &GameConfig,
+) -> usize {
     if resource.kind.as_str() == "resource:food" {
         // Unity's production generation settings list the same bush mesh twice.
         return 0;
     }
-    usize::from((resource.position.x ^ resource.position.z) & 1)
+    let mut position = grid_to_world(resource.position, config);
+    position.x += f32::from(resource.offset_milli_cells[0]) * config.world.cell_size / 1_000.0;
+    position.z += f32::from(resource.offset_milli_cells[1]) * config.world.cell_size / 1_000.0;
+    resource_visual_variant(position.x, position.z, &resource.kind, 2)
 }
 
 fn resource_visual_scale(cell_size: f32) -> f32 {
@@ -15929,8 +15942,9 @@ fn spawn_resource_visual(
     asset_root: &Path,
     resource: &stream_town_domain::GeneratedResource,
     position: Vec3,
-    cell_size: f32,
+    config: &GameConfig,
 ) {
+    let cell_size = config.world.cell_size;
     if resource.target_kind.as_str() == "target:fish" {
         // Unity's Resource_Fish_Base prefab is an invisible work target in the
         // water. Keep the ECS node for depletion/save state without rendering
@@ -15950,7 +15964,7 @@ fn spawn_resource_visual(
     let visual = visual_archetype
         .and_then(default_archetype_scene)
         .filter(|scene| converted_asset_exists(asset_root, &scene.asset_path));
-    let mesh_index = resource_mesh_index(resource);
+    let mesh_index = resource_mesh_index(resource, config);
     let material = visual.and_then(|scene| {
         presentation
             .model_materials
@@ -33505,7 +33519,7 @@ fn credits_skip_button(
 
 fn cleanup_state_entities(mut commands: Commands, entities: Query<Entity, With<StateEntity>>) {
     for entity in &entities {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 }
 
@@ -33519,10 +33533,10 @@ fn cleanup_loading_screen(
     cameras: Query<Entity, With<LoadingUiCamera>>,
 ) {
     for entity in &entities {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
     for entity in &cameras {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
     clear_loading_runtime(&mut commands);
 }
@@ -33549,7 +33563,7 @@ fn cleanup_world(
     mut ruler_announcements: ResMut<RulerVoteAnnouncementRuntime>,
 ) {
     for entity in &entities {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
     commands.remove_resource::<WorldRuntime>();
     commands.remove_resource::<SimulationRuntime>();
@@ -33563,7 +33577,7 @@ fn cleanup_world(
 
 fn cleanup_menu_overlay(mut commands: Commands, overlays: MenuOverlayEntityQuery) {
     for entity in &overlays {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
 }
 
@@ -36529,6 +36543,40 @@ mod tests {
         assert!(app.world().get_entity(overlay).is_err());
         assert!(app.world().get_entity(game_menu).is_err());
         assert!(app.world().get_entity(world_entity).is_ok());
+    }
+
+    #[test]
+    fn state_cleanup_is_idempotent_for_nested_marked_entities() {
+        let mut app = App::new();
+        app.add_systems(Update, cleanup_state_entities);
+        let parent = app.world_mut().spawn(StateEntity).id();
+        let child = app.world_mut().spawn(StateEntity).id();
+        app.world_mut().entity_mut(parent).add_child(child);
+
+        app.update();
+
+        assert!(app.world().get_entity(parent).is_err());
+        assert!(app.world().get_entity(child).is_err());
+    }
+
+    #[test]
+    fn accessibility_tagging_tolerates_ui_removed_before_deferred_annotation() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (
+                cleanup_state_entities.before(tag_accessible_text),
+                tag_accessible_text,
+            ),
+        );
+        let text = app
+            .world_mut()
+            .spawn((StateEntity, Text::new("Transient menu label")))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get_entity(text).is_err());
     }
 
     #[test]
@@ -40966,10 +41014,16 @@ mod tests {
             generation_occupancy: [i16::try_from(x).unwrap(), i16::try_from(z).unwrap()],
             amount: 100,
         };
-        assert_eq!(resource_mesh_index(&resource("resource:wood", 2, 4)), 0);
-        assert_eq!(resource_mesh_index(&resource("resource:wood", 3, 4)), 1);
-        assert_eq!(resource_mesh_index(&resource("resource:ore", 9, 6)), 1);
-        assert_eq!(resource_mesh_index(&resource("resource:food", 9, 6)), 0);
+        let config = GameConfig::default();
+        let wood = resource("resource:wood", 2, 4);
+        let wood_variant = resource_mesh_index(&wood, &config);
+        assert!(wood_variant < 2);
+        assert_eq!(resource_mesh_index(&wood, &config), wood_variant);
+        assert!(resource_mesh_index(&resource("resource:ore", 9, 6), &config) < 2);
+        assert_eq!(
+            resource_mesh_index(&resource("resource:food", 9, 6), &config),
+            0
+        );
         assert!((resource_visual_scale(2.0) - 0.01).abs() < f32::EPSILON);
         assert!((resource_visual_scale(12.0) - 0.06).abs() < f32::EPSILON);
         let content = embedded_content();
@@ -40978,6 +41032,33 @@ mod tests {
         let centred = centred_resource_visual_position(Vec3::ZERO, tree, 2.0);
         assert!((centred.x + tree.bounds.center[0]).abs() < f32::EPSILON);
         assert!((centred.z - tree.bounds.center[2]).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn baked_menu_tree_variants_override_legacy_checkerboard_indices() {
+        let reference: MainMenuSceneReference =
+            ron::from_str(include_str!("../../../assets/content/main_menu_scene.ron")).unwrap();
+        let resources = &reference.corrective_bake.unwrap().resources;
+        let trees = resources
+            .iter()
+            .filter(|resource| resource.kind.as_str() == "resource:wood")
+            .collect::<Vec<_>>();
+        let mut counts = [0_usize; 2];
+        let mut corrected = 0_usize;
+        for tree in &trees {
+            let variant = resource_visual_variant(
+                tree.position[0],
+                tree.position[2],
+                &tree.kind,
+                counts.len(),
+            );
+            counts[variant] += 1;
+            corrected += usize::from(variant != usize::from(tree.mesh_index));
+        }
+
+        assert!(trees.len() > 100);
+        assert!(counts.into_iter().all(|count| count > trees.len() / 3));
+        assert!(corrected > trees.len() / 3);
     }
 
     #[test]

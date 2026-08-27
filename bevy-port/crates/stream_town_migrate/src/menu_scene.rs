@@ -8,6 +8,7 @@ use stream_town_domain::{
     ArchetypeKind, ContentCatalog, GameConfig, GridPos, MainMenuCameraReference,
     MainMenuCorrectiveBake, MainMenuEmbeddedMesh, MainMenuFoliageVisual, MainMenuModelInstance,
     MainMenuResourceVisual, MainMenuSceneReference, generate_world_with_content,
+    resource_visual_variant,
 };
 
 const MAIN_MENU_TERRAIN_HEIGHT_MULTIPLIER: f32 = 3.0;
@@ -312,7 +313,8 @@ pub(crate) fn bake(
                     mesh_index: if resource.kind.as_str() == "resource:food" {
                         0
                     } else {
-                        (resource.position.x ^ resource.position.z) & 1
+                        u16::try_from(resource_visual_variant(x, z, &resource.kind, 2))
+                            .expect("two resource mesh variants fit u16")
                     },
                 },
             )

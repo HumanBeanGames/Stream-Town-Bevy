@@ -91,5 +91,5 @@ pub use world::{
     GeneratedFoliage, GeneratedResource, GeneratedWorld, WorldGenerationStage,
     foliage_visual_variant, foliage_visual_yaw_milliradians, generate_world,
     generate_world_with_content, generate_world_with_content_observed, legacy_v1_world_hash,
-    legacy_v2_world_hash, legacy_v3_world_hash, shoreline_approaches,
+    legacy_v2_world_hash, legacy_v3_world_hash, resource_visual_variant, shoreline_approaches,
 };

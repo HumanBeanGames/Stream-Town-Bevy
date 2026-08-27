@@ -929,6 +929,19 @@ pub fn foliage_visual_yaw_milliradians(world_x: f32, world_z: f32, layer: &Stabl
     u16::try_from(quarter_turn * 1_571).expect("four authored quarter turns fit u16")
 }
 
+#[must_use]
+pub fn resource_visual_variant(world_x: f32, world_z: f32, kind: &StableId, count: usize) -> usize {
+    let unity_resource = match kind.as_str() {
+        "resource:wood" => 1,
+        "resource:ore" => 2,
+        "resource:food" => 3,
+        "resource:gold" => 4,
+        "resource:recruit" => 5,
+        _ => 0,
+    };
+    unity_instance_index(world_x, world_z, 0x13_57_9B_u32 ^ unity_resource, count)
+}
+
 #[allow(clippy::cast_possible_truncation)]
 fn unity_instance_index(world_x: f32, world_z: f32, salt: u32, count: usize) -> usize {
     if count == 0 {
@@ -1227,6 +1240,33 @@ mod tests {
                 if x > 0 && z > 0 {
                     let diagonal =
                         foliage_visual_variant(coordinate(x - 1), coordinate(z - 1), &layer, 2);
+                    if variant == diagonal {
+                        equal_diagonal_neighbours += 1;
+                    } else {
+                        different_diagonal_neighbours += 1;
+                    }
+                }
+            }
+        }
+        assert!(counts.into_iter().all(|count| (400..=624).contains(&count)));
+        assert!(equal_diagonal_neighbours > 250);
+        assert!(different_diagonal_neighbours > 250);
+    }
+
+    #[test]
+    fn two_variant_resource_hash_does_not_form_coordinate_parity_rows() {
+        let kind = StableId::new("resource:wood").unwrap();
+        let mut counts = [0_usize; 2];
+        let mut equal_diagonal_neighbours = 0_usize;
+        let mut different_diagonal_neighbours = 0_usize;
+        let coordinate = |value: usize| f32::from(u16::try_from(value).unwrap()) * 0.5;
+        for z in 0..32 {
+            for x in 0..32 {
+                let variant = resource_visual_variant(coordinate(x), coordinate(z), &kind, 2);
+                counts[variant] += 1;
+                if x > 0 && z > 0 {
+                    let diagonal =
+                        resource_visual_variant(coordinate(x - 1), coordinate(z - 1), &kind, 2);
                     if variant == diagonal {
                         equal_diagonal_neighbours += 1;
                     } else {
