@@ -147,8 +147,10 @@ impl Default for PlayerSettings {
                 high_contrast: false,
                 reduced_motion: false,
             },
-            // Unity's default index 3 maps through [0, 5, 10, 30, 60].
-            autosave_minutes: 30,
+            // Temporarily favor short recovery windows while the migrated
+            // runtime is being hardened. The authored Unity intervals remain
+            // available in the settings menu.
+            autosave_minutes: 1,
         }
     }
 }
@@ -175,7 +177,7 @@ pub enum PlayerSettingsValidationError {
     FieldOfView,
     #[error("UI scale must be between 75% and 150%")]
     UiScale,
-    #[error("autosave interval must be 0, 5, 10, 30, or 60 minutes")]
+    #[error("autosave interval must be 0, 1, 5, 10, 30, or 60 minutes")]
     AutosaveInterval,
 }
 
@@ -265,7 +267,7 @@ impl PlayerSettings {
         if !(75..=150).contains(&self.interface.ui_scale_percent) {
             return Err(PlayerSettingsValidationError::UiScale);
         }
-        if !matches!(self.autosave_minutes, 0 | 5 | 10 | 30 | 60) {
+        if !matches!(self.autosave_minutes, 0 | 1 | 5 | 10 | 30 | 60) {
             return Err(PlayerSettingsValidationError::AutosaveInterval);
         }
         Ok(())

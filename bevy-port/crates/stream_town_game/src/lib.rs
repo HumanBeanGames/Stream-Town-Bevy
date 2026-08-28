@@ -3906,9 +3906,11 @@ impl Plugin for StreamTownGamePlugin {
                 OnExit(GameState::InGame),
                 (
                     tidal_music::stop_tidal_music,
+                    save_on_gameplay_exit,
                     cleanup_world,
                     cleanup_menu_overlay,
-                ),
+                )
+                    .chain(),
             )
             .add_systems(
                 Update,
@@ -14866,7 +14868,7 @@ fn adjust_settings_menu(
                 cycle_choice(&MODES, settings.interface.display_building_health, increase);
         }
         19 => {
-            const MINUTES: [u16; 5] = [0, 5, 10, 30, 60];
+            const MINUTES: [u16; 6] = [0, 1, 5, 10, 30, 60];
             settings.autosave_minutes = cycle_choice(&MINUTES, settings.autosave_minutes, increase);
         }
         20 => {
@@ -17446,6 +17448,28 @@ fn assigned_station<'a>(
         })
 }
 
+fn station_deposit_approach(
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    station: StationCandidate<'_>,
+    current: GridPos,
+) -> Option<GridPos> {
+    simulation
+        .buildings
+        .get(station.id)
+        .and_then(|building| {
+            let definition = building_def_for_archetype(content, &building.archetype)?;
+            building_approach(
+                world,
+                building.position,
+                rotated_footprint(definition.footprint, building.rotation_quarter_turns),
+                current,
+            )
+        })
+        .or_else(|| nearest_walkable(world, station.position))
+}
+
 fn station_search_range_cells(station: StationCandidate<'_>) -> u16 {
     u16::try_from(station.definition.search_range_milli_cells.div_ceil(1_000)).unwrap_or(u16::MAX)
 }
@@ -18471,11 +18495,19 @@ fn next_agent_goal_with_station_runtime(
     }
     if actor_remaining_carry_capacity(content, simulation, actor) == 0 {
         let destination = station.map_or_else(
-            || restored_town_hall_position(content, simulation, config),
-            |station| station.position,
+            || {
+                nearest_walkable(
+                    world,
+                    restored_town_hall_position(content, simulation, config),
+                )
+                .unwrap_or(current)
+            },
+            |station| {
+                station_deposit_approach(content, simulation, world, station, current)
+                    .unwrap_or(current)
+            },
         );
-        let target = nearest_walkable(world, destination).unwrap_or(current);
-        return (AgentGoal::Deposit, target);
+        return (AgentGoal::Deposit, destination);
     }
     let Some(resource_kind) = resource_for_role(content, &actor.role) else {
         return (
@@ -20951,6 +20983,31 @@ fn rotate_agent_toward(
     };
 }
 
+fn rotate_agent_toward_action(
+    transform: &mut Transform,
+    agent: &Agent,
+    content: &ContentCatalog,
+    simulation: &WorldSimulation,
+    world: &GeneratedWorld,
+    config: &GameConfig,
+    delta_seconds: f32,
+    correct_player_axis: bool,
+) -> bool {
+    let Some(facing_grid) = agent_action_facing_grid(&agent.goal, content, simulation, world)
+    else {
+        return false;
+    };
+    let facing_target = grid_to_world_on_surface(facing_grid, config, world);
+    rotate_agent_toward(
+        transform,
+        facing_target,
+        delta_seconds,
+        matches!(agent.goal, AgentGoal::Gather(_)),
+        correct_player_axis,
+    );
+    true
+}
+
 fn actor_movement_speed(
     config: &GameConfig,
     content: &ContentCatalog,
@@ -21364,6 +21421,19 @@ fn move_agents(
                 ) {
                     // Unity enters the action state, plays its animation, and
                     // invokes DoAction only after the authored timer.
+                    // Keep turning throughout that timer. Previously the early
+                    // continue froze construction actors after only the single
+                    // arrival-frame rotation step.
+                    rotate_agent_toward_action(
+                        &mut transform,
+                        &agent,
+                        &content.0,
+                        &simulation.0,
+                        &world.generated,
+                        &config.0,
+                        time.delta_secs(),
+                        axis_corrected.is_some(),
+                    );
                     continue;
                 }
                 if action_phase == ArrivedActionPhase::Complete {
@@ -21578,19 +21648,24 @@ fn move_agents(
         } else {
             transform.translation += distance.normalize_or_zero() * step;
         }
-        let action_target = (!agent_is_moving(&agent))
-            .then(|| {
-                agent_action_facing_grid(&agent.goal, &content.0, &simulation.0, &world.generated)
-            })
-            .flatten();
-        let facing_grid = action_target.or_else(|| agent.path.get(agent.path_index).copied());
-        if let Some(facing_grid) = facing_grid {
+        let action_facing = !agent_is_moving(&agent)
+            && rotate_agent_toward_action(
+                &mut transform,
+                &agent,
+                &content.0,
+                &simulation.0,
+                &world.generated,
+                &config.0,
+                time.delta_secs(),
+                axis_corrected.is_some(),
+            );
+        if !action_facing && let Some(facing_grid) = agent.path.get(agent.path_index).copied() {
             let facing_target = grid_to_world_on_surface(facing_grid, &config.0, &world.generated);
             rotate_agent_toward(
                 &mut transform,
                 facing_target,
                 time.delta_secs(),
-                action_target.is_some_and(|_| matches!(agent.goal, AgentGoal::Gather(_))),
+                false,
                 axis_corrected.is_some(),
             );
         }
@@ -29077,6 +29152,22 @@ fn autosave_game(
     }
 }
 
+fn save_on_gameplay_exit(
+    save: Res<SaveRuntime>,
+    world: Option<Res<WorldRuntime>>,
+    stats: Option<Res<SessionStats>>,
+    simulation: Option<Res<SimulationRuntime>>,
+) {
+    let (Some(world), Some(stats), Some(simulation)) = (world, stats, simulation) else {
+        return;
+    };
+    let snapshot = snapshot_world(&world, &stats, &simulation);
+    match save.store.write(&snapshot) {
+        Ok(()) => info!(path = %save.store.path().display(), "gameplay-exit save written"),
+        Err(error) => error!(%error, "gameplay-exit save failed"),
+    }
+}
+
 fn load_input(
     mut ecs: Commands,
     mut io: ResMut<MenuIoRequest>,
@@ -29136,6 +29227,7 @@ fn load_input(
             NativeWorldCompatibility::UpgradeV1
                 | NativeWorldCompatibility::UpgradeV2
                 | NativeWorldCompatibility::UpgradeV3
+                | NativeWorldCompatibility::RegeneratePrior
         )
     ) {
         info!(
@@ -29568,6 +29660,7 @@ enum NativeWorldCompatibility {
     UpgradeV1,
     UpgradeV2,
     UpgradeV3,
+    RegeneratePrior,
 }
 
 fn native_world_compatibility(
@@ -29588,8 +29681,16 @@ fn native_world_compatibility(
     if generator_version == 2 && world_hash == stream_town_domain::legacy_v2_world_hash(world) {
         return Some(NativeWorldCompatibility::UpgradeV2);
     }
-    (generator_version == 3 && world_hash == stream_town_domain::legacy_v3_world_hash(world))
-        .then_some(NativeWorldCompatibility::UpgradeV3)
+    if generator_version == 3 && world_hash == stream_town_domain::legacy_v3_world_hash(world) {
+        return Some(NativeWorldCompatibility::UpgradeV3);
+    }
+    // NativeSaveStore has already verified the envelope checksum and snapshot
+    // schema before this point. Versions 4+ changed terrain/resource topology
+    // too substantially to reproduce their old fingerprints from the current
+    // generator, so regenerate the seeded world and use the existing stable-ID
+    // restoration/relocation path instead of rejecting a valid native save.
+    (generator_version >= 4 && generator_version < world.generator_version)
+        .then_some(NativeWorldCompatibility::RegeneratePrior)
 }
 
 fn capture_screenshot(
@@ -37335,7 +37436,7 @@ mod tests {
         assert!((draft.camera.zoom_sensitivity - 11.0).abs() < f32::EPSILON);
         assert_eq!(draft.camera.field_of_view_degrees, 65);
         assert_eq!(draft.interface.display_names, NameDisplayMode::None);
-        assert_eq!(draft.autosave_minutes, 60);
+        assert_eq!(draft.autosave_minutes, 5);
         assert_eq!(draft.interface.ui_scale_percent, 110);
         assert!(draft.interface.high_contrast);
         assert!(draft.interface.reduced_motion);
@@ -37938,6 +38039,100 @@ mod tests {
                 .map(StableId::as_str),
             Some("building:townhall")
         );
+    }
+
+    #[test]
+    fn resource_workers_deposit_at_their_authored_processing_stations() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let centre = nearest_walkable(
+            &world,
+            GridPos {
+                x: world.navigation.width() / 2,
+                z: world.navigation.height() / 2,
+            },
+        )
+        .unwrap();
+
+        for (serial, building_id, role_id, resource_id) in [
+            (0, "building:stonemason", "role:miner", "resource:ore"),
+            (1, "building:lumbermill", "role:logger", "resource:wood"),
+            (2, "building:windmill", "role:gatherer", "resource:food"),
+        ] {
+            let building_definition = &content.buildings[&StableId::new(building_id).unwrap()];
+            let station_id = StableId::new(format!("building:deposit_station_{serial}")).unwrap();
+            let actor_id = StableId::new(format!("npc:deposit_worker_{serial}")).unwrap();
+            let resource = StableId::new(resource_id).unwrap();
+            let mut simulation = WorldSimulation::new(world.seed);
+            simulation.buildings.insert(
+                station_id.clone(),
+                BuildingState {
+                    id: station_id.clone(),
+                    archetype: building_definition.archetype.clone(),
+                    position: centre,
+                    rotation_quarter_turns: 0,
+                    level: 1,
+                    health: building_base_max_health(&content, building_definition)
+                        .try_into()
+                        .unwrap(),
+                    complete: true,
+                },
+            );
+            assert!(simulation.join_player(actor_id.clone(), centre));
+            simulation
+                .assign_role(&actor_id, StableId::new(role_id).unwrap())
+                .unwrap();
+            simulation.actors.get_mut(&actor_id).unwrap().station = Some(station_id.clone());
+            let carry_capacity =
+                effective_role_stats(&content, &simulation, &simulation.actors[&actor_id])
+                    .unwrap()
+                    .carry_capacity;
+            simulation
+                .gather(&actor_id, resource.clone(), carry_capacity)
+                .unwrap();
+
+            let (goal, target) =
+                next_agent_goal(&simulation, &world, &config, &content, &actor_id, centre);
+            assert_eq!(
+                goal,
+                AgentGoal::Deposit,
+                "{role_id} did not choose its station"
+            );
+            let station = assigned_station(
+                &content,
+                &simulation,
+                &config,
+                &simulation.actors[&actor_id],
+            )
+            .unwrap();
+            assert_eq!(station.id, &station_id);
+            assert_eq!(
+                Some(target),
+                station_deposit_approach(&content, &simulation, &world, station, centre)
+            );
+            assert!(world.navigation.find_path(centre, target).is_ok());
+
+            assert!(
+                complete_agent_goal(
+                    &mut simulation,
+                    &mut world,
+                    &config,
+                    &content,
+                    &actor_id,
+                    &goal,
+                    target,
+                )
+                .is_none(),
+                "deposit has no visual presentation"
+            );
+            assert_eq!(simulation.town_resources[&resource], carry_capacity);
+            assert!(
+                !simulation.actors[&actor_id]
+                    .inventory
+                    .contains_key(&resource)
+            );
+        }
     }
 
     #[test]
@@ -39559,7 +39754,7 @@ mod tests {
     }
 
     #[test]
-    fn native_world_compatibility_accepts_current_and_verified_upgrades_only() {
+    fn native_world_compatibility_accepts_current_and_checksum_valid_prior_generators() {
         let world = generate_world(&GameConfig::default().world);
         assert_eq!(
             native_world_compatibility(
@@ -39600,6 +39795,14 @@ mod tests {
         assert_eq!(
             native_world_compatibility(world.seed, 1, "corrupt", &world),
             None
+        );
+        assert_eq!(
+            native_world_compatibility(world.seed, 4, "validated-v4-fingerprint", &world),
+            Some(NativeWorldCompatibility::RegeneratePrior)
+        );
+        assert_eq!(
+            native_world_compatibility(world.seed, 5, "validated-v5-fingerprint", &world),
+            Some(NativeWorldCompatibility::RegeneratePrior)
         );
         assert_eq!(
             native_world_compatibility(
@@ -43442,6 +43645,62 @@ mod tests {
             ),
             Some(resource.position)
         );
+
+        let building_id = StableId::new("building:facing_construction").unwrap();
+        let building_definition = &content.buildings[&StableId::new("building:townhall").unwrap()];
+        simulation.buildings.insert(
+            building_id.clone(),
+            BuildingState {
+                id: building_id.clone(),
+                archetype: building_definition.archetype.clone(),
+                position: GridPos { x: 12, z: 4 },
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: 1,
+                complete: false,
+            },
+        );
+        let origin = GridPos { x: 4, z: 4 };
+        let agent = Agent {
+            id: StableId::new("npc:waiting_builder").unwrap(),
+            kind: ActorKind::Player,
+            archetype: StableId::new("archetype:waiting_builder").unwrap(),
+            goal: AgentGoal::Construct(building_id),
+            spawn: origin,
+            origin,
+            path: vec![origin],
+            path_index: 1,
+            target: origin,
+            action_cooldown_seconds: 1.0,
+            action_started: true,
+            repath_remaining_seconds: 0.0,
+            health_regen_accumulator: 0.0,
+            wander_sequence: 0,
+            previous_wander_origin: None,
+        };
+        let mut transform =
+            Transform::from_translation(grid_to_world_on_surface(origin, &config, &world));
+        for _ in 0..10 {
+            assert!(rotate_agent_toward_action(
+                &mut transform,
+                &agent,
+                &content,
+                &simulation,
+                &world,
+                &config,
+                0.05,
+                false,
+            ));
+        }
+        let target = grid_to_world_on_surface(
+            agent_action_facing_grid(&agent.goal, &content, &simulation, &world).unwrap(),
+            &config,
+            &world,
+        );
+        let expected = (target - transform.translation)
+            .with_y(0.0)
+            .normalize_or_zero();
+        assert!((transform.rotation * Vec3::Z).dot(expected) > 0.99);
     }
 
     #[test]

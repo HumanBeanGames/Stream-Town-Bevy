@@ -37,5 +37,5 @@
         high_contrast: false,
         reduced_motion: false,
     ),
-    autosave_minutes: 30,
+    autosave_minutes: 1,
 )

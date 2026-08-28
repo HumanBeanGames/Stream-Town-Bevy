@@ -152,6 +152,7 @@ pub struct DirectBroadcastRuntime {
     broadcast_started: Option<Instant>,
     health_reported_at: Option<Instant>,
     health_reported_metrics: BroadcastMetricsSnapshot,
+    recent_video_replacements: u64,
     rolling_captured_video_fps: f64,
     rolling_encoded_video_fps: f64,
 }
@@ -333,6 +334,7 @@ impl Default for DirectBroadcastRuntime {
             broadcast_started: None,
             health_reported_at: None,
             health_reported_metrics: BroadcastMetricsSnapshot::default(),
+            recent_video_replacements: 0,
             rolling_captured_video_fps: 0.0,
             rolling_encoded_video_fps: 0.0,
         }
@@ -359,7 +361,7 @@ impl DirectBroadcastRuntime {
             dropped_video_frames: metrics.dropped_video,
             encoded_audio_frames: metrics.encoded_audio,
             dropped_audio_frames: metrics.dropped_audio,
-            replaced_video_frames: metrics.replaced_video,
+            replaced_video_frames: self.recent_video_replacements,
             skipped_video_frames: metrics.skipped_video,
             audio_queue_depth: metrics.queued_audio,
             audio_queue_high_water: metrics.audio_queue_high_water,
@@ -741,13 +743,14 @@ fn poll_direct_broadcast_worker(
                 runtime.encoder_rejections = rejected_encoders;
                 let now = Instant::now();
                 runtime.broadcast_started.get_or_insert(now);
-                runtime.health_reported_at.get_or_insert(now);
+                reset_stream_health_window(&mut runtime, now);
                 begin_twitch_live_verification(&mut runtime);
             }
             WorkerEvent::Reconnecting(error) => {
                 runtime.live_verification = None;
                 runtime.verification_status = Some(format!("RTMP reconnect: {error}"));
                 runtime.phase = DirectBroadcastPhase::Reconnecting;
+                reset_stream_health_window(&mut runtime, Instant::now());
                 warn!(%error, "direct Twitch broadcast reconnecting");
             }
             WorkerEvent::Stopped => {
@@ -765,6 +768,17 @@ fn poll_direct_broadcast_worker(
         }
     }
     report_stream_health(&mut runtime, config.0.twitch.broadcast.frames_per_second);
+}
+
+fn reset_stream_health_window(runtime: &mut DirectBroadcastRuntime, now: Instant) {
+    runtime.health_reported_at = Some(now);
+    runtime.health_reported_metrics = runtime.controller.as_ref().map_or_else(
+        BroadcastMetricsSnapshot::default,
+        BroadcastController::metrics,
+    );
+    runtime.recent_video_replacements = 0;
+    runtime.rolling_captured_video_fps = 0.0;
+    runtime.rolling_encoded_video_fps = 0.0;
 }
 
 fn begin_twitch_live_verification(runtime: &mut DirectBroadcastRuntime) {
@@ -903,6 +917,7 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
     let new_video_replacements = metrics
         .replaced_video
         .saturating_sub(runtime.health_reported_metrics.replaced_video);
+    runtime.recent_video_replacements = new_video_replacements;
     let new_video_skips = metrics
         .skipped_video
         .saturating_sub(runtime.health_reported_metrics.skipped_video);
@@ -1769,7 +1784,7 @@ fn update_stream_operator_info(
         .as_deref()
         .unwrap_or("No Twitch public-status check is active");
     **text = format!(
-        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nCapture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
+        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nRecent capture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
         snapshot.phase,
         twitch_status,
         snapshot.encoder.as_deref().unwrap_or("starting"),
@@ -2721,6 +2736,7 @@ struct WindowCaptureFlags {
     metrics: Arc<BroadcastMetrics>,
     stop: Arc<AtomicBool>,
     sensitive_screen: Arc<AtomicBool>,
+    video_consumer_ready: Arc<AtomicBool>,
 }
 
 struct WindowCaptureHandler {
@@ -2728,6 +2744,7 @@ struct WindowCaptureHandler {
     metrics: Arc<BroadcastMetrics>,
     stop: Arc<AtomicBool>,
     sensitive_screen: Arc<AtomicBool>,
+    video_consumer_ready: Arc<AtomicBool>,
     row_scratch: Vec<u8>,
 }
 
@@ -2741,6 +2758,7 @@ impl GraphicsCaptureApiHandler for WindowCaptureHandler {
             metrics: context.flags.metrics,
             stop: context.flags.stop,
             sensitive_screen: context.flags.sensitive_screen,
+            video_consumer_ready: context.flags.video_consumer_ready,
             row_scratch: Vec::new(),
         })
     }
@@ -2770,6 +2788,7 @@ impl GraphicsCaptureApiHandler for WindowCaptureHandler {
             &self.video,
             &self.stop,
             &self.metrics,
+            &self.video_consumer_ready,
             VideoFrame {
                 width,
                 height,
@@ -2792,6 +2811,7 @@ fn start_window_capture(
     metrics: Arc<BroadcastMetrics>,
     stop: Arc<AtomicBool>,
     sensitive_screen: Arc<AtomicBool>,
+    video_consumer_ready: Arc<AtomicBool>,
     events: mpsc::Sender<WorkerEvent>,
 ) -> Result<()> {
     let window = CapturableWindow::from_name(window_title)
@@ -2811,6 +2831,7 @@ fn start_window_capture(
             metrics,
             stop: Arc::clone(&stop),
             sensitive_screen,
+            video_consumer_ready,
         },
     );
     thread::Builder::new()
@@ -2833,6 +2854,7 @@ fn publish_latest_video(
     video: &Mutex<Option<VideoFrame>>,
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
+    video_consumer_ready: &AtomicBool,
     frame: VideoFrame,
 ) -> bool {
     if stop.load(Ordering::Relaxed) {
@@ -2842,7 +2864,7 @@ fn publish_latest_video(
         metrics.dropped_video.fetch_add(1, Ordering::Relaxed);
         return false;
     };
-    if latest.replace(frame).is_some() {
+    if latest.replace(frame).is_some() && video_consumer_ready.load(Ordering::Relaxed) {
         metrics.replaced_video.fetch_add(1, Ordering::Relaxed);
     }
     metrics.captured_video.fetch_add(1, Ordering::Relaxed);
@@ -2855,6 +2877,7 @@ struct BroadcastController {
     events: Arc<Mutex<Receiver<WorkerEvent>>>,
     stop: Arc<AtomicBool>,
     sensitive_screen: Arc<AtomicBool>,
+    video_consumer_ready: Arc<AtomicBool>,
     metrics: Arc<BroadcastMetrics>,
 }
 
@@ -2871,6 +2894,7 @@ impl BroadcastController {
         let metrics = Arc::new(BroadcastMetrics::default());
         let video = Arc::new(Mutex::new(None));
         let sensitive_screen = Arc::new(AtomicBool::new(false));
+        let video_consumer_ready = Arc::new(AtomicBool::new(false));
         let capture_fps = config.frames_per_second;
         let stream_only = config.render_mode == BroadcastRenderMode::StreamOnly;
         let tidal_audio = stream_only
@@ -2880,6 +2904,7 @@ impl BroadcastController {
         let worker_stop = Arc::clone(&stop);
         let worker_metrics = Arc::clone(&metrics);
         let worker_video = Arc::clone(&video);
+        let worker_video_consumer_ready = Arc::clone(&video_consumer_ready);
         let audio_event_sender = event_sender.clone();
         let capture_event_sender = event_sender.clone();
         thread::Builder::new()
@@ -2893,6 +2918,7 @@ impl BroadcastController {
                     &event_sender,
                     &worker_stop,
                     &worker_metrics,
+                    &worker_video_consumer_ready,
                 );
             })
             .context("failed to start the in-process FFmpeg worker")?;
@@ -2905,6 +2931,7 @@ impl BroadcastController {
                 Arc::clone(&metrics),
                 Arc::clone(&stop),
                 Arc::clone(&sensitive_screen),
+                Arc::clone(&video_consumer_ready),
                 capture_event_sender,
             )
         {
@@ -2942,12 +2969,19 @@ impl BroadcastController {
             events: audio_events,
             stop,
             sensitive_screen,
+            video_consumer_ready,
             metrics,
         })
     }
 
     fn send_video(&self, frame: VideoFrame) -> bool {
-        publish_latest_video(&self.video, &self.stop, &self.metrics, frame)
+        publish_latest_video(
+            &self.video,
+            &self.stop,
+            &self.metrics,
+            &self.video_consumer_ready,
+            frame,
+        )
     }
 
     fn drop_video_frames(&self, count: u64) {
@@ -3160,6 +3194,7 @@ fn run_broadcast_worker(
     events: &mpsc::Sender<WorkerEvent>,
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
+    video_consumer_ready: &AtomicBool,
 ) {
     let mut reconnect_delay = 1_u64;
     loop {
@@ -3168,25 +3203,47 @@ fn run_broadcast_worker(
             return;
         }
         let _ = events.send(WorkerEvent::Connecting);
-        match encode_broadcast_session(&target, &config, &receiver, &video, stop, metrics, events) {
+        let mut session_published = false;
+        let result = encode_broadcast_session(
+            &target,
+            &config,
+            &receiver,
+            &video,
+            stop,
+            metrics,
+            events,
+            video_consumer_ready,
+            &mut session_published,
+        );
+        video_consumer_ready.store(false, Ordering::Relaxed);
+        match result {
             Ok(SessionEnd::Stopped | SessionEnd::InputClosed) => {
                 let _ = events.send(WorkerEvent::Stopped);
                 return;
             }
             Err(error) => {
+                let wait_seconds = reconnect_wait_seconds(&mut reconnect_delay, session_published);
                 let message = format!("{error:#}");
                 let _ = events.send(WorkerEvent::Reconnecting(message));
-                for _ in 0..reconnect_delay.saturating_mul(4) {
+                for _ in 0..wait_seconds.saturating_mul(4) {
                     if stop.load(Ordering::Relaxed) {
                         let _ = events.send(WorkerEvent::Stopped);
                         return;
                     }
                     thread::sleep(Duration::from_millis(250));
                 }
-                reconnect_delay = (reconnect_delay * 2).min(MAX_RECONNECT_DELAY_SECONDS);
             }
         }
     }
+}
+
+fn reconnect_wait_seconds(delay: &mut u64, session_published: bool) -> u64 {
+    if session_published {
+        *delay = 1;
+    }
+    let wait = *delay;
+    *delay = delay.saturating_mul(2).min(MAX_RECONNECT_DELAY_SECONDS);
+    wait
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3301,10 +3358,13 @@ fn encode_broadcast_session(
     stop: &AtomicBool,
     metrics: &BroadcastMetrics,
     events: &mpsc::Sender<WorkerEvent>,
+    video_consumer_ready: &AtomicBool,
+    session_published: &mut bool,
 ) -> Result<SessionEnd> {
     ffmpeg::init().context("could not initialize the linked FFmpeg libraries")?;
     ffmpeg::log::set_level(ffmpeg::log::Level::Quiet);
     let (mut encoder, encoder_selection) = BroadcastEncoder::open(target, config)?;
+    video_consumer_ready.store(true, Ordering::Relaxed);
     if discard_pending_audio(receiver, metrics) {
         encoder.finish()?;
         return Ok(SessionEnd::Stopped);
@@ -3341,6 +3401,7 @@ fn encode_broadcast_session(
             if published_packets > 0
                 && let Some(selection) = encoder_selection.take()
             {
+                *session_published = true;
                 let _ = events.send(WorkerEvent::Broadcasting {
                     encoder: selection.display_name(),
                     rejected_encoders: selection.rejections,
@@ -4314,6 +4375,7 @@ mod tests {
             events: Arc::new(Mutex::new(event_receiver)),
             stop: Arc::new(AtomicBool::new(false)),
             sensitive_screen: Arc::new(AtomicBool::new(false)),
+            video_consumer_ready: Arc::new(AtomicBool::new(true)),
             metrics: Arc::clone(&metrics),
         };
         let first = VideoFrame {
@@ -4335,6 +4397,55 @@ mod tests {
             take_latest_video(&controller.video).unwrap().pixels,
             [5, 6, 7, 8]
         );
+    }
+
+    #[test]
+    fn reconnect_opening_replacements_do_not_pollute_live_health_metrics() {
+        let mailbox = Mutex::new(None);
+        let stop = AtomicBool::new(false);
+        let ready = AtomicBool::new(false);
+        let metrics = BroadcastMetrics::default();
+        let frame = || VideoFrame {
+            width: 1,
+            height: 1,
+            pixel_format: VideoPixelFormat::Bgra,
+            pixels: vec![1, 2, 3, 4],
+        };
+
+        assert!(publish_latest_video(
+            &mailbox,
+            &stop,
+            &metrics,
+            &ready,
+            frame()
+        ));
+        assert!(publish_latest_video(
+            &mailbox,
+            &stop,
+            &metrics,
+            &ready,
+            frame()
+        ));
+        assert_eq!(metrics.snapshot().replaced_video, 0);
+
+        ready.store(true, Ordering::Relaxed);
+        assert!(publish_latest_video(
+            &mailbox,
+            &stop,
+            &metrics,
+            &ready,
+            frame()
+        ));
+        assert_eq!(metrics.snapshot().replaced_video, 1);
+    }
+
+    #[test]
+    fn recovered_session_resets_exponential_reconnect_delay() {
+        let mut delay = 8;
+        assert_eq!(reconnect_wait_seconds(&mut delay, true), 1);
+        assert_eq!(delay, 2);
+        assert_eq!(reconnect_wait_seconds(&mut delay, false), 2);
+        assert_eq!(delay, 4);
     }
 
     #[test]

@@ -201,6 +201,12 @@ geometry, rigs, and translation animation curves. It exports every imported FBX
 take as a named GLB animation rather than retaining only the active action.
 
 The first native save is written to `.stream-town/StreamTownSave.stbevy`.
+During migration hardening, gameplay autosaves every minute by default and also
+writes on the transition back to the Main Menu. Both paths use the same
+checksummed atomic replacement and `.bak` recovery file. Checksum-valid native
+saves from older generator revisions regenerate seeded terrain and relocate
+stable-ID state deterministically instead of being rejected solely because the
+current generator fingerprint changed.
 Legacy Unity saves are never modified by migration tools. `import-save` is an
 optional one-time compatibility command only. The production generator never
 loads a Unity save: `export-world-oracle` emits sanitized counts and position
@@ -222,7 +228,7 @@ screen, not the external authoring suite.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
 the authored camera projection, name/building-health overlays, the Unity
-0/5/10/30/60-minute autosave choices, UI scale, high contrast, and reduced
+0/1/5/10/30/60-minute autosave choices, UI scale, high contrast, and reduced
 motion are applied by the runtime. Schema-2 settings upgrade without changing
 their existing appearance; the three new accessibility fields use neutral
 defaults. See [`docs/accessibility.md`](docs/accessibility.md) for keyboard and
@@ -269,8 +275,10 @@ active pattern. FFmpeg's FLV muxer
 publishes directly to Twitch RTMP. No OBS
 installation, desktop capture, virtual audio device, `ffmpeg.exe` subprocess,
 serialized stream key, or unbounded frame queue is involved. Automatic reconnect
-and five-second health reports expose captured/output FPS, encoder/ingest,
-capture replacements, cadence skips, actual rejected video/audio frames, queue
+resets its backoff after every recovered session and pauses replacement accounting
+while the RTMP encoder is unavailable. Five-second health reports expose
+captured/output FPS, encoder/ingest, recent capture replacements, cadence skips,
+actual rejected video/audio frames, queue
 depth, and capture/encode latency. Auto encoder selection prefers AMD AMF on a
 compatible Radeon GPU, falls back to forced-hardware Windows Media Foundation,
 and uses OpenH264 only as the software fallback. The

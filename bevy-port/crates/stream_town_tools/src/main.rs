@@ -8190,6 +8190,7 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         .show_ui(ui, |ui| {
             for (minutes, label) in [
                 (0, "Off"),
+                (1, "1 minute"),
                 (5, "5 minutes"),
                 (10, "10 minutes"),
                 (30, "30 minutes"),
