@@ -181,6 +181,9 @@ struct StreamOperatorLiveButton;
 struct StreamOperatorLiveButtonText;
 
 #[derive(Component)]
+struct StreamOperatorRestartButton;
+
+#[derive(Component)]
 struct StreamOperatorChatInput;
 
 #[derive(Component)]
@@ -242,6 +245,12 @@ type StreamOperatorLiveButtonQuery<'w, 's> = Query<
         &'static mut BorderColor,
     ),
     (With<StreamOperatorLiveButton>, Changed<Interaction>),
+>;
+type StreamOperatorRestartButtonQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static mut BackgroundColor),
+    (With<StreamOperatorRestartButton>, Changed<Interaction>),
 >;
 type StreamOperatorChatRowTextQuery<'w, 's> = Query<
     'w,
@@ -428,6 +437,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     return_to_main_menu_after_broadcast_stops,
                     sync_stream_only_capture,
                     stream_operator_live_button,
+                    stream_operator_restart_button,
                     update_stream_operator_info,
                     stream_operator_chat_controls,
                     update_stream_operator_chat,
@@ -1164,6 +1174,33 @@ fn spawn_stream_operator_view(
                 Pickable::IGNORE,
             ));
             root.spawn((
+                StreamOperatorRestartButton,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(292),
+                    bottom: px(42),
+                    width: px(190),
+                    height: px(52),
+                    border: UiRect::all(px(2)),
+                    border_radius: BorderRadius::all(px(10)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.12, 0.22, 0.34)),
+                BorderColor::all(Color::srgb(0.31, 0.58, 0.82)),
+            ))
+            .with_child((
+                Text::new("RESTART STREAM"),
+                TextFont {
+                    font_size: FontSize::Px(16.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+            root.spawn((
                 Text::new("LOCAL SETTINGS · EXCLUDED FROM STREAM"),
                 TextFont {
                     font_size: FontSize::Px(13.0),
@@ -1548,6 +1585,22 @@ fn stream_operator_live_button(
             } else {
                 control.request_restart();
             }
+        }
+    }
+}
+
+fn stream_operator_restart_button(
+    mut control: ResMut<DirectBroadcastControl>,
+    mut buttons: StreamOperatorRestartButtonQuery,
+) {
+    for (interaction, mut background) in &mut buttons {
+        background.0 = if *interaction == Interaction::Hovered {
+            Color::srgb(0.17, 0.34, 0.52)
+        } else {
+            Color::srgb(0.12, 0.22, 0.34)
+        };
+        if *interaction == Interaction::Pressed {
+            control.request_restart();
         }
     }
 }
@@ -3821,6 +3874,10 @@ mod tests {
         assert_eq!(node.left, px(48));
         assert_eq!(node.bottom, px(42));
         assert_eq!(node.top, Val::Auto);
+        let mut restart_button = world.query_filtered::<&Node, With<StreamOperatorRestartButton>>();
+        let node = restart_button.single(world).unwrap();
+        assert_eq!(node.left, px(292));
+        assert_eq!(node.bottom, px(42));
         let mut chat_inputs = world.query_filtered::<Entity, With<StreamOperatorChatInput>>();
         assert_eq!(chat_inputs.iter(world).count(), 1);
         let mut chat_rows = world.query_filtered::<Entity, With<StreamOperatorChatRow>>();
@@ -3840,6 +3897,30 @@ mod tests {
         assert!(
             text.iter(world)
                 .all(|text| !text.0.contains("Preview · 320 × 180"))
+        );
+        assert!(
+            text.iter(world)
+                .any(|text| text.0.contains("RESTART STREAM"))
+        );
+    }
+
+    #[test]
+    fn operator_restart_button_requests_a_stream_restart() {
+        let mut app = App::new();
+        app.init_resource::<DirectBroadcastControl>()
+            .add_systems(Update, stream_operator_restart_button);
+        app.world_mut().spawn((
+            StreamOperatorRestartButton,
+            Interaction::Pressed,
+            BackgroundColor(Color::NONE),
+        ));
+
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<DirectBroadcastControl>()
+                .restart_requested_for_test()
         );
     }
 

@@ -391,7 +391,7 @@ const EYE_COLORS: [[f32; 3]; 5] = [
 ];
 use twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
-    TwitchStatus, TwitchTransport,
+    TwitchModerationStatus, TwitchStatus, TwitchTransport,
 };
 use unity_color_filter::{UnityColorFilter, UnityColorFilterPlugin};
 
@@ -790,6 +790,7 @@ enum AgentCommand {
 struct TwitchConnection {
     transport: Option<TwitchTransport>,
     status: TwitchStatus,
+    moderation_status: TwitchModerationStatus,
     fish_god_reward_id: Option<String>,
 }
 
@@ -841,6 +842,7 @@ impl Default for TwitchConnection {
         Self {
             transport: None,
             status: TwitchStatus::Disabled,
+            moderation_status: TwitchModerationStatus::Disabled,
             fish_god_reward_id: None,
         }
     }
@@ -1532,7 +1534,6 @@ enum SecretsAction {
     Save,
     AuthorizeBot,
     AuthorizeBroadcaster,
-    RestartBroadcast,
     Back,
 }
 
@@ -13202,24 +13203,17 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                             );
                             spawn_secrets_button(
                                 buttons,
-                                SecretsAction::RestartBroadcast,
+                                SecretsAction::Save,
                                 config,
                                 render,
                                 8,
                             );
                             spawn_secrets_button(
                                 buttons,
-                                SecretsAction::Save,
-                                config,
-                                render,
-                                9,
-                            );
-                            spawn_secrets_button(
-                                buttons,
                                 SecretsAction::Back,
                                 config,
                                 render,
-                                10,
+                                9,
                             );
                         });
                     panel.spawn((
@@ -13467,7 +13461,6 @@ fn secrets_action_label(action: SecretsAction, config: &GameConfig) -> String {
         SecretsAction::Save => "Save and apply".to_owned(),
         SecretsAction::AuthorizeBot => "Authorize bot account".to_owned(),
         SecretsAction::AuthorizeBroadcaster => "Authorize stream account".to_owned(),
-        SecretsAction::RestartBroadcast => "Restart stream".to_owned(),
         SecretsAction::Back => "Back".to_owned(),
     }
 }
@@ -13480,7 +13473,6 @@ fn secrets_buttons(
     mut config: ResMut<RuntimeConfig>,
     mut connection: ResMut<TwitchConnection>,
     mut focus: ResMut<InputFocus>,
-    #[cfg(target_os = "windows")] mut broadcast: ResMut<direct_broadcast::DirectBroadcastControl>,
 ) {
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -13520,36 +13512,6 @@ fn secrets_buttons(
                     draft.twitch.broadcast.bandwidth_test = enabled;
                 });
                 set_secrets_save_feedback(outcome, &mut secrets, &mut connection);
-            }
-            SecretsAction::RestartBroadcast => {
-                match save_secrets_fields(&fields, &mut config, |_| {}) {
-                    Ok(path) if !config.0.twitch.broadcast.enabled => {
-                        secrets.feedback = format!(
-                            "Saved {}. Direct stream is disabled; enable it before restarting.",
-                            path.display()
-                        );
-                    }
-                    Ok(path) => {
-                        #[cfg(target_os = "windows")]
-                        {
-                            broadcast.request_restart();
-                            secrets.feedback = format!(
-                                "Saved {}. Restarting the internal Twitch stream now...",
-                                path.display()
-                            );
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        {
-                            secrets.feedback = format!(
-                                "Saved {}. Direct Twitch streaming is currently available only on Windows.",
-                                path.display()
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        secrets.feedback = format!("Cannot restart the stream: {error:#}");
-                    }
-                }
             }
             SecretsAction::Save => {
                 let previous = config.0.twitch.clone();
@@ -13677,15 +13639,31 @@ fn restart_twitch_connection(config: &GameConfig, connection: &mut TwitchConnect
     }
     if !config.twitch.enabled {
         connection.status = TwitchStatus::Disabled;
+        connection.moderation_status = TwitchModerationStatus::Disabled;
         return;
     }
     connection
         .fish_god_reward_id
         .clone_from(&config.twitch.fish_god_reward_id);
     connection.status = TwitchStatus::Authorizing;
+    connection.moderation_status = TwitchModerationStatus::Authorizing;
     match TwitchTransport::start(config.twitch.clone()) {
         Ok(transport) => connection.transport = Some(transport),
-        Err(error) => connection.status = TwitchStatus::Error(error.to_string()),
+        Err(error) => {
+            connection.status = TwitchStatus::Error(error.to_string());
+            connection.moderation_status = TwitchModerationStatus::Disabled;
+        }
+    }
+}
+
+fn reload_twitch_moderation(config: &GameConfig, connection: &mut TwitchConnection) {
+    connection.moderation_status = TwitchModerationStatus::Authorizing;
+    let reload_sent = connection
+        .transport
+        .as_ref()
+        .is_some_and(|transport| transport.send(TwitchControl::ReloadModeration).is_ok());
+    if !reload_sent {
+        restart_twitch_connection(config, connection);
     }
 }
 
@@ -13841,6 +13819,7 @@ fn poll_secrets_authorization(
                     }
                     SecretsAuthorizationKind::Broadcaster => {
                         secrets.broadcaster_credential = SecretsCredentialState::Stored;
+                        reload_twitch_moderation(&config.0, &mut connection);
                     }
                 }
             }
@@ -13895,6 +13874,7 @@ fn twitch_accounts_connected(
         && secrets.bot_credential == SecretsCredentialState::Stored
         && secrets.broadcaster_credential == SecretsCredentialState::Stored
         && connection.status == TwitchStatus::Connected
+        && connection.moderation_status == TwitchModerationStatus::Ready
 }
 
 fn open_twitch_setup_required(menu: &mut MenuRuntime) {
@@ -13987,6 +13967,7 @@ fn bot_connection_status(
 fn broadcast_connection_status(
     config: &GameConfig,
     credential: &SecretsCredentialState,
+    moderation: &TwitchModerationStatus,
     snapshot: &direct_broadcast::DirectBroadcastSnapshot,
 ) -> (String, SecretsStatusTone) {
     use direct_broadcast::DirectBroadcastPhase;
@@ -14014,6 +13995,30 @@ fn broadcast_connection_status(
                 SecretsStatusTone::Pending,
             ),
         };
+    }
+    match moderation {
+        TwitchModerationStatus::Authorizing => {
+            return (
+                "● Validating the broadcaster account's moderation authority...".to_owned(),
+                SecretsStatusTone::Pending,
+            );
+        }
+        TwitchModerationStatus::Error(error) => {
+            return (
+                format!(
+                    "● Broadcaster moderation authorization error: {error}. Use Authorize stream account below."
+                ),
+                SecretsStatusTone::Error,
+            );
+        }
+        TwitchModerationStatus::Disabled => {
+            return (
+                "● Broadcaster moderation is waiting for the Twitch connection to start."
+                    .to_owned(),
+                SecretsStatusTone::Pending,
+            );
+        }
+        TwitchModerationStatus::Ready => {}
     }
     match &snapshot.phase {
         DirectBroadcastPhase::Disabled => (
@@ -14077,7 +14082,8 @@ fn broadcast_connection_status(
             SecretsStatusTone::Pending,
         ),
         DirectBroadcastPhase::Stopped => (
-            "● Stream stopped. Choose Restart stream to start it again.".to_owned(),
+            "● Stream stopped. Use Restart stream in the operator panel to start it again."
+                .to_owned(),
             SecretsStatusTone::Error,
         ),
         DirectBroadcastPhase::Error(error) => {
@@ -14178,6 +14184,7 @@ fn update_secrets_ui(
                     broadcast_connection_status(
                         &config.0,
                         &secrets.broadcaster_credential,
+                        &connection.moderation_status,
                         &broadcast.snapshot(),
                     )
                 }
@@ -28570,15 +28577,20 @@ fn inject_environment_commands(
 fn start_twitch_transport(config: Res<RuntimeConfig>, mut connection: ResMut<TwitchConnection>) {
     if !config.0.twitch.enabled {
         connection.status = TwitchStatus::Disabled;
+        connection.moderation_status = TwitchModerationStatus::Disabled;
         return;
     }
     connection
         .fish_god_reward_id
         .clone_from(&config.0.twitch.fish_god_reward_id);
     connection.status = TwitchStatus::Authorizing;
+    connection.moderation_status = TwitchModerationStatus::Authorizing;
     match TwitchTransport::start(config.0.twitch.clone()) {
         Ok(transport) => connection.transport = Some(transport),
-        Err(error) => connection.status = TwitchStatus::Error(error.to_string()),
+        Err(error) => {
+            connection.status = TwitchStatus::Error(error.to_string());
+            connection.moderation_status = TwitchModerationStatus::Disabled;
+        }
     }
 }
 
@@ -28597,15 +28609,20 @@ fn twitch_connection_input(
             let _ = transport.send(TwitchControl::Disconnect);
         }
         connection.status = TwitchStatus::Disconnected;
+        connection.moderation_status = TwitchModerationStatus::Disabled;
     } else if keyboard.just_pressed(KeyCode::F2) && config.0.twitch.enabled {
         connection.transport = None;
         connection
             .fish_god_reward_id
             .clone_from(&config.0.twitch.fish_god_reward_id);
         connection.status = TwitchStatus::Authorizing;
+        connection.moderation_status = TwitchModerationStatus::Authorizing;
         match TwitchTransport::start(config.0.twitch.clone()) {
             Ok(transport) => connection.transport = Some(transport),
-            Err(error) => connection.status = TwitchStatus::Error(error.to_string()),
+            Err(error) => {
+                connection.status = TwitchStatus::Error(error.to_string());
+                connection.moderation_status = TwitchModerationStatus::Disabled;
+            }
         }
     }
 }
@@ -28633,7 +28650,7 @@ fn poll_twitch_transport(
                 is_system: false,
             }),
             TwitchEvent::Notice(message) => operator_chat.push_system(message.clone()),
-            TwitchEvent::Status(_) => {}
+            TwitchEvent::Status(_) | TwitchEvent::ModerationStatus(_) => {}
         }
         handle_twitch_event(event, &mut connection, &mut injected);
     }
@@ -28651,7 +28668,28 @@ fn handle_twitch_event(
                 TwitchStatus::Error(error) => error!(%error, "Twitch transport error"),
                 _ => info!(?status, "Twitch connection state changed"),
             }
+            if matches!(
+                &status,
+                TwitchStatus::Disabled | TwitchStatus::Disconnected | TwitchStatus::Error(_)
+            ) && !matches!(
+                connection.moderation_status,
+                TwitchModerationStatus::Error(_)
+            ) {
+                connection.moderation_status = TwitchModerationStatus::Disabled;
+            }
             connection.status = status;
+        }
+        TwitchEvent::ModerationStatus(status) => {
+            match &status {
+                TwitchModerationStatus::Ready => {
+                    info!("Twitch broadcaster moderation authorized");
+                }
+                TwitchModerationStatus::Error(error) => {
+                    error!(%error, "Twitch broadcaster moderation authorization error");
+                }
+                _ => info!(?status, "Twitch broadcaster moderation state changed"),
+            }
+            connection.moderation_status = status;
         }
         TwitchEvent::Chat(message) => {
             if connection
@@ -36576,10 +36614,6 @@ mod tests {
             secrets_action_label(SecretsAction::DisclaimerYes, &GameConfig::default()),
             "Yes — continue"
         );
-        assert_eq!(
-            secrets_action_label(SecretsAction::RestartBroadcast, &GameConfig::default()),
-            "Restart stream"
-        );
     }
 
     #[test]
@@ -36650,6 +36684,7 @@ mod tests {
         };
         let mut connection = TwitchConnection {
             status: TwitchStatus::Connected,
+            moderation_status: TwitchModerationStatus::Ready,
             ..default()
         };
         assert!(twitch_accounts_connected(&config, &secrets, &connection));
@@ -36658,6 +36693,10 @@ mod tests {
         assert!(!twitch_accounts_connected(&config, &secrets, &connection));
         secrets.broadcaster_credential = SecretsCredentialState::Stored;
         connection.status = TwitchStatus::Connecting;
+        assert!(!twitch_accounts_connected(&config, &secrets, &connection));
+        connection.status = TwitchStatus::Connected;
+        connection.moderation_status =
+            TwitchModerationStatus::Error("missing moderator:manage:banned_users".to_owned());
         assert!(!twitch_accounts_connected(&config, &secrets, &connection));
 
         let mut menu = MenuRuntime::default();
@@ -36695,8 +36734,12 @@ mod tests {
             average_encode_ms: 2.0,
             maximum_encode_ms: 4.0,
         };
-        let (status, tone) =
-            broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
+        let (status, tone) = broadcast_connection_status(
+            &config,
+            &SecretsCredentialState::Stored,
+            &TwitchModerationStatus::Ready,
+            &snapshot,
+        );
         assert!(status.contains("BANDWIDTH TEST — not publicly live"));
         assert!(status.contains("29.5 captured / 30.0 output FPS"));
         assert!(status.contains("2 video / 1 audio drops"));
@@ -36704,10 +36747,50 @@ mod tests {
 
         config.twitch.broadcast.bandwidth_test = false;
         snapshot.phase = DirectBroadcastPhase::Broadcasting;
-        let (status, tone) =
-            broadcast_connection_status(&config, &SecretsCredentialState::Stored, &snapshot);
+        let (status, tone) = broadcast_connection_status(
+            &config,
+            &SecretsCredentialState::Stored,
+            &TwitchModerationStatus::Ready,
+            &snapshot,
+        );
         assert!(status.contains("● LIVE"));
         assert_eq!(tone, SecretsStatusTone::Good);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn broadcaster_moderation_failure_is_never_reported_as_a_bot_error() {
+        use direct_broadcast::DirectBroadcastRuntime;
+
+        let mut config = GameConfig::default();
+        config.twitch.enabled = true;
+        config.twitch.broadcast.enabled = true;
+        config.twitch.bot_login = "humanbeanbot".to_owned();
+        config.twitch.channel_login = "humanbeangames".to_owned();
+        let connection = TwitchConnection {
+            status: TwitchStatus::Connected,
+            moderation_status: TwitchModerationStatus::Error(
+                "stored Twitch token is missing scope moderator:manage:banned_users".to_owned(),
+            ),
+            ..default()
+        };
+
+        let (bot_status, bot_tone) =
+            bot_connection_status(&config, &connection, &SecretsCredentialState::Stored);
+        assert!(bot_status.contains("Connected automatically"));
+        assert!(!bot_status.contains("moderation"));
+        assert_eq!(bot_tone, SecretsStatusTone::Good);
+
+        let (broadcaster_status, broadcaster_tone) = broadcast_connection_status(
+            &config,
+            &SecretsCredentialState::Stored,
+            &connection.moderation_status,
+            &DirectBroadcastRuntime::default().snapshot(),
+        );
+        assert!(broadcaster_status.contains("Broadcaster moderation authorization error"));
+        assert!(broadcaster_status.contains("Authorize stream account"));
+        assert!(!broadcaster_status.contains("Bot connection error"));
+        assert_eq!(broadcaster_tone, SecretsStatusTone::Error);
     }
 
     #[test]
@@ -45360,6 +45443,37 @@ mod tests {
         let dispatched = commands.0.pop_front().unwrap();
         assert_eq!(dispatched.actor_id, StableId::new("twitch:42").unwrap());
         assert_eq!(dispatched.command, ChatCommand::Join);
+    }
+
+    #[test]
+    fn broadcaster_moderation_state_changes_do_not_overwrite_bot_connection_state() {
+        let mut connection = TwitchConnection {
+            status: TwitchStatus::Connected,
+            moderation_status: TwitchModerationStatus::Error(
+                "old broadcaster authorization failed".to_owned(),
+            ),
+            ..default()
+        };
+        let mut commands = InjectedCommands::default();
+
+        handle_twitch_event(
+            TwitchEvent::ModerationStatus(TwitchModerationStatus::Authorizing),
+            &mut connection,
+            &mut commands,
+        );
+        assert_eq!(connection.status, TwitchStatus::Connected);
+        assert_eq!(
+            connection.moderation_status,
+            TwitchModerationStatus::Authorizing
+        );
+
+        handle_twitch_event(
+            TwitchEvent::ModerationStatus(TwitchModerationStatus::Ready),
+            &mut connection,
+            &mut commands,
+        );
+        assert_eq!(connection.status, TwitchStatus::Connected);
+        assert_eq!(connection.moderation_status, TwitchModerationStatus::Ready);
     }
 
     #[test]

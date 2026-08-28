@@ -127,9 +127,9 @@ credential is stored there.
 
 This second token has a distinct Windows Credential Manager entry. Stream Town
 uses it to fetch the stream key from Twitch Helix only after an explicit Go Live
-or Restart stream action, and to submit operator-panel timeout/ban requests. The
-key is never written to configuration, the repository, logs, diagnostics, or
-the runtime console.
+or operator-panel Restart stream action, and to submit operator-panel timeout/ban
+requests. The key is never written to configuration, the repository, logs,
+diagnostics, or the runtime console.
 
 ## 7. Choose broadcast quality and test bandwidth
 
@@ -203,7 +203,8 @@ render stalls without allowing latency to accumulate.
    broadcast, click **LIVE · END STREAM** in the operator panel. The encoder
    flushes the stream trailer, restores the ordinary game window in stream-only
    mode, and closes RTMP without exiting the game. The same toggle can start a
-   new session from the already-loaded town.
+   new session from the already-loaded town. Use the adjacent **Restart stream**
+   control when you want to rebuild an active or failed encoder session in place.
 
 WASAPI capture is scoped to the Stream Town process tree, so both the Bevy sound
 engine and Bevy Tidal music are included while unrelated desktop/application
@@ -223,17 +224,22 @@ switcher; they are not silently captured from the desktop.
   opens the explicit go-live confirmation. After Yes, the operator panel appears
   only with gameplay and changes to **LIVE · END STREAM** after gameplay
   readiness. Encoded video and audio frame counts then increase.
-- **Restart stream** saves the visible public settings, stops the current
-  in-process encoder if one exists, revalidates the broadcaster grant, fetches a
-  fresh stream key and ingest list, and starts a new encoder connection.
+- **Restart stream** is in the local operator panel, not Secrets. It stops the
+  current in-process encoder if one exists, revalidates the broadcaster grant,
+  fetches a fresh stream key and ingest list, and starts a new encoder
+  connection using the already-saved settings.
 - In-game HUD state: `Twitch: Connected`; the local-only operator toggle reports
   **NOT LIVE · GO LIVE**, a transitional starting state, or **LIVE · END STREAM**.
   In stream-only mode the HUD is sent to Twitch while the operator sees the
   separate diagnostics/preview window.
-- A wrong-account authorization is rejected before IRC is started.
+- A wrong bot-account authorization is rejected before IRC is started. A
+  broadcaster-account or moderation-scope failure is reported separately on the
+  broadcaster card and does not masquerade as a bot connection error.
 - If authorization is revoked, the app registration changes, the streamer token
   lacks the moderation scope, or a refresh token expires, reopen Main Menu >
-  Secrets and authorize the affected account again.
+  Secrets and authorize the affected account again. A successful broadcaster
+  authorization refreshes moderation authority without disconnecting healthy
+  bot chat.
 - `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.
 - A channel-join timeout normally means the channel login is wrong or Twitch IRC is unreachable from the machine.
 - `WaitingForBroadcasterAuthorization` means the broadcaster grant has not been

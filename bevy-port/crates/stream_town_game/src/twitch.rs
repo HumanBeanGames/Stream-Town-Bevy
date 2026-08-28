@@ -611,8 +611,17 @@ pub enum TwitchStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TwitchModerationStatus {
+    Disabled,
+    Authorizing,
+    Ready,
+    Error(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TwitchEvent {
     Status(TwitchStatus),
+    ModerationStatus(TwitchModerationStatus),
     Chat(TwitchChatEnvelope),
     Notice(String),
 }
@@ -629,6 +638,7 @@ pub enum TwitchControl {
         user_id: String,
         reason: String,
     },
+    ReloadModeration,
     Disconnect,
 }
 
@@ -701,15 +711,10 @@ async fn run_transport(
     let vault = CredentialVault::new(&config.client_id, &config.bot_login);
     let (mut token, validation) = oauth.load_validated_token(&vault).await?;
     ensure_oauth_identity(&validation, &config.bot_login)?;
-    let moderation_oauth = OAuthClient::broadcaster(config.client_id.clone())?;
-    let moderation_vault = CredentialVault::broadcaster(&config.client_id, &config.channel_login);
-    let (mut moderation_token, moderation_validation) = moderation_oauth
-        .load_validated_token(&moderation_vault)
-        .await
-        .context("Twitch streamer account is not authorized for moderation")?;
-    ensure_oauth_identity(&moderation_validation, &config.channel_login)?;
-    let broadcaster_id = moderation_validation.user_id.clone();
-    let moderator_id = moderation_validation.user_id;
+    let (moderation_sender, mut moderation_receiver) = tokio_mpsc::unbounded_channel();
+    let mut moderation_generation = 1;
+    let mut moderation_session: Option<ModerationSession> = None;
+    request_moderation_session(&config, moderation_generation, &events, &moderation_sender)?;
     let mut first_connection = true;
 
     'connection: loop {
@@ -772,43 +777,74 @@ async fn run_transport(
                         }
                         Some(TwitchControl::Timeout { user_id, duration_seconds, reason }) => {
                             let duration_seconds = duration_seconds.clamp(1, 1_209_600);
-                            let notice = match moderation_oauth
-                                .moderate_user(
-                                    &moderation_token,
-                                    &broadcaster_id,
-                                    &moderator_id,
+                            let notice = match moderation_session.as_ref() {
+                                Some(session) => match session.oauth.moderate_user(
+                                    &session.token,
+                                    &session.broadcaster_id,
+                                    &session.moderator_id,
                                     &user_id,
                                     Some(duration_seconds),
                                     &reason,
                                 )
                                 .await
-                            {
-                                Ok(()) => format!("Timed out Twitch user {user_id} for {duration_seconds} seconds"),
-                                Err(error) => format!("Timeout failed for Twitch user {user_id}: {error:#}"),
+                                {
+                                    Ok(()) => format!("Timed out Twitch user {user_id} for {duration_seconds} seconds"),
+                                    Err(error) => format!("Timeout failed for Twitch user {user_id}: {error:#}"),
+                                },
+                                None => "Timeout unavailable: authorize the broadcaster account for moderation in Main Menu > Secrets".to_owned(),
                             };
                             events.send(TwitchEvent::Notice(notice))?;
                         }
                         Some(TwitchControl::Ban { user_id, reason }) => {
-                            let notice = match moderation_oauth
-                                .moderate_user(
-                                    &moderation_token,
-                                    &broadcaster_id,
-                                    &moderator_id,
+                            let notice = match moderation_session.as_ref() {
+                                Some(session) => match session.oauth.moderate_user(
+                                    &session.token,
+                                    &session.broadcaster_id,
+                                    &session.moderator_id,
                                     &user_id,
                                     None,
                                     &reason,
                                 )
                                 .await
-                            {
-                                Ok(()) => format!("Banned Twitch user {user_id}"),
-                                Err(error) => format!("Ban failed for Twitch user {user_id}: {error:#}"),
+                                {
+                                    Ok(()) => format!("Banned Twitch user {user_id}"),
+                                    Err(error) => format!("Ban failed for Twitch user {user_id}: {error:#}"),
+                                },
+                                None => "Ban unavailable: authorize the broadcaster account for moderation in Main Menu > Secrets".to_owned(),
                             };
                             events.send(TwitchEvent::Notice(notice))?;
+                        }
+                        Some(TwitchControl::ReloadModeration) => {
+                            moderation_generation = moderation_generation.saturating_add(1);
+                            request_moderation_session(
+                                &config,
+                                moderation_generation,
+                                &events,
+                                &moderation_sender,
+                            )?;
                         }
                         Some(TwitchControl::Disconnect) | None => {
                             client.part(config.channel_login.clone());
                             events.send(TwitchEvent::Status(TwitchStatus::Disconnected))?;
+                            events.send(TwitchEvent::ModerationStatus(TwitchModerationStatus::Disabled))?;
                             return Ok(());
+                        }
+                    }
+                }
+                Some(result) = moderation_receiver.recv() => {
+                    if result.generation != moderation_generation {
+                        continue;
+                    }
+                    match result.session {
+                        Ok(session) => {
+                            moderation_session = Some(session);
+                            events.send(TwitchEvent::ModerationStatus(TwitchModerationStatus::Ready))?;
+                        }
+                        Err(error) => {
+                            moderation_session = None;
+                            events.send(TwitchEvent::ModerationStatus(
+                                TwitchModerationStatus::Error(error),
+                            ))?;
                         }
                     }
                 }
@@ -825,16 +861,73 @@ async fn run_transport(
                         continue 'connection;
                     }
                     token = validated_token;
-                    let (validated_moderation_token, moderation_validation) = moderation_oauth
-                        .load_validated_token(&moderation_vault)
-                        .await
-                        .context("Twitch streamer moderation token refresh failed")?;
-                    ensure_oauth_identity(&moderation_validation, &config.channel_login)?;
-                    moderation_token = validated_moderation_token;
+                    moderation_generation = moderation_generation.saturating_add(1);
+                    request_moderation_session(
+                        &config,
+                        moderation_generation,
+                        &events,
+                        &moderation_sender,
+                    )?;
                 }
             }
         }
     }
+}
+
+struct ModerationSession {
+    oauth: OAuthClient,
+    token: StoredOAuthToken,
+    broadcaster_id: String,
+    moderator_id: String,
+}
+
+struct ModerationSessionResult {
+    generation: u64,
+    session: std::result::Result<ModerationSession, String>,
+}
+
+fn request_moderation_session(
+    config: &TwitchConfig,
+    generation: u64,
+    events: &mpsc::Sender<TwitchEvent>,
+    results: &tokio_mpsc::UnboundedSender<ModerationSessionResult>,
+) -> Result<()> {
+    events.send(TwitchEvent::ModerationStatus(
+        TwitchModerationStatus::Authorizing,
+    ))?;
+    let client_id = config.client_id.clone();
+    let channel_login = config.channel_login.clone();
+    let results = results.clone();
+    tokio::spawn(async move {
+        let session = load_moderation_session(client_id, channel_login)
+            .await
+            .map_err(|error| format!("{error:#}"));
+        let _ = results.send(ModerationSessionResult {
+            generation,
+            session,
+        });
+    });
+    Ok(())
+}
+
+async fn load_moderation_session(
+    client_id: String,
+    channel_login: String,
+) -> Result<ModerationSession> {
+    let oauth = OAuthClient::broadcaster(client_id.clone())?;
+    let vault = CredentialVault::broadcaster(&client_id, &channel_login);
+    let (token, validation) = oauth
+        .load_validated_token(&vault)
+        .await
+        .context("Twitch broadcaster account is not authorized for moderation")?;
+    ensure_oauth_identity(&validation, &channel_login)
+        .context("Twitch broadcaster moderation account does not match the configured channel")?;
+    Ok(ModerationSession {
+        oauth,
+        token,
+        broadcaster_id: validation.user_id.clone(),
+        moderator_id: validation.user_id,
+    })
 }
 
 fn ensure_oauth_identity(validation: &TokenValidation, expected_login: &str) -> Result<()> {

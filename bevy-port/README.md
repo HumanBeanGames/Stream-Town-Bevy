@@ -280,19 +280,23 @@ New/Load Town requires an explicit confirmation that the internal stream may go
 live. Yes authorizes the destination while loading, but does not open RTMP,
 start media clocks, or capture audio/video until the truthful world-reveal gate
 has retired the loading cover and inserted `GameplayReady`. Gameplay then owns a
-separate local operator panel with the Live/Not Live toggle, detailed health
-telemetry, persistent local settings, and a Twitch transcript. The bot account
-sends operator messages; selecting a viewer enables timeout/ban requests through
-the independently authorized streamer account. Stream-only mode adds a preview, redirects the town to
+separate local operator panel with the Live/Not Live toggle, a dedicated Restart
+Stream control, detailed health telemetry, persistent local settings, and a
+Twitch transcript. The bot account sends operator messages; selecting a viewer
+enables timeout/ban requests through the independently authorized streamer
+account. Stream-only mode adds a preview, redirects the town to
 the full-resolution offscreen target, and hides the original game window;
 headed mode leaves the full game visible. The operator surface is deliberately
 absent from frames sent to Twitch. There is no floating status badge or in-game
 Escape menu. Automated capture scripts forcibly disable direct broadcasting so
 a visual regression run can never publish its diagnostic frames.
 The protected Main Menu > Secrets screen also reports credential presence, live
-bot connection state, and the direct encoder phase with advancing media-frame
-counts. Its Restart stream control reapplies the visible settings and rebuilds
-the in-process Twitch connection without restarting the game. Save and apply
+bot connection state, broadcaster moderation authority, and the direct encoder
+phase with advancing media-frame counts. A broadcaster moderation failure stays
+on that account card and cannot overwrite the bot-chat status; successful
+broadcaster reauthorization refreshes moderation in place. Restart stream lives
+in the local operator panel and rebuilds the in-process encoder without
+restarting the game. Save and apply
 restarts only a connection whose client ID or login actually changed; a no-op
 save preserves the live bot connection and broadcast worker. The application
 always starts offline. New/Load Town opens the protected Secrets setup prompt
