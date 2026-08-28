@@ -10,7 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use stream_town_domain::{StableId, TwitchConfig};
@@ -26,6 +26,7 @@ const VALIDATE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/validate";
 const USERS_ENDPOINT: &str = "https://api.twitch.tv/helix/users";
 const STREAMS_ENDPOINT: &str = "https://api.twitch.tv/helix/streams";
 const STREAM_KEY_ENDPOINT: &str = "https://api.twitch.tv/helix/streams/key";
+const CHAT_MESSAGES_ENDPOINT: &str = "https://api.twitch.tv/helix/chat/messages";
 const MODERATION_BANS_ENDPOINT: &str = "https://api.twitch.tv/helix/moderation/bans";
 const INGESTS_ENDPOINT: &str = "https://ingest.twitch.tv/ingests";
 const VAULT_SERVICE: &str = "stream-town-twitch";
@@ -33,8 +34,11 @@ const TOKEN_REFRESH_WINDOW_SECONDS: u64 = 90 * 60;
 const TWITCH_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TWITCH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const REQUIRED_SCOPES: [&str; 2] = ["chat:read", "chat:edit"];
-pub const BROADCAST_SCOPES: [&str; 2] =
-    ["channel:read:stream_key", "moderator:manage:banned_users"];
+pub const BROADCAST_SCOPES: [&str; 3] = [
+    "channel:read:stream_key",
+    "moderator:manage:banned_users",
+    "user:write:chat",
+];
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct StoredOAuthToken {
@@ -192,6 +196,31 @@ struct ModerationRequestData<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     duration: Option<u32>,
     reason: &'a str,
+}
+
+#[derive(Serialize)]
+struct SendChatMessageRequest<'a> {
+    broadcaster_id: &'a str,
+    sender_id: &'a str,
+    message: &'a str,
+}
+
+#[derive(Deserialize)]
+struct SendChatMessageResponse {
+    data: Vec<SendChatMessageResult>,
+}
+
+#[derive(Deserialize)]
+struct SendChatMessageResult {
+    message_id: String,
+    is_sent: bool,
+    drop_reason: Option<SendChatDropReason>,
+}
+
+#[derive(Deserialize)]
+struct SendChatDropReason {
+    code: String,
+    message: String,
 }
 
 #[derive(Clone)]
@@ -466,6 +495,52 @@ impl OAuthClient {
         Ok(ingests)
     }
 
+    async fn send_chat_message(
+        &self,
+        token: &StoredOAuthToken,
+        broadcaster_id: &str,
+        message: &str,
+    ) -> Result<String> {
+        let message = message.trim();
+        if broadcaster_id.is_empty() || !broadcaster_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("Twitch broadcaster ID is invalid");
+        }
+        if message.is_empty() {
+            bail!("Twitch chat message is empty");
+        }
+        let response: SendChatMessageResponse = self
+            .http
+            .post(CHAT_MESSAGES_ENDPOINT)
+            .header("Client-Id", &self.client_id)
+            .bearer_auth(&token.access_token)
+            .json(&SendChatMessageRequest {
+                broadcaster_id,
+                sender_id: broadcaster_id,
+                message,
+            })
+            .send()
+            .await
+            .context("Twitch broadcaster chat request failed")?
+            .error_for_status()
+            .context("Twitch rejected the broadcaster chat message")?
+            .json()
+            .await
+            .context("Twitch returned an invalid broadcaster chat response")?;
+        let result = response
+            .data
+            .into_iter()
+            .next()
+            .context("Twitch returned no broadcaster chat result")?;
+        if !result.is_sent {
+            let reason = result.drop_reason.map_or_else(
+                || "Twitch dropped the broadcaster chat message".to_owned(),
+                |reason| format!("{}: {}", reason.code, reason.message),
+            );
+            bail!("Twitch did not send the broadcaster chat message ({reason})");
+        }
+        Ok(result.message_id)
+    }
+
     async fn moderate_user(
         &self,
         token: &StoredOAuthToken,
@@ -588,6 +663,7 @@ impl CredentialVault {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TwitchChatEnvelope {
+    pub message_id: Option<String>,
     pub actor_id: StableId,
     pub user_id: String,
     pub login: String,
@@ -623,12 +699,15 @@ pub enum TwitchEvent {
     Status(TwitchStatus),
     ModerationStatus(TwitchModerationStatus),
     Chat(TwitchChatEnvelope),
+    BroadcasterChatSent(TwitchChatEnvelope),
+    BroadcasterChatSendFailed(String),
     Notice(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TwitchControl {
-    SendMessage(String),
+    SendBotMessage(String),
+    SendBroadcasterMessage(String),
     Timeout {
         user_id: String,
         duration_seconds: u32,
@@ -713,7 +792,7 @@ async fn run_transport(
     ensure_oauth_identity(&validation, &config.bot_login)?;
     let (moderation_sender, mut moderation_receiver) = tokio_mpsc::unbounded_channel();
     let mut moderation_generation = 1;
-    let mut moderation_session: Option<ModerationSession> = None;
+    let mut broadcaster_session: Option<BroadcasterSession> = None;
     request_moderation_session(&config, moderation_generation, &events, &moderation_sender)?;
     let mut first_connection = true;
 
@@ -769,15 +848,55 @@ async fn run_transport(
                 }
                 control = controls.recv() => {
                     match control {
-                        Some(TwitchControl::SendMessage(message)) => {
+                        Some(TwitchControl::SendBotMessage(message)) => {
                             client
                                 .say(config.channel_login.clone(), message)
                                 .await
                                 .context("failed to send Twitch chat message")?;
                         }
+                        Some(TwitchControl::SendBroadcasterMessage(message)) => {
+                            let result = match broadcaster_session.as_ref() {
+                                Some(session) => session.oauth.send_chat_message(
+                                    &session.token,
+                                    &session.broadcaster_id,
+                                    &message,
+                                )
+                                .await
+                                .and_then(|message_id| {
+                                    Ok(TwitchChatEnvelope {
+                                        message_id: Some(message_id),
+                                        actor_id: StableId::new(format!(
+                                            "twitch:{}",
+                                            session.broadcaster_id
+                                        ))?,
+                                        user_id: session.broadcaster_id.clone(),
+                                        login: session.login.clone(),
+                                        display_name: session.display_name.clone(),
+                                        message: message.trim().to_owned(),
+                                        is_broadcaster: true,
+                                        is_moderator: false,
+                                        is_subscriber: false,
+                                        custom_reward_id: None,
+                                    })
+                                }),
+                                None => Err(anyhow!(
+                                    "authorize the broadcaster account for operator chat in Main Menu > Secrets"
+                                )),
+                            };
+                            match result {
+                                Ok(envelope) => {
+                                    events.send(TwitchEvent::BroadcasterChatSent(envelope))?;
+                                }
+                                Err(error) => {
+                                    events.send(TwitchEvent::BroadcasterChatSendFailed(
+                                        format!("{error:#}"),
+                                    ))?;
+                                }
+                            }
+                        }
                         Some(TwitchControl::Timeout { user_id, duration_seconds, reason }) => {
                             let duration_seconds = duration_seconds.clamp(1, 1_209_600);
-                            let notice = match moderation_session.as_ref() {
+                            let notice = match broadcaster_session.as_ref() {
                                 Some(session) => match session.oauth.moderate_user(
                                     &session.token,
                                     &session.broadcaster_id,
@@ -796,7 +915,7 @@ async fn run_transport(
                             events.send(TwitchEvent::Notice(notice))?;
                         }
                         Some(TwitchControl::Ban { user_id, reason }) => {
-                            let notice = match moderation_session.as_ref() {
+                            let notice = match broadcaster_session.as_ref() {
                                 Some(session) => match session.oauth.moderate_user(
                                     &session.token,
                                     &session.broadcaster_id,
@@ -837,11 +956,11 @@ async fn run_transport(
                     }
                     match result.session {
                         Ok(session) => {
-                            moderation_session = Some(session);
+                            broadcaster_session = Some(session);
                             events.send(TwitchEvent::ModerationStatus(TwitchModerationStatus::Ready))?;
                         }
                         Err(error) => {
-                            moderation_session = None;
+                            broadcaster_session = None;
                             events.send(TwitchEvent::ModerationStatus(
                                 TwitchModerationStatus::Error(error),
                             ))?;
@@ -874,16 +993,18 @@ async fn run_transport(
     }
 }
 
-struct ModerationSession {
+struct BroadcasterSession {
     oauth: OAuthClient,
     token: StoredOAuthToken,
     broadcaster_id: String,
     moderator_id: String,
+    login: String,
+    display_name: String,
 }
 
 struct ModerationSessionResult {
     generation: u64,
-    session: std::result::Result<ModerationSession, String>,
+    session: std::result::Result<BroadcasterSession, String>,
 }
 
 fn request_moderation_session(
@@ -913,20 +1034,25 @@ fn request_moderation_session(
 async fn load_moderation_session(
     client_id: String,
     channel_login: String,
-) -> Result<ModerationSession> {
+) -> Result<BroadcasterSession> {
     let oauth = OAuthClient::broadcaster(client_id.clone())?;
     let vault = CredentialVault::broadcaster(&client_id, &channel_login);
-    let (token, validation) = oauth
-        .load_validated_token(&vault)
-        .await
-        .context("Twitch broadcaster account is not authorized for moderation")?;
+    let (token, validation) = oauth.load_validated_token(&vault).await.context(
+        "Twitch broadcaster account is not authorized for streaming, operator chat, and moderation",
+    )?;
     ensure_oauth_identity(&validation, &channel_login)
-        .context("Twitch broadcaster moderation account does not match the configured channel")?;
-    Ok(ModerationSession {
+        .context("Twitch broadcaster account does not match the configured channel")?;
+    let identity = oauth
+        .lookup_user(&token, &channel_login)
+        .await
+        .context("could not load the Twitch broadcaster identity")?;
+    Ok(BroadcasterSession {
         oauth,
         token,
         broadcaster_id: validation.user_id.clone(),
         moderator_id: validation.user_id,
+        login: identity.login,
+        display_name: identity.display_name,
     })
 }
 
@@ -955,6 +1081,7 @@ fn envelope_from_privmsg(
     let actor_id = StableId::new(format!("twitch:{}", message.sender.id))?;
     let custom_reward_id = message.source.tags.0.get("custom-reward-id").cloned();
     Ok(TwitchChatEnvelope {
+        message_id: message.source.tags.0.get("id").cloned(),
         actor_id,
         user_id: message.sender.id,
         login: message.sender.login,
@@ -1004,7 +1131,9 @@ mod tests {
         assert_eq!(REQUIRED_SCOPES, ["chat:read", "chat:edit"]);
         assert!(BROADCAST_SCOPES.contains(&"channel:read:stream_key"));
         assert!(BROADCAST_SCOPES.contains(&"moderator:manage:banned_users"));
+        assert!(BROADCAST_SCOPES.contains(&"user:write:chat"));
         assert!(!REQUIRED_SCOPES.contains(&"moderator:manage:banned_users"));
+        assert!(!REQUIRED_SCOPES.contains(&"user:write:chat"));
     }
 
     #[test]
@@ -1039,6 +1168,7 @@ mod tests {
         let raw = "@badge-info=;badges=;color=;custom-reward-id=5a760033-50b5-4e47-911b-d63993d2860c;display-name=Viewer;emotes=;id=message;mod=0;room-id=7;subscriber=0;tmi-sent-ts=1594545155039;user-id=42;user-type= :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #channel :Praise!";
         let message = PrivmsgMessage::try_from(IRCMessage::parse(raw).unwrap()).unwrap();
         let envelope = envelope_from_privmsg(message).unwrap();
+        assert_eq!(envelope.message_id.as_deref(), Some("message"));
         assert_eq!(
             envelope.custom_reward_id.as_deref(),
             Some("5a760033-50b5-4e47-911b-d63993d2860c")

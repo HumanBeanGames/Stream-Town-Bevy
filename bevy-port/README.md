@@ -253,8 +253,9 @@ The bot's `!help` response links to the complete, versioned
 [`TWITCH_COMMANDS.md`](../TWITCH_COMMANDS.md) reference. Invalid command attempts
 receive a concise reminder to use `!help`; ordinary non-command chat is ignored.
 On Windows, Main Menu > Secrets separately authorizes the configured streamer
-with `channel:read:stream_key` and `moderator:manage:banned_users`. Direct
-broadcasting and operator moderation therefore use the streamer grant, while the
+with `channel:read:stream_key`, `user:write:chat`, and
+`moderator:manage:banned_users`. Direct broadcasting, operator-panel chat
+messages, and operator moderation therefore use the streamer grant, while the
 bot retains only `chat:read` and `chat:edit`. The default
 stream-only mode renders the town once into a full-resolution offscreen target,
 moves that GPU readback allocation directly into a latest-frame mailbox, and
@@ -262,7 +263,9 @@ replaces the local game window with a separate 1100x680 operator dashboard and a
 low-resolution preview. The optional headed mode uses Windows Graphics Capture instead.
 WASAPI application loopback captures only Stream Town's Bevy audio. In
 stream-only mode, Bevy Tidal's bounded pre-monitor PCM tap feeds music directly
-into that encoder mix while its local monitor is silent. FFmpeg's FLV muxer
+into that encoder mix while its local monitor is silent. Music/master slider
+changes update the library's live PCM gain and do not replay or reschedule the
+active pattern. FFmpeg's FLV muxer
 publishes directly to Twitch RTMP. No OBS
 installation, desktop capture, virtual audio device, `ffmpeg.exe` subprocess,
 serialized stream key, or unbounded frame queue is involved. Automatic reconnect
@@ -282,17 +285,20 @@ start media clocks, or capture audio/video until the truthful world-reveal gate
 has retired the loading cover and inserted `GameplayReady`. Gameplay then owns a
 separate local operator panel with the Live/Not Live toggle, a dedicated Restart
 Stream control, detailed health telemetry, persistent local settings, and a
-Twitch transcript. The bot account sends operator messages; selecting a viewer
-enables timeout/ban requests through the independently authorized streamer
-account. Stream-only mode adds a preview, redirects the town to
+Twitch transcript. Operator messages are sent by the independently authorized
+broadcaster account and are inserted into the local transcript immediately;
+the bot account is reserved for automated game replies and announcements.
+Broadcaster, moderator, and subscriber badges are shown independently, the
+history is scrollable, and the exact selected line is highlighted before
+timeout/ban actions. Stream-only mode adds a preview, redirects the town to
 the full-resolution offscreen target, and hides the original game window;
 headed mode leaves the full game visible. The operator surface is deliberately
 absent from frames sent to Twitch. There is no floating status badge or in-game
 Escape menu. Automated capture scripts forcibly disable direct broadcasting so
 a visual regression run can never publish its diagnostic frames.
 The protected Main Menu > Secrets screen also reports credential presence, live
-bot connection state, broadcaster moderation authority, and the direct encoder
-phase with advancing media-frame counts. A broadcaster moderation failure stays
+bot connection state, broadcaster operator authority, and the direct encoder
+phase with advancing media-frame counts. A broadcaster authorization failure stays
 on that account card and cannot overwrite the bot-chat status; successful
 broadcaster reauthorization refreshes moderation in place. Restart stream lives
 in the local operator panel and rebuilds the in-process encoder without

@@ -7,9 +7,10 @@ Stream Town uses three deliberately separate identities:
 - **Twitch application:** the OAuth registration that lets Stream Town act as the bot
 
 Stream Town authorizes the chat bot for IRC and independently authorizes the
-broadcaster for stream-key lookup and channel moderation. The bot sends and
-receives chat, but operator-panel timeouts and bans are made through the
-streamer account and appear as streamer moderation actions. The game captures,
+broadcaster for stream-key lookup, operator-panel chat output, and channel
+moderation. Automated game replies and announcements come from the bot;
+messages typed into the operator panel, plus operator timeouts and bans, come
+from the streamer account. The game captures,
 encodes, and publishes its own output; OBS is not required. Never authorize the
 bot grant while signed in as the broadcaster, or the broadcaster grant while
 signed in as the bot.
@@ -117,18 +118,18 @@ credential is stored there.
    are correct.
 3. Click **Authorize stream account**. Stream Town automatically opens Twitch's
    activation page; enter the device code, sign in as `HumanBeanGames` (not
-   `HumanBeanBot`), and approve `channel:read:stream_key` plus
-   `moderator:manage:banned_users`. Stream Town
+   `HumanBeanBot`), and approve `channel:read:stream_key`, `user:write:chat`,
+   and `moderator:manage:banned_users`. Stream Town
    rejects a grant for a different account. The broadcaster status changes to
    **Broadcaster authorized** when the validated token is in Windows Credential
    Manager.
 4. If the streamer was authorized by an older build, authorize it again once;
-   refreshing an old token cannot add the moderation scope.
+   refreshing an old token cannot add the operator-chat or moderation scopes.
 
 This second token has a distinct Windows Credential Manager entry. Stream Town
 uses it to fetch the stream key from Twitch Helix only after an explicit Go Live
-or operator-panel Restart stream action, and to submit operator-panel timeout/ban
-requests. The key is never written to configuration, the repository, logs,
+or operator-panel Restart stream action, to send operator-panel chat messages,
+and to submit operator-panel timeout/ban requests. The key is never written to configuration, the repository, logs,
 diagnostics, or the runtime console.
 
 ## 7. Choose broadcast quality and test bandwidth
@@ -162,8 +163,9 @@ Start in Main Menu > **Secrets**:
    capture replacements, cadence skips, actual audio/video rejection counts,
    queue depth, and encode latency. Stream-only mode
    hides the original game window and opens a lightweight 1100×680 operator
-   window with a low-resolution preview, Twitch chat, moderation, and local
-   settings. The operator surface is never sent to Twitch.
+   window with a low-resolution preview, scrollable Twitch chat with account
+   badges and line selection, moderation, and local settings. The operator
+   surface is never sent to Twitch.
 5. End the test with **End Stream** in the operator panel. Relaunch to the Main
    Menu, open **Secrets**, accept the warning, and turn **Bandwidth test** off.
    Start/load a town, answer **Yes**, and wait for the operator panel to show

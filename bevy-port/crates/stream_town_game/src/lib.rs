@@ -797,19 +797,30 @@ struct TwitchConnection {
 const OPERATOR_CHAT_HISTORY_CAPACITY: usize = 200;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+struct OperatorChatBadges {
+    broadcaster: bool,
+    moderator: bool,
+    subscriber: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct OperatorChatLine {
+    line_id: u64,
     user_id: String,
     login: String,
     display_name: String,
     message: String,
-    is_broadcaster: bool,
-    is_moderator: bool,
+    badges: OperatorChatBadges,
     is_system: bool,
 }
 
 #[derive(Resource, Default)]
 struct OperatorChatRuntime {
     lines: VecDeque<OperatorChatLine>,
+    seen_message_ids: VecDeque<String>,
+    next_line_id: u64,
+    selected_line: Option<u64>,
+    scroll_from_latest: usize,
     draft: String,
     input_focused: bool,
     selected_user: Option<(String, String)>,
@@ -817,21 +828,85 @@ struct OperatorChatRuntime {
 }
 
 impl OperatorChatRuntime {
-    fn push(&mut self, line: OperatorChatLine) {
+    fn push(&mut self, mut line: OperatorChatLine) {
+        self.next_line_id = self.next_line_id.wrapping_add(1).max(1);
+        line.line_id = self.next_line_id;
+        if self.scroll_from_latest > 0 {
+            self.scroll_from_latest = self.scroll_from_latest.saturating_add(1);
+        }
         self.lines.push_back(line);
         while self.lines.len() > OPERATOR_CHAT_HISTORY_CAPACITY {
-            self.lines.pop_front();
+            if let Some(removed) = self.lines.pop_front()
+                && self.selected_line == Some(removed.line_id)
+            {
+                self.selected_line = None;
+                self.selected_user = None;
+            }
         }
+    }
+
+    fn push_chat(&mut self, message: &twitch::TwitchChatEnvelope) -> bool {
+        if let Some(message_id) = message.message_id.as_ref() {
+            if self.seen_message_ids.contains(message_id) {
+                return false;
+            }
+            self.seen_message_ids.push_back(message_id.clone());
+            while self.seen_message_ids.len() > OPERATOR_CHAT_HISTORY_CAPACITY {
+                self.seen_message_ids.pop_front();
+            }
+        }
+        self.push(OperatorChatLine {
+            line_id: 0,
+            user_id: message.user_id.clone(),
+            login: message.login.clone(),
+            display_name: message.display_name.clone(),
+            message: message.message.clone(),
+            badges: OperatorChatBadges {
+                broadcaster: message.is_broadcaster,
+                moderator: message.is_moderator,
+                subscriber: message.is_subscriber,
+            },
+            is_system: false,
+        });
+        true
+    }
+
+    fn maximum_scroll(&self, visible_rows: usize) -> usize {
+        self.lines.len().saturating_sub(visible_rows)
+    }
+
+    fn scroll_older(&mut self, rows: usize, visible_rows: usize) {
+        self.scroll_from_latest = self
+            .scroll_from_latest
+            .saturating_add(rows)
+            .min(self.maximum_scroll(visible_rows));
+    }
+
+    fn scroll_newer(&mut self, rows: usize) {
+        self.scroll_from_latest = self.scroll_from_latest.saturating_sub(rows);
+    }
+
+    fn visible_lines(&self, visible_rows: usize) -> Vec<&OperatorChatLine> {
+        let end = self.lines.len().saturating_sub(
+            self.scroll_from_latest
+                .min(self.maximum_scroll(visible_rows)),
+        );
+        let start = end.saturating_sub(visible_rows);
+        self.lines.iter().skip(start).take(end - start).collect()
     }
 
     fn push_system(&mut self, message: impl Into<String>) {
         self.push(OperatorChatLine {
+            line_id: 0,
             user_id: String::new(),
             login: "stream_town".to_owned(),
             display_name: "Stream Town".to_owned(),
             message: message.into(),
-            is_broadcaster: false,
-            is_moderator: false,
+            badges: OperatorChatBadges {
+                broadcaster: false,
+                moderator: false,
+                subscriber: false,
+            },
             is_system: true,
         });
     }
@@ -13159,7 +13234,7 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                             spawn_secrets_account_column(
                                 columns,
                                 "BROADCASTER / STREAM ACCOUNT",
-                                "Separately authorizes stream-key access and moderation for the broadcaster login above. The stream key is never saved; operator timeouts and bans are performed by this streamer account, not the chat bot.",
+                                "Separately authorizes stream-key access, operator chat output, and moderation for the broadcaster login above. The stream key is never saved; operator messages, timeouts, and bans all come from this streamer account, never the chat bot.",
                                 SecretsConnectionKind::Broadcast,
                                 SecretsAction::ToggleBroadcast,
                                 SecretsAction::AuthorizeBroadcaster,
@@ -13999,21 +14074,22 @@ fn broadcast_connection_status(
     match moderation {
         TwitchModerationStatus::Authorizing => {
             return (
-                "● Validating the broadcaster account's moderation authority...".to_owned(),
+                "● Validating broadcaster streaming, operator chat, and moderation authority..."
+                    .to_owned(),
                 SecretsStatusTone::Pending,
             );
         }
         TwitchModerationStatus::Error(error) => {
             return (
                 format!(
-                    "● Broadcaster moderation authorization error: {error}. Use Authorize stream account below."
+                    "● Broadcaster authorization error: {error}. Use Authorize stream account below."
                 ),
                 SecretsStatusTone::Error,
             );
         }
         TwitchModerationStatus::Disabled => {
             return (
-                "● Broadcaster moderation is waiting for the Twitch connection to start."
+                "● Broadcaster operator controls are waiting for the Twitch connection to start."
                     .to_owned(),
                 SecretsStatusTone::Pending,
             );
@@ -27990,7 +28066,7 @@ fn announce_ruler_vote_result(
     {
         info!(announcement = %message, "ruler vote result announced");
         if let Some(transport) = &connection.transport {
-            let _ = transport.send(TwitchControl::SendMessage(message));
+            let _ = transport.send(TwitchControl::SendBotMessage(message));
         }
     }
     if active_kind != runtime.active_kind {
@@ -28639,20 +28715,26 @@ fn poll_twitch_transport(
         .flat_map(|transport| std::iter::from_fn(|| transport.try_recv()))
         .collect();
     for event in events {
-        match &event {
-            TwitchEvent::Chat(message) => operator_chat.push(OperatorChatLine {
-                user_id: message.user_id.clone(),
-                login: message.login.clone(),
-                display_name: message.display_name.clone(),
-                message: message.message.clone(),
-                is_broadcaster: message.is_broadcaster,
-                is_moderator: message.is_moderator,
-                is_system: false,
-            }),
-            TwitchEvent::Notice(message) => operator_chat.push_system(message.clone()),
-            TwitchEvent::Status(_) | TwitchEvent::ModerationStatus(_) => {}
+        let dispatch = match &event {
+            TwitchEvent::Chat(message) => operator_chat.push_chat(message),
+            TwitchEvent::BroadcasterChatSent(message) => {
+                operator_chat.push_chat(message);
+                operator_chat.feedback = format!("Sent as @{}", message.login);
+                false
+            }
+            TwitchEvent::BroadcasterChatSendFailed(error) => {
+                operator_chat.feedback = format!("Broadcaster chat send failed: {error}");
+                false
+            }
+            TwitchEvent::Notice(message) => {
+                operator_chat.push_system(message.clone());
+                true
+            }
+            TwitchEvent::Status(_) | TwitchEvent::ModerationStatus(_) => true,
+        };
+        if dispatch {
+            handle_twitch_event(event, &mut connection, &mut injected);
         }
-        handle_twitch_event(event, &mut connection, &mut injected);
     }
 }
 
@@ -28725,12 +28807,14 @@ fn handle_twitch_event(
                     if let Some(reply) = invalid_twitch_command_reply(&message.message)
                         && let Some(transport) = &connection.transport
                     {
-                        let _ = transport.send(TwitchControl::SendMessage(reply.to_owned()));
+                        let _ = transport.send(TwitchControl::SendBotMessage(reply.to_owned()));
                     }
                 }
             }
         }
-        TwitchEvent::Notice(_) => {}
+        TwitchEvent::Notice(_)
+        | TwitchEvent::BroadcasterChatSent(_)
+        | TwitchEvent::BroadcasterChatSendFailed(_) => {}
     }
 }
 
@@ -31770,7 +31854,7 @@ fn recruit_npcs(
 
 fn send_command_feedback(connection: &TwitchConnection, message: String) {
     if let Some(transport) = &connection.transport {
-        let _ = transport.send(TwitchControl::SendMessage(message));
+        let _ = transport.send(TwitchControl::SendBotMessage(message));
     }
 }
 
@@ -36759,7 +36843,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn broadcaster_moderation_failure_is_never_reported_as_a_bot_error() {
+    fn broadcaster_control_failure_is_never_reported_as_a_bot_error() {
         use direct_broadcast::DirectBroadcastRuntime;
 
         let mut config = GameConfig::default();
@@ -36787,7 +36871,7 @@ mod tests {
             &connection.moderation_status,
             &DirectBroadcastRuntime::default().snapshot(),
         );
-        assert!(broadcaster_status.contains("Broadcaster moderation authorization error"));
+        assert!(broadcaster_status.contains("Broadcaster authorization error"));
         assert!(broadcaster_status.contains("Authorize stream account"));
         assert!(!broadcaster_status.contains("Bot connection error"));
         assert_eq!(broadcaster_tone, SecretsStatusTone::Error);
@@ -45425,6 +45509,7 @@ mod tests {
     fn connected_bot_dispatches_twitch_commands_without_a_chat_gate() {
         let viewer = |message: &str, is_broadcaster| {
             TwitchEvent::Chat(twitch::TwitchChatEnvelope {
+                message_id: None,
                 actor_id: StableId::new("twitch:42").unwrap(),
                 user_id: "42".to_owned(),
                 login: "viewer".to_owned(),
@@ -45481,12 +45566,16 @@ mod tests {
         let mut chat = OperatorChatRuntime::default();
         for index in 0..(OPERATOR_CHAT_HISTORY_CAPACITY + 5) {
             chat.push(OperatorChatLine {
+                line_id: 0,
                 user_id: index.to_string(),
                 login: format!("viewer{index}"),
                 display_name: format!("Viewer {index}"),
                 message: format!("message {index}"),
-                is_broadcaster: false,
-                is_moderator: false,
+                badges: OperatorChatBadges {
+                    broadcaster: false,
+                    moderator: false,
+                    subscriber: false,
+                },
                 is_system: false,
             });
         }
@@ -45496,6 +45585,56 @@ mod tests {
             chat.lines.back().unwrap().message,
             format!("message {}", OPERATOR_CHAT_HISTORY_CAPACITY + 4)
         );
+    }
+
+    #[test]
+    fn operator_chat_deduplicates_the_broadcaster_echo_by_twitch_message_id() {
+        let message = twitch::TwitchChatEnvelope {
+            message_id: Some("outbound-message-id".to_owned()),
+            actor_id: StableId::new("twitch:7").unwrap(),
+            user_id: "7".to_owned(),
+            login: "streamer".to_owned(),
+            display_name: "Streamer".to_owned(),
+            message: "Hello chat".to_owned(),
+            is_broadcaster: true,
+            is_moderator: true,
+            is_subscriber: true,
+            custom_reward_id: None,
+        };
+        let mut chat = OperatorChatRuntime::default();
+
+        assert!(chat.push_chat(&message));
+        assert!(!chat.push_chat(&message));
+        assert_eq!(chat.lines.len(), 1);
+        let line = chat.lines.back().unwrap();
+        assert!(line.badges.broadcaster);
+        assert!(line.badges.moderator);
+        assert!(line.badges.subscriber);
+    }
+
+    #[test]
+    fn operator_chat_scroll_stays_anchored_when_new_messages_arrive() {
+        let mut chat = OperatorChatRuntime::default();
+        for index in 0..12 {
+            chat.push_system(format!("message {index}"));
+        }
+        chat.scroll_older(2, 8);
+        let before = chat
+            .visible_lines(8)
+            .into_iter()
+            .map(|line| line.message.clone())
+            .collect::<Vec<_>>();
+
+        chat.push_system("new message");
+        let after = chat
+            .visible_lines(8)
+            .into_iter()
+            .map(|line| line.message.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(before, after);
+        chat.scroll_newer(usize::MAX);
+        assert_eq!(chat.visible_lines(8).last().unwrap().message, "new message");
     }
 
     #[test]
@@ -45527,6 +45666,7 @@ mod tests {
         let mut commands = InjectedCommands::default();
         handle_twitch_event(
             TwitchEvent::Chat(twitch::TwitchChatEnvelope {
+                message_id: None,
                 actor_id: StableId::new("twitch:fish").unwrap(),
                 user_id: "fish".to_owned(),
                 login: "fishfriend".to_owned(),
@@ -45552,6 +45692,7 @@ mod tests {
         let mut commands = InjectedCommands::default();
         handle_twitch_event(
             TwitchEvent::Chat(twitch::TwitchChatEnvelope {
+                message_id: None,
                 actor_id: StableId::new("twitch:fish").unwrap(),
                 user_id: "fish".to_owned(),
                 login: "fishfriend".to_owned(),

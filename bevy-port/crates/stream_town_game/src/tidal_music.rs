@@ -2,8 +2,8 @@ use std::{path::Path, time::Duration};
 
 use bevy::prelude::*;
 use bevy_tidal::{
-    NativeAudioState, NativeAudioStatus, TidalBackendState, TidalBackendStatus, TidalConfig,
-    TidalController, TidalPlugin,
+    NativeAudioRouting, NativeAudioState, NativeAudioStatus, TidalBackendState, TidalBackendStatus,
+    TidalConfig, TidalController, TidalPlugin,
 };
 use stream_town_domain::Season;
 
@@ -12,7 +12,6 @@ use super::{RuntimeConfig, RuntimePlayerSettings, SimulationRuntime};
 const MUSIC_TRACK: u64 = 1;
 const MUSIC_GAIN: f32 = 0.22;
 const MUSIC_CYCLES_PER_SECOND: f64 = 0.35;
-const SILENT_GAIN: f32 = 0.000_1;
 
 const SPRING_DAY: &str = include_str!("../../../assets/music/patterns/spring_day.tidal");
 const SPRING_NIGHT: &str = include_str!("../../../assets/music/patterns/spring_night.tidal");
@@ -27,7 +26,6 @@ const WINTER_NIGHT: &str = include_str!("../../../assets/music/patterns/winter_n
 struct MusicSignature {
     season: Season,
     daytime: bool,
-    gain_bits: u32,
 }
 
 #[derive(Resource, Default)]
@@ -51,12 +49,15 @@ pub(super) fn drive_tidal_music(
     controller: Option<Res<TidalController>>,
     backend: Option<Res<TidalBackendStatus>>,
     audio: Option<Res<NativeAudioStatus>>,
+    routing: Option<Res<NativeAudioRouting>>,
     simulation: Option<Res<SimulationRuntime>>,
     config: Res<RuntimeConfig>,
     player_settings: Res<RuntimePlayerSettings>,
     mut runtime: ResMut<TidalMusicRuntime>,
 ) {
-    let (Some(controller), Some(backend), Some(audio)) = (controller, backend, audio) else {
+    let (Some(controller), Some(backend), Some(audio), Some(routing)) =
+        (controller, backend, audio, routing)
+    else {
         report_once(
             &mut runtime,
             "The bevy-tidal plugin resources are unavailable".to_owned(),
@@ -68,6 +69,8 @@ pub(super) fn drive_tidal_music(
         return;
     }
 
+    routing.set_master_gain(player_music_gain(&player_settings.0));
+
     let Some(simulation) = simulation else {
         silence_music(&controller, &mut runtime);
         return;
@@ -77,22 +80,15 @@ pub(super) fn drive_tidal_music(
         .time
         .sample(simulation.0.elapsed_seconds)
         .is_daytime;
-    let gain = effective_music_gain(&player_settings.0);
-    if gain <= SILENT_GAIN {
-        silence_music(&controller, &mut runtime);
-        return;
-    }
-
     let signature = MusicSignature {
         season: simulation.0.season,
         daytime,
-        gain_bits: gain.to_bits(),
     };
     if runtime.applied == Some(signature) || runtime.failed == Some(signature) {
         return;
     }
 
-    let expression = music_expression(signature.season, signature.daytime, gain);
+    let expression = music_expression(signature.season, signature.daytime);
     match controller.play(MUSIC_TRACK, &expression) {
         Ok(()) => {
             info!(
@@ -169,12 +165,12 @@ fn report_once(runtime: &mut TidalMusicRuntime, diagnostic: String) {
     }
 }
 
-fn effective_music_gain(settings: &stream_town_domain::PlayerSettings) -> f32 {
-    (MUSIC_GAIN * settings.audio.master * settings.audio.music).clamp(0.0, 1.0)
+fn player_music_gain(settings: &stream_town_domain::PlayerSettings) -> f32 {
+    (settings.audio.master * settings.audio.music).clamp(0.0, 1.0)
 }
 
-fn music_expression(season: Season, daytime: bool, gain: f32) -> String {
-    music_template(season, daytime).replace("{{gain}}", &format!("{gain:.6}"))
+fn music_expression(season: Season, daytime: bool) -> String {
+    music_template(season, daytime).replace("{{gain}}", &format!("{MUSIC_GAIN:.6}"))
 }
 
 fn music_template(season: Season, daytime: bool) -> &'static str {
@@ -208,7 +204,7 @@ mod tests {
             Season::Winter,
         ] {
             for daytime in [true, false] {
-                let expression = music_expression(season, daytime, 0.125);
+                let expression = music_expression(season, daytime);
                 controller
                     .play(MUSIC_TRACK, expression)
                     .unwrap_or_else(|error| panic!("{season:?}/{daytime} did not parse: {error}"));
@@ -235,10 +231,25 @@ mod tests {
         let mut settings = stream_town_domain::PlayerSettings::default();
         settings.audio.master = 0.5;
         settings.audio.music = 0.4;
-        let gain = effective_music_gain(&settings);
-        assert!((gain - MUSIC_GAIN * 0.2).abs() < f32::EPSILON);
-        let expression = music_expression(Season::Spring, true, gain);
+        let gain = player_music_gain(&settings);
+        assert!((gain - 0.2).abs() < f32::EPSILON);
+        let expression = music_expression(Season::Spring, true);
         assert!(!expression.contains("{{gain}}"));
-        assert!(expression.contains(&format!("{gain:.6}")));
+        assert!(expression.contains(&format!("{MUSIC_GAIN:.6}")));
+    }
+
+    #[test]
+    fn volume_is_not_part_of_the_pattern_signature() {
+        let signature = MusicSignature {
+            season: Season::Spring,
+            daytime: true,
+        };
+        let mut settings = stream_town_domain::PlayerSettings::default();
+        let before = music_expression(signature.season, signature.daytime);
+        settings.audio.master = 0.1;
+        settings.audio.music = 0.2;
+        let after = music_expression(signature.season, signature.daytime);
+        assert_eq!(before, after);
+        assert!((player_music_gain(&settings) - 0.02).abs() < f32::EPSILON);
     }
 }

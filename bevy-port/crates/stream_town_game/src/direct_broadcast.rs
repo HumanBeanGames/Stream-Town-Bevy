@@ -26,6 +26,7 @@ use bevy::{
     input::{
         ButtonState,
         keyboard::{Key, KeyboardInput},
+        mouse::{MouseScrollUnit, MouseWheel},
     },
     prelude::*,
     render::{
@@ -73,6 +74,10 @@ const MAX_RECONNECT_DELAY_SECONDS: u64 = 30;
 const OPERATOR_WINDOW_WIDTH: u32 = 1_100;
 const OPERATOR_WINDOW_HEIGHT: u32 = 680;
 const OPERATOR_CHAT_VISIBLE_ROWS: usize = 8;
+const OPERATOR_CHAT_LEFT: f32 = 568.0;
+const OPERATOR_CHAT_TOP: f32 = 326.0;
+const OPERATOR_CHAT_WIDTH: f32 = 500.0;
+const OPERATOR_CHAT_HEIGHT: f32 = 208.0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectBroadcastPhase {
@@ -204,12 +209,35 @@ struct StreamOperatorChatSelectedText;
 #[derive(Component)]
 struct StreamOperatorChatRow {
     slot: usize,
+    line_id: Option<u64>,
     user_id: String,
     login: String,
 }
 
 #[derive(Component)]
 struct StreamOperatorChatRowText(usize);
+
+#[derive(Clone, Copy, Component)]
+struct StreamOperatorChatBadge {
+    slot: usize,
+    kind: OperatorChatBadgeKind,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum OperatorChatBadgeKind {
+    Broadcaster,
+    Moderator,
+    Subscriber,
+}
+
+#[derive(Clone, Copy, Component)]
+enum StreamOperatorChatScrollAction {
+    Older,
+    Newer,
+}
+
+#[derive(Component)]
+struct StreamOperatorChatScrollThumb;
 
 #[derive(Clone, Copy, Component)]
 enum StreamOperatorSettingAction {
@@ -260,6 +288,12 @@ type StreamOperatorChatRowTextQuery<'w, 's> = Query<
         Without<StreamOperatorChatInputText>,
         Without<StreamOperatorChatSelectedText>,
     ),
+>;
+type StreamOperatorChatBadgeQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static StreamOperatorChatBadge, &'static mut Node),
+    Without<StreamOperatorChatScrollThumb>,
 >;
 type StreamOperatorChatInputTextQuery<'w, 's> = Query<
     'w,
@@ -1383,9 +1417,9 @@ fn spawn_stream_operator_view(
                 Node {
                     position_type: PositionType::Absolute,
                     right: px(32),
-                    top: px(326),
-                    width: px(500),
-                    height: px(208),
+                    top: px(OPERATOR_CHAT_TOP),
+                    width: px(OPERATOR_CHAT_WIDTH),
+                    height: px(OPERATOR_CHAT_HEIGHT),
                     padding: UiRect::all(px(6)),
                     border: UiRect::all(px(1)),
                     flex_direction: FlexDirection::Column,
@@ -1399,30 +1433,129 @@ fn spawn_stream_operator_view(
                     chat.spawn((
                         StreamOperatorChatRow {
                             slot,
+                            line_id: None,
                             user_id: String::new(),
                             login: String::new(),
                         },
                         Button,
                         Node {
-                            width: percent(100),
+                            width: px(462),
                             height: px(24),
                             padding: UiRect::horizontal(px(5)),
+                            border: UiRect::all(px(1)),
                             align_items: AlignItems::Center,
                             ..default()
                         },
                         BackgroundColor(Color::NONE),
+                        BorderColor::all(Color::NONE),
                     ))
-                    .with_child((
-                        StreamOperatorChatRowText(slot),
-                        Text::new(""),
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
+                    .with_children(|row| {
+                        for (kind, icon, color) in [
+                            (
+                                OperatorChatBadgeKind::Broadcaster,
+                                "★",
+                                Color::srgb(1.0, 0.76, 0.2),
+                            ),
+                            (
+                                OperatorChatBadgeKind::Moderator,
+                                "◆",
+                                Color::srgb(0.35, 0.9, 0.52),
+                            ),
+                            (
+                                OperatorChatBadgeKind::Subscriber,
+                                "♥",
+                                Color::srgb(0.72, 0.45, 1.0),
+                            ),
+                        ] {
+                            row.spawn((
+                                StreamOperatorChatBadge { slot, kind },
+                                Text::new(icon),
+                                TextFont {
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(color),
+                                Node {
+                                    display: Display::None,
+                                    width: px(14),
+                                    flex_shrink: 0.0,
+                                    ..default()
+                                },
+                                Pickable::IGNORE,
+                            ));
+                        }
+                        row.spawn((
+                            StreamOperatorChatRowText(slot),
+                            Text::new(""),
+                            TextFont {
+                                font_size: FontSize::Px(12.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.78, 0.84, 0.9)),
+                            Node {
+                                flex_shrink: 1.0,
+                                ..default()
+                            },
+                            Pickable::IGNORE,
+                        ));
+                    });
+                }
+                for (action, icon, top) in [
+                    (StreamOperatorChatScrollAction::Older, "▲", 4.0),
+                    (StreamOperatorChatScrollAction::Newer, "▼", 174.0),
+                ] {
+                    chat.spawn((
+                        action,
+                        Button,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            right: px(4),
+                            top: px(top),
+                            width: px(18),
+                            height: px(18),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             ..default()
                         },
-                        TextColor(Color::srgb(0.78, 0.84, 0.9)),
+                        BackgroundColor(Color::srgb(0.10, 0.16, 0.22)),
+                    ))
+                    .with_child((
+                        Text::new(icon),
+                        TextFont {
+                            font_size: FontSize::Px(9.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.72, 0.8, 0.88)),
                         Pickable::IGNORE,
                     ));
                 }
+                chat.spawn((
+                    Name::new("Operator chat scrollbar"),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: px(8),
+                        top: px(25),
+                        width: px(10),
+                        height: px(145),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.055, 0.075, 0.1)),
+                    Pickable::IGNORE,
+                ))
+                .with_child((
+                    StreamOperatorChatScrollThumb,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(1),
+                        top: px(0),
+                        width: px(8),
+                        height: px(145),
+                        border_radius: BorderRadius::all(px(4)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.28, 0.42, 0.56)),
+                    Pickable::IGNORE,
+                ));
             });
             root.spawn((
                 StreamOperatorChatInput,
@@ -1755,11 +1888,14 @@ fn stream_operator_chat_controls(
     mut chat: ResMut<OperatorChatRuntime>,
     connection: Option<Res<TwitchConnection>>,
     keyboard: Option<MessageReader<KeyboardInput>>,
+    wheel: Option<MessageReader<MouseWheel>>,
+    operator_windows: Query<&Window, With<StreamOperatorWindow>>,
     input: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatInput>)>,
     send: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatSendButton>)>,
     timeout: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatTimeoutButton>)>,
     ban: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatBanButton>)>,
     rows: Query<(&Interaction, &StreamOperatorChatRow), Changed<Interaction>>,
+    scroll: Query<(&Interaction, &StreamOperatorChatScrollAction), Changed<Interaction>>,
 ) {
     if input
         .iter()
@@ -1768,12 +1904,52 @@ fn stream_operator_chat_controls(
         chat.input_focused = true;
     }
     for (interaction, row) in &rows {
-        if *interaction == Interaction::Pressed && !row.user_id.is_empty() {
-            chat.selected_user = Some((row.user_id.clone(), row.login.clone()));
+        if *interaction == Interaction::Pressed
+            && let Some(line_id) = row.line_id
+        {
+            chat.selected_line = Some(line_id);
+            chat.selected_user =
+                (!row.user_id.is_empty()).then(|| (row.user_id.clone(), row.login.clone()));
+        }
+    }
+    for (interaction, action) in &scroll {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            StreamOperatorChatScrollAction::Older => {
+                chat.scroll_older(1, OPERATOR_CHAT_VISIBLE_ROWS);
+            }
+            StreamOperatorChatScrollAction::Newer => chat.scroll_newer(1),
         }
     }
 
     let operator_window = state.operator_window;
+    if let Some(mut wheel) = wheel {
+        let cursor_is_over_chat = operator_window
+            .and_then(|entity| operator_windows.get(entity).ok())
+            .and_then(Window::cursor_position)
+            .is_some_and(|cursor| {
+                cursor.x >= OPERATOR_CHAT_LEFT
+                    && cursor.x <= OPERATOR_CHAT_LEFT + OPERATOR_CHAT_WIDTH
+                    && cursor.y >= OPERATOR_CHAT_TOP
+                    && cursor.y <= OPERATOR_CHAT_TOP + OPERATOR_CHAT_HEIGHT
+            });
+        for event in wheel
+            .read()
+            .filter(|event| Some(event.window) == operator_window)
+        {
+            if !cursor_is_over_chat {
+                continue;
+            }
+            let rows = operator_chat_scroll_rows(event.unit, event.y);
+            if event.y > 0.0 {
+                chat.scroll_older(rows, OPERATOR_CHAT_VISIBLE_ROWS);
+            } else if event.y < 0.0 {
+                chat.scroll_newer(rows);
+            }
+        }
+    }
     let mut submit = send
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed);
@@ -1834,11 +2010,11 @@ fn send_operator_chat_message(
         "Twitch chat is not connected".clone_into(&mut chat.feedback);
         return;
     };
-    match transport.send(crate::twitch::TwitchControl::SendMessage(
+    match transport.send(crate::twitch::TwitchControl::SendBroadcasterMessage(
         message.to_owned(),
     )) {
         Ok(()) => {
-            "Message sent to Twitch".clone_into(&mut chat.feedback);
+            "Sending from the broadcaster account…".clone_into(&mut chat.feedback);
             chat.draft.clear();
         }
         Err(error) => chat.feedback = format!("Could not send chat message: {error}"),
@@ -1884,52 +2060,86 @@ fn moderate_selected_operator_user(
 
 fn update_stream_operator_chat(
     chat: Res<OperatorChatRuntime>,
-    mut rows: Query<(&mut StreamOperatorChatRow, &mut BackgroundColor)>,
+    mut rows: Query<(
+        &mut StreamOperatorChatRow,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
     mut row_text: StreamOperatorChatRowTextQuery,
+    mut badges: StreamOperatorChatBadgeQuery,
+    mut scroll_thumb: Query<
+        &mut Node,
+        (
+            With<StreamOperatorChatScrollThumb>,
+            Without<StreamOperatorChatBadge>,
+        ),
+    >,
     mut input_text: StreamOperatorChatInputTextQuery,
     mut selected_text: StreamOperatorChatSelectedTextQuery,
 ) {
-    let visible: Vec<_> = chat
-        .lines
-        .iter()
-        .rev()
-        .take(OPERATOR_CHAT_VISIBLE_ROWS)
-        .rev()
-        .collect();
-    for (mut row, mut background) in &mut rows {
+    let visible = chat.visible_lines(OPERATOR_CHAT_VISIBLE_ROWS);
+    for (mut row, mut background, mut border) in &mut rows {
         if let Some(line) = visible.get(row.slot) {
+            row.line_id = Some(line.line_id);
             line.user_id.clone_into(&mut row.user_id);
             line.login.clone_into(&mut row.login);
-            background.0 = if chat
-                .selected_user
-                .as_ref()
-                .is_some_and(|(user_id, _)| user_id == &line.user_id)
-            {
-                Color::srgb(0.12, 0.22, 0.31)
+            let selected = chat.selected_line == Some(line.line_id);
+            background.0 = if selected {
+                Color::srgb(0.12, 0.31, 0.47)
             } else {
                 Color::NONE
             };
+            *border = BorderColor::all(if selected {
+                Color::srgb(0.35, 0.78, 1.0)
+            } else {
+                Color::NONE
+            });
         } else {
+            row.line_id = None;
             row.user_id.clear();
             row.login.clear();
             background.0 = Color::NONE;
+            *border = BorderColor::all(Color::NONE);
         }
+    }
+    for (badge, mut node) in &mut badges {
+        let show = visible.get(badge.slot).is_some_and(|line| {
+            !line.is_system
+                && match badge.kind {
+                    OperatorChatBadgeKind::Broadcaster => line.badges.broadcaster,
+                    OperatorChatBadgeKind::Moderator => line.badges.moderator,
+                    OperatorChatBadgeKind::Subscriber => line.badges.subscriber,
+                }
+        });
+        node.display = if show { Display::Flex } else { Display::None };
     }
     for (slot, mut text) in &mut row_text {
         **text = visible.get(slot.0).map_or_else(String::new, |line| {
             if line.is_system {
-                format!("◆ {}", line.message)
+                format!("SYSTEM · {}", line.message)
             } else {
-                let badge = if line.is_broadcaster {
-                    "★"
-                } else if line.is_moderator {
-                    "◆"
-                } else {
-                    ""
-                };
-                format!("{badge}{}: {}", line.display_name, line.message)
+                format!("{}: {}", line.display_name, line.message)
             }
         });
+    }
+    if let Ok(mut thumb) = scroll_thumb.single_mut() {
+        const TRACK_HEIGHT: f32 = 145.0;
+        let total = chat.lines.len();
+        let height = if total <= OPERATOR_CHAT_VISIBLE_ROWS {
+            TRACK_HEIGHT
+        } else {
+            (TRACK_HEIGHT * bounded_history_f32(OPERATOR_CHAT_VISIBLE_ROWS)
+                / bounded_history_f32(total))
+            .max(18.0)
+        };
+        let maximum_scroll = chat.maximum_scroll(OPERATOR_CHAT_VISIBLE_ROWS);
+        let newest_fraction = if maximum_scroll == 0 {
+            1.0
+        } else {
+            1.0 - bounded_history_f32(chat.scroll_from_latest) / bounded_history_f32(maximum_scroll)
+        };
+        thumb.height = px(height);
+        thumb.top = px((TRACK_HEIGHT - height) * newest_fraction);
     }
     if let Ok(mut text) = input_text.single_mut() {
         **text = if chat.draft.is_empty() {
@@ -1955,6 +2165,23 @@ fn update_stream_operator_chat(
             format!("{selected}\n{}", chat.feedback)
         };
     }
+}
+
+fn operator_chat_scroll_rows(unit: MouseScrollUnit, delta: f32) -> usize {
+    let mut remaining = match unit {
+        MouseScrollUnit::Line => delta.abs(),
+        MouseScrollUnit::Pixel => delta.abs() / 24.0,
+    };
+    let mut rows = 1;
+    while remaining > 1.0 && rows < OPERATOR_CHAT_VISIBLE_ROWS {
+        rows += 1;
+        remaining -= 1.0;
+    }
+    rows
+}
+
+fn bounded_history_f32(value: usize) -> f32 {
+    f32::from(u16::try_from(value).unwrap_or(u16::MAX))
 }
 
 const fn camera_targets_primary_window(target: &RenderTarget) -> bool {
@@ -3882,6 +4109,17 @@ mod tests {
         assert_eq!(chat_inputs.iter(world).count(), 1);
         let mut chat_rows = world.query_filtered::<Entity, With<StreamOperatorChatRow>>();
         assert_eq!(chat_rows.iter(world).count(), OPERATOR_CHAT_VISIBLE_ROWS);
+        let mut chat_badges = world.query_filtered::<Entity, With<StreamOperatorChatBadge>>();
+        assert_eq!(
+            chat_badges.iter(world).count(),
+            OPERATOR_CHAT_VISIBLE_ROWS * 3
+        );
+        let mut scroll_actions =
+            world.query_filtered::<Entity, With<StreamOperatorChatScrollAction>>();
+        assert_eq!(scroll_actions.iter(world).count(), 2);
+        let mut scroll_thumb =
+            world.query_filtered::<Entity, With<StreamOperatorChatScrollThumb>>();
+        assert_eq!(scroll_thumb.iter(world).count(), 1);
         let mut moderation = world.query_filtered::<Entity, Or<(
             With<StreamOperatorChatTimeoutButton>,
             With<StreamOperatorChatBanButton>,
