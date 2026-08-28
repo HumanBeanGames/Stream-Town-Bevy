@@ -33,7 +33,7 @@ cargo run -p stream_town_tools -- --validate-authoring
 | Workflow | Project data | Local/runtime data |
 |---|---|---|
 | Game Authority and World + Nav | `assets/config/game.ron` | `.stream-town/config.ron` |
-| Models, buildings, roles, resource/foliage/camp generation | `assets/content/catalog.ron`, `assets/user/models/*.glb` | None |
+| Models, textures, materials, animation, buildings, roles, resource/foliage/camp generation | `assets/content/catalog.ron`, `assets/content/presentation.ron`, `assets/user/models/*.glb`, `assets/migrated/textures/user/*` | None |
 | Technology content, vote requirements, and graph layout | `assets/content/catalog.ron`, `assets/content/technology_layout.ron` | None |
 | Player settings | None | `.stream-town/settings.ron`, edited from the local operator panel or game menus |
 | Twitch accounts and credentials | None | Main Menu > Secrets and the OS credential vault |
@@ -47,12 +47,19 @@ tool never writes Twitch access or refresh tokens to RON.
 
 - Game Authority edits window, boot, simulation cadence, starting resources,
   capacities, time-of-day lighting, and emission settings.
-- Models + Assets imports GLBs without overwriting existing files, creates and
-  removes model archetypes/variants, and renders the selected scene in a live
-  offscreen 3D viewport. Renderer/material bindings, textures, Animator
-  controllers, and clips remain visible as migration provenance. It does not
+- Models + Assets is split into Models, Textures, Materials, and Animations.
+  It imports GLBs and images without overwriting existing files; creates,
+  duplicates, edits, and removes archetypes, scenes, texture records, PBR
+  materials, clips, controllers, layers, states, transitions, parameters,
+  curves, events, and renderer bindings; and uses parsed GLB nodes, materials,
+  and animation takes for typed choices. Live offscreen previews apply the same
+  renderer/model/fallback material precedence as the game. Drag to orbit,
+  Shift+drag or right-drag to pan, use the wheel to zoom, and use the playback,
+  looping, speed, restart, and reset controls for animation clips. It does not
   duplicate building, role, or technology records.
-- Buildings provides template-based creation, visual footprint/GLB inspection,
+- Buildings provides template-based creation, an interactive logical placement
+  footprint editor with rotate/row/column controls and explicit model/runtime
+  synchronization, visual GLB inspection,
   construction and level costs, storage, role capacity, passive production,
   station and target settings, projectiles, and model hierarchy bindings. Every
   stable reference is chosen from the loaded catalog.
@@ -64,8 +71,10 @@ tool never writes Twitch access or refresh tokens to RON.
 - Technology makes the full-width graph canvas the primary surface. Cards show
   prerequisite, unlock, vote-requirement, building, economy, and stat summaries;
   hovering exposes the complete record, while selecting opens a movable editor
-  over the canvas. Drag output-to-input sockets to add prerequisite edges and
-  remove them from searchable chips. The same tab creates, edits, and safely
+  over the canvas. Drag output-to-input sockets to add prerequisite edges.
+  Select an edge and press Delete/Backspace, right-click it, or click its red
+  midpoint × to remove it; searchable prerequisite chips remain another removal
+  route. The same tab creates, edits, and safely
   removes typed vote-requirement records. It edits groups, descriptions, age/tier
   placement, explicit unlocks,
   icons, building caps/unlocks/cost reductions, storage boosts, building ages,

@@ -9,17 +9,23 @@ mistaken for production-ready systems.
 
 ## Delivered in this milestone
 
-- The external authoring suite now uses real offscreen Bevy GLB previews rather
-  than footprint placeholders, scopes every repeated egui control to eliminate
-  upgrade-layer widget collisions, safely imports GLBs, and supports complete
-  archetype/variant and building-model binding creation/removal. Technology is a
-  full-width graph workspace with data-rich cards, hover details, socket-drag
-  prerequisite edges, searchable removable reference chips, typed vote-
-  requirement CRUD, cycle rejection, and the complete selected-node editor as a
-  movable graph overlay. Content schema 35 promotes land and shoreline-water
-  resource generation to explicit RON layers without changing the Unity oracle
-  fingerprints. World + Nav edits and previews those layers, foliage variants,
-  and enemy-camp generation ranges with catalog-backed model/source choices.
+- The external authoring suite now treats presentation data as authored content,
+  not read-only migration provenance. Models + Assets has dedicated model,
+  texture, PBR material, and animation editors with validated add/remove support
+  down through controller layers, states, transitions, motions, conditions,
+  curves, keyframes, and events. GLB metadata supplies typed node, material, and
+  take choices. Its offscreen previews use the runtime renderer/model/fallback
+  material precedence, source textures, orbit/pan/zoom controls, and animation
+  playback/loop/speed/restart controls. Building logical footprints are editable,
+  rotatable, visualized as occupied cells, and explicitly synchronized with the
+  referenced archetype. Technology edges can be created by socket drag and
+  removed by selecting plus Delete/Backspace, right-clicking, or the visible
+  midpoint removal affordance. The graph retains data-rich cards, typed vote-
+  requirement CRUD, cycle rejection, and its complete movable node editor.
+  Content schema 35 promotes land and shoreline-water resource generation to
+  explicit RON layers without changing Unity oracle fingerprints; World + Nav
+  edits and previews those layers, foliage variants, and enemy-camp generation
+  ranges with catalog-backed model/source choices.
 
 - Shipping-scale world rendering now replaces the 64x64 Bevy prototype. Config
   schema 7 upgrades untouched schema-5 worlds to Unity's 200x200 samples,

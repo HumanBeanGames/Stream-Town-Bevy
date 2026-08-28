@@ -6751,6 +6751,7 @@ dependencies = [
  "anyhow",
  "bevy",
  "bevy_egui",
+ "gltf",
  "ron",
  "stream_town_domain",
  "stream_town_game",

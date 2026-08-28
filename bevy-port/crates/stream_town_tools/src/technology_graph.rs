@@ -16,6 +16,7 @@ pub(crate) struct TechnologyGraphViewState {
     fit_requested: bool,
     focus_requested: Option<StableId>,
     connection_source: Option<StableId>,
+    selected_connection: Option<(StableId, StableId)>,
     pub show_minimap: bool,
 }
 
@@ -27,6 +28,7 @@ impl Default for TechnologyGraphViewState {
             fit_requested: true,
             focus_requested: None,
             connection_source: None,
+            selected_connection: None,
             show_minimap: true,
         }
     }
@@ -53,6 +55,7 @@ pub(crate) struct TechnologyGraphCanvasOutput {
     pub selected_group: Option<StableId>,
     pub layout_edit_started: bool,
     pub connection_requested: Option<(StableId, StableId)>,
+    pub connection_removal_requested: Option<(StableId, StableId)>,
 }
 
 pub(crate) fn show(
@@ -139,7 +142,16 @@ pub(crate) fn show(
         }
     }
 
-    // Connections are rendered before nodes so node cards mask their ends.
+    let pointer_position = ui.input(|input| input.pointer.hover_pos());
+    let primary_clicked = ui.input(|input| input.pointer.primary_clicked());
+    let secondary_clicked = ui.input(|input| input.pointer.secondary_clicked());
+    let delete_pressed = ui.input(|input| {
+        input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace)
+    });
+
+    // Connections are rendered before nodes so node cards mask their ends. A
+    // connection can be selected, deleted with Delete/Backspace, right-clicked,
+    // or removed using the × affordance shown on hover.
     for (id, node) in &catalog.technology.nodes {
         let Some(target_layout) = layout.nodes.get(id) else {
             continue;
@@ -164,8 +176,44 @@ pub(crate) fn show(
                     source_layout.position.y + NODE_SIZE.y * 0.5,
                 ),
             );
-            draw_connection(&painter, source, target, view.zoom);
+            let edge = (prerequisite.clone(), id.clone());
+            let hovered = pointer_position
+                .is_some_and(|pointer| connection_hit_test(pointer, source, target, view.zoom));
+            if hovered && primary_clicked {
+                view.selected_connection = Some(edge.clone());
+            }
+            let selected = view.selected_connection.as_ref() == Some(&edge);
+            draw_connection_with_color(
+                &painter,
+                source,
+                target,
+                view.zoom,
+                if selected {
+                    egui::Color32::from_rgb(235, 105, 92)
+                } else if hovered {
+                    egui::Color32::from_rgb(255, 193, 82)
+                } else {
+                    egui::Color32::from_rgb(94, 128, 143)
+                },
+            );
+            let remove_now = (hovered && secondary_clicked)
+                || (selected && delete_pressed)
+                || connection_remove_button(
+                    ui,
+                    &painter,
+                    &edge,
+                    source,
+                    target,
+                    view.zoom,
+                    hovered || selected,
+                );
+            if remove_now {
+                output.connection_removal_requested = Some(edge);
+            }
         }
+    }
+    if output.connection_removal_requested.is_some() {
+        view.selected_connection = None;
     }
 
     // Group headers move the group and all of its members. The lower-right
@@ -419,7 +467,7 @@ pub(crate) fn show(
         rect.left_bottom() + egui::vec2(10.0, -8.0),
         egui::Align2::LEFT_BOTTOM,
         format!(
-            "{} nodes · {} edges · {:.0}% · drag socket → socket to add prerequisite · wheel zoom · middle/Space-drag pan",
+            "{} nodes · {} edges · {:.0}% · drag socket → socket to add · select + Delete, right-click, or × to remove · wheel zoom · middle/Space-drag pan",
             catalog.technology.nodes.len(),
             catalog
                 .technology
@@ -651,6 +699,22 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, view: &TechnologyGraphVi
 }
 
 fn draw_connection(painter: &egui::Painter, source: egui::Pos2, target: egui::Pos2, zoom: f32) {
+    draw_connection_with_color(
+        painter,
+        source,
+        target,
+        zoom,
+        egui::Color32::from_rgb(94, 128, 143),
+    );
+}
+
+fn draw_connection_with_color(
+    painter: &egui::Painter,
+    source: egui::Pos2,
+    target: egui::Pos2,
+    zoom: f32,
+    color: egui::Color32,
+) {
     let bend = ((target.x - source.x).abs() * 0.45).max(25.0 * zoom);
     let control_a = source + egui::vec2(bend, 0.0);
     let control_b = target - egui::vec2(bend, 0.0);
@@ -662,22 +726,92 @@ fn draw_connection(painter: &egui::Painter, source: egui::Pos2, target: egui::Po
         .collect();
     painter.add(egui::Shape::line(
         points,
-        egui::Stroke::new(
-            (1.5 * zoom).clamp(0.65, 2.0),
-            egui::Color32::from_rgb(94, 128, 143),
-        ),
+        egui::Stroke::new((1.5 * zoom).clamp(0.65, 2.0), color),
     ));
     if zoom >= 0.08 {
         let direction = (target - control_b).normalized();
         painter.line_segment(
             [target, target - direction.rot90() * 5.0 - direction * 9.0],
-            egui::Stroke::new(1.4, egui::Color32::from_rgb(94, 128, 143)),
+            egui::Stroke::new(1.4, color),
         );
         painter.line_segment(
             [target, target + direction.rot90() * 5.0 - direction * 9.0],
-            egui::Stroke::new(1.4, egui::Color32::from_rgb(94, 128, 143)),
+            egui::Stroke::new(1.4, color),
         );
     }
+}
+
+fn connection_remove_button(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    edge: &(StableId, StableId),
+    source: egui::Pos2,
+    target: egui::Pos2,
+    zoom: f32,
+    visible: bool,
+) -> bool {
+    if !visible {
+        return false;
+    }
+    let bend = ((target.x - source.x).abs() * 0.45).max(25.0 * zoom);
+    let midpoint = cubic_bezier(
+        source,
+        source + egui::vec2(bend, 0.0),
+        target - egui::vec2(bend, 0.0),
+        target,
+        0.5,
+    );
+    let button_rect = egui::Rect::from_center_size(midpoint, egui::Vec2::splat(22.0));
+    let response = ui
+        .interact(
+            button_rect,
+            ui.id().with((
+                "remove_technology_connection",
+                edge.0.as_str(),
+                edge.1.as_str(),
+            )),
+            egui::Sense::click(),
+        )
+        .on_hover_text("Remove this prerequisite connection");
+    painter.circle_filled(midpoint, 9.0, egui::Color32::from_rgb(126, 44, 45));
+    painter.text(
+        midpoint,
+        egui::Align2::CENTER_CENTER,
+        "×",
+        egui::FontId::proportional(15.0),
+        egui::Color32::WHITE,
+    );
+    response.clicked()
+}
+
+fn connection_hit_test(
+    pointer: egui::Pos2,
+    source: egui::Pos2,
+    target: egui::Pos2,
+    zoom: f32,
+) -> bool {
+    let bend = ((target.x - source.x).abs() * 0.45).max(25.0 * zoom);
+    let control_a = source + egui::vec2(bend, 0.0);
+    let control_b = target - egui::vec2(bend, 0.0);
+    let mut previous = source;
+    for step in 1_u8..=24 {
+        let point = cubic_bezier(source, control_a, control_b, target, f32::from(step) / 24.0);
+        if point_segment_distance(pointer, previous, point) <= 8.0 {
+            return true;
+        }
+        previous = point;
+    }
+    false
+}
+
+fn point_segment_distance(point: egui::Pos2, start: egui::Pos2, end: egui::Pos2) -> f32 {
+    let segment = end - start;
+    let length_squared = segment.length_sq();
+    if length_squared <= f32::EPSILON {
+        return point.distance(start);
+    }
+    let progress = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    point.distance(start + segment * progress)
 }
 
 fn cubic_bezier(
@@ -878,5 +1012,26 @@ mod tests {
         let screen = world_to_screen(rect, &view, world);
         let restored = screen_to_world(rect, &view, screen);
         assert!((restored - world).length() < 0.001);
+    }
+
+    #[test]
+    fn connection_hit_testing_selects_curve_without_selecting_distant_space() {
+        let source = egui::pos2(10.0, 25.0);
+        let target = egui::pos2(350.0, 145.0);
+        let bend = ((target.x - source.x).abs() * 0.45).max(25.0);
+        let midpoint = cubic_bezier(
+            source,
+            source + egui::vec2(bend, 0.0),
+            target - egui::vec2(bend, 0.0),
+            target,
+            0.5,
+        );
+        assert!(connection_hit_test(midpoint, source, target, 1.0));
+        assert!(!connection_hit_test(
+            midpoint + egui::vec2(0.0, 80.0),
+            source,
+            target,
+            1.0
+        ));
     }
 }

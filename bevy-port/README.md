@@ -11,8 +11,10 @@ here.
 - `stream_town_tools`: focused content, migration, world-generation, and
   validation tooling. Dedicated Buildings and Roles tabs provide complete,
   template-based catalog creation with typed reference choices. Models + Assets
-  imports, creates, removes, searches, and live-previews GLB archetypes;
-  Technology is a graph-first editor with socket connections and typed vote
+  provides full model, texture, PBR material, animation clip/controller, and
+  renderer-binding CRUD plus textured, orbit/pan/zoom and playback previews;
+  Technology is a graph-first editor with add/select/right-click/keyboard edge
+  connections and typed vote
   requirements; World + Nav edits and previews land/water resources, foliage,
   and enemy-camp ranges without a redundant A* probe.
   Runtime, player-settings, Twitch, and generic ECS-inspector tabs were removed
@@ -24,7 +26,7 @@ here.
 The Technology tab is an interactive editor rather than only a record inspector.
 It renders all 363 nodes, 20 groups, cross-group edges, and compact requirement/
 effect summaries on a full-width pannable/zoomable canvas; supports socket-drag
-prerequisite creation, removable searchable reference chips, node and group
+prerequisite creation, edge selection and deletion, removable searchable reference chips, node and group
 dragging, group resizing, search highlighting and focus, fit-all, a clickable
 minimap, deterministic auto-layout, and typed vote-requirement CRUD. Catalog and
 stable-ID layout edits share undo/redo. Both

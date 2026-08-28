@@ -1,6 +1,7 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher},
     fs::{self, OpenOptions},
+    hash::{Hash, Hasher},
     io::Write,
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -11,6 +12,11 @@ use std::{
 
 mod technology_graph;
 
+use bevy::animation::{
+    RepeatAnimation,
+    graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex},
+};
+use bevy::math::Affine2;
 use bevy::prelude::*;
 #[cfg(target_os = "windows")]
 use bevy::render::{
@@ -20,7 +26,7 @@ use bevy::render::{
 use bevy::{
     asset::{AssetPlugin, LoadState},
     camera::{ClearColorConfig, RenderTarget, primitives::Aabb},
-    gltf::GltfAssetLabel,
+    gltf::{GltfAssetLabel, GltfMaterialName, GltfMeshName},
     render::render_resource::TextureFormat,
     transform::TransformSystems,
 };
@@ -29,16 +35,23 @@ use bevy_egui::{
     EguiTextureHandle, EguiUserTextures, PrimaryEguiContext, egui,
 };
 use stream_town_domain::{
-    ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, BroadcastEncoderPreference,
-    BuildingDef, BuildingHealthDisplayMode, BuildingModelDef, ChatCommand, ContentCatalog,
-    DisplayMode, EnemyCampGenerationDef, FoliageHabitat, FoliageLayerDef, GameConfig,
-    GeneratedWorld, GridPos, NameDisplayMode, ObjectiveDef, ObjectiveKind,
-    PassiveResourceContribution, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
-    PresentationCatalog, ProjectileShooterDef, ResourceGenerationHabitat,
-    ResourceGenerationLayerDef, RoleDef, RoleEquipmentDef, RoleSlotContribution,
-    RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus, RuntimeConsoleStore,
-    StableId, StationDef, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup,
-    TechNode, TechnologyGraphLayout,
+    AnimationClipDef, AnimationConditionDef, AnimationConditionMode, AnimationControllerDef,
+    AnimationEventDef, AnimationFloatKeyframe, AnimationLayerBlendMode, AnimationLayerDef,
+    AnimationMotionDef, AnimationParameterDef, AnimationParameterKind, AnimationPropertyCurve,
+    AnimationQuatKeyframe, AnimationStateDef, AnimationStateMachineDef, AnimationTangent,
+    AnimationTransformTrack, AnimationTransitionDef, AnimationVec3Keyframe, ArchetypeBounds,
+    ArchetypeDef, ArchetypeKind, ArchetypeScene, BroadcastEncoderPreference, BuildingDef,
+    BuildingHealthDisplayMode, BuildingModelDef, ChatCommand, ContentCatalog, DisplayMode,
+    EnemyCampGenerationDef, EnemyDef, EnemyModelSetDef, EnemyRunAnimation, EnemySpawnerDef,
+    EnemyWeaponModelDef, FoliageHabitat, FoliageLayerDef, GameConfig, GeneratedWorld, GridPos,
+    HealthDef, MaterialAlphaMode, MaterialDef, NameDisplayMode, ObjectiveDef, ObjectiveKind,
+    PassiveResourceContribution, PetDef, PetModelDef, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PresentationCatalog, ProjectileShooterDef, RendererMaterialBinding,
+    ResourceGenerationHabitat, ResourceGenerationLayerDef, ResourceReward, RoleDef,
+    RoleEquipmentDef, RoleSlotContribution, RotatingNodeDef, RuntimeConsoleAction,
+    RuntimeConsoleRequest, RuntimeConsoleStatus, RuntimeConsoleStore, StableId, StationDef,
+    StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup, TechNode,
+    TechnologyGraphLayout, TextureDef, TextureTransform, WeightedEnemySpawn,
 };
 #[cfg(target_os = "windows")]
 use stream_town_game::direct_broadcast::{BroadcastPrerequisites, inspect_broadcast_prerequisites};
@@ -59,6 +72,95 @@ enum ToolTab {
     Technology,
     World,
     Validation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum AssetEditorSection {
+    #[default]
+    Models,
+    Textures,
+    Materials,
+    Animations,
+}
+
+impl AssetEditorSection {
+    const ALL: [Self; 4] = [
+        Self::Models,
+        Self::Textures,
+        Self::Materials,
+        Self::Animations,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Models => "Models",
+            Self::Textures => "Textures",
+            Self::Materials => "Materials",
+            Self::Animations => "Animations",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PreviewRequest {
+    Model(String),
+    Texture {
+        id: StableId,
+        fingerprint: u64,
+    },
+    Material {
+        id: StableId,
+        fingerprint: u64,
+    },
+    Animation {
+        clip: StableId,
+        asset_path: String,
+        animation_index: u32,
+        fingerprint: u64,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct ModelPreviewControls {
+    yaw: f32,
+    pitch: f32,
+    distance: f32,
+    pan: Vec2,
+    animation_playing: bool,
+    animation_looping: bool,
+    animation_speed: f32,
+    restart_animation: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct GltfMetadata {
+    nodes: Vec<String>,
+    materials: Vec<String>,
+    animations: Vec<(usize, String)>,
+}
+
+impl Default for ModelPreviewControls {
+    fn default() -> Self {
+        Self {
+            yaw: 0.62,
+            pitch: 0.34,
+            distance: 7.5,
+            pan: Vec2::ZERO,
+            animation_playing: true,
+            animation_looping: true,
+            animation_speed: 1.0,
+            restart_animation: false,
+        }
+    }
+}
+
+impl ModelPreviewControls {
+    fn reset_view(&mut self) {
+        self.yaw = 0.62;
+        self.pitch = 0.34;
+        self.distance = 7.5;
+        self.pan = Vec2::ZERO;
+    }
 }
 
 impl ToolTab {
@@ -98,9 +200,13 @@ struct ToolState {
     player_settings: PlayerSettings,
     catalog: ContentCatalog,
     presentation: PresentationCatalog,
+    presentation_path: String,
+    asset_section: AssetEditorSection,
     selected_archetype: Option<StableId>,
     selected_archetype_scene: usize,
     discovered_model_assets: Vec<String>,
+    discovered_texture_assets: Vec<String>,
+    gltf_metadata: BTreeMap<String, GltfMetadata>,
     asset_search: String,
     new_archetype_id: String,
     new_archetype_name: String,
@@ -108,9 +214,30 @@ struct ToolState {
     new_archetype_asset: String,
     model_import_source: String,
     model_import_name: String,
-    preview_asset_path: Option<String>,
-    preview_bounds: ArchetypeBounds,
+    preview_request: Option<PreviewRequest>,
     preview_label: String,
+    selected_texture: Option<StableId>,
+    selected_material: Option<StableId>,
+    selected_clip: Option<StableId>,
+    selected_controller: Option<StableId>,
+    new_texture_id: String,
+    new_texture_name: String,
+    new_texture_asset: String,
+    texture_import_source: String,
+    texture_import_name: String,
+    new_material_id: String,
+    new_material_name: String,
+    new_material_texture_slot: String,
+    new_material_property: String,
+    new_material_vector: String,
+    new_clip_id: String,
+    new_clip_name: String,
+    new_clip_asset: String,
+    new_controller_id: String,
+    new_controller_name: String,
+    new_controller_state_id: String,
+    new_controller_machine_id: String,
+    new_animation_parameter: String,
     generated_world: Option<GeneratedWorld>,
     technology_search: String,
     selected_group: Option<StableId>,
@@ -172,16 +299,38 @@ struct ToolState {
 #[derive(Resource)]
 struct ModelPreviewRuntime {
     image: Handle<Image>,
-    neutral_material: Handle<StandardMaterial>,
     scene_entity: Option<Entity>,
     scene_handle: Option<Handle<WorldAsset>>,
-    loaded_asset_path: Option<String>,
+    loaded_request: Option<PreviewRequest>,
+    animation_graph: Option<Handle<AnimationGraph>>,
+    animation_node: Option<AnimationNodeIndex>,
+    animation_started: bool,
+    material_overrides: PreviewMaterialOverrides,
     framed: bool,
     status: String,
+    controls: ModelPreviewControls,
+}
+
+#[derive(Default)]
+struct PreviewMaterialOverrides {
+    fallback: Option<Handle<StandardMaterial>>,
+    model_materials: BTreeMap<String, Handle<StandardMaterial>>,
+    renderer_materials: Vec<PreviewRendererMaterialBinding>,
+}
+
+struct PreviewRendererMaterialBinding {
+    target_path: String,
+    materials: BTreeMap<String, Handle<StandardMaterial>>,
 }
 
 #[derive(Component)]
 struct ModelPreviewScene;
+
+#[derive(Component)]
+struct PreviewMaterialApplied;
+
+#[derive(Component)]
+struct ModelPreviewCamera;
 
 #[derive(Clone)]
 struct AuthoringSnapshot {
@@ -373,7 +522,17 @@ impl Default for ToolState {
             .expect("checked-in presentation catalog must validate");
         let selected_archetype = catalog.archetypes.keys().next().cloned();
         let discovered_model_assets = discover_model_assets();
+        let discovered_texture_assets = discover_texture_assets();
         let new_archetype_asset = discovered_model_assets.first().cloned().unwrap_or_default();
+        let selected_texture = presentation.textures.keys().next().cloned();
+        let selected_material = presentation.materials.keys().next().cloned();
+        let selected_clip = presentation.clips.keys().next().cloned();
+        let selected_controller = presentation.controllers.keys().next().cloned();
+        let new_texture_asset = discovered_texture_assets
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let new_clip_asset = discovered_model_assets.first().cloned().unwrap_or_default();
         let config_path = default_config_path();
         let config = load_game_config(config_path.to_string_lossy().as_ref())
             .expect("checked-in game configuration must parse and validate");
@@ -393,15 +552,20 @@ impl Default for ToolState {
             tab: ToolTab::default(),
             unity_root: "..".to_owned(),
             command: "!join".to_owned(),
-            status: "Ready. Migration operations are read-only by default.".to_owned(),
+            status: "Ready. Content edits remain drafts until their catalog validates and saves."
+                .to_owned(),
             config,
             config_path: config_path.display().to_string(),
             player_settings,
             catalog,
             presentation,
+            presentation_path: default_presentation_path().display().to_string(),
+            asset_section: AssetEditorSection::default(),
             selected_archetype,
             selected_archetype_scene: 0,
             discovered_model_assets,
+            discovered_texture_assets,
+            gltf_metadata: BTreeMap::new(),
             asset_search: String::new(),
             new_archetype_id: "archetype:new".to_owned(),
             new_archetype_name: "New Model".to_owned(),
@@ -409,12 +573,30 @@ impl Default for ToolState {
             new_archetype_asset,
             model_import_source: String::new(),
             model_import_name: String::new(),
-            preview_asset_path: None,
-            preview_bounds: ArchetypeBounds {
-                center: [0.0, 0.5, 0.0],
-                size: [1.0, 1.0, 1.0],
-            },
+            preview_request: None,
             preview_label: "No model selected".to_owned(),
+            selected_texture,
+            selected_material,
+            selected_clip,
+            selected_controller,
+            new_texture_id: "texture:new".to_owned(),
+            new_texture_name: "New Texture".to_owned(),
+            new_texture_asset,
+            texture_import_source: String::new(),
+            texture_import_name: String::new(),
+            new_material_id: "material:new".to_owned(),
+            new_material_name: "New Material".to_owned(),
+            new_material_texture_slot: "_BaseMap".to_owned(),
+            new_material_property: "_Property".to_owned(),
+            new_material_vector: "_Colour".to_owned(),
+            new_clip_id: "clip:new".to_owned(),
+            new_clip_name: "New Animation".to_owned(),
+            new_clip_asset,
+            new_controller_id: "animation_controller:new".to_owned(),
+            new_controller_name: "New Controller".to_owned(),
+            new_controller_state_id: "animation_state:new".to_owned(),
+            new_controller_machine_id: "animation_state_machine:new".to_owned(),
+            new_animation_parameter: "Parameter".to_owned(),
             generated_world: None,
             technology_search: String::new(),
             selected_group,
@@ -509,9 +691,16 @@ fn main() -> anyhow::Result<()> {
             setup_camera.before(EguiStartupSet::InitContexts),
         )
         .add_systems(Startup, setup_model_preview)
+        .add_systems(Update, drive_model_preview_animation)
         .add_systems(
             PostUpdate,
-            frame_model_preview.after(TransformSystems::Propagate),
+            (
+                apply_preview_material_overrides,
+                frame_model_preview,
+                update_model_preview_camera,
+            )
+                .chain()
+                .after(TransformSystems::Propagate),
         )
         .add_systems(
             EguiPrimaryContextPass,
@@ -539,7 +728,6 @@ fn setup_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSett
 fn setup_model_preview(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut egui_textures: ResMut<EguiUserTextures>,
 ) {
     let image = images.add(Image::new_target_texture(
@@ -549,13 +737,8 @@ fn setup_model_preview(
         None,
     ));
     egui_textures.add_image(EguiTextureHandle::Strong(image.clone()));
-    let neutral_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.62, 0.69, 0.74),
-        perceptual_roughness: 0.78,
-        metallic: 0.0,
-        ..default()
-    });
     commands.spawn((
+        ModelPreviewCamera,
         Camera3d::default(),
         Camera {
             order: -1,
@@ -564,15 +747,15 @@ fn setup_model_preview(
         },
         RenderTarget::Image(image.clone().into()),
         AmbientLight {
-            color: Color::srgb(0.78, 0.84, 0.92),
-            brightness: 420.0,
+            color: Color::srgb(0.82, 0.88, 0.96),
+            brightness: 260.0,
             ..default()
         },
         Transform::from_xyz(5.5, 4.0, 7.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     commands.spawn((
         DirectionalLight {
-            illuminance: 12_000.0,
+            illuminance: 9_000.0,
             shadow_maps_enabled: false,
             ..default()
         },
@@ -580,12 +763,16 @@ fn setup_model_preview(
     ));
     commands.insert_resource(ModelPreviewRuntime {
         image,
-        neutral_material,
         scene_entity: None,
         scene_handle: None,
-        loaded_asset_path: None,
+        loaded_request: None,
+        animation_graph: None,
+        animation_node: None,
+        animation_started: false,
+        material_overrides: PreviewMaterialOverrides::default(),
         framed: false,
         status: "Choose a model to render it here".to_owned(),
+        controls: ModelPreviewControls::default(),
     });
 }
 
@@ -594,34 +781,386 @@ fn sync_model_preview(
     asset_server: Res<AssetServer>,
     state: Res<ToolState>,
     mut preview: ResMut<ModelPreviewRuntime>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut animation_graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    if preview.loaded_asset_path == state.preview_asset_path {
+    if preview.loaded_request == state.preview_request {
         return;
     }
     if let Some(entity) = preview.scene_entity.take() {
         commands.entity(entity).try_despawn();
     }
     preview.scene_handle = None;
+    preview.animation_graph = None;
+    preview.animation_node = None;
+    preview.animation_started = false;
+    preview.material_overrides = PreviewMaterialOverrides::default();
     preview.framed = false;
-    preview
-        .loaded_asset_path
-        .clone_from(&state.preview_asset_path);
-    let Some(asset_path) = state.preview_asset_path.as_ref() else {
-        "No GLB scene selected".clone_into(&mut preview.status);
+    preview.loaded_request.clone_from(&state.preview_request);
+    let Some(request) = state.preview_request.as_ref() else {
+        "Nothing selected for preview".clone_into(&mut preview.status);
         return;
     };
-    let scene_handle = asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_path.clone()));
-    let entity = commands
-        .spawn((
-            Name::new(format!("Model preview: {}", state.preview_label)),
-            ModelPreviewScene,
-            WorldAssetRoot(scene_handle.clone()),
-            Transform::IDENTITY,
-        ))
-        .id();
-    preview.scene_entity = Some(entity);
-    preview.scene_handle = Some(scene_handle);
-    preview.status = format!("Loading GLB: {asset_path}");
+    match request {
+        PreviewRequest::Model(asset_path) => {
+            preview.material_overrides =
+                preview_material_overrides(asset_path, &state, &asset_server, &mut materials);
+            let scene_handle =
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_path.clone()));
+            let entity = commands
+                .spawn((
+                    Name::new(format!("Model preview: {}", state.preview_label)),
+                    ModelPreviewScene,
+                    WorldAssetRoot(scene_handle.clone()),
+                    Transform::IDENTITY,
+                ))
+                .id();
+            preview.scene_entity = Some(entity);
+            preview.scene_handle = Some(scene_handle);
+            preview.status = format!("Loading textured GLB: {asset_path}");
+        }
+        PreviewRequest::Animation {
+            clip,
+            asset_path,
+            animation_index,
+            ..
+        } => {
+            preview.material_overrides =
+                preview_material_overrides(asset_path, &state, &asset_server, &mut materials);
+            let scene_handle =
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_path.clone()));
+            let entity = commands
+                .spawn((
+                    Name::new(format!("Animation preview: {clip}")),
+                    ModelPreviewScene,
+                    WorldAssetRoot(scene_handle.clone()),
+                    Transform::IDENTITY,
+                ))
+                .id();
+            let animation = asset_server.load(
+                GltfAssetLabel::Animation(
+                    usize::try_from(*animation_index).expect("animation index fits platform"),
+                )
+                .from_asset(asset_path.clone()),
+            );
+            let (graph, node) = AnimationGraph::from_clip(animation);
+            preview.scene_entity = Some(entity);
+            preview.scene_handle = Some(scene_handle);
+            preview.animation_graph = Some(animation_graphs.add(graph));
+            preview.animation_node = Some(node);
+            if let Some(definition) = state.presentation.clips.get(clip) {
+                preview.controls.animation_looping = definition.looping;
+            }
+            preview.status = format!(
+                "Loading animation {} from {}#Animation{}",
+                state.preview_label, asset_path, animation_index
+            );
+        }
+        PreviewRequest::Material { id, .. } => {
+            let Some(definition) = state.presentation.materials.get(id) else {
+                preview.status = format!("Missing material {id}");
+                return;
+            };
+            let material = materials.add(preview_standard_material(
+                definition,
+                &state.presentation,
+                &asset_server,
+            ));
+            let entity = commands
+                .spawn((
+                    Name::new(format!("Material preview: {id}")),
+                    ModelPreviewScene,
+                    Mesh3d(
+                        meshes.add(
+                            Sphere::new(1.55)
+                                .mesh()
+                                .ico(5)
+                                .expect("valid preview sphere"),
+                        ),
+                    ),
+                    MeshMaterial3d(material),
+                    Transform::from_xyz(0.0, 0.25, 0.0),
+                ))
+                .id();
+            preview.scene_entity = Some(entity);
+            preview.framed = true;
+            preview.status = format!("Live PBR material preview · {}", definition.display_name);
+        }
+        PreviewRequest::Texture { id, .. } => {
+            let Some(definition) = state.presentation.textures.get(id) else {
+                preview.status = format!("Missing texture {id}");
+                return;
+            };
+            let material = materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(asset_server.load(definition.asset_path.clone())),
+                perceptual_roughness: 0.82,
+                cull_mode: None,
+                ..default()
+            });
+            let entity = commands
+                .spawn((
+                    Name::new(format!("Texture preview: {id}")),
+                    ModelPreviewScene,
+                    Mesh3d(meshes.add(Cuboid::new(3.8, 2.6, 0.08))),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                ))
+                .id();
+            preview.scene_entity = Some(entity);
+            preview.framed = true;
+            preview.status = format!("Live texture preview · {}", definition.asset_path);
+        }
+    }
+}
+
+fn preview_standard_material(
+    material: &MaterialDef,
+    presentation: &PresentationCatalog,
+    asset_server: &AssetServer,
+) -> StandardMaterial {
+    const PRIORITY: [&str; 8] = [
+        "_BaseMap",
+        "_BaseColorMap",
+        "_MainTexture",
+        "_MainTex",
+        "_Texture0",
+        "_characterTexture",
+        "_BaseColorRGBOutlineWidthA",
+        "_BaseColorRGBSmoothnessA",
+    ];
+    let primary = PRIORITY
+        .iter()
+        .filter_map(|slot| material.textures.get_key_value(*slot))
+        .chain(material.textures.iter())
+        .find_map(|(slot, id)| {
+            presentation
+                .textures
+                .get(id)
+                .map(|texture| (slot.as_str(), texture.asset_path.as_str()))
+        });
+    let transform = primary
+        .and_then(|(slot, _)| material.texture_transforms.get(slot))
+        .copied()
+        .unwrap_or_default();
+    StandardMaterial {
+        base_color: Color::srgba(
+            material.base_color[0],
+            material.base_color[1],
+            material.base_color[2],
+            material.base_color[3],
+        ),
+        base_color_texture: primary.map(|(_, path)| asset_server.load(path.to_owned())),
+        emissive: LinearRgba::new(
+            material.emissive[0],
+            material.emissive[1],
+            material.emissive[2],
+            material.emissive[3],
+        ),
+        metallic: material.metallic,
+        perceptual_roughness: material.perceptual_roughness,
+        alpha_mode: match material.alpha_mode {
+            MaterialAlphaMode::Opaque => AlphaMode::Opaque,
+            MaterialAlphaMode::Mask => AlphaMode::Mask(0.5),
+            MaterialAlphaMode::Blend => AlphaMode::Blend,
+        },
+        uv_transform: Affine2::from_scale_angle_translation(
+            Vec2::from_array(transform.scale),
+            0.0,
+            Vec2::from_array(transform.offset),
+        ),
+        cull_mode: None,
+        ..default()
+    }
+}
+
+fn preview_material_overrides(
+    asset_path: &str,
+    state: &ToolState,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+) -> PreviewMaterialOverrides {
+    let selected = state
+        .selected_archetype
+        .as_ref()
+        .and_then(|id| state.catalog.archetypes.get(id))
+        .filter(|archetype| {
+            archetype
+                .scenes
+                .iter()
+                .any(|scene| scene.asset_path == asset_path)
+        });
+    let archetype = selected.or_else(|| {
+        state.catalog.archetypes.values().find(|archetype| {
+            archetype
+                .scenes
+                .iter()
+                .any(|scene| scene.asset_path == asset_path)
+        })
+    });
+    let Some(archetype) = archetype else {
+        return PreviewMaterialOverrides::default();
+    };
+    let Some(scene) = archetype
+        .scenes
+        .iter()
+        .find(|scene| scene.asset_path == asset_path)
+    else {
+        return PreviewMaterialOverrides::default();
+    };
+    let make_material = |id: &StableId, materials: &mut Assets<StandardMaterial>| {
+        state.presentation.materials.get(id).map(|definition| {
+            materials.add(preview_standard_material(
+                definition,
+                &state.presentation,
+                asset_server,
+            ))
+        })
+    };
+    let fallback = state
+        .presentation
+        .prefab_materials
+        .get(&archetype.source_guid)
+        .into_iter()
+        .flatten()
+        .find_map(|id| make_material(id, materials));
+    let model_materials = state
+        .presentation
+        .model_materials
+        .get(&scene.source_model)
+        .into_iter()
+        .flat_map(|bindings| bindings.iter())
+        .filter_map(|(name, id)| {
+            make_material(id, materials).map(|material| (name.clone(), material))
+        })
+        .collect();
+    let renderer_materials = state
+        .presentation
+        .prefab_renderer_materials
+        .get(&archetype.source_guid)
+        .into_iter()
+        .flatten()
+        .filter_map(|binding| {
+            let bound = binding
+                .materials
+                .iter()
+                .filter_map(|(name, id)| {
+                    make_material(id, materials).map(|material| (name.clone(), material))
+                })
+                .collect::<BTreeMap<_, _>>();
+            (!bound.is_empty()).then(|| PreviewRendererMaterialBinding {
+                target_path: binding.target_path.clone(),
+                materials: bound,
+            })
+        })
+        .collect();
+    PreviewMaterialOverrides {
+        fallback,
+        model_materials,
+        renderer_materials,
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn apply_preview_material_overrides(
+    mut commands: Commands,
+    preview: Res<ModelPreviewRuntime>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    roots: Query<(), With<ModelPreviewScene>>,
+    mut renderers: Query<
+        (
+            Entity,
+            &mut MeshMaterial3d<StandardMaterial>,
+            Option<&GltfMeshName>,
+            Option<&GltfMaterialName>,
+        ),
+        Without<PreviewMaterialApplied>,
+    >,
+) {
+    for (entity, mut material, mesh_name, material_name) in &mut renderers {
+        let mut ancestor = entity;
+        let mut path = Vec::new();
+        let mut belongs_to_preview = false;
+        for _ in 0..64 {
+            if roots.contains(ancestor) {
+                belongs_to_preview = true;
+                break;
+            }
+            if let Ok(name) = names.get(ancestor) {
+                path.push(name.as_str().to_owned());
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+        if !belongs_to_preview {
+            continue;
+        }
+        let hierarchy_path = path.iter().rev().cloned().collect::<Vec<_>>().join("/");
+        if let Some(authored) = resolved_preview_material(
+            &preview.material_overrides,
+            &hierarchy_path,
+            mesh_name.map(|name| name.0.as_str()),
+            material_name.map(|name| name.0.as_str()),
+        ) {
+            material.0 = authored.clone();
+        }
+        commands.entity(entity).insert(PreviewMaterialApplied);
+    }
+}
+
+fn resolved_preview_material<'a>(
+    overrides: &'a PreviewMaterialOverrides,
+    hierarchy_path: &str,
+    mesh_name: Option<&str>,
+    material_name: Option<&str>,
+) -> Option<&'a Handle<StandardMaterial>> {
+    let node_path = if mesh_name.is_some() {
+        hierarchy_path
+            .rsplit_once('/')
+            .map_or(hierarchy_path, |(path, _)| path)
+    } else {
+        hierarchy_path
+    };
+    let target_name = mesh_name
+        .or_else(|| node_path.rsplit('/').next())
+        .unwrap_or_default();
+    let full_path_matches = |binding: &&PreviewRendererMaterialBinding| {
+        binding.target_path == node_path
+            || node_path.ends_with(&format!("/{}", binding.target_path))
+            || binding.target_path.ends_with(&format!("/{node_path}"))
+    };
+    let name_matches = |binding: &&PreviewRendererMaterialBinding| {
+        binding.target_path.rsplit('/').next() == Some(target_name)
+    };
+    let exact_path = material_name
+        .and_then(|name| {
+            overrides
+                .renderer_materials
+                .iter()
+                .filter(full_path_matches)
+                .find(|binding| binding.materials.contains_key(name))
+        })
+        .or_else(|| overrides.renderer_materials.iter().find(full_path_matches));
+    let exact = exact_path.or_else(|| {
+        material_name
+            .and_then(|name| {
+                overrides
+                    .renderer_materials
+                    .iter()
+                    .filter(name_matches)
+                    .find(|binding| binding.materials.contains_key(name))
+            })
+            .or_else(|| overrides.renderer_materials.iter().find(name_matches))
+    });
+    material_name
+        .and_then(|name| exact.and_then(|binding| binding.materials.get(name)))
+        .or_else(|| material_name.and_then(|name| overrides.model_materials.get(name)))
+        .or_else(|| exact.and_then(|binding| binding.materials.values().next()))
+        .or(overrides.fallback.as_ref())
 }
 
 fn frame_model_preview(
@@ -629,7 +1168,6 @@ fn frame_model_preview(
     mut preview: ResMut<ModelPreviewRuntime>,
     children: Query<&Children>,
     bounds: Query<(&GlobalTransform, &Aabb)>,
-    mut mesh_materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
     mut roots: Query<&mut Transform, With<ModelPreviewScene>>,
 ) {
     if preview.framed {
@@ -660,9 +1198,6 @@ fn frame_model_preview(
         if let Ok(value) = children.get(entity) {
             stack.extend(value.iter());
         }
-        if let Ok(mut material) = mesh_materials.get_mut(entity) {
-            material.0.clone_from(&preview.neutral_material);
-        }
         let Ok((global, aabb)) = bounds.get(entity) else {
             continue;
         };
@@ -692,19 +1227,102 @@ fn frame_model_preview(
     };
     *transform = Transform::from_translation(-center * scale).with_scale(Vec3::splat(scale));
     preview.framed = true;
-    preview.status = format!("Loaded and framed {mesh_count} render mesh(es) in studio material");
+    let authored_bindings = usize::from(preview.material_overrides.fallback.is_some())
+        + preview.material_overrides.model_materials.len()
+        + preview
+            .material_overrides
+            .renderer_materials
+            .iter()
+            .map(|binding| binding.materials.len())
+            .sum::<usize>();
+    let appearance = if authored_bindings == 0 {
+        "embedded GLB materials".to_owned()
+    } else {
+        format!("{authored_bindings} authored material binding(s)")
+    };
+    preview.status = if preview.animation_graph.is_some() {
+        format!("Loaded and framed {mesh_count} mesh(es) with {appearance}; attaching animation")
+    } else {
+        format!("Loaded and framed {mesh_count} mesh(es) with {appearance}")
+    };
+}
+
+fn update_model_preview_camera(
+    preview: Res<ModelPreviewRuntime>,
+    mut cameras: Query<&mut Transform, With<ModelPreviewCamera>>,
+) {
+    if !preview.is_changed() {
+        return;
+    }
+    let controls = &preview.controls;
+    let horizontal = controls.distance * controls.pitch.cos();
+    let target = Vec3::new(controls.pan.x, controls.pan.y, 0.0);
+    let offset = Vec3::new(
+        controls.yaw.sin() * horizontal,
+        controls.distance * controls.pitch.sin(),
+        controls.yaw.cos() * horizontal,
+    );
+    for mut transform in &mut cameras {
+        *transform = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
+    }
+}
+
+fn drive_model_preview_animation(
+    mut commands: Commands,
+    mut preview: ResMut<ModelPreviewRuntime>,
+    mut players: Query<(Entity, &mut AnimationPlayer)>,
+) {
+    let (Some(graph), Some(node)) = (preview.animation_graph.clone(), preview.animation_node)
+    else {
+        return;
+    };
+    let mut attached = false;
+    let restart = preview.controls.restart_animation;
+    for (entity, mut player) in &mut players {
+        if !player.is_playing_animation(node) {
+            player.play(node);
+            commands
+                .entity(entity)
+                .insert(AnimationGraphHandle(graph.clone()));
+        }
+        if let Some(active) = player.animation_mut(node) {
+            if restart {
+                active.rewind();
+            }
+            active.set_speed(preview.controls.animation_speed);
+            active.set_repeat(if preview.controls.animation_looping {
+                RepeatAnimation::Forever
+            } else {
+                RepeatAnimation::Never
+            });
+            if preview.controls.animation_playing {
+                active.resume();
+            } else {
+                active.pause();
+            }
+            attached = true;
+        }
+    }
+    if attached && !preview.animation_started {
+        preview.animation_started = true;
+        "Animation playing on the textured preview rig".clone_into(&mut preview.status);
+    }
+    if restart {
+        preview.controls.restart_animation = false;
+    }
 }
 
 fn tools_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<ToolState>,
-    preview: Res<ModelPreviewRuntime>,
+    mut preview: ResMut<ModelPreviewRuntime>,
 ) -> Result {
     poll_twitch_tool_events(&mut state);
     poll_tool_job_events(&mut state);
     poll_runtime_console(&mut state);
     update_preview_request(&mut state);
     let preview_texture = contexts.image_id(&preview.image);
+    let preview_status = preview.status.clone();
     let context = contexts.ctx_mut()?;
     let mut viewport_ui = egui::Ui::new(
         context.clone(),
@@ -730,13 +1348,31 @@ fn tools_ui(
     egui::CentralPanel::default().show(&mut viewport_ui, |ui| match state.tab {
         ToolTab::Migration => migration_tab(ui, &mut state),
         ToolTab::Authority => authority_tab(ui, &mut state),
-        ToolTab::Assets => content_tab(ui, &mut state, preview_texture, &preview.status),
+        ToolTab::Assets => content_tab(
+            ui,
+            &mut state,
+            preview_texture,
+            &preview_status,
+            &mut preview.controls,
+        ),
         ToolTab::Buildings => {
-            buildings_tab(ui, &mut state, preview_texture, &preview.status);
+            buildings_tab(
+                ui,
+                &mut state,
+                preview_texture,
+                &preview_status,
+                &mut preview.controls,
+            );
         }
         ToolTab::Roles => roles_tab(ui, &mut state),
         ToolTab::Technology => technology_tab(ui, &mut state),
-        ToolTab::World => world_tab(ui, &mut state, preview_texture, &preview.status),
+        ToolTab::World => world_tab(
+            ui,
+            &mut state,
+            preview_texture,
+            &preview_status,
+            &mut preview.controls,
+        ),
         ToolTab::Validation => validation_tab(ui, &mut state),
     });
     Ok(())
@@ -957,22 +1593,63 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 
 fn update_preview_request(state: &mut ToolState) {
     let requested = match state.tab {
-        ToolTab::Assets => state
-            .selected_archetype
-            .as_ref()
-            .and_then(|id| state.catalog.archetypes.get(id))
-            .and_then(|archetype| {
-                let index = state
-                    .selected_archetype_scene
-                    .min(archetype.scenes.len().saturating_sub(1));
-                archetype.scenes.get(index).map(|scene| {
+        ToolTab::Assets => match state.asset_section {
+            AssetEditorSection::Models => state
+                .selected_archetype
+                .as_ref()
+                .and_then(|id| state.catalog.archetypes.get(id))
+                .and_then(|archetype| {
+                    let index = state
+                        .selected_archetype_scene
+                        .min(archetype.scenes.len().saturating_sub(1));
+                    archetype.scenes.get(index).map(|scene| {
+                        (
+                            PreviewRequest::Model(scene.asset_path.clone()),
+                            format!("{} · {}", archetype.display_name, scene.asset_path),
+                        )
+                    })
+                }),
+            AssetEditorSection::Textures => state.selected_texture.as_ref().and_then(|id| {
+                state.presentation.textures.get(id).map(|texture| {
                     (
-                        scene.asset_path.clone(),
-                        archetype.bounds,
-                        format!("{} · {}", archetype.display_name, scene.asset_path),
+                        PreviewRequest::Texture {
+                            id: id.clone(),
+                            fingerprint: debug_fingerprint(texture),
+                        },
+                        format!("{} · {}", texture.display_name, texture.asset_path),
                     )
                 })
             }),
+            AssetEditorSection::Materials => state.selected_material.as_ref().and_then(|id| {
+                state.presentation.materials.get(id).map(|material| {
+                    (
+                        PreviewRequest::Material {
+                            id: id.clone(),
+                            fingerprint: debug_fingerprint(material),
+                        },
+                        format!("{} · {id}", material.display_name),
+                    )
+                })
+            }),
+            AssetEditorSection::Animations => state.selected_clip.as_ref().and_then(|id| {
+                let clip = state.presentation.clips.get(id)?;
+                let asset_path = clip
+                    .converted_asset_path
+                    .as_ref()
+                    .or(clip.rig_asset_path.as_ref())?
+                    .clone();
+                let animation_index = clip.gltf_animation_index?;
+                Some((
+                    PreviewRequest::Animation {
+                        clip: id.clone(),
+                        asset_path,
+                        animation_index,
+                        fingerprint: debug_fingerprint(clip),
+                    },
+                    format!("{} · {id}", clip.display_name),
+                ))
+            }),
+        },
         ToolTab::Buildings => state
             .building_draft
             .as_ref()
@@ -985,8 +1662,7 @@ fn update_preview_request(state: &mut ToolState) {
                     .or_else(|| archetype.scenes.first())
                     .map(|scene| {
                         (
-                            scene.asset_path.clone(),
-                            archetype.bounds,
+                            PreviewRequest::Model(scene.asset_path.clone()),
                             format!("{} · {}", archetype.display_name, scene.asset_path),
                         )
                     })
@@ -998,10 +1674,8 @@ fn update_preview_request(state: &mut ToolState) {
             ) =>
         {
             state.resource_generation_draft.as_ref().map(|layer| {
-                let bounds = model_bounds_for_asset(&state.catalog, &layer.visual_asset_path);
                 (
-                    layer.visual_asset_path.clone(),
-                    bounds,
+                    PreviewRequest::Model(layer.visual_asset_path.clone()),
                     format!("Resource · {}", layer.display_name),
                 )
             })
@@ -1018,8 +1692,7 @@ fn update_preview_request(state: &mut ToolState) {
                     .or_else(|| archetype.scenes.first())
                     .map(|scene| {
                         (
-                            scene.asset_path.clone(),
-                            archetype.bounds,
+                            PreviewRequest::Model(scene.asset_path.clone()),
                             format!("Enemy camp · {}", archetype.display_name),
                         )
                     })
@@ -1029,45 +1702,29 @@ fn update_preview_request(state: &mut ToolState) {
             .as_ref()
             .and_then(|layer| layer.variants.get(state.selected_foliage_variant))
             .map(|variant| {
-                let bounds = model_bounds_for_asset(&state.catalog, &variant.asset_path);
                 (
-                    variant.asset_path.clone(),
-                    bounds,
+                    PreviewRequest::Model(variant.asset_path.clone()),
                     format!("Foliage · {}", variant.asset_path),
                 )
             }),
         _ => None,
     };
-    if let Some((asset_path, bounds, label)) = requested {
-        state.preview_asset_path = Some(asset_path);
-        state.preview_bounds = bounds;
+    if let Some((request, label)) = requested {
+        state.preview_request = Some(request);
         state.preview_label = label;
     } else if matches!(
         state.tab,
         ToolTab::Assets | ToolTab::Buildings | ToolTab::World
     ) {
-        state.preview_asset_path = None;
-        "No GLB model is assigned".clone_into(&mut state.preview_label);
+        state.preview_request = None;
+        "Nothing previewable is assigned".clone_into(&mut state.preview_label);
     }
 }
 
-fn model_bounds_for_asset(catalog: &ContentCatalog, asset_path: &str) -> ArchetypeBounds {
-    catalog
-        .archetypes
-        .values()
-        .find(|archetype| {
-            archetype
-                .scenes
-                .iter()
-                .any(|scene| scene.asset_path == asset_path)
-        })
-        .map_or(
-            ArchetypeBounds {
-                center: [0.0, 0.5, 0.0],
-                size: [2.0, 2.0, 2.0],
-            },
-            |archetype| archetype.bounds,
-        )
+fn debug_fingerprint(value: &impl std::fmt::Debug) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    format!("{value:?}").hash(&mut hasher);
+    hasher.finish()
 }
 
 fn draw_model_preview(
@@ -1075,13 +1732,24 @@ fn draw_model_preview(
     texture: Option<egui::TextureId>,
     status: &str,
     desired: egui::Vec2,
+    controls: &mut ModelPreviewControls,
+    animation_controls: bool,
 ) {
     ui.group(|ui| {
-        ui.strong("Live 3D preview");
-        if let Some(texture) = texture {
-            ui.image(egui::load::SizedTexture::new(texture, desired));
+        ui.horizontal(|ui| {
+            ui.strong("Live 3D preview");
+            if ui.small_button("Reset view").clicked() {
+                controls.reset_view();
+            }
+            ui.small("drag: orbit · Shift/right-drag: pan · wheel: zoom");
+        });
+        let response = if let Some(texture) = texture {
+            ui.add(
+                egui::Image::new(egui::load::SizedTexture::new(texture, desired))
+                    .sense(egui::Sense::click_and_drag()),
+            )
         } else {
-            let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+            let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
             ui.painter()
                 .rect_filled(rect, 5.0, egui::Color32::from_rgb(9, 14, 19));
             ui.painter().text(
@@ -1091,6 +1759,58 @@ fn draw_model_preview(
                 egui::FontId::proportional(13.0),
                 egui::Color32::LIGHT_RED,
             );
+            response
+        };
+        if response.double_clicked() {
+            controls.reset_view();
+        }
+        if response.hovered() {
+            let (delta, scroll, shift) = ui.input(|input| {
+                (
+                    input.pointer.delta(),
+                    input.smooth_scroll_delta.y,
+                    input.modifiers.shift,
+                )
+            });
+            if response.dragged_by(egui::PointerButton::Primary) && !shift {
+                controls.yaw = (controls.yaw - delta.x * 0.012).rem_euclid(std::f32::consts::TAU);
+                controls.pitch = (controls.pitch + delta.y * 0.01).clamp(-1.35, 1.35);
+            }
+            if response.dragged_by(egui::PointerButton::Secondary)
+                || (response.dragged_by(egui::PointerButton::Primary) && shift)
+            {
+                let pan_scale = controls.distance * 0.0028;
+                controls.pan.x -= delta.x * pan_scale;
+                controls.pan.y += delta.y * pan_scale;
+            }
+            if scroll.abs() > f32::EPSILON {
+                controls.distance =
+                    (controls.distance * (-scroll * 0.0015).exp()).clamp(2.25, 30.0);
+            }
+        }
+        if animation_controls {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(if controls.animation_playing {
+                        "Pause"
+                    } else {
+                        "Play"
+                    })
+                    .clicked()
+                {
+                    controls.animation_playing = !controls.animation_playing;
+                }
+                if ui.button("Restart").clicked() {
+                    controls.animation_playing = true;
+                    controls.restart_animation = true;
+                }
+                ui.checkbox(&mut controls.animation_looping, "Loop");
+                ui.add(
+                    egui::Slider::new(&mut controls.animation_speed, 0.05..=3.0)
+                        .logarithmic(true)
+                        .text("Speed"),
+                );
+            });
         }
         ui.small(status);
     });
@@ -1121,6 +1841,98 @@ fn discover_model_assets() -> Vec<String> {
     output.sort();
     output.dedup();
     output
+}
+
+fn discover_texture_assets() -> Vec<String> {
+    fn visit(root: &std::path::Path, current: &std::path::Path, output: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, output);
+            } else if path.extension().is_some_and(|extension| {
+                matches!(
+                    extension.to_string_lossy().to_ascii_lowercase().as_str(),
+                    "png" | "tga" | "jpg" | "jpeg"
+                )
+            }) && let Ok(relative) = path.strip_prefix(root)
+            {
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                if relative.starts_with("migrated/textures/") {
+                    output.push(relative);
+                }
+            }
+        }
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let mut output = Vec::new();
+    visit(&root, &root, &mut output);
+    output.sort();
+    output.dedup();
+    output
+}
+
+fn inspect_gltf_asset(asset_path: &str) -> Result<GltfMetadata, String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets")
+        .join(asset_path);
+    let document = gltf::Gltf::open(&path)
+        .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
+    let mut nodes = document
+        .nodes()
+        .filter_map(|node| node.name().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    let mut materials = document
+        .materials()
+        .enumerate()
+        .map(|(index, material)| {
+            material
+                .name()
+                .map_or_else(|| format!("Material {index}"), ToOwned::to_owned)
+        })
+        .collect::<Vec<_>>();
+    let animations = document
+        .animations()
+        .enumerate()
+        .map(|(index, animation)| {
+            (
+                index,
+                animation
+                    .name()
+                    .map_or_else(|| format!("Animation {index}"), ToOwned::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    nodes.sort();
+    nodes.dedup();
+    materials.sort();
+    materials.dedup();
+    Ok(GltfMetadata {
+        nodes,
+        materials,
+        animations,
+    })
+}
+
+fn cached_gltf_metadata(state: &mut ToolState, asset_path: &str) -> GltfMetadata {
+    if let Some(value) = state.gltf_metadata.get(asset_path) {
+        return value.clone();
+    }
+    match inspect_gltf_asset(asset_path) {
+        Ok(value) => {
+            state
+                .gltf_metadata
+                .insert(asset_path.to_owned(), value.clone());
+            value
+        }
+        Err(error) => {
+            state.status = error;
+            GltfMetadata::default()
+        }
+    }
 }
 
 fn import_model_asset(state: &mut ToolState) -> Result<String, String> {
@@ -1183,16 +1995,1720 @@ fn import_model_asset(state: &mut ToolState) -> Result<String, String> {
     Ok(relative)
 }
 
+fn import_texture_asset(state: &mut ToolState) -> Result<String, String> {
+    let source_text = state.texture_import_source.trim();
+    if source_text.is_empty() {
+        return Err("choose a source PNG, TGA, JPG, or JPEG file".to_owned());
+    }
+    let source = fs::canonicalize(source_text)
+        .map_err(|error| format!("could not read {source_text}: {error}"))?;
+    let extension = source
+        .extension()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !source.is_file() || !matches!(extension.as_str(), "png" | "tga" | "jpg" | "jpeg") {
+        return Err("the source must be a supported image file".to_owned());
+    }
+    let requested_name = state.texture_import_name.trim();
+    let file_name = if requested_name.is_empty() {
+        source
+            .file_name()
+            .ok_or_else(|| "the source has no filename".to_owned())?
+            .to_owned()
+    } else {
+        let candidate = std::path::Path::new(requested_name);
+        if candidate.file_name() != Some(candidate.as_os_str()) {
+            return Err("destination name must be a filename, not a path".to_owned());
+        }
+        candidate.as_os_str().to_owned()
+    };
+    let output_extension = std::path::Path::new(&file_name)
+        .extension()
+        .map(|value| value.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !matches!(output_extension.as_str(), "png" | "tga" | "jpg" | "jpeg") {
+        return Err("destination name must retain a supported image extension".to_owned());
+    }
+    let relative = PathBuf::from("migrated/textures/user").join(&file_name);
+    let destination = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets")
+        .join(&relative);
+    if destination.exists() {
+        return Err(format!(
+            "{} already exists; choose another destination name",
+            destination.display()
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "destination has no parent directory".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    fs::copy(&source, &destination)
+        .map_err(|error| format!("could not copy texture into the project: {error}"))?;
+    state.discovered_texture_assets = discover_texture_assets();
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    relative.clone_into(&mut state.new_texture_asset);
+    state.texture_import_source.clear();
+    state.texture_import_name.clear();
+    Ok(relative)
+}
+
+fn texture_assets_editor(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
+) {
+    let choices = state
+        .presentation
+        .textures
+        .iter()
+        .map(|(id, value)| (id.clone(), value.display_name.clone()))
+        .collect::<Vec<_>>();
+    ui.horizontal_wrapped(|ui| {
+        stable_id_option_choice(ui, "Texture", &mut state.selected_texture, &choices);
+        if ui.button("Refresh texture files").clicked() {
+            state.discovered_texture_assets = discover_texture_assets();
+            state.status = format!(
+                "Discovered {} supported textures",
+                state.discovered_texture_assets.len()
+            );
+        }
+        if ui
+            .add_enabled(
+                state.selected_texture.is_some(),
+                egui::Button::new("Delete"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_texture(state) {
+                Ok(()) => "Deleted unreferenced texture definition".to_owned(),
+                Err(error) => format!("Texture deletion rejected: {error}"),
+            };
+        }
+    });
+    draw_model_preview(
+        ui,
+        preview_texture,
+        preview_status,
+        egui::vec2(500.0, 333.0),
+        preview_controls,
+        false,
+    );
+    ui.collapsing("Import texture file", |ui| {
+        ui.label("Copies a supported image into assets/migrated/textures/user without overwriting existing files.");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Source file");
+            ui.add(
+                egui::TextEdit::singleline(&mut state.texture_import_source)
+                    .desired_width(400.0)
+                    .hint_text("C:\\path\\to\\texture.png"),
+            );
+            ui.label("Destination name");
+            ui.add(
+                egui::TextEdit::singleline(&mut state.texture_import_name)
+                    .desired_width(220.0)
+                    .hint_text("optional_name.png"),
+            );
+            if ui.button("Import").clicked() {
+                state.status = match import_texture_asset(state) {
+                    Ok(path) => format!("Imported texture as {path}"),
+                    Err(error) => format!("Texture import rejected: {error}"),
+                };
+            }
+        });
+    });
+    ui.collapsing("Add texture definition", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Stable ID");
+            ui.text_edit_singleline(&mut state.new_texture_id);
+            ui.label("Name");
+            ui.text_edit_singleline(&mut state.new_texture_name);
+        });
+        let assets = state.discovered_texture_assets.clone();
+        searchable_string_choice(
+            ui,
+            "new_texture_asset",
+            "Texture file",
+            &mut state.new_texture_asset,
+            &assets,
+            &mut state.asset_search,
+        );
+        if ui.button("Add texture").clicked() {
+            state.status = match create_texture_definition(state) {
+                Ok(()) => "Added texture definition and selected it".to_owned(),
+                Err(error) => format!("Texture creation rejected: {error}"),
+            };
+        }
+    });
+    if let Some(id) = state.selected_texture.clone()
+        && let Some(texture) = state.presentation.textures.get_mut(&id)
+    {
+        ui.separator();
+        ui.heading(&texture.display_name);
+        ui.monospace(id.to_string());
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Display name");
+            ui.text_edit_singleline(&mut texture.display_name);
+            ui.label("Source GUID");
+            ui.text_edit_singleline(&mut texture.source_guid);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Source path");
+            ui.text_edit_singleline(&mut texture.source_path);
+        });
+        let assets = state.discovered_texture_assets.clone();
+        searchable_string_choice(
+            ui,
+            "selected_texture_asset",
+            "Asset file",
+            &mut texture.asset_path,
+            &assets,
+            &mut state.asset_search,
+        );
+        let mut nine_slice = texture.sprite_border.is_some();
+        if ui
+            .checkbox(&mut nine_slice, "Nine-slice sprite border")
+            .changed()
+        {
+            texture.sprite_border = nine_slice.then_some([8.0; 4]);
+        }
+        if let Some(border) = texture.sprite_border.as_mut() {
+            ui.horizontal_wrapped(|ui| {
+                for (value, label) in border.iter_mut().zip(["Left", "Right", "Top", "Bottom"]) {
+                    ui.add(
+                        egui::DragValue::new(value)
+                            .range(0.0..=8_192.0)
+                            .prefix(format!("{label} ")),
+                    );
+                }
+            });
+        }
+    }
+}
+
+fn create_texture_definition(state: &mut ToolState) -> Result<(), String> {
+    let id = StableId::new(state.new_texture_id.trim()).map_err(|error| error.to_string())?;
+    if state.presentation.textures.contains_key(&id) {
+        return Err(format!("texture {id} already exists"));
+    }
+    let mut candidate = state.presentation.clone();
+    candidate.textures.insert(
+        id.clone(),
+        TextureDef {
+            display_name: state.new_texture_name.trim().to_owned(),
+            source_guid: "authored-in-bevy".to_owned(),
+            source_path: "authoring://stream-town-tools".to_owned(),
+            asset_path: state.new_texture_asset.clone(),
+            sprite_border: None,
+        },
+    );
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_texture = Some(id);
+    "texture:new".clone_into(&mut state.new_texture_id);
+    "New Texture".clone_into(&mut state.new_texture_name);
+    Ok(())
+}
+
+fn delete_selected_texture(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_texture
+        .clone()
+        .ok_or_else(|| "no texture selected".to_owned())?;
+    let mut candidate = state.presentation.clone();
+    candidate
+        .textures
+        .remove(&id)
+        .ok_or_else(|| format!("missing texture {id}"))?;
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_texture = state.presentation.textures.keys().next().cloned();
+    Ok(())
+}
+
+fn material_assets_editor(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
+) {
+    let material_choices = state
+        .presentation
+        .materials
+        .iter()
+        .map(|(id, value)| (id.clone(), value.display_name.clone()))
+        .collect::<Vec<_>>();
+    let texture_choices = state
+        .presentation
+        .textures
+        .iter()
+        .map(|(id, value)| (id.clone(), value.display_name.clone()))
+        .collect::<Vec<_>>();
+    ui.horizontal_wrapped(|ui| {
+        stable_id_option_choice(
+            ui,
+            "Material",
+            &mut state.selected_material,
+            &material_choices,
+        );
+        ui.label("New stable ID");
+        ui.text_edit_singleline(&mut state.new_material_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_material_name);
+        if ui.button("Add material").clicked() {
+            state.status = match create_material_definition(state) {
+                Ok(()) => "Added material and selected it".to_owned(),
+                Err(error) => format!("Material creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_material.is_some(),
+                egui::Button::new("Delete"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_material(state) {
+                Ok(()) => "Deleted unreferenced material".to_owned(),
+                Err(error) => format!("Material deletion rejected: {error}"),
+            };
+        }
+    });
+    draw_model_preview(
+        ui,
+        preview_texture,
+        preview_status,
+        egui::vec2(500.0, 333.0),
+        preview_controls,
+        false,
+    );
+    let Some(id) = state.selected_material.clone() else {
+        return;
+    };
+    let Some(material) = state.presentation.materials.get_mut(&id) else {
+        return;
+    };
+    ui.separator();
+    ui.heading(&material.display_name);
+    ui.monospace(id.to_string());
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Display name");
+        ui.text_edit_singleline(&mut material.display_name);
+        ui.label("Source GUID");
+        ui.text_edit_singleline(&mut material.source_guid);
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Source path");
+        ui.text_edit_singleline(&mut material.source_path);
+        ui.label("Shader source");
+        optional_string_editor(ui, &mut material.shader_source, "Assets/Shaders/...");
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Base colour");
+        ui.color_edit_button_rgba_unmultiplied(&mut material.base_color);
+        ui.label("Emissive");
+        ui.color_edit_button_rgba_unmultiplied(&mut material.emissive);
+        ui.add(egui::Slider::new(&mut material.metallic, 0.0..=1.0).text("Metallic"));
+        ui.add(egui::Slider::new(&mut material.perceptual_roughness, 0.0..=1.0).text("Roughness"));
+        material_alpha_choice(ui, &mut material.alpha_mode);
+    });
+    ui.collapsing("Texture slots and UV transforms", |ui| {
+        let slots = material.textures.keys().cloned().collect::<Vec<_>>();
+        let mut remove = None;
+        for slot in slots {
+            ui.push_id(("material_texture", &slot), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.monospace(&slot);
+                    if let Some(texture) = material.textures.get_mut(&slot) {
+                        stable_id_required_choice(ui, "Texture", texture, &texture_choices);
+                    }
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(slot.clone());
+                    }
+                });
+                let mut transformed = material.texture_transforms.contains_key(&slot);
+                if ui
+                    .checkbox(&mut transformed, "Custom tiling/offset")
+                    .changed()
+                {
+                    if transformed {
+                        material
+                            .texture_transforms
+                            .insert(slot.clone(), TextureTransform::default());
+                    } else {
+                        material.texture_transforms.remove(&slot);
+                    }
+                }
+                if let Some(transform) = material.texture_transforms.get_mut(&slot) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(egui::DragValue::new(&mut transform.scale[0]).prefix("Tile X "));
+                        ui.add(egui::DragValue::new(&mut transform.scale[1]).prefix("Y "));
+                        ui.add(egui::DragValue::new(&mut transform.offset[0]).prefix("Offset X "));
+                        ui.add(egui::DragValue::new(&mut transform.offset[1]).prefix("Y "));
+                    });
+                }
+            });
+        }
+        if let Some(slot) = remove {
+            material.textures.remove(&slot);
+            material.texture_transforms.remove(&slot);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("New slot");
+            ui.text_edit_singleline(&mut state.new_material_texture_slot);
+            if ui
+                .add_enabled(
+                    !texture_choices.is_empty(),
+                    egui::Button::new("Add texture slot"),
+                )
+                .clicked()
+                && let Some((texture, _)) = texture_choices.first()
+            {
+                material
+                    .textures
+                    .entry(state.new_material_texture_slot.trim().to_owned())
+                    .or_insert_with(|| texture.clone());
+            }
+        });
+    });
+    ui.collapsing("Custom shader scalar properties", |ui| {
+        string_f32_map_editor(
+            ui,
+            &mut material.custom_properties,
+            &mut state.new_material_property,
+        );
+    });
+    ui.collapsing("Custom shader vector/colour properties", |ui| {
+        string_vec4_map_editor(
+            ui,
+            &mut material.custom_vectors,
+            &mut state.new_material_vector,
+        );
+    });
+}
+
+fn material_alpha_choice(ui: &mut egui::Ui, value: &mut MaterialAlphaMode) {
+    egui::ComboBox::from_id_salt(("material_alpha", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, MaterialAlphaMode::Opaque, "Opaque");
+            ui.selectable_value(value, MaterialAlphaMode::Mask, "Alpha mask");
+            ui.selectable_value(value, MaterialAlphaMode::Blend, "Transparent blend");
+        });
+}
+
+fn create_material_definition(state: &mut ToolState) -> Result<(), String> {
+    let id = StableId::new(state.new_material_id.trim()).map_err(|error| error.to_string())?;
+    if state.presentation.materials.contains_key(&id) {
+        return Err(format!("material {id} already exists"));
+    }
+    let mut candidate = state.presentation.clone();
+    candidate.materials.insert(
+        id.clone(),
+        MaterialDef {
+            display_name: state.new_material_name.trim().to_owned(),
+            source_guid: "authored-in-bevy".to_owned(),
+            source_path: "authoring://stream-town-tools".to_owned(),
+            shader_source: None,
+            base_color: [1.0; 4],
+            emissive: [0.0, 0.0, 0.0, 1.0],
+            metallic: 0.0,
+            perceptual_roughness: 0.75,
+            alpha_mode: MaterialAlphaMode::Opaque,
+            textures: BTreeMap::new(),
+            texture_transforms: BTreeMap::new(),
+            custom_properties: BTreeMap::new(),
+            custom_vectors: BTreeMap::new(),
+        },
+    );
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_material = Some(id);
+    "material:new".clone_into(&mut state.new_material_id);
+    "New Material".clone_into(&mut state.new_material_name);
+    Ok(())
+}
+
+fn delete_selected_material(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_material
+        .clone()
+        .ok_or_else(|| "no material selected".to_owned())?;
+    let mut candidate = state.presentation.clone();
+    candidate
+        .materials
+        .remove(&id)
+        .ok_or_else(|| format!("missing material {id}"))?;
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_material = state.presentation.materials.keys().next().cloned();
+    Ok(())
+}
+
+fn string_f32_map_editor(
+    ui: &mut egui::Ui,
+    values: &mut BTreeMap<String, f32>,
+    new_key: &mut String,
+) {
+    let keys = values.keys().cloned().collect::<Vec<_>>();
+    let mut remove = None;
+    for key in keys {
+        ui.horizontal_wrapped(|ui| {
+            ui.monospace(&key);
+            if let Some(value) = values.get_mut(&key) {
+                ui.add(egui::DragValue::new(value).speed(0.01));
+            }
+            if ui.small_button("Remove").clicked() {
+                remove = Some(key.clone());
+            }
+        });
+    }
+    if let Some(key) = remove {
+        values.remove(&key);
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.text_edit_singleline(new_key);
+        if ui.button("Add scalar").clicked() && !new_key.trim().is_empty() {
+            values.entry(new_key.trim().to_owned()).or_insert(0.0);
+        }
+    });
+}
+
+fn string_vec4_map_editor(
+    ui: &mut egui::Ui,
+    values: &mut BTreeMap<String, [f32; 4]>,
+    new_key: &mut String,
+) {
+    let keys = values.keys().cloned().collect::<Vec<_>>();
+    let mut remove = None;
+    for key in keys {
+        ui.group(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.monospace(&key);
+                if let Some(value) = values.get_mut(&key) {
+                    ui.color_edit_button_rgba_unmultiplied(value);
+                    for component in value {
+                        ui.add(egui::DragValue::new(component).speed(0.01));
+                    }
+                }
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(key.clone());
+                }
+            });
+        });
+    }
+    if let Some(key) = remove {
+        values.remove(&key);
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.text_edit_singleline(new_key);
+        if ui.button("Add vector").clicked() && !new_key.trim().is_empty() {
+            values.entry(new_key.trim().to_owned()).or_insert([1.0; 4]);
+        }
+    });
+}
+
+fn optional_string_editor(ui: &mut egui::Ui, value: &mut Option<String>, hint: &str) {
+    let mut enabled = value.is_some();
+    if ui.checkbox(&mut enabled, "Set").changed() {
+        *value = enabled.then(String::new);
+    }
+    if let Some(value) = value {
+        ui.add(
+            egui::TextEdit::singleline(value)
+                .desired_width(280.0)
+                .hint_text(hint),
+        );
+    }
+}
+
+fn animation_assets_editor(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
+) {
+    let clip_choices = state
+        .presentation
+        .clips
+        .iter()
+        .map(|(id, value)| (id.clone(), value.display_name.clone()))
+        .collect::<Vec<_>>();
+    let animation_assets = state
+        .discovered_model_assets
+        .iter()
+        .filter(|path| path.starts_with("migrated/models/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    ui.horizontal_wrapped(|ui| {
+        stable_id_option_choice(
+            ui,
+            "Animation clip",
+            &mut state.selected_clip,
+            &clip_choices,
+        );
+        ui.label("New stable ID");
+        ui.text_edit_singleline(&mut state.new_clip_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_clip_name);
+    });
+    searchable_string_choice(
+        ui,
+        "new_clip_asset",
+        "Converted rig/animation GLB",
+        &mut state.new_clip_asset,
+        &animation_assets,
+        &mut state.asset_search,
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Add animation clip").clicked() {
+            state.status = match create_animation_clip(state) {
+                Ok(()) => "Added animation clip and selected it".to_owned(),
+                Err(error) => format!("Animation creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_clip.is_some(),
+                egui::Button::new("Delete clip"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_animation_clip(state) {
+                Ok(()) => "Deleted unreferenced animation clip".to_owned(),
+                Err(error) => format!("Animation deletion rejected: {error}"),
+            };
+        }
+    });
+    draw_model_preview(
+        ui,
+        preview_texture,
+        preview_status,
+        egui::vec2(560.0, 373.0),
+        preview_controls,
+        true,
+    );
+    let Some(id) = state.selected_clip.clone() else {
+        return;
+    };
+    let selected_clip_asset = state
+        .presentation
+        .clips
+        .get(&id)
+        .and_then(|clip| {
+            clip.converted_asset_path
+                .as_ref()
+                .or(clip.rig_asset_path.as_ref())
+        })
+        .cloned();
+    let clip_metadata = selected_clip_asset
+        .as_deref()
+        .map(|path| cached_gltf_metadata(state, path))
+        .unwrap_or_default();
+    let Some(clip) = state.presentation.clips.get_mut(&id) else {
+        return;
+    };
+    ui.separator();
+    ui.heading(&clip.display_name);
+    ui.monospace(id.to_string());
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Display name");
+        ui.text_edit_singleline(&mut clip.display_name);
+        ui.label("Source GUID");
+        ui.text_edit_singleline(&mut clip.source_guid);
+        ui.checkbox(&mut clip.looping, "Authored looping");
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Source path");
+        ui.text_edit_singleline(&mut clip.source_path);
+        ui.add(
+            egui::DragValue::new(&mut clip.duration_seconds)
+                .range(0.001..=86_400.0)
+                .suffix(" seconds"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut clip.sample_rate)
+                .range(0.001..=10_000.0)
+                .suffix(" Hz"),
+        );
+    });
+    optional_asset_choice(
+        ui,
+        "clip_rig_asset",
+        "Rig GLB",
+        &mut clip.rig_asset_path,
+        &animation_assets,
+        &mut state.asset_search,
+    );
+    optional_asset_choice(
+        ui,
+        "clip_converted_asset",
+        "Converted animation GLB",
+        &mut clip.converted_asset_path,
+        &animation_assets,
+        &mut state.asset_search,
+    );
+    let mut has_index = clip.gltf_animation_index.is_some();
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .checkbox(&mut has_index, "glTF animation index")
+            .changed()
+        {
+            clip.gltf_animation_index = has_index.then_some(0);
+        }
+        if let Some(index) = clip.gltf_animation_index.as_mut() {
+            if clip_metadata.animations.is_empty() {
+                ui.add(egui::DragValue::new(index));
+            } else {
+                egui::ComboBox::from_id_salt("gltf_animation_index")
+                    .selected_text(
+                        clip_metadata
+                            .animations
+                            .iter()
+                            .find(|(candidate, _)| u32::try_from(*candidate).ok() == Some(*index))
+                            .map_or_else(|| format!("Animation {index}"), |(_, name)| name.clone()),
+                    )
+                    .show_ui(ui, |ui| {
+                        for (candidate, name) in &clip_metadata.animations {
+                            if let Ok(candidate) = u32::try_from(*candidate) {
+                                ui.selectable_value(
+                                    index,
+                                    candidate,
+                                    format!("{candidate}: {name}"),
+                                );
+                            }
+                        }
+                    });
+            }
+        }
+    });
+    animation_transform_tracks_editor(ui, &mut clip.transform_tracks, clip.duration_seconds);
+    animation_property_curves_editor(ui, &mut clip.property_curves, clip.duration_seconds);
+    animation_events_editor(ui, &mut clip.events, clip.duration_seconds);
+    ui.separator();
+    animation_controller_editor(ui, state, &clip_choices);
+}
+
+fn optional_asset_choice(
+    ui: &mut egui::Ui,
+    salt: &str,
+    label: &str,
+    value: &mut Option<String>,
+    choices: &[String],
+    search: &mut String,
+) {
+    let mut enabled = value.is_some();
+    ui.horizontal_wrapped(|ui| {
+        if ui.checkbox(&mut enabled, label).changed() {
+            *value = enabled.then(|| choices.first().cloned().unwrap_or_default());
+        }
+    });
+    if let Some(value) = value {
+        searchable_string_choice(ui, salt, label, value, choices, search);
+    }
+}
+
+fn create_animation_clip(state: &mut ToolState) -> Result<(), String> {
+    let id = StableId::new(state.new_clip_id.trim()).map_err(|error| error.to_string())?;
+    if state.presentation.clips.contains_key(&id) {
+        return Err(format!("animation clip {id} already exists"));
+    }
+    if !state.new_clip_asset.starts_with("migrated/models/") {
+        return Err("animation GLBs must live below migrated/models".to_owned());
+    }
+    let mut candidate = state.presentation.clone();
+    candidate.clips.insert(
+        id.clone(),
+        AnimationClipDef {
+            display_name: state.new_clip_name.trim().to_owned(),
+            source_guid: "authored-in-bevy".to_owned(),
+            source_path: "authoring://stream-town-tools".to_owned(),
+            duration_seconds: 1.0,
+            sample_rate: 30.0,
+            looping: true,
+            rig_asset_path: Some(state.new_clip_asset.clone()),
+            transform_tracks: Vec::new(),
+            property_curves: Vec::new(),
+            events: Vec::new(),
+            converted_asset_path: Some(state.new_clip_asset.clone()),
+            gltf_animation_index: Some(0),
+        },
+    );
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_clip = Some(id);
+    "clip:new".clone_into(&mut state.new_clip_id);
+    "New Animation".clone_into(&mut state.new_clip_name);
+    Ok(())
+}
+
+fn delete_selected_animation_clip(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_clip
+        .clone()
+        .ok_or_else(|| "no animation clip selected".to_owned())?;
+    let mut candidate = state.presentation.clone();
+    candidate
+        .clips
+        .remove(&id)
+        .ok_or_else(|| format!("missing animation clip {id}"))?;
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_clip = state.presentation.clips.keys().next().cloned();
+    Ok(())
+}
+
+fn animation_controller_editor(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    clip_choices: &[(StableId, String)],
+) {
+    ui.heading("Animation controllers");
+    ui.label(
+        "Controller parameters, states, blend motions, transitions, state machines, and layers are authored here rather than displayed as migration diagnostics.",
+    );
+    let controller_choices = state
+        .presentation
+        .controllers
+        .iter()
+        .map(|(id, value)| (id.clone(), value.display_name.clone()))
+        .collect::<Vec<_>>();
+    ui.horizontal_wrapped(|ui| {
+        stable_id_option_choice(
+            ui,
+            "Controller",
+            &mut state.selected_controller,
+            &controller_choices,
+        );
+        ui.label("New stable ID");
+        ui.text_edit_singleline(&mut state.new_controller_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_controller_name);
+        if ui.button("Add controller").clicked() {
+            state.status = match create_animation_controller(state) {
+                Ok(()) => "Added animation controller and selected it".to_owned(),
+                Err(error) => format!("Controller creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_controller.is_some(),
+                egui::Button::new("Delete controller"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_animation_controller(state) {
+                Ok(()) => "Deleted unreferenced animation controller".to_owned(),
+                Err(error) => format!("Controller deletion rejected: {error}"),
+            };
+        }
+    });
+    let Some(id) = state.selected_controller.clone() else {
+        return;
+    };
+    let avatar_mask_choices = state
+        .presentation
+        .avatar_masks
+        .iter()
+        .map(|(id, value)| (id.clone(), value.display_name.clone()))
+        .collect::<Vec<_>>();
+    let Some(controller) = state.presentation.controllers.get_mut(&id) else {
+        return;
+    };
+    ui.group(|ui| {
+        ui.heading(&controller.display_name);
+        ui.monospace(id.to_string());
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Display name");
+            ui.text_edit_singleline(&mut controller.display_name);
+            ui.label("Source GUID");
+            ui.text_edit_singleline(&mut controller.source_guid);
+            ui.label("Source path");
+            ui.text_edit_singleline(&mut controller.source_path);
+        });
+    });
+    animation_parameters_editor(ui, controller, &mut state.new_animation_parameter);
+    animation_states_editor(
+        ui,
+        controller,
+        clip_choices,
+        &mut state.new_controller_state_id,
+    );
+    animation_transitions_editor(ui, controller);
+    animation_state_machines_editor(ui, controller, &mut state.new_controller_machine_id);
+    animation_layers_editor(ui, controller, &avatar_mask_choices);
+}
+
+fn create_animation_controller(state: &mut ToolState) -> Result<(), String> {
+    let id = StableId::new(state.new_controller_id.trim()).map_err(|error| error.to_string())?;
+    if state.presentation.controllers.contains_key(&id) {
+        return Err(format!("animation controller {id} already exists"));
+    }
+    let mut candidate = state.presentation.clone();
+    candidate.controllers.insert(
+        id.clone(),
+        AnimationControllerDef {
+            display_name: state.new_controller_name.trim().to_owned(),
+            source_guid: "authored-in-bevy".to_owned(),
+            source_path: "authoring://stream-town-tools".to_owned(),
+            parameters: Vec::new(),
+            states: BTreeMap::new(),
+            transitions: Vec::new(),
+            state_machines: BTreeMap::new(),
+            layers: Vec::new(),
+            default_states: Vec::new(),
+        },
+    );
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_controller = Some(id);
+    "animation_controller:new".clone_into(&mut state.new_controller_id);
+    "New Controller".clone_into(&mut state.new_controller_name);
+    Ok(())
+}
+
+fn delete_selected_animation_controller(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_controller
+        .clone()
+        .ok_or_else(|| "no animation controller selected".to_owned())?;
+    let mut candidate = state.presentation.clone();
+    candidate
+        .controllers
+        .remove(&id)
+        .ok_or_else(|| format!("missing animation controller {id}"))?;
+    candidate.validate().map_err(|error| error.to_string())?;
+    state.presentation = candidate;
+    state.selected_controller = state.presentation.controllers.keys().next().cloned();
+    Ok(())
+}
+
+fn animation_parameters_editor(
+    ui: &mut egui::Ui,
+    controller: &mut AnimationControllerDef,
+    new_name: &mut String,
+) {
+    ui.collapsing(
+        format!("Parameters ({})", controller.parameters.len()),
+        |ui| {
+            let mut remove = None;
+            for (index, parameter) in controller.parameters.iter_mut().enumerate() {
+                ui.push_id(("animation_parameter", index), |ui| {
+                    ui.group(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut parameter.name);
+                            animation_parameter_kind_choice(ui, &mut parameter.kind);
+                            ui.checkbox(&mut parameter.inferred, "Inferred");
+                            if ui.small_button("Remove").clicked() {
+                                remove = Some(index);
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut parameter.default_float).prefix("Float "),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut parameter.default_integer)
+                                    .prefix("Integer "),
+                            );
+                            ui.checkbox(&mut parameter.default_boolean, "Boolean default");
+                        });
+                    });
+                });
+            }
+            if let Some(index) = remove {
+                let removed = controller.parameters.remove(index).name;
+                for state in controller.states.values_mut() {
+                    if state.speed_parameter.as_deref() == Some(removed.as_str()) {
+                        state.speed_parameter = None;
+                    }
+                    if state.blend_parameter.as_deref() == Some(removed.as_str()) {
+                        state.blend_parameter = None;
+                    }
+                }
+                for transition in &mut controller.transitions {
+                    transition
+                        .conditions
+                        .retain(|condition| condition.parameter != removed);
+                }
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.text_edit_singleline(new_name);
+                if ui.button("Add parameter").clicked() && !new_name.trim().is_empty() {
+                    controller.parameters.push(AnimationParameterDef {
+                        name: new_name.trim().to_owned(),
+                        kind: AnimationParameterKind::Float,
+                        default_float: 0.0,
+                        default_integer: 0,
+                        default_boolean: false,
+                        inferred: false,
+                    });
+                }
+            });
+        },
+    );
+}
+
+fn animation_parameter_kind_choice(ui: &mut egui::Ui, value: &mut AnimationParameterKind) {
+    egui::ComboBox::from_id_salt(("animation_parameter_kind", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            for kind in [
+                AnimationParameterKind::Float,
+                AnimationParameterKind::Integer,
+                AnimationParameterKind::Boolean,
+                AnimationParameterKind::Trigger,
+            ] {
+                ui.selectable_value(value, kind, format!("{kind:?}"));
+            }
+        });
+}
+
+fn animation_states_editor(
+    ui: &mut egui::Ui,
+    controller: &mut AnimationControllerDef,
+    clip_choices: &[(StableId, String)],
+    new_state_id: &mut String,
+) {
+    ui.collapsing(format!("States ({})", controller.states.len()), |ui| {
+        let state_ids = controller.states.keys().cloned().collect::<Vec<_>>();
+        let parameter_names = controller
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.kind == AnimationParameterKind::Float)
+            .map(|parameter| parameter.name.clone())
+            .collect::<Vec<_>>();
+        let mut remove_state = None;
+        for state_id in state_ids {
+            let Some(state) = controller.states.get_mut(&state_id) else {
+                continue;
+            };
+            ui.push_id(("animation_state", state_id.as_str()), |ui| {
+                ui.collapsing(format!("{} · {state_id}", state.display_name), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Name");
+                        ui.text_edit_singleline(&mut state.display_name);
+                        ui.add(egui::DragValue::new(&mut state.speed).prefix("Speed "));
+                        if ui.small_button("Remove state").clicked() {
+                            remove_state = Some(state_id.clone());
+                        }
+                    });
+                    optional_string_choice(
+                        ui,
+                        "Speed parameter",
+                        &mut state.speed_parameter,
+                        &parameter_names,
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Blend parameter",
+                        &mut state.blend_parameter,
+                        &parameter_names,
+                    );
+                    let mut remove_motion = None;
+                    for (index, motion) in state.motions.iter_mut().enumerate() {
+                        ui.horizontal_wrapped(|ui| {
+                            stable_id_required_choice(ui, "Clip", &mut motion.clip, clip_choices);
+                            let mut threshold = motion.threshold.is_some();
+                            if ui.checkbox(&mut threshold, "Blend threshold").changed() {
+                                motion.threshold = threshold.then_some(0.0);
+                            }
+                            if let Some(value) = motion.threshold.as_mut() {
+                                ui.add(egui::DragValue::new(value));
+                            }
+                            if ui.small_button("Remove motion").clicked() {
+                                remove_motion = Some(index);
+                            }
+                        });
+                    }
+                    if let Some(index) = remove_motion {
+                        state.motions.remove(index);
+                    }
+                    if ui
+                        .add_enabled(!clip_choices.is_empty(), egui::Button::new("Add motion"))
+                        .clicked()
+                        && let Some((clip, _)) = clip_choices.first()
+                    {
+                        state.motions.push(AnimationMotionDef {
+                            clip: clip.clone(),
+                            threshold: None,
+                        });
+                    }
+                });
+            });
+        }
+        if let Some(state_id) = remove_state {
+            controller.states.remove(&state_id);
+            controller.default_states.retain(|id| id != &state_id);
+            for machine in controller.state_machines.values_mut() {
+                machine.states.retain(|id| id != &state_id);
+                if machine.default_state.as_ref() == Some(&state_id) {
+                    machine.default_state = None;
+                }
+            }
+            controller.transitions.retain(|transition| {
+                transition.source.as_ref() != Some(&state_id)
+                    && transition.destination.as_ref() != Some(&state_id)
+            });
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("New state ID");
+            ui.text_edit_singleline(new_state_id);
+            if ui.button("Add state").clicked()
+                && let Ok(id) = StableId::new(new_state_id.trim())
+            {
+                controller.states.entry(id).or_insert(AnimationStateDef {
+                    display_name: "New State".to_owned(),
+                    speed: 1.0,
+                    speed_parameter: None,
+                    blend_parameter: None,
+                    motions: Vec::new(),
+                });
+            }
+        });
+        let state_choices = controller
+            .states
+            .iter()
+            .map(|(id, state)| (id.clone(), state.display_name.clone()))
+            .collect::<Vec<_>>();
+        stable_id_vec_choices(
+            ui,
+            "Controller default states",
+            &mut controller.default_states,
+            &state_choices,
+        );
+    });
+}
+
+fn animation_transitions_editor(ui: &mut egui::Ui, controller: &mut AnimationControllerDef) {
+    ui.collapsing(
+        format!("Transitions ({})", controller.transitions.len()),
+        |ui| {
+            let state_choices = controller
+                .states
+                .iter()
+                .map(|(id, state)| (id.clone(), state.display_name.clone()))
+                .collect::<Vec<_>>();
+            let machine_choices = controller
+                .state_machines
+                .iter()
+                .map(|(id, machine)| (id.clone(), machine.display_name.clone()))
+                .collect::<Vec<_>>();
+            let parameter_names = controller
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect::<Vec<_>>();
+            let mut remove_transition = None;
+            for (index, transition) in controller.transitions.iter_mut().enumerate() {
+                ui.push_id(("animation_transition", index), |ui| {
+                    ui.group(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong(format!("Transition {}", index + 1));
+                            stable_id_option_choice(
+                                ui,
+                                "Source",
+                                &mut transition.source,
+                                &state_choices,
+                            );
+                            stable_id_option_choice(
+                                ui,
+                                "Destination",
+                                &mut transition.destination,
+                                &state_choices,
+                            );
+                            if ui.small_button("Remove").clicked() {
+                                remove_transition = Some(index);
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            stable_id_option_choice(
+                                ui,
+                                "Source machine",
+                                &mut transition.source_state_machine,
+                                &machine_choices,
+                            );
+                            stable_id_option_choice(
+                                ui,
+                                "Destination machine",
+                                &mut transition.destination_state_machine,
+                                &machine_choices,
+                            );
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.checkbox(&mut transition.is_entry, "Entry");
+                            ui.checkbox(&mut transition.is_any_state, "Any state");
+                            ui.checkbox(&mut transition.is_exit, "Exit");
+                            ui.checkbox(&mut transition.has_exit_time, "Has exit time");
+                            ui.checkbox(&mut transition.fixed_duration, "Duration in seconds");
+                            ui.add(
+                                egui::DragValue::new(&mut transition.exit_time)
+                                    .prefix("Exit time "),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut transition.duration)
+                                    .range(0.0..=10_000.0)
+                                    .prefix("Duration "),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut transition.offset)
+                                    .range(0.0..=10_000.0)
+                                    .prefix("Offset "),
+                            );
+                        });
+                        let mut remove_condition = None;
+                        for (condition_index, condition) in
+                            transition.conditions.iter_mut().enumerate()
+                        {
+                            ui.horizontal_wrapped(|ui| {
+                                string_choice(
+                                    ui,
+                                    "Parameter",
+                                    &mut condition.parameter,
+                                    &parameter_names,
+                                );
+                                animation_condition_mode_choice(ui, &mut condition.mode);
+                                ui.add(
+                                    egui::DragValue::new(&mut condition.threshold)
+                                        .prefix("Threshold "),
+                                );
+                                if ui.small_button("Remove condition").clicked() {
+                                    remove_condition = Some(condition_index);
+                                }
+                            });
+                        }
+                        if let Some(index) = remove_condition {
+                            transition.conditions.remove(index);
+                        }
+                        if ui
+                            .add_enabled(
+                                !parameter_names.is_empty(),
+                                egui::Button::new("Add condition"),
+                            )
+                            .clicked()
+                        {
+                            transition.conditions.push(AnimationConditionDef {
+                                parameter: parameter_names[0].clone(),
+                                mode: AnimationConditionMode::Greater,
+                                threshold: 0.0,
+                            });
+                        }
+                    });
+                });
+            }
+            if let Some(index) = remove_transition {
+                controller.transitions.remove(index);
+            }
+            if ui
+                .add_enabled(
+                    !state_choices.is_empty(),
+                    egui::Button::new("Add transition"),
+                )
+                .clicked()
+            {
+                let state = state_choices[0].0.clone();
+                controller.transitions.push(AnimationTransitionDef {
+                    source: Some(state.clone()),
+                    destination: Some(state),
+                    source_state_machine: None,
+                    destination_state_machine: None,
+                    is_entry: false,
+                    is_any_state: false,
+                    is_exit: false,
+                    has_exit_time: true,
+                    exit_time: 1.0,
+                    duration: 0.1,
+                    fixed_duration: true,
+                    offset: 0.0,
+                    conditions: Vec::new(),
+                });
+            }
+        },
+    );
+}
+
+fn animation_condition_mode_choice(ui: &mut egui::Ui, value: &mut AnimationConditionMode) {
+    egui::ComboBox::from_id_salt(("animation_condition_mode", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            for mode in [
+                AnimationConditionMode::If,
+                AnimationConditionMode::IfNot,
+                AnimationConditionMode::Greater,
+                AnimationConditionMode::Less,
+                AnimationConditionMode::Equals,
+                AnimationConditionMode::NotEqual,
+            ] {
+                ui.selectable_value(value, mode, format!("{mode:?}"));
+            }
+        });
+}
+
+fn animation_state_machines_editor(
+    ui: &mut egui::Ui,
+    controller: &mut AnimationControllerDef,
+    new_machine_id: &mut String,
+) {
+    ui.collapsing(
+        format!("State machines ({})", controller.state_machines.len()),
+        |ui| {
+            let state_choices = controller
+                .states
+                .iter()
+                .map(|(id, state)| (id.clone(), state.display_name.clone()))
+                .collect::<Vec<_>>();
+            let machine_choices = controller
+                .state_machines
+                .iter()
+                .map(|(id, machine)| (id.clone(), machine.display_name.clone()))
+                .collect::<Vec<_>>();
+            let machine_ids = controller
+                .state_machines
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut remove_machine = None;
+            for id in machine_ids {
+                let Some(machine) = controller.state_machines.get_mut(&id) else {
+                    continue;
+                };
+                ui.push_id(("animation_state_machine", id.as_str()), |ui| {
+                    ui.collapsing(format!("{} · {id}", machine.display_name), |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Name");
+                            ui.text_edit_singleline(&mut machine.display_name);
+                            if ui.small_button("Remove machine").clicked() {
+                                remove_machine = Some(id.clone());
+                            }
+                        });
+                        stable_id_vec_choices(ui, "States", &mut machine.states, &state_choices);
+                        let child_choices = machine_choices
+                            .iter()
+                            .filter(|(choice, _)| choice != &id)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        stable_id_vec_choices(
+                            ui,
+                            "Child state machines",
+                            &mut machine.child_state_machines,
+                            &child_choices,
+                        );
+                        stable_id_option_choice(
+                            ui,
+                            "Default state",
+                            &mut machine.default_state,
+                            &state_choices,
+                        );
+                    });
+                });
+            }
+            if let Some(id) = remove_machine {
+                controller.state_machines.remove(&id);
+                controller.layers.retain(|layer| layer.state_machine != id);
+                for machine in controller.state_machines.values_mut() {
+                    machine.child_state_machines.retain(|child| child != &id);
+                }
+                controller.transitions.retain(|transition| {
+                    transition.source_state_machine.as_ref() != Some(&id)
+                        && transition.destination_state_machine.as_ref() != Some(&id)
+                });
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label("New machine ID");
+                ui.text_edit_singleline(new_machine_id);
+                if ui.button("Add state machine").clicked()
+                    && let Ok(id) = StableId::new(new_machine_id.trim())
+                {
+                    controller
+                        .state_machines
+                        .entry(id)
+                        .or_insert(AnimationStateMachineDef {
+                            display_name: "New State Machine".to_owned(),
+                            states: Vec::new(),
+                            child_state_machines: Vec::new(),
+                            default_state: None,
+                        });
+                }
+            });
+        },
+    );
+}
+
+fn animation_layers_editor(
+    ui: &mut egui::Ui,
+    controller: &mut AnimationControllerDef,
+    avatar_masks: &[(StableId, String)],
+) {
+    ui.collapsing(format!("Layers ({})", controller.layers.len()), |ui| {
+        let machine_choices = controller
+            .state_machines
+            .iter()
+            .map(|(id, machine)| (id.clone(), machine.display_name.clone()))
+            .collect::<Vec<_>>();
+        let mut remove = None;
+        for (index, layer) in controller.layers.iter_mut().enumerate() {
+            ui.push_id(("animation_layer", index), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Name");
+                        ui.text_edit_singleline(&mut layer.display_name);
+                        stable_id_required_choice(
+                            ui,
+                            "State machine",
+                            &mut layer.state_machine,
+                            &machine_choices,
+                        );
+                        animation_layer_blend_choice(ui, &mut layer.blend_mode);
+                        ui.add(
+                            egui::Slider::new(&mut layer.default_weight, 0.0..=1.0).text("Weight"),
+                        );
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                    stable_id_option_choice(
+                        ui,
+                        "Avatar mask",
+                        &mut layer.avatar_mask,
+                        avatar_masks,
+                    );
+                });
+            });
+        }
+        if let Some(index) = remove {
+            controller.layers.remove(index);
+        }
+        if ui
+            .add_enabled(
+                !machine_choices.is_empty(),
+                egui::Button::new("Add animation layer"),
+            )
+            .clicked()
+        {
+            controller.layers.push(AnimationLayerDef {
+                display_name: "New Layer".to_owned(),
+                state_machine: machine_choices[0].0.clone(),
+                blend_mode: AnimationLayerBlendMode::Override,
+                default_weight: 1.0,
+                avatar_mask: None,
+            });
+        }
+    });
+}
+
+fn animation_layer_blend_choice(ui: &mut egui::Ui, value: &mut AnimationLayerBlendMode) {
+    egui::ComboBox::from_id_salt(("animation_layer_blend", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, AnimationLayerBlendMode::Override, "Override");
+            ui.selectable_value(value, AnimationLayerBlendMode::Additive, "Additive");
+        });
+}
+
+fn animation_transform_tracks_editor(
+    ui: &mut egui::Ui,
+    tracks: &mut Vec<AnimationTransformTrack>,
+    duration: f32,
+) {
+    ui.collapsing(format!("Transform tracks ({})", tracks.len()), |ui| {
+        let mut remove = None;
+        for (index, track) in tracks.iter_mut().enumerate() {
+            ui.push_id(("animation_track", index), |ui| {
+                ui.collapsing(
+                    if track.target_path.is_empty() {
+                        format!("Track {} · root", index + 1)
+                    } else {
+                        format!("Track {} · {}", index + 1, track.target_path)
+                    },
+                    |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Hierarchy path");
+                            ui.text_edit_singleline(&mut track.target_path);
+                            if ui.small_button("Remove track").clicked() {
+                                remove = Some(index);
+                            }
+                        });
+                        animation_vec3_keys_editor(
+                            ui,
+                            "Translation",
+                            &mut track.translation,
+                            duration,
+                            [0.0; 3],
+                        );
+                        animation_quat_keys_editor(ui, &mut track.rotation, duration);
+                        animation_vec3_keys_editor(
+                            ui,
+                            "Scale",
+                            &mut track.scale,
+                            duration,
+                            [1.0; 3],
+                        );
+                        animation_vec3_keys_editor(
+                            ui,
+                            "Euler degrees",
+                            &mut track.euler_degrees,
+                            duration,
+                            [0.0; 3],
+                        );
+                    },
+                );
+            });
+        }
+        if let Some(index) = remove {
+            tracks.remove(index);
+        }
+        if ui.button("Add transform track").clicked() {
+            tracks.push(AnimationTransformTrack {
+                target_path: String::new(),
+                reference_translation: None,
+                reference_rotation: None,
+                reference_scale: None,
+                translation: Vec::new(),
+                rotation: Vec::new(),
+                scale: Vec::new(),
+                euler_degrees: Vec::new(),
+            });
+        }
+    });
+}
+
+fn animation_vec3_keys_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    keys: &mut Vec<AnimationVec3Keyframe>,
+    duration: f32,
+    default_value: [f32; 3],
+) {
+    ui.collapsing(format!("{label} keys ({})", keys.len()), |ui| {
+        let mut remove = None;
+        for (index, key) in keys.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut key.time)
+                        .range(0.0..=duration.max(0.001))
+                        .prefix("t "),
+                );
+                for (component, axis) in key.value.iter_mut().zip(["x", "y", "z"]) {
+                    ui.add(egui::DragValue::new(component).prefix(format!("{axis} ")));
+                }
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            keys.remove(index);
+        }
+        if ui.button(format!("Add {label} key")).clicked() {
+            keys.push(AnimationVec3Keyframe {
+                time: duration.max(0.0),
+                value: default_value,
+            });
+        }
+    });
+}
+
+fn animation_quat_keys_editor(
+    ui: &mut egui::Ui,
+    keys: &mut Vec<AnimationQuatKeyframe>,
+    duration: f32,
+) {
+    ui.collapsing(format!("Rotation keys ({})", keys.len()), |ui| {
+        let mut remove = None;
+        for (index, key) in keys.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut key.time)
+                        .range(0.0..=duration.max(0.001))
+                        .prefix("t "),
+                );
+                for (component, axis) in key.value.iter_mut().zip(["x", "y", "z", "w"]) {
+                    ui.add(egui::DragValue::new(component).prefix(format!("{axis} ")));
+                }
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            keys.remove(index);
+        }
+        if ui.button("Add rotation key").clicked() {
+            keys.push(AnimationQuatKeyframe {
+                time: duration.max(0.0),
+                value: [0.0, 0.0, 0.0, 1.0],
+            });
+        }
+    });
+}
+
+fn animation_property_curves_editor(
+    ui: &mut egui::Ui,
+    curves: &mut Vec<AnimationPropertyCurve>,
+    duration: f32,
+) {
+    ui.collapsing(format!("Property curves ({})", curves.len()), |ui| {
+        let mut remove_curve = None;
+        for (index, curve) in curves.iter_mut().enumerate() {
+            ui.push_id(("property_curve", index), |ui| {
+                ui.collapsing(
+                    format!("{} :: {}", curve.target_path, curve.attribute),
+                    |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Target");
+                            ui.text_edit_singleline(&mut curve.target_path);
+                            ui.label("Attribute");
+                            ui.text_edit_singleline(&mut curve.attribute);
+                            ui.add(egui::DragValue::new(&mut curve.class_id).prefix("Class "));
+                            if ui.small_button("Remove curve").clicked() {
+                                remove_curve = Some(index);
+                            }
+                        });
+                        let mut remove_key = None;
+                        for (key_index, key) in curve.keys.iter_mut().enumerate() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut key.time)
+                                        .range(0.0..=duration.max(0.001))
+                                        .prefix("t "),
+                                );
+                                ui.add(egui::DragValue::new(&mut key.value).prefix("value "));
+                                if ui.small_button("Remove").clicked() {
+                                    remove_key = Some(key_index);
+                                }
+                            });
+                        }
+                        if let Some(key_index) = remove_key {
+                            curve.keys.remove(key_index);
+                        }
+                        if ui.button("Add property key").clicked() {
+                            curve.keys.push(default_float_key(duration.max(0.0), 0.0));
+                        }
+                    },
+                );
+            });
+        }
+        if let Some(index) = remove_curve {
+            curves.remove(index);
+        }
+        if ui.button("Add property curve").clicked() {
+            curves.push(AnimationPropertyCurve {
+                target_path: String::new(),
+                attribute: "m_Enabled".to_owned(),
+                class_id: 1,
+                script_guid: None,
+                keys: vec![default_float_key(0.0, 0.0)],
+            });
+        }
+    });
+}
+
+fn default_float_key(time: f32, value: f32) -> AnimationFloatKeyframe {
+    AnimationFloatKeyframe {
+        time,
+        value,
+        in_slope: AnimationTangent::Finite(0.0),
+        out_slope: AnimationTangent::Finite(0.0),
+        tangent_mode: 0,
+        weighted_mode: 0,
+        in_weight: 1.0 / 3.0,
+        out_weight: 1.0 / 3.0,
+    }
+}
+
+fn animation_events_editor(ui: &mut egui::Ui, events: &mut Vec<AnimationEventDef>, duration: f32) {
+    ui.collapsing(format!("Animation events ({})", events.len()), |ui| {
+        let mut remove = None;
+        for (index, event) in events.iter_mut().enumerate() {
+            ui.push_id(("animation_event", index), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut event.time)
+                                .range(0.0..=duration.max(0.001))
+                                .prefix("Time "),
+                        );
+                        ui.label("Function");
+                        ui.text_edit_singleline(&mut event.function_name);
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("String");
+                        ui.text_edit_singleline(&mut event.string_parameter);
+                        ui.add(egui::DragValue::new(&mut event.float_parameter).prefix("Float "));
+                        ui.add(egui::DragValue::new(&mut event.int_parameter).prefix("Int "));
+                        ui.add(
+                            egui::DragValue::new(&mut event.message_options)
+                                .prefix("Message options "),
+                        );
+                    });
+                });
+            });
+        }
+        if let Some(index) = remove {
+            events.remove(index);
+        }
+        if ui.button("Add animation event").clicked() {
+            events.push(AnimationEventDef {
+                time: duration.max(0.0),
+                function_name: "OnAnimationEvent".to_owned(),
+                string_parameter: String::new(),
+                object_reference: None,
+                float_parameter: 0.0,
+                int_parameter: 0,
+                message_options: 0,
+            });
+        }
+    });
+}
+
 fn content_tab(
     ui: &mut egui::Ui,
     state: &mut ToolState,
     preview_texture: Option<egui::TextureId>,
     preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
 ) {
     ui.heading("Models and presentation assets");
     ui.label(
-        "Add, remove, search, and preview converted GLB scenes. Gameplay content remains in its dedicated Building, Role, Technology, and World tabs.",
+        "Every shipping presentation catalog is editable here: models, imported textures, PBR materials, and animation clips.",
     );
+    ui.horizontal_wrapped(|ui| {
+        for section in AssetEditorSection::ALL {
+            ui.selectable_value(&mut state.asset_section, section, section.label());
+        }
+        ui.separator();
+        if ui.button("Save presentation catalog").clicked() {
+            state.status =
+                match save_presentation_catalog(&state.presentation, &state.presentation_path) {
+                    Ok(path) => format!("Saved presentation catalog to {}", path.display()),
+                    Err(error) => format!("Could not save presentation catalog: {error:#}"),
+                };
+        }
+    });
+    match state.asset_section {
+        AssetEditorSection::Models => {}
+        AssetEditorSection::Textures => {
+            texture_assets_editor(ui, state, preview_texture, preview_status, preview_controls);
+            return;
+        }
+        AssetEditorSection::Materials => {
+            material_assets_editor(ui, state, preview_texture, preview_status, preview_controls);
+            return;
+        }
+        AssetEditorSection::Animations => {
+            animation_assets_editor(ui, state, preview_texture, preview_status, preview_controls);
+            return;
+        }
+    }
     let archetype_choices: Vec<_> = state
         .catalog
         .archetypes
@@ -1225,6 +3741,8 @@ fn content_tab(
         preview_texture,
         preview_status,
         egui::vec2(500.0, 333.0),
+        preview_controls,
+        false,
     );
     ui.collapsing("Import a GLB asset", |ui| {
         ui.label(
@@ -1278,6 +3796,59 @@ fn content_tab(
     let selected_archetype = state.selected_archetype.clone();
     if let Some(id) = selected_archetype {
         let model_assets = state.discovered_model_assets.clone();
+        let selected_scene = state
+            .catalog
+            .archetypes
+            .get(&id)
+            .and_then(|archetype| {
+                let index = state
+                    .selected_archetype_scene
+                    .min(archetype.scenes.len().saturating_sub(1));
+                archetype.scenes.get(index)
+            })
+            .cloned();
+        let selected_source_guid = state
+            .catalog
+            .archetypes
+            .get(&id)
+            .map(|archetype| archetype.source_guid.clone())
+            .unwrap_or_default();
+        let selected_metadata = selected_scene
+            .as_ref()
+            .map(|scene| cached_gltf_metadata(state, &scene.asset_path))
+            .unwrap_or_default();
+        let resources = resource_choices(&state.catalog);
+        let target_kinds = target_kind_choices(&state.catalog);
+        let enemy_archetypes = state
+            .catalog
+            .archetypes
+            .iter()
+            .filter(|(_, archetype)| archetype.enemy.is_some())
+            .map(|(id, archetype)| (id.clone(), archetype.display_name.clone()))
+            .collect::<Vec<_>>();
+        let enemy_types = labeled_ids(
+            state
+                .catalog
+                .archetypes
+                .values()
+                .filter_map(|archetype| archetype.enemy.as_ref())
+                .map(|enemy| enemy.enemy_type.clone())
+                .collect(),
+        );
+        let enemy_pools = labeled_ids(
+            state
+                .catalog
+                .archetypes
+                .values()
+                .filter_map(|archetype| archetype.enemy.as_ref())
+                .map(|enemy| enemy.pool.clone())
+                .collect(),
+        );
+        let mut model_nodes = building_model_node_choices(&state.catalog);
+        model_nodes.extend(selected_metadata.nodes.iter().cloned());
+        model_nodes.sort();
+        model_nodes.dedup();
+        let animation_names = action_animation_choices(&state.catalog);
         let asset_source_models: BTreeMap<_, _> = state
             .catalog
             .archetypes
@@ -1296,17 +3867,53 @@ fn content_tab(
                     ui.label("Display name");
                     ui.text_edit_singleline(&mut archetype.display_name);
                     archetype_kind_choice(ui, &mut archetype.kind);
-                    ui.add(
-                        egui::DragValue::new(&mut archetype.footprint[0])
-                            .range(1..=4_096)
-                            .prefix("Footprint x "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut archetype.footprint[1])
-                            .range(1..=4_096)
-                            .prefix("z "),
-                    );
                 });
+                footprint_editor(
+                    ui,
+                    &mut archetype.footprint,
+                    "Default logical footprint",
+                    4_096,
+                );
+                ui.collapsing("Bounds, provenance, and components", |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Source GUID");
+                        ui.text_edit_singleline(&mut archetype.source_guid);
+                        ui.label("Source path");
+                        ui.text_edit_singleline(&mut archetype.source_path);
+                    });
+                    ui.label("Bounds centre / size");
+                    ui.horizontal_wrapped(|ui| {
+                        for (value, label) in archetype
+                            .bounds
+                            .center
+                            .iter_mut()
+                            .zip(["Centre X", "Y", "Z"])
+                        {
+                            ui.add(egui::DragValue::new(value).prefix(format!("{label} ")));
+                        }
+                        for (value, label) in
+                            archetype.bounds.size.iter_mut().zip(["Size X", "Y", "Z"])
+                        {
+                            ui.add(
+                                egui::DragValue::new(value)
+                                    .range(0.001..=100_000.0)
+                                    .prefix(format!("{label} ")),
+                            );
+                        }
+                    });
+                    free_string_vec_editor(ui, "Component types", &mut archetype.component_types);
+                });
+                archetype_runtime_editor(
+                    ui,
+                    archetype,
+                    &resources,
+                    &target_kinds,
+                    &enemy_archetypes,
+                    &enemy_types,
+                    &enemy_pools,
+                    &model_nodes,
+                    &animation_names,
+                );
                 for (index, scene) in archetype.scenes.iter_mut().enumerate() {
                     ui.push_id(("archetype_scene", index), |ui| {
                         ui.group(|ui| {
@@ -1370,6 +3977,16 @@ fn content_tab(
                 Ok(()) => "Deleted unreferenced model archetype".to_owned(),
                 Err(error) => format!("Could not delete model archetype: {error}"),
             };
+        }
+        if let Some(scene) = selected_scene {
+            gltf_material_bindings_editor(
+                ui,
+                &mut state.presentation,
+                &id,
+                &selected_source_guid,
+                &scene,
+                &selected_metadata,
+            );
         }
     }
     ui.horizontal_wrapped(|ui| {
@@ -1481,6 +4098,167 @@ fn content_tab(
                 });
             }
         });
+    });
+}
+
+fn gltf_material_bindings_editor(
+    ui: &mut egui::Ui,
+    presentation: &mut PresentationCatalog,
+    archetype_id: &StableId,
+    prefab_guid: &str,
+    scene: &ArchetypeScene,
+    metadata: &GltfMetadata,
+) {
+    let material_choices = presentation
+        .materials
+        .iter()
+        .map(|(id, material)| (id.clone(), material.display_name.clone()))
+        .collect::<Vec<_>>();
+    ui.collapsing("GLB hierarchy, animations, and material assignments", |ui| {
+        ui.label(format!(
+            "{} named nodes · {} embedded materials · {} embedded animations",
+            metadata.nodes.len(),
+            metadata.materials.len(),
+            metadata.animations.len()
+        ));
+        if !metadata.animations.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Animations:");
+                for (index, name) in &metadata.animations {
+                    ui.monospace(format!("{index}: {name}"));
+                }
+            });
+        }
+        ui.label(
+            "Model-wide material assignments use names read directly from the GLB; no embedded material name needs to be typed.",
+        );
+        let bindings = presentation
+            .model_materials
+            .entry(scene.source_model.clone())
+            .or_default();
+        for embedded in &metadata.materials {
+            ui.push_id(("model_material_binding", embedded), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.monospace(embedded);
+                    let mut selected = bindings.get(embedded).cloned();
+                    stable_id_option_choice(
+                        ui,
+                        "Authored material",
+                        &mut selected,
+                        &material_choices,
+                    );
+                    if let Some(material) = selected {
+                        bindings.insert(embedded.clone(), material);
+                    } else {
+                        bindings.remove(embedded);
+                    }
+                });
+            });
+        }
+        if bindings.is_empty() {
+            presentation.model_materials.remove(&scene.source_model);
+        }
+
+        ui.separator();
+        ui.label(format!(
+            "Per-renderer overrides for {} ({archetype_id})",
+            scene.asset_path
+        ));
+        let renderers = presentation
+            .prefab_renderer_materials
+            .entry(prefab_guid.to_owned())
+            .or_default();
+        let mut remove_renderer = None;
+        for (renderer_index, renderer) in renderers.iter_mut().enumerate() {
+            ui.push_id(("renderer_material_binding", renderer_index), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        string_choice(
+                            ui,
+                            "Renderer node",
+                            &mut renderer.target_path,
+                            &metadata.nodes,
+                        );
+                        if ui.small_button("Remove renderer override").clicked() {
+                            remove_renderer = Some(renderer_index);
+                        }
+                    });
+                    let slots = renderer.materials.keys().cloned().collect::<Vec<_>>();
+                    let mut remove_slot = None;
+                    for embedded in slots {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.monospace(&embedded);
+                            if let Some(material) = renderer.materials.get_mut(&embedded) {
+                                stable_id_required_choice(
+                                    ui,
+                                    "Material",
+                                    material,
+                                    &material_choices,
+                                );
+                            }
+                            if ui.small_button("Remove slot").clicked() {
+                                remove_slot = Some(embedded.clone());
+                            }
+                        });
+                    }
+                    if let Some(slot) = remove_slot
+                        && renderer.materials.len() > 1
+                    {
+                        renderer.materials.remove(&slot);
+                    }
+                    let unused_material = metadata
+                        .materials
+                        .iter()
+                        .find(|name| !renderer.materials.contains_key(*name));
+                    if ui
+                        .add_enabled(
+                            unused_material.is_some() && !material_choices.is_empty(),
+                            egui::Button::new("Add renderer material slot"),
+                        )
+                        .clicked()
+                        && let (Some(embedded), Some((material, _))) =
+                            (unused_material, material_choices.first())
+                    {
+                        renderer
+                            .materials
+                            .insert(embedded.clone(), material.clone());
+                    }
+                });
+            });
+        }
+        if let Some(index) = remove_renderer {
+            renderers.remove(index);
+        }
+        let unused_node = metadata
+            .nodes
+            .iter()
+            .find(|node| {
+                !renderers
+                    .iter()
+                    .any(|renderer| renderer.target_path == node.as_str())
+            });
+        if ui
+            .add_enabled(
+                unused_node.is_some()
+                    && !metadata.materials.is_empty()
+                    && !material_choices.is_empty(),
+                egui::Button::new("Add renderer override"),
+            )
+            .clicked()
+            && let (Some(node), Some(embedded), Some((material, _))) = (
+                unused_node,
+                metadata.materials.first(),
+                material_choices.first(),
+            )
+        {
+            renderers.push(RendererMaterialBinding {
+                target_path: node.clone(),
+                materials: BTreeMap::from([(embedded.clone(), material.clone())]),
+            });
+        }
+        if renderers.is_empty() {
+            presentation.prefab_renderer_materials.remove(prefab_guid);
+        }
     });
 }
 
@@ -2015,6 +4793,7 @@ fn buildings_tab(
     state: &mut ToolState,
     preview_texture: Option<egui::TextureId>,
     preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
 ) {
     ui.heading("Building authoring");
     ui.label(
@@ -2113,10 +4892,30 @@ fn buildings_tab(
         .collect();
     let station_kinds = station_kind_choices(&state.catalog);
     let target_kinds = target_kind_choices(&state.catalog);
-    let model_nodes = building_model_node_choices(&state.catalog);
+    let building_asset_path = state
+        .building_draft
+        .as_ref()
+        .and_then(|draft| state.catalog.archetypes.get(&draft.value.archetype))
+        .and_then(|archetype| {
+            archetype
+                .scenes
+                .iter()
+                .find(|scene| scene.is_default)
+                .or_else(|| archetype.scenes.first())
+        })
+        .map(|scene| scene.asset_path.clone());
+    let building_metadata = building_asset_path
+        .as_deref()
+        .map(|path| cached_gltf_metadata(state, path))
+        .unwrap_or_default();
+    let mut model_nodes = building_model_node_choices(&state.catalog);
+    model_nodes.extend(building_metadata.nodes);
+    model_nodes.sort();
+    model_nodes.dedup();
     let projectile_pools = projectile_pool_choices(&state.catalog);
     let mut apply = false;
     let mut reset = false;
+    let mut apply_footprint_to_archetype = None;
     if let Some(draft) = state.building_draft.as_mut() {
         ui.separator();
         ui.monospace(draft.id.to_string());
@@ -2130,17 +4929,33 @@ fn buildings_tab(
                     &mut draft.value.archetype,
                     &archetype_choices,
                 );
+                footprint_editor(
+                    &mut columns[0],
+                    &mut draft.value.footprint,
+                    "Logical placement footprint",
+                    64,
+                );
+                if let Some(archetype) = state.catalog.archetypes.get(&draft.value.archetype)
+                    && archetype.footprint != draft.value.footprint
+                {
+                    columns[0].colored_label(
+                        egui::Color32::YELLOW,
+                        format!(
+                            "Model archetype footprint is {} × {}",
+                            archetype.footprint[0], archetype.footprint[1]
+                        ),
+                    );
+                    columns[0].horizontal_wrapped(|ui| {
+                        if ui.button("Copy model footprint here").clicked() {
+                            draft.value.footprint = archetype.footprint;
+                        }
+                        if ui.button("Apply logical footprint to model").clicked() {
+                            apply_footprint_to_archetype =
+                                Some((draft.value.archetype.clone(), draft.value.footprint));
+                        }
+                    });
+                }
                 columns[0].horizontal_wrapped(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut draft.value.footprint[0])
-                            .range(1..=64)
-                            .prefix("Width "),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut draft.value.footprint[1])
-                            .range(1..=64)
-                            .prefix("Depth "),
-                    );
                     ui.checkbox(&mut draft.value.placeable, "Placeable");
                     ui.checkbox(&mut draft.value.can_level, "Can level");
                 });
@@ -2155,6 +4970,7 @@ fn buildings_tab(
                     &state.catalog,
                     preview_texture,
                     preview_status,
+                    preview_controls,
                 );
             });
             ui.collapsing("Construction and level costs", |ui| {
@@ -2483,6 +5299,14 @@ fn buildings_tab(
     } else {
         ui.label("Select a building to edit it.");
     }
+    if let Some((archetype, footprint)) = apply_footprint_to_archetype {
+        state.status = match synchronize_archetype_footprint(state, &archetype, footprint) {
+            Ok(()) => {
+                format!("Synchronized logical placement footprint to model archetype {archetype}")
+            }
+            Err(error) => format!("Could not synchronize model footprint: {error}"),
+        };
+    }
     if apply {
         state.status = match apply_building_draft(state) {
             Ok(()) => "Building edit applied; every reference remains valid".to_owned(),
@@ -2579,7 +5403,12 @@ fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     let target_choices = target_kind_choices(&state.catalog);
     let ability_choices = ability_choices(&state.catalog);
     let animation_choices = action_animation_choices(&state.catalog);
-    let equipment_choices = equipment_node_choices(&state.catalog, &state.presentation);
+    let character_metadata =
+        cached_gltf_metadata(state, "migrated/models/Models/Characters/Characters.glb");
+    let mut equipment_choices = equipment_node_choices(&state.catalog, &state.presentation);
+    equipment_choices.extend(character_metadata.nodes);
+    equipment_choices.sort();
+    equipment_choices.dedup();
     let mut apply = false;
     let mut reset = false;
     if let Some(draft) = state.role_draft.as_mut() {
@@ -3453,6 +6282,12 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             Err(error) => format!("Connection rejected: {error}"),
         };
     }
+    if let Some((source, target)) = output.connection_removal_requested {
+        state.status = match disconnect_technology_nodes(state, &source, &target) {
+            Ok(()) => format!("Removed prerequisite connection {source} → {target}"),
+            Err(error) => format!("Connection removal rejected: {error}"),
+        };
+    }
 
     let objective_details = state.catalog.objectives.clone();
     let mut apply = false;
@@ -3640,6 +6475,7 @@ fn enemy_camp_generation_editor(
     state: &mut ToolState,
     preview_texture: Option<egui::TextureId>,
     preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
 ) {
     ui.collapsing("Enemy camp generation layers", |ui| {
         let layer_choices = state
@@ -3755,6 +6591,8 @@ fn enemy_camp_generation_editor(
                         preview_texture,
                         preview_status,
                         egui::vec2(360.0, 240.0),
+                        preview_controls,
+                        false,
                     );
                 } else if ui
                     .button("Preview this camp model and placement range")
@@ -4120,6 +6958,7 @@ fn world_tab(
     state: &mut ToolState,
     preview_texture: Option<egui::TextureId>,
     preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
 ) {
     ui.heading("World-generation lab");
     ui.label(
@@ -4347,6 +7186,8 @@ fn world_tab(
                     preview_texture,
                     preview_status,
                     egui::vec2(360.0, 240.0),
+                    preview_controls,
+                    false,
                 );
                 ui.horizontal(|ui| {
                     apply = ui.button("Apply validated resource layer").clicked();
@@ -4365,7 +7206,7 @@ fn world_tab(
         }
     });
 
-    enemy_camp_generation_editor(ui, state, preview_texture, preview_status);
+    enemy_camp_generation_editor(ui, state, preview_texture, preview_status, preview_controls);
 
     ui.collapsing("Authored foliage generation layers", |ui| {
         let layers: Vec<_> = state
@@ -4622,6 +7463,8 @@ fn world_tab(
                 preview_texture,
                 preview_status,
                 egui::vec2(360.0, 240.0),
+                preview_controls,
+                false,
             );
             ui.horizontal(|ui| {
                 apply_foliage = ui.button("Apply validated foliage edit").clicked();
@@ -6158,6 +9001,10 @@ fn default_catalog_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/catalog.ron")
 }
 
+fn default_presentation_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/presentation.ron")
+}
+
 fn default_technology_layout_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/content/technology_layout.ron")
 }
@@ -6304,6 +9151,43 @@ fn save_content_catalog(catalog: &ContentCatalog, path: &str) -> anyhow::Result<
     reloaded.validate()?;
     if reloaded != *catalog {
         anyhow::bail!("reloaded catalog does not match the authored catalog");
+    }
+    Ok(path)
+}
+
+fn save_presentation_catalog(catalog: &PresentationCatalog, path: &str) -> anyhow::Result<PathBuf> {
+    catalog.validate()?;
+    let path = PathBuf::from(path.trim());
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("presentation-catalog path cannot be empty");
+    }
+    let encoded = ron::ser::to_string_pretty(catalog, ron::ser::PrettyConfig::default())?;
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    fs::create_dir_all(parent)?;
+    let temporary = PathBuf::from(format!("{}.tmp", path.display()));
+    let backup = PathBuf::from(format!("{}.bak", path.display()));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(encoded.as_bytes())?;
+    file.sync_all()?;
+    if path.is_file() {
+        fs::copy(&path, &backup)?;
+        fs::remove_file(&path)?;
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        if backup.is_file() && !path.exists() {
+            let _ = fs::copy(&backup, &path);
+        }
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    let reloaded: PresentationCatalog = ron::from_str(&fs::read_to_string(&path)?)?;
+    reloaded.validate()?;
+    if reloaded != *catalog {
+        anyhow::bail!("reloaded presentation catalog does not match the authored catalog");
     }
     Ok(path)
 }
@@ -7161,6 +10045,7 @@ fn draw_building_visual(
     catalog: &ContentCatalog,
     preview_texture: Option<egui::TextureId>,
     preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
 ) {
     ui.group(|ui| {
         let archetype = catalog.archetypes.get(&building.archetype);
@@ -7179,38 +10064,643 @@ fn draw_building_visual(
             preview_texture,
             preview_status,
             egui::vec2(320.0, 214.0),
+            preview_controls,
+            false,
         );
-        ui.small("Logical placement footprint");
-        let desired = egui::vec2(190.0, 80.0);
-        let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 5.0, egui::Color32::from_rgb(18, 27, 34));
-        let width = f32::from(building.footprint[0].max(1));
-        let depth = f32::from(building.footprint[1].max(1));
-        let scale = (rect.width() / width).min(rect.height() / depth) * 0.78;
-        let footprint =
-            egui::Rect::from_center_size(rect.center(), egui::vec2(width * scale, depth * scale));
-        ui.painter()
-            .rect_filled(footprint, 3.0, egui::Color32::from_rgb(71, 120, 145));
-        for x in 1..building.footprint[0] {
-            let x = footprint.left() + f32::from(x) * scale;
+        ui.small(format!(
+            "Runtime placement occupies {} × {} cells",
+            building.footprint[0], building.footprint[1]
+        ));
+        draw_footprint_grid(ui, building.footprint, egui::vec2(250.0, 140.0));
+    });
+}
+
+fn footprint_editor(ui: &mut egui::Ui, footprint: &mut [u16; 2], label: &str, maximum: u16) {
+    ui.group(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(label);
+            ui.add(
+                egui::DragValue::new(&mut footprint[0])
+                    .range(1..=maximum)
+                    .prefix("Width "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut footprint[1])
+                    .range(1..=maximum)
+                    .prefix("Depth "),
+            );
+            if ui.small_button("− column").clicked() {
+                footprint[0] = footprint[0].saturating_sub(1).max(1);
+            }
+            if ui.small_button("+ column").clicked() {
+                footprint[0] = footprint[0].saturating_add(1).min(maximum);
+            }
+            if ui.small_button("− row").clicked() {
+                footprint[1] = footprint[1].saturating_sub(1).max(1);
+            }
+            if ui.small_button("+ row").clicked() {
+                footprint[1] = footprint[1].saturating_add(1).min(maximum);
+            }
+            if ui.small_button("Rotate 90°").clicked() {
+                footprint.swap(0, 1);
+            }
+        });
+        draw_footprint_grid(ui, *footprint, egui::vec2(300.0, 170.0));
+        ui.small(format!(
+            "{} occupied cell{} · origin is the highlighted top-left cell",
+            u32::from(footprint[0]) * u32::from(footprint[1]),
+            if *footprint == [1, 1] { "" } else { "s" }
+        ));
+    });
+}
+
+fn draw_footprint_grid(ui: &mut egui::Ui, footprint: [u16; 2], desired: egui::Vec2) {
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 5.0, egui::Color32::from_rgb(18, 27, 34));
+    let width = f32::from(footprint[0].max(1));
+    let depth = f32::from(footprint[1].max(1));
+    let scale = (rect.width() / width).min(rect.height() / depth) * 0.86;
+    let grid =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(width * scale, depth * scale));
+    ui.painter()
+        .rect_filled(grid, 3.0, egui::Color32::from_rgb(71, 120, 145));
+    let line = egui::Stroke::new(0.8, egui::Color32::from_rgb(132, 184, 207));
+    if footprint[0] <= 64 {
+        for x in 1..footprint[0] {
+            let x = grid.left() + f32::from(x) * scale;
             ui.painter().line_segment(
-                [
-                    egui::pos2(x, footprint.top()),
-                    egui::pos2(x, footprint.bottom()),
-                ],
-                egui::Stroke::new(0.7, egui::Color32::from_rgb(119, 166, 188)),
+                [egui::pos2(x, grid.top()), egui::pos2(x, grid.bottom())],
+                line,
             );
         }
-        for z in 1..building.footprint[1] {
-            let y = footprint.top() + f32::from(z) * scale;
+    }
+    if footprint[1] <= 64 {
+        for z in 1..footprint[1] {
+            let y = grid.top() + f32::from(z) * scale;
             ui.painter().line_segment(
-                [
-                    egui::pos2(footprint.left(), y),
-                    egui::pos2(footprint.right(), y),
-                ],
-                egui::Stroke::new(0.7, egui::Color32::from_rgb(119, 166, 188)),
+                [egui::pos2(grid.left(), y), egui::pos2(grid.right(), y)],
+                line,
             );
+        }
+    }
+    let origin = egui::Rect::from_min_size(grid.min, egui::Vec2::splat(scale));
+    ui.painter().rect_filled(
+        origin.shrink(1.0),
+        2.0,
+        egui::Color32::from_rgb(218, 167, 67),
+    );
+    ui.painter().rect_stroke(
+        grid,
+        3.0,
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(183, 218, 232)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn free_string_vec_editor(ui: &mut egui::Ui, label: &str, values: &mut Vec<String>) {
+    ui.collapsing(format!("{label} ({})", values.len()), |ui| {
+        let mut remove = None;
+        for (index, value) in values.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.text_edit_singleline(value);
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            values.remove(index);
+        }
+        if ui.button(format!("Add {label}")).clicked() {
+            values.push(String::new());
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn archetype_runtime_editor(
+    ui: &mut egui::Ui,
+    archetype: &mut ArchetypeDef,
+    resources: &[(StableId, String)],
+    target_kinds: &[(StableId, String)],
+    enemy_archetypes: &[(StableId, String)],
+    enemy_types: &[(StableId, String)],
+    enemy_pools: &[(StableId, String)],
+    model_nodes: &[String],
+    animation_names: &[String],
+) {
+    ui.collapsing("Runtime behavior", |ui| {
+        optional_u32_editor(
+            ui,
+            "Disable after",
+            &mut archetype.disable_after_milliseconds,
+            1_000,
+            " ms",
+        );
+        optional_u32_editor(
+            ui,
+            "Health bar hide delay",
+            &mut archetype.health_bar_hide_milliseconds,
+            1_000,
+            " ms",
+        );
+        ui.add(
+            egui::DragValue::new(&mut archetype.target_size_milli_cells)
+                .range(0..=u32::MAX)
+                .prefix("Target size ")
+                .suffix(" milli-cells"),
+        );
+        rotating_nodes_editor(ui, &mut archetype.rotating_nodes, model_nodes);
+        health_definition_editor(ui, &mut archetype.health);
+        enemy_definition_editor(
+            ui,
+            &mut archetype.enemy,
+            resources,
+            target_kinds,
+            enemy_types,
+            enemy_pools,
+        );
+        enemy_model_set_editor(
+            ui,
+            &mut archetype.enemy_models,
+            model_nodes,
+            animation_names,
+        );
+        enemy_spawner_editor(ui, &mut archetype.enemy_spawner, enemy_archetypes);
+        pet_definition_editor(ui, &mut archetype.pet, model_nodes);
+    });
+}
+
+fn optional_u32_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<u32>,
+    default_value: u32,
+    suffix: &str,
+) {
+    ui.horizontal_wrapped(|ui| {
+        let mut enabled = value.is_some();
+        if ui.checkbox(&mut enabled, label).changed() {
+            *value = enabled.then_some(default_value);
+        }
+        if let Some(value) = value {
+            ui.add(egui::DragValue::new(value).suffix(suffix));
+        }
+    });
+}
+
+fn rotating_nodes_editor(
+    ui: &mut egui::Ui,
+    values: &mut Vec<RotatingNodeDef>,
+    model_nodes: &[String],
+) {
+    ui.collapsing(format!("Rotating nodes ({})", values.len()), |ui| {
+        let mut remove = None;
+        for (index, value) in values.iter_mut().enumerate() {
+            ui.push_id(("rotating_node", index), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Hierarchy path");
+                        ui.text_edit_singleline(&mut value.hierarchy_path);
+                        if model_nodes.is_empty() {
+                            ui.label("Node");
+                            ui.text_edit_singleline(&mut value.node);
+                        } else {
+                            string_choice(ui, "Node", &mut value.node, model_nodes);
+                        }
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        for (component, axis) in value.axis.iter_mut().zip(["Axis X", "Y", "Z"]) {
+                            ui.add(egui::DragValue::new(component).prefix(format!("{axis} ")));
+                        }
+                        ui.add(
+                            egui::DragValue::new(&mut value.degrees_per_second)
+                                .suffix(" degrees/s"),
+                        );
+                        let mut aged = value.age.is_some();
+                        if ui.checkbox(&mut aged, "Age-specific").changed() {
+                            value.age = aged.then_some(1);
+                        }
+                        if let Some(age) = value.age.as_mut() {
+                            ui.add(egui::DragValue::new(age).range(1..=u8::MAX));
+                        }
+                    });
+                });
+            });
+        }
+        if let Some(index) = remove {
+            values.remove(index);
+        }
+        if ui.button("Add rotating node").clicked() {
+            values.push(RotatingNodeDef {
+                hierarchy_path: String::new(),
+                age: None,
+                node: model_nodes.first().cloned().unwrap_or_default(),
+                axis: [0.0, 1.0, 0.0],
+                degrees_per_second: 30.0,
+            });
+        }
+    });
+}
+
+fn health_definition_editor(ui: &mut egui::Ui, value: &mut Option<HealthDef>) {
+    ui.collapsing("Health and revival", |ui| {
+        let mut enabled = value.is_some();
+        if ui.checkbox(&mut enabled, "Has health").changed() {
+            *value = enabled.then_some(HealthDef {
+                max_health: 100,
+                health_gain_per_level: 0,
+                regeneration_milli_per_second: 0,
+                regeneration_requires_food: false,
+                revive_milliseconds: None,
+            });
+        }
+        if let Some(value) = value {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::DragValue::new(&mut value.max_health).prefix("Maximum "));
+                ui.add(egui::DragValue::new(&mut value.health_gain_per_level).prefix("Per level "));
+                ui.add(
+                    egui::DragValue::new(&mut value.regeneration_milli_per_second)
+                        .prefix("Regeneration milli/s "),
+                );
+                ui.checkbox(&mut value.regeneration_requires_food, "Requires food");
+            });
+            optional_u32_editor(
+                ui,
+                "Revives after",
+                &mut value.revive_milliseconds,
+                5_000,
+                " ms",
+            );
+        }
+    });
+}
+
+fn enemy_definition_editor(
+    ui: &mut egui::Ui,
+    value: &mut Option<EnemyDef>,
+    resources: &[(StableId, String)],
+    target_kinds: &[(StableId, String)],
+    enemy_types: &[(StableId, String)],
+    enemy_pools: &[(StableId, String)],
+) {
+    ui.collapsing("Enemy combat behavior", |ui| {
+        let mut enabled = value.is_some();
+        if ui.checkbox(&mut enabled, "Is an enemy").changed() {
+            *value = enabled.then(|| EnemyDef {
+                enemy_type: enemy_types.first().map_or_else(
+                    || StableId::new("enemy_type:new").unwrap(),
+                    |value| value.0.clone(),
+                ),
+                pool: enemy_pools.first().map_or_else(
+                    || StableId::new("pool:enemy_new").unwrap(),
+                    |value| value.0.clone(),
+                ),
+                additional_health_milli_per_player: 0,
+                action_amount: 5,
+                action_milliseconds: 1_000,
+                action_range_milli_cells: 1_000,
+                target_search_range_milli_cells: 10_000,
+                attack_attacker: true,
+                kill_reward: ResourceReward {
+                    resource: resources.first().map_or_else(
+                        || StableId::new("resource:food").unwrap(),
+                        |value| value.0.clone(),
+                    ),
+                    amount: 1,
+                },
+                targets_all: true,
+                target_kinds: BTreeSet::new(),
+            });
+        }
+        let Some(value) = value else {
+            return;
+        };
+        if enemy_types.is_empty() {
+            ui.label("Enemy type");
+            ui.monospace(value.enemy_type.to_string());
+        } else {
+            stable_id_required_choice(ui, "Enemy type", &mut value.enemy_type, enemy_types);
+        }
+        if enemy_pools.is_empty() {
+            ui.label("Pool");
+            ui.monospace(value.pool.to_string());
+        } else {
+            stable_id_required_choice(ui, "Pool", &mut value.pool, enemy_pools);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut value.additional_health_milli_per_player)
+                    .prefix("Health/player milli "),
+            );
+            ui.add(egui::DragValue::new(&mut value.action_amount).prefix("Damage "));
+            ui.add(egui::DragValue::new(&mut value.action_milliseconds).prefix("Cadence ms "));
+            ui.add(
+                egui::DragValue::new(&mut value.action_range_milli_cells).prefix("Action range "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut value.target_search_range_milli_cells)
+                    .prefix("Search range "),
+            );
+            ui.checkbox(&mut value.attack_attacker, "Retaliates");
+        });
+        ui.horizontal_wrapped(|ui| {
+            if !resources.is_empty() {
+                stable_id_required_choice(
+                    ui,
+                    "Kill reward",
+                    &mut value.kill_reward.resource,
+                    resources,
+                );
+            }
+            ui.add(egui::DragValue::new(&mut value.kill_reward.amount).prefix("Amount "));
+        });
+        ui.checkbox(&mut value.targets_all, "Targets every kind");
+        stable_id_set_choices(ui, "Target kinds", &mut value.target_kinds, target_kinds);
+    });
+}
+
+fn enemy_model_set_editor(
+    ui: &mut egui::Ui,
+    value: &mut Option<EnemyModelSetDef>,
+    model_nodes: &[String],
+    animation_names: &[String],
+) {
+    ui.collapsing("Enemy model variants", |ui| {
+        let mut enabled = value.is_some();
+        if ui
+            .checkbox(&mut enabled, "Uses enemy model handler")
+            .changed()
+        {
+            *value = enabled.then_some(EnemyModelSetDef {
+                base_models: Vec::new(),
+                permanent_models: Vec::new(),
+                optional_models: Vec::new(),
+                weapons: Vec::new(),
+                base_animation_variants: 1,
+            });
+        }
+        let Some(value) = value else {
+            return;
+        };
+        ui.add(
+            egui::DragValue::new(&mut value.base_animation_variants)
+                .range(1..=u8::MAX)
+                .prefix("Base animation variants "),
+        );
+        model_string_vec_editor(ui, "Base models", &mut value.base_models, model_nodes);
+        model_string_vec_editor(
+            ui,
+            "Permanent models",
+            &mut value.permanent_models,
+            model_nodes,
+        );
+        model_string_vec_editor(
+            ui,
+            "Optional models",
+            &mut value.optional_models,
+            model_nodes,
+        );
+        let mut remove_weapon = None;
+        for (index, weapon) in value.weapons.iter_mut().enumerate() {
+            ui.push_id(("enemy_weapon", index), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if model_nodes.is_empty() {
+                            ui.text_edit_singleline(&mut weapon.main_model);
+                        } else {
+                            string_choice(ui, "Main model", &mut weapon.main_model, model_nodes);
+                        }
+                        if animation_names.is_empty() {
+                            ui.text_edit_singleline(&mut weapon.action_animation);
+                        } else {
+                            string_choice(
+                                ui,
+                                "Action animation",
+                                &mut weapon.action_animation,
+                                animation_names,
+                            );
+                        }
+                        ui.add(
+                            egui::DragValue::new(&mut weapon.action_animation_variants)
+                                .range(1..=u8::MAX)
+                                .prefix("Variants "),
+                        );
+                        enemy_run_animation_choice(ui, &mut weapon.run_animation);
+                        if ui.small_button("Remove weapon").clicked() {
+                            remove_weapon = Some(index);
+                        }
+                    });
+                    model_string_vec_editor(
+                        ui,
+                        "Off-hand models",
+                        &mut weapon.off_hand_models,
+                        model_nodes,
+                    );
+                });
+            });
+        }
+        if let Some(index) = remove_weapon {
+            value.weapons.remove(index);
+        }
+        if ui.button("Add weapon model").clicked() {
+            value.weapons.push(EnemyWeaponModelDef {
+                main_model: model_nodes.first().cloned().unwrap_or_default(),
+                off_hand_models: Vec::new(),
+                action_animation: animation_names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Attack".to_owned()),
+                action_animation_variants: 1,
+                run_animation: EnemyRunAnimation::Generic,
+            });
+        }
+    });
+}
+
+fn model_string_vec_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut Vec<String>,
+    choices: &[String],
+) {
+    if choices.is_empty() {
+        free_string_vec_editor(ui, label, values);
+    } else {
+        string_vec_choices(ui, label, values, choices);
+    }
+}
+
+fn enemy_run_animation_choice(ui: &mut egui::Ui, value: &mut EnemyRunAnimation) {
+    egui::ComboBox::from_id_salt(("enemy_run_animation", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, EnemyRunAnimation::Generic, "Generic");
+            ui.selectable_value(value, EnemyRunAnimation::TwoHanded, "Two handed");
+        });
+}
+
+fn enemy_spawner_editor(
+    ui: &mut egui::Ui,
+    value: &mut Option<EnemySpawnerDef>,
+    enemies: &[(StableId, String)],
+) {
+    ui.collapsing("Enemy spawner", |ui| {
+        let mut enabled = value.is_some();
+        if ui.checkbox(&mut enabled, "Spawns enemies").changed() {
+            *value = enabled.then_some(EnemySpawnerDef {
+                min_total_enemies: 1,
+                max_total_enemies: 3,
+                spawn_milliseconds: 5_000,
+                weighted_enemies: Vec::new(),
+                spawn_offsets_milli_cells: vec![[0, 0]],
+            });
+        }
+        let Some(value) = value else {
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::DragValue::new(&mut value.min_total_enemies).prefix("Minimum "));
+            ui.add(egui::DragValue::new(&mut value.max_total_enemies).prefix("Maximum "));
+            ui.add(egui::DragValue::new(&mut value.spawn_milliseconds).prefix("Spawn cadence ms "));
+        });
+        let mut remove_enemy = None;
+        for (index, spawn) in value.weighted_enemies.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                stable_id_required_choice(ui, "Enemy", &mut spawn.enemy_archetype, enemies);
+                ui.add(egui::DragValue::new(&mut spawn.weight_milli).prefix("Weight milli "));
+                if ui.small_button("Remove").clicked() {
+                    remove_enemy = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove_enemy {
+            value.weighted_enemies.remove(index);
+        }
+        if ui
+            .add_enabled(!enemies.is_empty(), egui::Button::new("Add weighted enemy"))
+            .clicked()
+        {
+            value.weighted_enemies.push(WeightedEnemySpawn {
+                enemy_archetype: enemies[0].0.clone(),
+                weight_milli: 1_000,
+            });
+        }
+        let mut remove_offset = None;
+        for (index, offset) in value.spawn_offsets_milli_cells.iter_mut().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::DragValue::new(&mut offset[0]).prefix("Offset X "));
+                ui.add(egui::DragValue::new(&mut offset[1]).prefix("Z "));
+                if ui.small_button("Remove offset").clicked() {
+                    remove_offset = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove_offset {
+            value.spawn_offsets_milli_cells.remove(index);
+        }
+        if ui.button("Add spawn offset").clicked() {
+            value.spawn_offsets_milli_cells.push([0, 0]);
+        }
+    });
+}
+
+fn pet_definition_editor(ui: &mut egui::Ui, value: &mut Option<PetDef>, models: &[String]) {
+    ui.collapsing("Pet follower", |ui| {
+        let mut enabled = value.is_some();
+        if ui.checkbox(&mut enabled, "Is a pet follower").changed() {
+            *value = enabled.then_some(PetDef {
+                closest_distance: 0.5,
+                max_distance: 5.0,
+                min_move_speed: 1.0,
+                max_move_speed: 4.0,
+                rotation_radians_per_second: 3.0,
+                models: BTreeMap::new(),
+            });
+        }
+        let Some(value) = value else {
+            return;
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.add(egui::DragValue::new(&mut value.closest_distance).prefix("Closest "));
+            ui.add(egui::DragValue::new(&mut value.max_distance).prefix("Maximum "));
+            ui.add(egui::DragValue::new(&mut value.min_move_speed).prefix("Minimum speed "));
+            ui.add(egui::DragValue::new(&mut value.max_move_speed).prefix("Maximum speed "));
+            ui.add(
+                egui::DragValue::new(&mut value.rotation_radians_per_second)
+                    .prefix("Rotation rad/s "),
+            );
+        });
+        let ids = value.models.keys().cloned().collect::<Vec<_>>();
+        let mut remove = None;
+        for id in ids {
+            let Some(model) = value.models.get_mut(&id) else {
+                continue;
+            };
+            ui.push_id(("pet_model", id.as_str()), |ui| {
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.monospace(id.to_string());
+                        if models.is_empty() {
+                            ui.text_edit_singleline(&mut model.source_model);
+                        } else {
+                            string_choice(ui, "Source model", &mut model.source_model, models);
+                        }
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(id.clone());
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        for (component, label) in
+                            model
+                                .local_position
+                                .iter_mut()
+                                .zip(["Position X", "Y", "Z"])
+                        {
+                            ui.add(egui::DragValue::new(component).prefix(format!("{label} ")));
+                        }
+                        for (component, label) in
+                            model.local_scale.iter_mut().zip(["Scale X", "Y", "Z"])
+                        {
+                            ui.add(egui::DragValue::new(component).prefix(format!("{label} ")));
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        for (component, label) in
+                            model
+                                .local_rotation
+                                .iter_mut()
+                                .zip(["Rotation X", "Y", "Z", "W"])
+                        {
+                            ui.add(egui::DragValue::new(component).prefix(format!("{label} ")));
+                        }
+                    });
+                });
+            });
+        }
+        if let Some(id) = remove {
+            value.models.remove(&id);
+        }
+        if ui.button("Add pet model").clicked() {
+            let mut suffix = value.models.len();
+            loop {
+                let id = StableId::new(format!("pet_model:authored_{suffix}"))
+                    .expect("generated pet model ID is valid");
+                if let std::collections::btree_map::Entry::Vacant(entry) = value.models.entry(id) {
+                    entry.insert(PetModelDef {
+                        source_model: models.first().cloned().unwrap_or_default(),
+                        local_position: [0.0; 3],
+                        local_rotation: [0.0, 0.0, 0.0, 1.0],
+                        local_scale: [1.0; 3],
+                    });
+                    break;
+                }
+                suffix += 1;
+            }
         }
     });
 }
@@ -7234,6 +10724,23 @@ fn refresh_building_draft(state: &mut ToolState) {
         .selected_building
         .as_ref()
         .and_then(|id| building_draft(&state.catalog, id));
+}
+
+fn synchronize_archetype_footprint(
+    state: &mut ToolState,
+    archetype: &StableId,
+    footprint: [u16; 2],
+) -> Result<(), String> {
+    if footprint.contains(&0) {
+        return Err("footprint dimensions must both be non-zero".to_owned());
+    }
+    let value = state
+        .catalog
+        .archetypes
+        .get_mut(archetype)
+        .ok_or_else(|| format!("missing model archetype {archetype}"))?;
+    value.footprint = footprint;
+    Ok(())
 }
 
 fn apply_building_draft(state: &mut ToolState) -> Result<(), String> {
@@ -7711,6 +11218,25 @@ fn connect_technology_nodes(
         return Err("that prerequisite connection already exists".to_owned());
     }
     node.prerequisites.push(prerequisite.clone());
+    commit_catalog_candidate(state, candidate)
+}
+
+fn disconnect_technology_nodes(
+    state: &mut ToolState,
+    prerequisite: &StableId,
+    dependent: &StableId,
+) -> Result<(), String> {
+    let mut candidate = state.catalog.clone();
+    let node = candidate
+        .technology
+        .nodes
+        .get_mut(dependent)
+        .ok_or_else(|| format!("missing dependent technology {dependent}"))?;
+    let previous = node.prerequisites.len();
+    node.prerequisites.retain(|value| value != prerequisite);
+    if node.prerequisites.len() == previous {
+        return Err("that prerequisite connection does not exist".to_owned());
+    }
     commit_catalog_candidate(state, candidate)
 }
 
@@ -8262,6 +11788,10 @@ mod tests {
                 "Validation",
             ]
         );
+        assert_eq!(
+            AssetEditorSection::ALL.map(AssetEditorSection::label),
+            ["Models", "Textures", "Materials", "Animations"]
+        );
     }
 
     #[test]
@@ -8287,6 +11817,104 @@ mod tests {
                 .iter()
                 .all(|path| !std::path::Path::new(path).is_absolute() && !path.contains('\\'))
         );
+    }
+
+    #[test]
+    fn texture_discovery_and_gltf_metadata_are_typed_project_assets() {
+        let textures = discover_texture_assets();
+        assert!(!textures.is_empty());
+        assert!(textures.iter().all(|path| {
+            path.starts_with("migrated/textures/")
+                && !path.contains('\\')
+                && matches!(
+                    std::path::Path::new(path)
+                        .extension()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "png" | "tga" | "jpg" | "jpeg"
+                )
+        }));
+        let metadata =
+            inspect_gltf_asset("migrated/models/Models/Characters/Characters.glb").unwrap();
+        assert!(!metadata.nodes.is_empty());
+        assert!(!metadata.materials.is_empty());
+        assert!(!metadata.animations.is_empty());
+    }
+
+    #[test]
+    fn preview_material_resolution_matches_runtime_binding_precedence() {
+        let mut assets = Assets::<StandardMaterial>::default();
+        let fallback = assets.add(StandardMaterial::default());
+        let model = assets.add(StandardMaterial::default());
+        let renderer = assets.add(StandardMaterial::default());
+        let overrides = PreviewMaterialOverrides {
+            fallback: Some(fallback.clone()),
+            model_materials: BTreeMap::from([("MainMaterial".to_owned(), model.clone())]),
+            renderer_materials: vec![PreviewRendererMaterialBinding {
+                target_path: "Root/Body".to_owned(),
+                materials: BTreeMap::from([("MainMaterial".to_owned(), renderer.clone())]),
+            }],
+        };
+
+        let resolved = resolved_preview_material(
+            &overrides,
+            "Imported/Root/Body/Primitive0",
+            Some("Body"),
+            Some("MainMaterial"),
+        )
+        .unwrap();
+        assert_eq!(resolved, &renderer);
+        assert_eq!(
+            resolved_preview_material(
+                &overrides,
+                "Unmatched/Primitive0",
+                None,
+                Some("MainMaterial")
+            ),
+            Some(&model)
+        );
+        assert_eq!(
+            resolved_preview_material(&overrides, "Unmatched", None, None),
+            Some(&fallback)
+        );
+    }
+
+    #[test]
+    fn presentation_asset_crud_stays_valid_and_reference_safe() {
+        let mut state = ToolState::default();
+
+        state.new_texture_id = "texture:test_authoring".to_owned();
+        state.new_texture_name = "Test Texture".to_owned();
+        state.new_texture_asset = state.discovered_texture_assets[0].clone();
+        create_texture_definition(&mut state).unwrap();
+        let texture = StableId::new("texture:test_authoring").unwrap();
+        assert!(state.presentation.textures.contains_key(&texture));
+        delete_selected_texture(&mut state).unwrap();
+
+        state.new_material_id = "material:test_authoring".to_owned();
+        state.new_material_name = "Test Material".to_owned();
+        create_material_definition(&mut state).unwrap();
+        let material = StableId::new("material:test_authoring").unwrap();
+        assert!(state.presentation.materials.contains_key(&material));
+        delete_selected_material(&mut state).unwrap();
+
+        state.new_clip_id = "clip:test_authoring".to_owned();
+        state.new_clip_name = "Test Clip".to_owned();
+        state.new_clip_asset = "migrated/models/Models/Characters/Characters.glb".to_owned();
+        create_animation_clip(&mut state).unwrap();
+        let clip = StableId::new("clip:test_authoring").unwrap();
+        assert!(state.presentation.clips.contains_key(&clip));
+        delete_selected_animation_clip(&mut state).unwrap();
+
+        state.new_controller_id = "animation_controller:test_authoring".to_owned();
+        state.new_controller_name = "Test Controller".to_owned();
+        create_animation_controller(&mut state).unwrap();
+        let controller = StableId::new("animation_controller:test_authoring").unwrap();
+        assert!(state.presentation.controllers.contains_key(&controller));
+        delete_selected_animation_controller(&mut state).unwrap();
+        state.presentation.validate().unwrap();
     }
 
     #[test]
@@ -8347,6 +11975,34 @@ mod tests {
 
         assert!(connect_technology_nodes(&mut state, &dependent, &prerequisite).is_err());
         assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn technology_connections_can_be_removed_and_restored() {
+        let mut state = ToolState::default();
+        let (dependent, prerequisite) = state
+            .catalog
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(id, node)| {
+                node.prerequisites
+                    .first()
+                    .map(|parent| (id.clone(), parent.clone()))
+            })
+            .expect("shipping graph has an edge");
+        disconnect_technology_nodes(&mut state, &prerequisite, &dependent).unwrap();
+        assert!(
+            !state.catalog.technology.nodes[&dependent]
+                .prerequisites
+                .contains(&prerequisite)
+        );
+        connect_technology_nodes(&mut state, &prerequisite, &dependent).unwrap();
+        assert!(
+            state.catalog.technology.nodes[&dependent]
+                .prerequisites
+                .contains(&prerequisite)
+        );
     }
 
     #[test]
@@ -8479,6 +12135,15 @@ mod tests {
     }
 
     #[test]
+    fn logical_footprint_sync_updates_the_runtime_archetype_record() {
+        let mut state = ToolState::default();
+        let archetype = state.catalog.archetypes.keys().next().unwrap().clone();
+        synchronize_archetype_footprint(&mut state, &archetype, [7, 3]).unwrap();
+        assert_eq!(state.catalog.archetypes[&archetype].footprint, [7, 3]);
+        assert!(synchronize_archetype_footprint(&mut state, &archetype, [0, 3]).is_err());
+    }
+
+    #[test]
     fn technology_catalog_save_is_atomic_validated_and_round_trips() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("catalog.ron");
@@ -8514,6 +12179,22 @@ mod tests {
 
         let reloaded = load_technology_layout(path.to_str().unwrap(), &state.catalog).unwrap();
         assert_eq!(reloaded, state.technology_layout);
+        assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
+        assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
+    }
+
+    #[test]
+    fn presentation_save_is_atomic_validated_and_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("presentation.ron");
+        let presentation = ToolState::default().presentation;
+
+        save_presentation_catalog(&presentation, path.to_str().unwrap()).unwrap();
+        save_presentation_catalog(&presentation, path.to_str().unwrap()).unwrap();
+
+        let reloaded: PresentationCatalog =
+            ron::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded, presentation);
         assert!(PathBuf::from(format!("{}.bak", path.display())).is_file());
         assert!(!PathBuf::from(format!("{}.tmp", path.display())).exists());
     }

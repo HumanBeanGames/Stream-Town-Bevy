@@ -29,6 +29,7 @@ bevy_hanabi = { version = "0.19.0", default-features = false, features = ["2d", 
 clap = { version = "4.5.54", features = ["derive"] }
 dunce = "1.0.5"
 flate2 = "1.1.5"
+gltf = { version = "1.4.1", default-features = false, features = ["names"] }
 ffmpeg-next = { version = "=8.1.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
 hex = "0.4.3"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
