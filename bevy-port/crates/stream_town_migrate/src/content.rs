@@ -525,6 +525,7 @@ fn convert_export(
         loading_screen: loading_screen_definition(required_asset(&assets_by_path, LOADER_SCENE)?)?,
         archetypes,
         foliage,
+        resource_generation: stream_town_domain::default_resource_generation_layers(),
         enemy_camp_generation,
         buildings,
         roles,

@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::StableId;
 
-pub const CURRENT_CONTENT_SCHEMA: u32 = 34;
+pub const CURRENT_CONTENT_SCHEMA: u32 = 35;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContentCatalog {
@@ -18,6 +18,9 @@ pub struct ContentCatalog {
     pub archetypes: BTreeMap<StableId, ArchetypeDef>,
     #[serde(default)]
     pub foliage: Vec<FoliageLayerDef>,
+    /// Authored land and shoreline-water resource generation layers.
+    #[serde(default = "default_resource_generation_layers")]
+    pub resource_generation: Vec<ResourceGenerationLayerDef>,
     /// Unity `CampGenSettings` entries converted from world units to logical cells.
     #[serde(default)]
     pub enemy_camp_generation: Vec<EnemyCampGenerationDef>,
@@ -65,6 +68,126 @@ pub struct FoliageLayerDef {
 pub enum FoliageHabitat {
     Land,
     Underwater,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceGenerationHabitat {
+    Land,
+    ShorelineWater,
+}
+
+/// One editable Unity-compatible resource-generation layer.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ResourceGenerationLayerDef {
+    pub id: StableId,
+    pub display_name: String,
+    pub source_path: String,
+    pub habitat: ResourceGenerationHabitat,
+    pub resource: StableId,
+    pub target_kind: StableId,
+    /// Searchable GLB choice used by authoring previews and presentation validation.
+    pub visual_asset_path: String,
+    pub source_size: u16,
+    pub seed: i32,
+    pub noise_scale: f32,
+    pub octaves: u8,
+    pub persistence: f32,
+    pub lacunarity: f32,
+    pub spawn_threshold: f32,
+    pub spacing: u16,
+    pub amount: u32,
+    /// Unity tree placement subtracts half a cell before terrain lookup.
+    pub half_cell_terrain_offset: bool,
+    /// Shoreline water layers multiply the global resource density by this value.
+    pub density_multiplier_per_thousand: u16,
+}
+
+#[must_use]
+pub fn default_resource_generation_layers() -> Vec<ResourceGenerationLayerDef> {
+    let id = |value| StableId::new(value).expect("built-in resource layer stable ID");
+    vec![
+        ResourceGenerationLayerDef {
+            id: id("resource_generation:wood"),
+            display_name: "Trees".to_owned(),
+            source_path: "Assets/DefaultSettings/D_ResourceGenSettings.asset".to_owned(),
+            habitat: ResourceGenerationHabitat::Land,
+            resource: id("resource:wood"),
+            target_kind: id("target:tree"),
+            visual_asset_path: "migrated/models/Models/Resources/Env_Tree.glb".to_owned(),
+            source_size: 300,
+            seed: -1_165_233_549,
+            noise_scale: 17.0,
+            octaves: 6,
+            persistence: 0.452,
+            lacunarity: 22.47,
+            spawn_threshold: 0.6,
+            spacing: 2,
+            amount: 100,
+            half_cell_terrain_offset: true,
+            density_multiplier_per_thousand: 1_000,
+        },
+        ResourceGenerationLayerDef {
+            id: id("resource_generation:ore"),
+            display_name: "Ore".to_owned(),
+            source_path: "Assets/DefaultSettings/D_ResourceGenSettings.asset".to_owned(),
+            habitat: ResourceGenerationHabitat::Land,
+            resource: id("resource:ore"),
+            target_kind: id("target:ore"),
+            visual_asset_path: "migrated/models/Models/Resources/Env_Ore.glb".to_owned(),
+            source_size: 300,
+            seed: -1_165_233_548,
+            noise_scale: 7.0,
+            octaves: 1,
+            persistence: 1.0,
+            lacunarity: 0.0,
+            spawn_threshold: 0.85,
+            spacing: 1,
+            amount: 100,
+            half_cell_terrain_offset: false,
+            density_multiplier_per_thousand: 1_000,
+        },
+        ResourceGenerationLayerDef {
+            id: id("resource_generation:food"),
+            display_name: "Berry bushes".to_owned(),
+            source_path: "Assets/DefaultSettings/D_ResourceGenSettings.asset".to_owned(),
+            habitat: ResourceGenerationHabitat::Land,
+            resource: id("resource:food"),
+            target_kind: id("target:bush"),
+            visual_asset_path: "migrated/models/Models/Resources/Env_Bush.glb".to_owned(),
+            source_size: 300,
+            seed: -1_165_233_547,
+            noise_scale: 7.0,
+            octaves: 2,
+            persistence: 1.0,
+            lacunarity: 0.0,
+            spawn_threshold: 0.85,
+            spacing: 1,
+            amount: 100,
+            half_cell_terrain_offset: false,
+            density_multiplier_per_thousand: 1_000,
+        },
+        ResourceGenerationLayerDef {
+            id: id("resource_generation:fish"),
+            display_name: "Shoreline fish".to_owned(),
+            source_path: "Assets/DefaultSettings/D_WaterResourceGenSettings.asset".to_owned(),
+            habitat: ResourceGenerationHabitat::ShorelineWater,
+            resource: id("resource:food"),
+            target_kind: id("target:fish"),
+            visual_asset_path: "migrated/models/Models/Critters/Fish1.glb".to_owned(),
+            source_size: 300,
+            seed: 0,
+            noise_scale: 1.0,
+            octaves: 1,
+            persistence: 1.0,
+            lacunarity: 1.0,
+            spawn_threshold: 0.0,
+            spacing: 1,
+            amount: 100,
+            half_cell_terrain_offset: false,
+            density_multiplier_per_thousand: 4_000,
+        },
+    ]
 }
 
 /// One converted FBX mesh choice in a Unity foliage generation layer.
@@ -600,6 +723,8 @@ pub enum ContentError {
     InvalidEnemyModels(StableId),
     #[error("foliage layer {0} has invalid generation or variant values")]
     InvalidFoliage(StableId),
+    #[error("resource generation layer {0} has invalid settings or references")]
+    InvalidResourceGeneration(StableId),
     #[error("enemy camp generation layer {0} has invalid placement values")]
     InvalidEnemyCampGeneration(StableId),
     #[error("enemy camp generation layer {layer} references invalid camp archetype {archetype}")]
@@ -741,6 +866,34 @@ impl ContentCatalog {
                 })
             {
                 return Err(ContentError::InvalidFoliage(layer.id.clone()));
+            }
+        }
+        let mut resource_generation_ids = BTreeSet::new();
+        for layer in &self.resource_generation {
+            let invalid_land = layer.habitat == ResourceGenerationHabitat::Land
+                && (layer.source_size == 0
+                    || !layer.noise_scale.is_finite()
+                    || layer.noise_scale <= 0.0
+                    || !(1..=8).contains(&layer.octaves)
+                    || !layer.persistence.is_finite()
+                    || !(0.0..=1.0).contains(&layer.persistence)
+                    || !layer.lacunarity.is_finite()
+                    || layer.lacunarity < 0.0
+                    || !layer.spawn_threshold.is_finite()
+                    || !(0.0..=1.0).contains(&layer.spawn_threshold)
+                    || layer.spacing == 0);
+            let invalid_water = layer.habitat == ResourceGenerationHabitat::ShorelineWater
+                && (layer.density_multiplier_per_thousand == 0
+                    || layer.density_multiplier_per_thousand > 10_000);
+            if !resource_generation_ids.insert(layer.id.clone())
+                || layer.display_name.trim().is_empty()
+                || layer.source_path.trim().is_empty()
+                || layer.amount == 0
+                || !valid_asset_path(&layer.visual_asset_path)
+                || invalid_land
+                || invalid_water
+            {
+                return Err(ContentError::InvalidResourceGeneration(layer.id.clone()));
             }
         }
         let mut enemy_camp_layer_ids = BTreeSet::new();

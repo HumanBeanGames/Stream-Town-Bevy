@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{FoliageHabitat, FoliageLayerDef, GridPos, NavGrid, StableId, WorldGenConfig};
+use crate::{
+    FoliageHabitat, FoliageLayerDef, GridPos, NavGrid, ResourceGenerationHabitat,
+    ResourceGenerationLayerDef, StableId, WorldGenConfig, default_resource_generation_layers,
+};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GeneratedResource {
@@ -64,7 +67,12 @@ impl WorldGenerationStage {
 
 #[must_use]
 pub fn generate_world(config: &WorldGenConfig) -> GeneratedWorld {
-    generate_world_from_layers(config, &[], &mut |_| {})
+    generate_world_from_layers(
+        config,
+        &default_resource_generation_layers(),
+        &[],
+        &mut |_| {},
+    )
 }
 
 #[must_use]
@@ -72,7 +80,12 @@ pub fn generate_world_with_content(
     config: &WorldGenConfig,
     content: &crate::ContentCatalog,
 ) -> GeneratedWorld {
-    generate_world_from_layers(config, &content.foliage, &mut |_| {})
+    generate_world_from_layers(
+        config,
+        &content.resource_generation,
+        &content.foliage,
+        &mut |_| {},
+    )
 }
 
 /// Generates the same deterministic world while reporting completed stages.
@@ -84,11 +97,17 @@ pub fn generate_world_with_content_observed(
     content: &crate::ContentCatalog,
     mut completed: impl FnMut(WorldGenerationStage),
 ) -> GeneratedWorld {
-    generate_world_from_layers(config, &content.foliage, &mut completed)
+    generate_world_from_layers(
+        config,
+        &content.resource_generation,
+        &content.foliage,
+        &mut completed,
+    )
 }
 
 fn generate_world_from_layers(
     config: &WorldGenConfig,
+    resource_layers: &[ResourceGenerationLayerDef],
     foliage_layers: &[FoliageLayerDef],
     completed: &mut impl FnMut(WorldGenerationStage),
 ) -> GeneratedWorld {
@@ -142,7 +161,7 @@ fn generate_world_from_layers(
     }
     completed(WorldGenerationStage::Terrain);
 
-    let mut resources = generate_authored_resources(config, &heights);
+    let mut resources = generate_authored_resources(config, &heights, resource_layers);
     completed(WorldGenerationStage::LandResources);
 
     // Keep the town centre navigable and suitable for deterministic actor spawning.
@@ -163,7 +182,7 @@ fn generate_world_from_layers(
     blocked[spawn_index] = false;
     let navigation = NavGrid::new(config.width, config.height, blocked, heights)
         .expect("validated world configuration produces a valid grid");
-    generate_shoreline_fish(config, &navigation, &mut resources);
+    generate_shoreline_resources(config, &navigation, resource_layers, &mut resources);
     completed(WorldGenerationStage::NavigationAndFish);
     let foliage = generate_foliage(config, &navigation, &resources, foliage_layers);
     completed(WorldGenerationStage::Foliage);
@@ -182,62 +201,21 @@ fn generate_world_from_layers(
     }
 }
 
-#[derive(Clone, Copy)]
-struct AuthoredResourceLayer {
-    seed: i32,
-    noise_scale: f32,
-    octaves: u8,
-    persistence: f32,
-    lacunarity: f32,
-    threshold: f32,
-    spacing: u16,
-    kind: &'static str,
-    target_kind: &'static str,
-}
-
-const AUTHORED_RESOURCE_LAYERS: [AuthoredResourceLayer; 3] = [
-    AuthoredResourceLayer {
-        seed: -1_165_233_549,
-        noise_scale: 17.0,
-        octaves: 6,
-        persistence: 0.452,
-        lacunarity: 22.47,
-        threshold: 0.6,
-        spacing: 2,
-        kind: "resource:wood",
-        target_kind: "target:tree",
-    },
-    AuthoredResourceLayer {
-        seed: -1_165_233_548,
-        noise_scale: 7.0,
-        octaves: 1,
-        persistence: 1.0,
-        lacunarity: 0.0,
-        threshold: 0.85,
-        spacing: 1,
-        kind: "resource:ore",
-        target_kind: "target:ore",
-    },
-    AuthoredResourceLayer {
-        seed: -1_165_233_547,
-        noise_scale: 7.0,
-        octaves: 2,
-        persistence: 1.0,
-        lacunarity: 0.0,
-        threshold: 0.85,
-        spacing: 1,
-        kind: "resource:food",
-        target_kind: "target:bush",
-    },
-];
-
-fn generate_authored_resources(config: &WorldGenConfig, heights: &[i16]) -> Vec<GeneratedResource> {
+fn generate_authored_resources(
+    config: &WorldGenConfig,
+    heights: &[i16],
+    layers: &[ResourceGenerationLayerDef],
+) -> Vec<GeneratedResource> {
     let mut resources = Vec::new();
     // Unity shares one HashSet<(int, int)> across all resource and foliage
     // layers. Each layer computes those keys using its own spacing; preserving
     // that slightly unusual behavior is required for placement parity.
     let mut occupied = std::collections::BTreeSet::<(i32, i32)>::new();
-    for (layer_index, layer) in AUTHORED_RESOURCE_LAYERS.iter().enumerate() {
+    for (layer_index, layer) in layers
+        .iter()
+        .filter(|layer| layer.habitat == ResourceGenerationHabitat::Land)
+        .enumerate()
+    {
         let candidates = generate_candidate_mask(
             300,
             layer.seed,
@@ -245,20 +223,20 @@ fn generate_authored_resources(config: &WorldGenConfig, heights: &[i16]) -> Vec<
             layer.octaves,
             layer.persistence,
             layer.lacunarity,
-            layer.threshold,
+            layer.spawn_threshold,
             layer.spacing,
-            layer.kind == "resource:wood",
+            layer.half_cell_terrain_offset,
         );
         for candidate in candidates {
             let resource_world_x = f32::from(candidate[0]) * 0.5;
             let resource_world_z = f32::from(candidate[1]) * 0.5;
-            let wood_offset = if layer.kind == "resource:wood" {
+            let terrain_offset = if layer.half_cell_terrain_offset {
                 0.5
             } else {
                 0.0
             };
-            let world_x = resource_world_x - wood_offset;
-            let world_z = resource_world_z - wood_offset;
+            let world_x = resource_world_x - terrain_offset;
+            let world_z = resource_world_z - terrain_offset;
             let centre = f32::from(layer.spacing) * 0.5;
             let source_z = unity_rounded_i32(world_x - centre);
             let source_x = unity_rounded_i32(world_z - centre);
@@ -294,58 +272,72 @@ fn generate_authored_resources(config: &WorldGenConfig, heights: &[i16]) -> Vec<
             resources.push(GeneratedResource {
                 id: StableId::new(format!("resource:{layer_index}:{source_x}:{source_z}"))
                     .expect("generated stable resource ID"),
-                kind: StableId::new(layer.kind).expect("authored resource kind ID"),
-                target_kind: StableId::new(layer.target_kind).expect("authored target kind ID"),
+                kind: layer.resource.clone(),
+                target_kind: layer.target_kind.clone(),
                 position,
                 offset_milli_cells,
                 generation_occupancy: [
                     i16::try_from(occupancy.0).expect("authored occupancy x fits i16"),
                     i16::try_from(occupancy.1).expect("authored occupancy z fits i16"),
                 ],
-                amount: 100,
+                amount: layer.amount,
             });
         }
     }
     resources
 }
 
-fn generate_shoreline_fish(
+fn generate_shoreline_resources(
     config: &WorldGenConfig,
     navigation: &NavGrid,
+    layers: &[ResourceGenerationLayerDef],
     resources: &mut Vec<GeneratedResource>,
 ) {
     const FISH_SEED_SALT: u64 = 0x4649_5348_5F53_484F;
-    let density = config
-        .resource_density_per_thousand
-        .saturating_mul(4)
-        .min(1_000);
-    for z in 0..navigation.height() {
-        for x in 0..navigation.width() {
-            let position = GridPos { x, z };
-            if navigation.is_walkable(position)
-                || navigation.height_at(position).unwrap_or_default()
-                    > config.water_level_centimetres
-                || shoreline_approaches(navigation, position).next().is_none()
-            {
-                continue;
+    for (layer_index, layer) in layers
+        .iter()
+        .filter(|layer| layer.habitat == ResourceGenerationHabitat::ShorelineWater)
+        .enumerate()
+    {
+        let density = u32::from(config.resource_density_per_thousand)
+            .saturating_mul(u32::from(layer.density_multiplier_per_thousand))
+            .div_ceil(1_000)
+            .min(1_000);
+        let seed =
+            config.seed ^ FISH_SEED_SALT ^ u64::from(u32::from_ne_bytes(layer.seed.to_ne_bytes()));
+        for z in 0..navigation.height() {
+            for x in 0..navigation.width() {
+                let position = GridPos { x, z };
+                if navigation.is_walkable(position)
+                    || navigation.height_at(position).unwrap_or_default()
+                        > config.water_level_centimetres
+                    || shoreline_approaches(navigation, position).next().is_none()
+                {
+                    continue;
+                }
+                let random = cell_hash(seed, x, z);
+                let roll = u32::try_from(random % 1_000).expect("modulo 1000");
+                if roll >= density {
+                    continue;
+                }
+                let id = if layer_index == 0 && layer.target_kind.as_str() == "target:fish" {
+                    format!("resource:fish:{x}:{z}")
+                } else {
+                    format!("resource:water:{layer_index}:{x}:{z}")
+                };
+                resources.push(GeneratedResource {
+                    id: StableId::new(id).expect("generated stable resource ID"),
+                    kind: layer.resource.clone(),
+                    target_kind: layer.target_kind.clone(),
+                    position,
+                    offset_milli_cells: [0, 0],
+                    generation_occupancy: [
+                        i16::try_from(x).expect("world x fits i16"),
+                        i16::try_from(z).expect("world z fits i16"),
+                    ],
+                    amount: layer.amount,
+                });
             }
-            let random = cell_hash(config.seed ^ FISH_SEED_SALT, x, z);
-            let roll = u16::try_from(random % 1_000).expect("modulo 1000");
-            if roll >= density {
-                continue;
-            }
-            resources.push(GeneratedResource {
-                id: StableId::new(format!("resource:fish:{x}:{z}")).expect("generated stable ID"),
-                kind: StableId::new("resource:food").expect("static stable ID"),
-                target_kind: StableId::new("target:fish").expect("static stable ID"),
-                position,
-                offset_milli_cells: [0, 0],
-                generation_occupancy: [
-                    i16::try_from(x).expect("world x fits i16"),
-                    i16::try_from(z).expect("world z fits i16"),
-                ],
-                amount: 100,
-            });
         }
     }
 }
