@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt::Write as _};
 
 use bevy_egui::egui;
 use stream_town_domain::{ContentCatalog, StableId, TechnologyGraphLayout};
 
-const NODE_SIZE: egui::Vec2 = egui::vec2(220.0, 76.0);
+const NODE_SIZE: egui::Vec2 = egui::vec2(340.0, 208.0);
 const GROUP_HEADER_HEIGHT: f32 = 42.0;
 const MIN_GROUP_SIZE: egui::Vec2 = egui::vec2(280.0, 180.0);
 const MIN_ZOOM: f32 = 0.01;
@@ -15,6 +15,7 @@ pub(crate) struct TechnologyGraphViewState {
     zoom: f32,
     fit_requested: bool,
     focus_requested: Option<StableId>,
+    connection_source: Option<StableId>,
     pub show_minimap: bool,
 }
 
@@ -25,6 +26,7 @@ impl Default for TechnologyGraphViewState {
             zoom: 1.0,
             fit_requested: true,
             focus_requested: None,
+            connection_source: None,
             show_minimap: true,
         }
     }
@@ -50,6 +52,7 @@ pub(crate) struct TechnologyGraphCanvasOutput {
     pub selected_node: Option<StableId>,
     pub selected_group: Option<StableId>,
     pub layout_edit_started: bool,
+    pub connection_requested: Option<(StableId, StableId)>,
 }
 
 pub(crate) fn show(
@@ -92,6 +95,9 @@ pub(crate) fn show(
 
     let mut output = TechnologyGraphCanvasOutput::default();
     let pointer_delta = ui.input(|input| input.pointer.delta()) / view.zoom;
+    let pointer_released = ui.input(|input| input.pointer.any_released());
+    let pointer_down = ui.input(|input| input.pointer.primary_down());
+    let mut completed_connection = false;
 
     // Group bodies sit behind every connection and node.
     for (id, group) in &catalog.technology.groups {
@@ -280,6 +286,37 @@ pub(crate) fn show(
             value.position.y += pointer_delta.y;
         }
 
+        let connector_radius = (7.0 * view.zoom).clamp(4.0, 9.0);
+        let input_position = egui::pos2(node_rect.left(), node_rect.center().y);
+        let output_position = egui::pos2(node_rect.right(), node_rect.center().y);
+        let input_rect =
+            egui::Rect::from_center_size(input_position, egui::Vec2::splat(connector_radius * 3.0));
+        let output_rect = egui::Rect::from_center_size(
+            output_position,
+            egui::Vec2::splat(connector_radius * 3.0),
+        );
+        let input_response = ui.interact(
+            input_rect,
+            ui.id().with(("technology_input", id.as_str())),
+            egui::Sense::click_and_drag(),
+        );
+        let output_response = ui.interact(
+            output_rect,
+            ui.id().with(("technology_output", id.as_str())),
+            egui::Sense::click_and_drag(),
+        );
+        if output_response.drag_started() || output_response.clicked() {
+            view.connection_source = Some(id.clone());
+        }
+        if input_response.hovered()
+            && pointer_released
+            && let Some(source) = view.connection_source.as_ref()
+            && source != id
+        {
+            output.connection_requested = Some((source.clone(), id.clone()));
+            completed_connection = true;
+        }
+
         let selected = selected_node == Some(id);
         let search_match = search_matches.contains(id);
         let fill = if node.unavailable {
@@ -303,6 +340,24 @@ pub(crate) fn show(
             stroke,
             egui::StrokeKind::Inside,
         );
+        painter.circle_filled(
+            input_position,
+            connector_radius,
+            if input_response.hovered() {
+                egui::Color32::from_rgb(255, 208, 72)
+            } else {
+                egui::Color32::from_rgb(104, 174, 202)
+            },
+        );
+        painter.circle_filled(
+            output_position,
+            connector_radius,
+            if output_response.hovered() || view.connection_source.as_ref() == Some(id) {
+                egui::Color32::from_rgb(255, 208, 72)
+            } else {
+                egui::Color32::from_rgb(104, 174, 202)
+            },
+        );
         if view.zoom >= 0.09 {
             painter.text(
                 node_rect.left_top() + egui::vec2(9.0, 8.0),
@@ -319,6 +374,42 @@ pub(crate) fn show(
                 egui::Color32::from_rgb(157, 178, 188),
             );
         }
+        if view.zoom >= 0.22 {
+            let lines = node_detail_lines(node, catalog);
+            for (line_index, line) in lines.iter().enumerate() {
+                let line_offset = f32::from(u16::try_from(line_index).unwrap_or_default());
+                painter.text(
+                    node_rect.left_top() + egui::vec2(9.0, 34.0 + line_offset * 24.0) * view.zoom,
+                    egui::Align2::LEFT_TOP,
+                    line,
+                    egui::FontId::monospace((11.0 * view.zoom).clamp(8.0, 12.0)),
+                    egui::Color32::from_rgb(183, 201, 209),
+                );
+            }
+        }
+        response.on_hover_ui(|ui| node_hover_details(ui, id, node, catalog));
+    }
+
+    if let Some(source) = view.connection_source.as_ref()
+        && pointer_down
+        && let Some(source_layout) = layout.nodes.get(source)
+        && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+    {
+        let start = world_to_screen(
+            rect,
+            view,
+            egui::pos2(
+                source_layout.position.x + NODE_SIZE.x,
+                source_layout.position.y + NODE_SIZE.y * 0.5,
+            ),
+        );
+        draw_connection(&painter, start, pointer, view.zoom);
+    }
+    if pointer_released {
+        view.connection_source = None;
+        if !completed_connection {
+            output.connection_requested = None;
+        }
     }
 
     if view.show_minimap {
@@ -328,7 +419,7 @@ pub(crate) fn show(
         rect.left_bottom() + egui::vec2(10.0, -8.0),
         egui::Align2::LEFT_BOTTOM,
         format!(
-            "{} nodes · {} edges · {:.0}% · wheel zoom · middle/Space-drag pan",
+            "{} nodes · {} edges · {:.0}% · drag socket → socket to add prerequisite · wheel zoom · middle/Space-drag pan",
             catalog.technology.nodes.len(),
             catalog
                 .technology
@@ -342,6 +433,173 @@ pub(crate) fn show(
         egui::Color32::from_rgb(133, 153, 164),
     );
     output
+}
+
+fn node_detail_lines(node: &stream_town_domain::TechNode, catalog: &ContentCatalog) -> Vec<String> {
+    let technology_labels = |ids: &[StableId]| {
+        let mut value = ids
+            .iter()
+            .take(2)
+            .map(|id| {
+                catalog
+                    .technology
+                    .nodes
+                    .get(id)
+                    .map_or(id.as_str(), |node| node.display_name.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if ids.len() > 2 {
+            let _ = write!(value, " +{}", ids.len() - 2);
+        }
+        if value.is_empty() {
+            value.push('—');
+        }
+        value
+    };
+    let mut lines = vec![
+        format!("Requires: {}", technology_labels(&node.prerequisites)),
+        format!("Unlocks: {}", technology_labels(&node.unlocks)),
+    ];
+    let objective_labels = node
+        .objectives
+        .iter()
+        .take(2)
+        .map(|id| {
+            catalog.objectives.get(id).map_or_else(
+                || id.to_string(),
+                |objective| format!("{:?} ×{}", objective.kind, objective.required_amount),
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.push(format!(
+        "Vote: {}{}",
+        if objective_labels.is_empty() {
+            "—".to_owned()
+        } else {
+            objective_labels.join(", ")
+        },
+        if node.objectives.len() > 2 {
+            format!(" +{}", node.objectives.len() - 2)
+        } else {
+            String::new()
+        }
+    ));
+    let building_name = |id: &StableId| {
+        catalog
+            .buildings
+            .get(id)
+            .map_or_else(|| id.to_string(), |building| building.display_name.clone())
+    };
+    if !node.building_level_caps.is_empty() {
+        lines.push(format!(
+            "Level caps: {}",
+            summarized_pairs(
+                node.building_level_caps
+                    .iter()
+                    .map(|(id, level)| format!("{} L{level}", building_name(id))),
+                node.building_level_caps.len(),
+            )
+        ));
+    }
+    if !node.unlocked_buildings.is_empty() || !node.aged_buildings.is_empty() {
+        let effects = node
+            .unlocked_buildings
+            .iter()
+            .map(|id| format!("+{}", building_name(id)))
+            .chain(
+                node.aged_buildings
+                    .iter()
+                    .map(|id| format!("age {}", building_name(id))),
+            );
+        lines.push(format!(
+            "Buildings: {}",
+            summarized_pairs(
+                effects,
+                node.unlocked_buildings.len() + node.aged_buildings.len()
+            )
+        ));
+    }
+    let economy_effects = node.building_cost_reduction_percent.len()
+        + usize::from(node.global_building_cost_reduction_percent != 0)
+        + node.storage_boost_percent.len();
+    let stat_effects = node.global_stat_boost_percent.len()
+        + node
+            .role_stat_boost_percent
+            .values()
+            .map(std::collections::BTreeMap::len)
+            .sum::<usize>();
+    if economy_effects > 0 || stat_effects > 0 {
+        lines.push(format!(
+            "Boosts: {economy_effects} economy · {stat_effects} stats"
+        ));
+    }
+    lines.truncate(6);
+    lines
+}
+
+fn summarized_pairs(values: impl Iterator<Item = String>, count: usize) -> String {
+    let labels = values.take(2).collect::<Vec<_>>();
+    let mut value = labels.join(", ");
+    if count > labels.len() {
+        let _ = write!(value, " +{}", count - labels.len());
+    }
+    value
+}
+
+fn node_hover_details(
+    ui: &mut egui::Ui,
+    id: &StableId,
+    node: &stream_town_domain::TechNode,
+    catalog: &ContentCatalog,
+) {
+    ui.strong(&node.display_name);
+    ui.monospace(id.as_str());
+    if !node.description.trim().is_empty() {
+        ui.label(&node.description);
+    }
+    ui.separator();
+    for prerequisite in &node.prerequisites {
+        let label = catalog
+            .technology
+            .nodes
+            .get(prerequisite)
+            .map_or(prerequisite.as_str(), |value| value.display_name.as_str());
+        ui.label(format!("Requires: {label}"));
+    }
+    for objective in &node.objectives {
+        if let Some(value) = catalog.objectives.get(objective) {
+            ui.label(format!(
+                "Vote requirement: {:?} ×{}",
+                value.kind, value.required_amount
+            ));
+        }
+    }
+    for (building, level) in &node.building_level_caps {
+        let label = catalog
+            .buildings
+            .get(building)
+            .map_or(building.as_str(), |value| value.display_name.as_str());
+        ui.label(format!("Maximum {label} level: {level}"));
+    }
+    for building in &node.unlocked_buildings {
+        let label = catalog
+            .buildings
+            .get(building)
+            .map_or(building.as_str(), |value| value.display_name.as_str());
+        ui.label(format!("Unlock building: {label}"));
+    }
+    let remaining = node.building_cost_reduction_percent.len()
+        + node.storage_boost_percent.len()
+        + node.global_stat_boost_percent.len()
+        + node
+            .role_stat_boost_percent
+            .values()
+            .map(std::collections::BTreeMap::len)
+            .sum::<usize>();
+    if remaining > 0 {
+        ui.label(format!("{remaining} additional economy/stat effect(s)"));
+    }
 }
 
 fn handle_navigation(

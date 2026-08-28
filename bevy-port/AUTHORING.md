@@ -33,8 +33,8 @@ cargo run -p stream_town_tools -- --validate-authoring
 | Workflow | Project data | Local/runtime data |
 |---|---|---|
 | Game Authority and World + Nav | `assets/config/game.ron` | `.stream-town/config.ron` |
-| Buildings, roles, and foliage | `assets/content/catalog.ron` | None |
-| Technology content and graph layout | `assets/content/catalog.ron`, `assets/content/technology_layout.ron` | None |
+| Models, buildings, roles, resource/foliage/camp generation | `assets/content/catalog.ron`, `assets/user/models/*.glb` | None |
+| Technology content, vote requirements, and graph layout | `assets/content/catalog.ron`, `assets/content/technology_layout.ron` | None |
 | Player settings | None | `.stream-town/settings.ron`, edited from the local operator panel or game menus |
 | Twitch accounts and credentials | None | Main Menu > Secrets and the OS credential vault |
 
@@ -47,9 +47,11 @@ tool never writes Twitch access or refresh tokens to RON.
 
 - Game Authority edits window, boot, simulation cadence, starting resources,
   capacities, time-of-day lighting, and emission settings.
-- Models + Assets is a focused visual browser for converted GLB variants,
-  renderer/material bindings, textures, Animator controllers, and clips. It no
-  longer duplicates building, role, or technology records.
+- Models + Assets imports GLBs without overwriting existing files, creates and
+  removes model archetypes/variants, and renders the selected scene in a live
+  offscreen 3D viewport. Renderer/material bindings, textures, Animator
+  controllers, and clips remain visible as migration provenance. It does not
+  duplicate building, role, or technology records.
 - Buildings provides template-based creation, visual footprint/GLB inspection,
   construction and level costs, storage, role capacity, passive production,
   station and target settings, projectiles, and model hierarchy bindings. Every
@@ -59,9 +61,13 @@ tool never writes Twitch access or refresh tokens to RON.
   body nodes, hand items, helmets, and carry behavior. Role/model fields use
   catalog and converted-hierarchy choices instead of free-form reference text. Roles can be duplicated;
   deletion is allowed only when the full catalog has no remaining reference.
-- Technology makes the graph canvas the primary surface and keeps the complete
-  selected-node inspector beside it. It edits groups, descriptions, age/tier
-  placement, prerequisites, explicit unlocks, objectives and requirements,
+- Technology makes the full-width graph canvas the primary surface. Cards show
+  prerequisite, unlock, vote-requirement, building, economy, and stat summaries;
+  hovering exposes the complete record, while selecting opens a movable editor
+  over the canvas. Drag output-to-input sockets to add prerequisite edges and
+  remove them from searchable chips. The same tab creates, edits, and safely
+  removes typed vote-requirement records. It edits groups, descriptions, age/tier
+  placement, explicit unlocks,
   icons, building caps/unlocks/cost reductions, storage boosts, building ages,
   global/role stat boosts, and availability. Use the wheel to zoom, middle-drag or
   Space+primary-drag to pan, drag nodes or group headers to move them, and drag
@@ -70,10 +76,13 @@ tool never writes Twitch access or refresh tokens to RON.
   auto-layout, cycle/dangling-reference checks, and a clickable/drag-recentered
   minimap are included.
 - World + Nav edits the terrain seed, dimensions, spatial scale, height/water
-  levels and resource density plus every foliage layer's Unity-compatible noise,
-  habitat, spacing, material, GLB variants, and base scales. Preview modes show
-  elevation/water, navigation occupancy, generated resource kinds, and selected
-  foliage layers. The redundant point-to-point A* probe has been removed.
+  levels and resource density; land and shoreline-water resource rules; every
+  foliage layer's Unity-compatible noise, habitat, spacing, material, GLB
+  variants, and base scales; and enemy-camp placement rules. Resource, foliage,
+  and camp archetype fields are catalog/search backed. Preview modes show
+  elevation/water, navigation occupancy, land resources, water resources,
+  selected foliage layers, camp placement ranges, and live 3D models. The
+  redundant point-to-point A* probe has been removed.
 - Migration and Validation retain conversion, data-integrity, and packaging
   workflows. Runtime control, player settings, Twitch setup, and inspection are
   no longer duplicate tool tabs: Twitch setup lives in Main Menu > Secrets, and

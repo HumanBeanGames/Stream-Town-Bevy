@@ -1,6 +1,6 @@
 # Bevy Migration Status
 
-Last updated: 2026-08-25
+Last updated: 2026-08-28
 
 The Unity project remains at the repository root as read-only migration input.
 The new Rust workspace is in `bevy-port`. This document records delivered
@@ -8,6 +8,18 @@ behavior separately from planned parity so partially implemented tools cannot be
 mistaken for production-ready systems.
 
 ## Delivered in this milestone
+
+- The external authoring suite now uses real offscreen Bevy GLB previews rather
+  than footprint placeholders, scopes every repeated egui control to eliminate
+  upgrade-layer widget collisions, safely imports GLBs, and supports complete
+  archetype/variant and building-model binding creation/removal. Technology is a
+  full-width graph workspace with data-rich cards, hover details, socket-drag
+  prerequisite edges, searchable removable reference chips, typed vote-
+  requirement CRUD, cycle rejection, and the complete selected-node editor as a
+  movable graph overlay. Content schema 35 promotes land and shoreline-water
+  resource generation to explicit RON layers without changing the Unity oracle
+  fingerprints. World + Nav edits and previews those layers, foliage variants,
+  and enemy-camp generation ranges with catalog-backed model/source choices.
 
 - Shipping-scale world rendering now replaces the 64x64 Bevy prototype. Config
   schema 7 upgrades untouched schema-5 worlds to Unity's 200x200 samples,

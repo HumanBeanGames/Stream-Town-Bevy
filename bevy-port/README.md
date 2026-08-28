@@ -11,8 +11,10 @@ here.
 - `stream_town_tools`: focused content, migration, world-generation, and
   validation tooling. Dedicated Buildings and Roles tabs provide complete,
   template-based catalog creation with typed reference choices. Models + Assets
-  is a visual GLB/material/animation browser; Technology is a graph-first editor;
-  World + Nav previews the production generator without a redundant A* probe.
+  imports, creates, removes, searches, and live-previews GLB archetypes;
+  Technology is a graph-first editor with socket connections and typed vote
+  requirements; World + Nav edits and previews land/water resources, foliage,
+  and enemy-camp ranges without a redundant A* probe.
   Runtime, player-settings, Twitch, and generic ECS-inspector tabs were removed
   in favor of the shipping menus and local operator panel.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
@@ -20,11 +22,12 @@ here.
 - `xtask`: repository validation and repeatable developer automation.
 
 The Technology tab is an interactive editor rather than only a record inspector.
-It renders all 363 nodes, 20 groups, and cross-group edges on a pannable/zoomable
-canvas; supports node and group dragging, group resizing, search highlighting and
-focus, fit-all, a clickable minimap, and deterministic auto-layout; and retains
-the existing node/group CRUD plus prerequisite, unlock, objective, icon, and
-metadata editing. Catalog and stable-ID layout edits share undo/redo. Both
+It renders all 363 nodes, 20 groups, cross-group edges, and compact requirement/
+effect summaries on a full-width pannable/zoomable canvas; supports socket-drag
+prerequisite creation, removable searchable reference chips, node and group
+dragging, group resizing, search highlighting and focus, fit-all, a clickable
+minimap, deterministic auto-layout, and typed vote-requirement CRUD. Catalog and
+stable-ID layout edits share undo/redo. Both
 `catalog.ron` and `technology_layout.ron` are validated, backed up, atomically
 written, reloaded, and compared before success is reported.
 
@@ -33,8 +36,9 @@ can also write a machine-local runtime override. The Buildings and Roles tabs
 cover every persisted balance, station, target, ability, animation, equipment,
 production, storage, projectile, footprint, and model binding through validated
 catalog-backed choices.
-The World + Nav tab edits the Unity-scale terrain inputs and every converted
-foliage noise layer, then renders elevation, occupancy, resource, and foliage
+The World + Nav tab edits the Unity-scale terrain inputs, explicit land/water
+resource layers, every converted foliage-noise layer, and enemy-camp placement,
+then renders elevation, occupancy, resource, foliage, camp-range, and GLB model
 previews using the production deterministic generator. See
 [`AUTHORING.md`](AUTHORING.md) for paths and the safe-save workflow.
 

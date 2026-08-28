@@ -12,14 +12,32 @@ use std::{
 mod technology_graph;
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
+#[cfg(target_os = "windows")]
+use bevy::render::{
+    RenderPlugin,
+    settings::{Backends, WgpuSettings},
+};
+use bevy::{
+    asset::{AssetPlugin, LoadState},
+    camera::{ClearColorConfig, RenderTarget, primitives::Aabb},
+    gltf::GltfAssetLabel,
+    render::render_resource::TextureFormat,
+    transform::TransformSystems,
+};
+use bevy_egui::{
+    EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet,
+    EguiTextureHandle, EguiUserTextures, PrimaryEguiContext, egui,
+};
 use stream_town_domain::{
-    ArchetypeKind, BroadcastEncoderPreference, BuildingDef, BuildingHealthDisplayMode, ChatCommand,
-    ContentCatalog, DisplayMode, FoliageHabitat, FoliageLayerDef, GameConfig, GeneratedWorld,
-    GridPos, NameDisplayMode, PassiveResourceContribution, PlayerSettings, PlayerSettingsStore,
-    PostProcessAntiAliasing, PresentationCatalog, ProjectileShooterDef, RoleDef, RoleEquipmentDef,
-    RoleSlotContribution, RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus,
-    RuntimeConsoleStore, StableId, StationDef, StorageContribution, TargetingScoreDef, TechGroup,
+    ArchetypeBounds, ArchetypeDef, ArchetypeKind, ArchetypeScene, BroadcastEncoderPreference,
+    BuildingDef, BuildingHealthDisplayMode, BuildingModelDef, ChatCommand, ContentCatalog,
+    DisplayMode, EnemyCampGenerationDef, FoliageHabitat, FoliageLayerDef, GameConfig,
+    GeneratedWorld, GridPos, NameDisplayMode, ObjectiveDef, ObjectiveKind,
+    PassiveResourceContribution, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
+    PresentationCatalog, ProjectileShooterDef, ResourceGenerationHabitat,
+    ResourceGenerationLayerDef, RoleDef, RoleEquipmentDef, RoleSlotContribution,
+    RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus, RuntimeConsoleStore,
+    StableId, StationDef, StorageContribution, StorageModelDef, TargetingScoreDef, TechGroup,
     TechNode, TechnologyGraphLayout,
 };
 #[cfg(target_os = "windows")]
@@ -80,6 +98,19 @@ struct ToolState {
     player_settings: PlayerSettings,
     catalog: ContentCatalog,
     presentation: PresentationCatalog,
+    selected_archetype: Option<StableId>,
+    selected_archetype_scene: usize,
+    discovered_model_assets: Vec<String>,
+    asset_search: String,
+    new_archetype_id: String,
+    new_archetype_name: String,
+    new_archetype_kind: ArchetypeKind,
+    new_archetype_asset: String,
+    model_import_source: String,
+    model_import_name: String,
+    preview_asset_path: Option<String>,
+    preview_bounds: ArchetypeBounds,
+    preview_label: String,
     generated_world: Option<GeneratedWorld>,
     technology_search: String,
     selected_group: Option<StableId>,
@@ -88,6 +119,9 @@ struct ToolState {
     technology_layout: TechnologyGraphLayout,
     technology_layout_path: String,
     technology_graph_view: TechnologyGraphViewState,
+    selected_objective: Option<StableId>,
+    objective_draft: Option<ObjectiveDraft>,
+    new_objective_id: String,
     selected_building: Option<StableId>,
     building_draft: Option<BuildingDraft>,
     new_building_id: String,
@@ -99,6 +133,16 @@ struct ToolState {
     new_role_name: String,
     selected_foliage: Option<StableId>,
     foliage_draft: Option<FoliageLayerDef>,
+    selected_foliage_variant: usize,
+    new_foliage_id: String,
+    selected_resource_generation: Option<StableId>,
+    resource_generation_draft: Option<ResourceGenerationLayerDef>,
+    new_resource_generation_id: String,
+    new_resource_generation_name: String,
+    selected_enemy_camp_generation: Option<StableId>,
+    enemy_camp_generation_draft: Option<EnemyCampGenerationDef>,
+    new_enemy_camp_generation_id: String,
+    world_asset_search: String,
     world_preview_layer: WorldPreviewLayer,
     new_technology_id: String,
     new_technology_name: String,
@@ -124,6 +168,20 @@ struct ToolState {
     runtime_actor_id: String,
     runtime_login: String,
 }
+
+#[derive(Resource)]
+struct ModelPreviewRuntime {
+    image: Handle<Image>,
+    neutral_material: Handle<StandardMaterial>,
+    scene_entity: Option<Entity>,
+    scene_handle: Option<Handle<WorldAsset>>,
+    loaded_asset_path: Option<String>,
+    framed: bool,
+    status: String,
+}
+
+#[derive(Component)]
+struct ModelPreviewScene;
 
 #[derive(Clone)]
 struct AuthoringSnapshot {
@@ -174,6 +232,10 @@ struct TechnologyDraft {
     icon_path: String,
     initially_unlocked: bool,
     unavailable: bool,
+    prerequisite_search: String,
+    unlock_search: String,
+    objective_search: String,
+    icon_search: String,
 }
 
 #[derive(Clone)]
@@ -199,29 +261,41 @@ struct BuildingDraft {
     value: BuildingDef,
 }
 
+#[derive(Clone)]
+struct ObjectiveDraft {
+    id: StableId,
+    value: ObjectiveDef,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum WorldPreviewLayer {
     #[default]
     Elevation,
     Navigation,
-    Resources,
+    LandResources,
+    WaterResources,
     Foliage,
+    EnemyCamps,
 }
 
 impl WorldPreviewLayer {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 6] = [
         Self::Elevation,
         Self::Navigation,
-        Self::Resources,
+        Self::LandResources,
+        Self::WaterResources,
         Self::Foliage,
+        Self::EnemyCamps,
     ];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Elevation => "Elevation + water",
             Self::Navigation => "Navigation occupancy",
-            Self::Resources => "Resources",
+            Self::LandResources => "Land resources",
+            Self::WaterResources => "Water resources",
             Self::Foliage => "Foliage layers",
+            Self::EnemyCamps => "Enemy camp ranges",
         }
     }
 }
@@ -242,11 +316,37 @@ impl Default for ToolState {
             .validate(&catalog.technology)
             .expect("checked-in technology layout must validate");
         let selected_group = catalog.technology.groups.keys().next().cloned();
+        let selected_objective = catalog.objectives.keys().next().cloned();
+        let objective_draft = selected_objective.as_ref().and_then(|id| {
+            catalog
+                .objectives
+                .get(id)
+                .cloned()
+                .map(|value| ObjectiveDraft {
+                    id: id.clone(),
+                    value,
+                })
+        });
         let selected_role = catalog.roles.keys().next().cloned();
         let role_draft = selected_role
             .as_ref()
             .and_then(|id| role_draft(&catalog, id));
         let selected_foliage = catalog.foliage.first().map(|layer| layer.id.clone());
+        let selected_resource_generation = catalog
+            .resource_generation
+            .first()
+            .map(|layer| layer.id.clone());
+        let selected_enemy_camp_generation = catalog
+            .enemy_camp_generation
+            .first()
+            .map(|layer| layer.id.clone());
+        let enemy_camp_generation_draft = selected_enemy_camp_generation.as_ref().and_then(|id| {
+            catalog
+                .enemy_camp_generation
+                .iter()
+                .find(|layer| &layer.id == id)
+                .cloned()
+        });
         let selected_building = catalog.buildings.keys().next().cloned();
         let building_draft = selected_building
             .as_ref()
@@ -258,12 +358,22 @@ impl Default for ToolState {
                 .find(|layer| &layer.id == id)
                 .cloned()
         });
+        let resource_generation_draft = selected_resource_generation.as_ref().and_then(|id| {
+            catalog
+                .resource_generation
+                .iter()
+                .find(|layer| &layer.id == id)
+                .cloned()
+        });
         let presentation: PresentationCatalog =
             ron::from_str(include_str!("../../../assets/content/presentation.ron"))
                 .expect("checked-in presentation catalog must parse");
         presentation
             .validate()
             .expect("checked-in presentation catalog must validate");
+        let selected_archetype = catalog.archetypes.keys().next().cloned();
+        let discovered_model_assets = discover_model_assets();
+        let new_archetype_asset = discovered_model_assets.first().cloned().unwrap_or_default();
         let config_path = default_config_path();
         let config = load_game_config(config_path.to_string_lossy().as_ref())
             .expect("checked-in game configuration must parse and validate");
@@ -289,6 +399,22 @@ impl Default for ToolState {
             player_settings,
             catalog,
             presentation,
+            selected_archetype,
+            selected_archetype_scene: 0,
+            discovered_model_assets,
+            asset_search: String::new(),
+            new_archetype_id: "archetype:new".to_owned(),
+            new_archetype_name: "New Model".to_owned(),
+            new_archetype_kind: ArchetypeKind::Other,
+            new_archetype_asset,
+            model_import_source: String::new(),
+            model_import_name: String::new(),
+            preview_asset_path: None,
+            preview_bounds: ArchetypeBounds {
+                center: [0.0, 0.5, 0.0],
+                size: [1.0, 1.0, 1.0],
+            },
+            preview_label: "No model selected".to_owned(),
             generated_world: None,
             technology_search: String::new(),
             selected_group,
@@ -297,6 +423,9 @@ impl Default for ToolState {
             technology_layout,
             technology_layout_path: default_technology_layout_path().display().to_string(),
             technology_graph_view: TechnologyGraphViewState::default(),
+            selected_objective,
+            objective_draft,
+            new_objective_id: "objective:new".to_owned(),
             selected_building,
             building_draft,
             new_building_id: "building:new".to_owned(),
@@ -308,6 +437,16 @@ impl Default for ToolState {
             new_role_name: "New Role".to_owned(),
             selected_foliage,
             foliage_draft,
+            selected_foliage_variant: 0,
+            new_foliage_id: "foliage:new".to_owned(),
+            selected_resource_generation,
+            resource_generation_draft,
+            new_resource_generation_id: "resource_generation:new".to_owned(),
+            new_resource_generation_name: "New Resource Layer".to_owned(),
+            selected_enemy_camp_generation,
+            enemy_camp_generation_draft,
+            new_enemy_camp_generation_id: "enemy_camp_generation:new".to_owned(),
+            world_asset_search: String::new(),
             world_preview_layer: WorldPreviewLayer::default(),
             new_technology_id: "technology:new".to_owned(),
             new_technology_name: "New Technology".to_owned(),
@@ -342,34 +481,230 @@ fn main() -> anyhow::Result<()> {
         println!("{summary}");
         return Ok(());
     }
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let asset_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let default_plugins = DefaultPlugins
+        .set(AssetPlugin {
+            file_path: asset_root.to_string_lossy().into_owned(),
+            ..default()
+        })
+        .set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Stream Town Tools".to_owned(),
                 resolution: (1_440, 900).into(),
                 ..default()
             }),
             ..default()
-        }))
+        });
+    #[cfg(target_os = "windows")]
+    let default_plugins = default_plugins.set(RenderPlugin {
+        render_creation: tools_wgpu_settings().into(),
+        ..default()
+    });
+    App::new()
+        .add_plugins(default_plugins)
         .add_plugins(EguiPlugin::default())
         .init_resource::<ToolState>()
         .add_systems(
             PreStartup,
             setup_camera.before(EguiStartupSet::InitContexts),
         )
-        .add_systems(EguiPrimaryContextPass, tools_ui)
+        .add_systems(Startup, setup_model_preview)
+        .add_systems(
+            PostUpdate,
+            frame_model_preview.after(TransformSystems::Propagate),
+        )
+        .add_systems(
+            EguiPrimaryContextPass,
+            (sync_model_preview, tools_ui).chain(),
+        )
         .run();
     Ok(())
 }
 
-fn setup_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
+#[cfg(target_os = "windows")]
+fn tools_wgpu_settings() -> WgpuSettings {
+    // Match the shipping game: the current Windows AMD driver emits invalid
+    // Vulkan swapchain transitions, while DX12 is stable and supported.
+    WgpuSettings {
+        backends: Some(Backends::DX12),
+        ..default()
+    }
 }
 
-fn tools_ui(mut contexts: EguiContexts, mut state: ResMut<ToolState>) -> Result {
+fn setup_camera(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
+    egui_settings.auto_create_primary_context = false;
+    commands.spawn((Camera2d, PrimaryEguiContext));
+}
+
+fn setup_model_preview(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut egui_textures: ResMut<EguiUserTextures>,
+) {
+    let image = images.add(Image::new_target_texture(
+        768,
+        512,
+        TextureFormat::Bgra8UnormSrgb,
+        None,
+    ));
+    egui_textures.add_image(EguiTextureHandle::Strong(image.clone()));
+    let neutral_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.69, 0.74),
+        perceptual_roughness: 0.78,
+        metallic: 0.0,
+        ..default()
+    });
+    commands.spawn((
+        Camera3d::default(),
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.035, 0.05, 0.065)),
+            ..default()
+        },
+        RenderTarget::Image(image.clone().into()),
+        AmbientLight {
+            color: Color::srgb(0.78, 0.84, 0.92),
+            brightness: 420.0,
+            ..default()
+        },
+        Transform::from_xyz(5.5, 4.0, 7.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 12_000.0,
+            shadow_maps_enabled: false,
+            ..default()
+        },
+        Transform::from_xyz(4.0, 8.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    commands.insert_resource(ModelPreviewRuntime {
+        image,
+        neutral_material,
+        scene_entity: None,
+        scene_handle: None,
+        loaded_asset_path: None,
+        framed: false,
+        status: "Choose a model to render it here".to_owned(),
+    });
+}
+
+fn sync_model_preview(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    state: Res<ToolState>,
+    mut preview: ResMut<ModelPreviewRuntime>,
+) {
+    if preview.loaded_asset_path == state.preview_asset_path {
+        return;
+    }
+    if let Some(entity) = preview.scene_entity.take() {
+        commands.entity(entity).try_despawn();
+    }
+    preview.scene_handle = None;
+    preview.framed = false;
+    preview
+        .loaded_asset_path
+        .clone_from(&state.preview_asset_path);
+    let Some(asset_path) = state.preview_asset_path.as_ref() else {
+        "No GLB scene selected".clone_into(&mut preview.status);
+        return;
+    };
+    let scene_handle = asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_path.clone()));
+    let entity = commands
+        .spawn((
+            Name::new(format!("Model preview: {}", state.preview_label)),
+            ModelPreviewScene,
+            WorldAssetRoot(scene_handle.clone()),
+            Transform::IDENTITY,
+        ))
+        .id();
+    preview.scene_entity = Some(entity);
+    preview.scene_handle = Some(scene_handle);
+    preview.status = format!("Loading GLB: {asset_path}");
+}
+
+fn frame_model_preview(
+    asset_server: Res<AssetServer>,
+    mut preview: ResMut<ModelPreviewRuntime>,
+    children: Query<&Children>,
+    bounds: Query<(&GlobalTransform, &Aabb)>,
+    mut mesh_materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut roots: Query<&mut Transform, With<ModelPreviewScene>>,
+) {
+    if preview.framed {
+        return;
+    }
+    let Some(root) = preview.scene_entity else {
+        return;
+    };
+    let Some(handle) = preview.scene_handle.as_ref() else {
+        return;
+    };
+    match asset_server.load_state(handle.id()) {
+        LoadState::Failed(error) => {
+            preview.status = format!("GLB load failed: {error}");
+            return;
+        }
+        LoadState::Loading | LoadState::NotLoaded => return,
+        LoadState::Loaded => {}
+    }
+
+    let mut stack = children
+        .get(root)
+        .map_or_else(|_| Vec::new(), |value| value.iter().collect::<Vec<_>>());
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    let mut mesh_count = 0_usize;
+    while let Some(entity) = stack.pop() {
+        if let Ok(value) = children.get(entity) {
+            stack.extend(value.iter());
+        }
+        if let Ok(mut material) = mesh_materials.get_mut(entity) {
+            material.0.clone_from(&preview.neutral_material);
+        }
+        let Ok((global, aabb)) = bounds.get(entity) else {
+            continue;
+        };
+        mesh_count += 1;
+        let center = Vec3::from(aabb.center);
+        let half = Vec3::from(aabb.half_extents);
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    let point = global.transform_point(center + half * Vec3::new(x, y, z));
+                    minimum = minimum.min(point);
+                    maximum = maximum.max(point);
+                }
+            }
+        }
+    }
+    if mesh_count == 0 {
+        "GLB loaded; waiting for render meshes".clone_into(&mut preview.status);
+        return;
+    }
+    let size = maximum - minimum;
+    let largest = size.max_element().max(0.01);
+    let scale = 4.0 / largest;
+    let center = (minimum + maximum) * 0.5;
+    let Ok(mut transform) = roots.get_mut(root) else {
+        return;
+    };
+    *transform = Transform::from_translation(-center * scale).with_scale(Vec3::splat(scale));
+    preview.framed = true;
+    preview.status = format!("Loaded and framed {mesh_count} render mesh(es) in studio material");
+}
+
+fn tools_ui(
+    mut contexts: EguiContexts,
+    mut state: ResMut<ToolState>,
+    preview: Res<ModelPreviewRuntime>,
+) -> Result {
     poll_twitch_tool_events(&mut state);
     poll_tool_job_events(&mut state);
     poll_runtime_console(&mut state);
+    update_preview_request(&mut state);
+    let preview_texture = contexts.image_id(&preview.image);
     let context = contexts.ctx_mut()?;
     let mut viewport_ui = egui::Ui::new(
         context.clone(),
@@ -395,11 +730,13 @@ fn tools_ui(mut contexts: EguiContexts, mut state: ResMut<ToolState>) -> Result 
     egui::CentralPanel::default().show(&mut viewport_ui, |ui| match state.tab {
         ToolTab::Migration => migration_tab(ui, &mut state),
         ToolTab::Authority => authority_tab(ui, &mut state),
-        ToolTab::Assets => content_tab(ui, &state),
-        ToolTab::Buildings => buildings_tab(ui, &mut state),
+        ToolTab::Assets => content_tab(ui, &mut state, preview_texture, &preview.status),
+        ToolTab::Buildings => {
+            buildings_tab(ui, &mut state, preview_texture, &preview.status);
+        }
         ToolTab::Roles => roles_tab(ui, &mut state),
         ToolTab::Technology => technology_tab(ui, &mut state),
-        ToolTab::World => world_tab(ui, &mut state),
+        ToolTab::World => world_tab(ui, &mut state, preview_texture, &preview.status),
         ToolTab::Validation => validation_tab(ui, &mut state),
     });
     Ok(())
@@ -618,11 +955,423 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     });
 }
 
-fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
+fn update_preview_request(state: &mut ToolState) {
+    let requested = match state.tab {
+        ToolTab::Assets => state
+            .selected_archetype
+            .as_ref()
+            .and_then(|id| state.catalog.archetypes.get(id))
+            .and_then(|archetype| {
+                let index = state
+                    .selected_archetype_scene
+                    .min(archetype.scenes.len().saturating_sub(1));
+                archetype.scenes.get(index).map(|scene| {
+                    (
+                        scene.asset_path.clone(),
+                        archetype.bounds,
+                        format!("{} · {}", archetype.display_name, scene.asset_path),
+                    )
+                })
+            }),
+        ToolTab::Buildings => state
+            .building_draft
+            .as_ref()
+            .and_then(|draft| state.catalog.archetypes.get(&draft.value.archetype))
+            .and_then(|archetype| {
+                archetype
+                    .scenes
+                    .iter()
+                    .find(|scene| scene.is_default)
+                    .or_else(|| archetype.scenes.first())
+                    .map(|scene| {
+                        (
+                            scene.asset_path.clone(),
+                            archetype.bounds,
+                            format!("{} · {}", archetype.display_name, scene.asset_path),
+                        )
+                    })
+            }),
+        ToolTab::World
+            if matches!(
+                state.world_preview_layer,
+                WorldPreviewLayer::LandResources | WorldPreviewLayer::WaterResources
+            ) =>
+        {
+            state.resource_generation_draft.as_ref().map(|layer| {
+                let bounds = model_bounds_for_asset(&state.catalog, &layer.visual_asset_path);
+                (
+                    layer.visual_asset_path.clone(),
+                    bounds,
+                    format!("Resource · {}", layer.display_name),
+                )
+            })
+        }
+        ToolTab::World if state.world_preview_layer == WorldPreviewLayer::EnemyCamps => state
+            .enemy_camp_generation_draft
+            .as_ref()
+            .and_then(|layer| state.catalog.archetypes.get(&layer.camp_archetype))
+            .and_then(|archetype| {
+                archetype
+                    .scenes
+                    .iter()
+                    .find(|scene| scene.is_default)
+                    .or_else(|| archetype.scenes.first())
+                    .map(|scene| {
+                        (
+                            scene.asset_path.clone(),
+                            archetype.bounds,
+                            format!("Enemy camp · {}", archetype.display_name),
+                        )
+                    })
+            }),
+        ToolTab::World => state
+            .foliage_draft
+            .as_ref()
+            .and_then(|layer| layer.variants.get(state.selected_foliage_variant))
+            .map(|variant| {
+                let bounds = model_bounds_for_asset(&state.catalog, &variant.asset_path);
+                (
+                    variant.asset_path.clone(),
+                    bounds,
+                    format!("Foliage · {}", variant.asset_path),
+                )
+            }),
+        _ => None,
+    };
+    if let Some((asset_path, bounds, label)) = requested {
+        state.preview_asset_path = Some(asset_path);
+        state.preview_bounds = bounds;
+        state.preview_label = label;
+    } else if matches!(
+        state.tab,
+        ToolTab::Assets | ToolTab::Buildings | ToolTab::World
+    ) {
+        state.preview_asset_path = None;
+        "No GLB model is assigned".clone_into(&mut state.preview_label);
+    }
+}
+
+fn model_bounds_for_asset(catalog: &ContentCatalog, asset_path: &str) -> ArchetypeBounds {
+    catalog
+        .archetypes
+        .values()
+        .find(|archetype| {
+            archetype
+                .scenes
+                .iter()
+                .any(|scene| scene.asset_path == asset_path)
+        })
+        .map_or(
+            ArchetypeBounds {
+                center: [0.0, 0.5, 0.0],
+                size: [2.0, 2.0, 2.0],
+            },
+            |archetype| archetype.bounds,
+        )
+}
+
+fn draw_model_preview(
+    ui: &mut egui::Ui,
+    texture: Option<egui::TextureId>,
+    status: &str,
+    desired: egui::Vec2,
+) {
+    ui.group(|ui| {
+        ui.strong("Live 3D preview");
+        if let Some(texture) = texture {
+            ui.image(egui::load::SizedTexture::new(texture, desired));
+        } else {
+            let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 5.0, egui::Color32::from_rgb(9, 14, 19));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Preview render target unavailable",
+                egui::FontId::proportional(13.0),
+                egui::Color32::LIGHT_RED,
+            );
+        }
+        ui.small(status);
+    });
+}
+
+fn discover_model_assets() -> Vec<String> {
+    fn visit(root: &std::path::Path, current: &std::path::Path, output: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, output);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                output.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let mut output = Vec::new();
+    visit(&root, &root, &mut output);
+    output.sort();
+    output.dedup();
+    output
+}
+
+fn import_model_asset(state: &mut ToolState) -> Result<String, String> {
+    let source_text = state.model_import_source.trim();
+    if source_text.is_empty() {
+        return Err("choose a source .glb file".to_owned());
+    }
+    let source = fs::canonicalize(source_text)
+        .map_err(|error| format!("could not read {source_text}: {error}"))?;
+    if !source.is_file()
+        || !source
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+    {
+        return Err("the source must be an existing .glb file".to_owned());
+    }
+    let requested_name = state.model_import_name.trim();
+    let file_name = if requested_name.is_empty() {
+        source
+            .file_name()
+            .ok_or_else(|| "the source has no filename".to_owned())?
+            .to_owned()
+    } else {
+        let candidate = std::path::Path::new(requested_name);
+        if candidate.file_name() != Some(candidate.as_os_str()) {
+            return Err("destination name must be a filename, not a path".to_owned());
+        }
+        candidate.as_os_str().to_owned()
+    };
+    if !std::path::Path::new(&file_name)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+    {
+        return Err("destination name must end in .glb".to_owned());
+    }
+
+    let relative = PathBuf::from("user/models").join(&file_name);
+    let destination = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets")
+        .join(&relative);
+    if destination.exists() {
+        return Err(format!(
+            "{} already exists; choose another destination name",
+            destination.display()
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "destination has no parent directory".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    fs::copy(&source, &destination)
+        .map_err(|error| format!("could not copy model into the project: {error}"))?;
+
+    state.discovered_model_assets = discover_model_assets();
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    relative.clone_into(&mut state.new_archetype_asset);
+    state.model_import_source.clear();
+    state.model_import_name.clear();
+    Ok(relative)
+}
+
+fn content_tab(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+) {
     ui.heading("Models and presentation assets");
     ui.label(
-        "Inspect converted GLB scenes, renderer/material bindings, animation controllers, and clips. Gameplay content is authored in its dedicated Building, Role, Technology, and World tabs.",
+        "Add, remove, search, and preview converted GLB scenes. Gameplay content remains in its dedicated Building, Role, Technology, and World tabs.",
     );
+    let archetype_choices: Vec<_> = state
+        .catalog
+        .archetypes
+        .iter()
+        .map(|(id, archetype)| (id.clone(), archetype.display_name.clone()))
+        .collect();
+    ui.horizontal_wrapped(|ui| {
+        stable_id_option_choice(
+            ui,
+            "Selected model",
+            &mut state.selected_archetype,
+            &archetype_choices,
+        );
+        if ui.button("Refresh discovered GLBs").clicked() {
+            state.discovered_model_assets = discover_model_assets();
+            state.status = format!(
+                "Discovered {} GLB assets below bevy-port/assets",
+                state.discovered_model_assets.len()
+            );
+        }
+        if ui.button("Save catalog").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved model catalog to {}", path.display()),
+                Err(error) => format!("Could not save model catalog: {error:#}"),
+            };
+        }
+    });
+    draw_model_preview(
+        ui,
+        preview_texture,
+        preview_status,
+        egui::vec2(500.0, 333.0),
+    );
+    ui.collapsing("Import a GLB asset", |ui| {
+        ui.label(
+            "Copies an existing .glb into assets/user/models. The original is retained and existing destination files are never overwritten.",
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Source file");
+            ui.add(
+                egui::TextEdit::singleline(&mut state.model_import_source)
+                    .hint_text("C:\\path\\to\\model.glb")
+                    .desired_width(420.0),
+            );
+            ui.label("Destination name (optional)");
+            ui.add(
+                egui::TextEdit::singleline(&mut state.model_import_name)
+                    .hint_text("my_model.glb")
+                    .desired_width(220.0),
+            );
+            if ui.button("Import GLB").clicked() {
+                state.status = match import_model_asset(state) {
+                    Ok(path) => format!("Imported model asset as {path}"),
+                    Err(error) => format!("Model import rejected: {error}"),
+                };
+            }
+        });
+    });
+    ui.collapsing("Add model archetype", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Stable ID");
+            ui.text_edit_singleline(&mut state.new_archetype_id);
+            ui.label("Display name");
+            ui.text_edit_singleline(&mut state.new_archetype_name);
+            archetype_kind_choice(ui, &mut state.new_archetype_kind);
+        });
+        searchable_string_choice(
+            ui,
+            "new_archetype_asset",
+            "GLB asset",
+            &mut state.new_archetype_asset,
+            &state.discovered_model_assets,
+            &mut state.asset_search,
+        );
+        if ui.button("Add model archetype").clicked() {
+            state.status = match create_model_archetype(state) {
+                Ok(()) => "Added a validated model archetype and selected it".to_owned(),
+                Err(error) => format!("Model creation rejected: {error}"),
+            };
+        }
+    });
+
+    let selected_archetype = state.selected_archetype.clone();
+    if let Some(id) = selected_archetype {
+        let model_assets = state.discovered_model_assets.clone();
+        let asset_source_models: BTreeMap<_, _> = state
+            .catalog
+            .archetypes
+            .values()
+            .flat_map(|archetype| archetype.scenes.iter())
+            .map(|scene| (scene.asset_path.clone(), scene.source_model.clone()))
+            .collect();
+        let mut remove_scene = None;
+        let mut make_default = None;
+        let mut add_scene = false;
+        let mut delete_archetype = false;
+        let asset_search = &mut state.asset_search;
+        if let Some(archetype) = state.catalog.archetypes.get_mut(&id) {
+            ui.collapsing("Selected archetype and variants", |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Display name");
+                    ui.text_edit_singleline(&mut archetype.display_name);
+                    archetype_kind_choice(ui, &mut archetype.kind);
+                    ui.add(
+                        egui::DragValue::new(&mut archetype.footprint[0])
+                            .range(1..=4_096)
+                            .prefix("Footprint x "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut archetype.footprint[1])
+                            .range(1..=4_096)
+                            .prefix("z "),
+                    );
+                });
+                for (index, scene) in archetype.scenes.iter_mut().enumerate() {
+                    ui.push_id(("archetype_scene", index), |ui| {
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(format!("Variant {}", index + 1));
+                                if ui.radio(scene.is_default, "Default").clicked() {
+                                    state.selected_archetype_scene = index;
+                                    make_default = Some(index);
+                                }
+                                ui.add(
+                                    egui::DragValue::new(scene.age.get_or_insert(1))
+                                        .range(1..=u8::MAX)
+                                        .prefix("Age "),
+                                );
+                                if ui.small_button("No age").clicked() {
+                                    scene.age = None;
+                                }
+                                if ui.small_button("Remove").clicked() {
+                                    remove_scene = Some(index);
+                                }
+                            });
+                            if searchable_string_choice(
+                                ui,
+                                "scene_asset",
+                                "GLB asset",
+                                &mut scene.asset_path,
+                                &model_assets,
+                                asset_search,
+                            ) {
+                                scene.source_model = asset_source_models
+                                    .get(&scene.asset_path)
+                                    .cloned()
+                                    .unwrap_or_else(|| scene.asset_path.clone());
+                            }
+                        });
+                    });
+                }
+                add_scene = ui.button("Add GLB variant").clicked();
+                delete_archetype = ui.button("Delete unreferenced archetype").clicked();
+            });
+        }
+        if let Some(index) = make_default
+            && let Some(archetype) = state.catalog.archetypes.get_mut(&id)
+        {
+            for (scene_index, scene) in archetype.scenes.iter_mut().enumerate() {
+                scene.is_default = scene_index == index;
+            }
+        }
+        if let Some(index) = remove_scene {
+            state.status = match remove_archetype_scene(state, &id, index) {
+                Ok(()) => "Removed model variant".to_owned(),
+                Err(error) => format!("Could not remove model variant: {error}"),
+            };
+        } else if add_scene {
+            state.status = match add_archetype_scene(state, &id) {
+                Ok(()) => "Added model variant".to_owned(),
+                Err(error) => format!("Could not add model variant: {error}"),
+            };
+        } else if delete_archetype {
+            state.status = match delete_model_archetype(state, &id) {
+                Ok(()) => "Deleted unreferenced model archetype".to_owned(),
+                Err(error) => format!("Could not delete model archetype: {error}"),
+            };
+        }
+    }
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("Archetypes: {}", state.catalog.archetypes.len()));
         ui.separator();
@@ -1261,7 +2010,12 @@ fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
     });
 }
 
-fn buildings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+fn buildings_tab(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+) {
     ui.heading("Building authoring");
     ui.label(
         "Create a building from a complete shipping template, choose its model archetype visually, and edit gameplay references without typing stable IDs.",
@@ -1395,7 +2149,13 @@ fn buildings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                         .range(1..=100_000)
                         .prefix("Level cost multiplier /1000 "),
                 );
-                draw_building_visual(&mut columns[1], &draft.value, &state.catalog);
+                draw_building_visual(
+                    &mut columns[1],
+                    &draft.value,
+                    &state.catalog,
+                    preview_texture,
+                    preview_status,
+                );
             });
             ui.collapsing("Construction and level costs", |ui| {
                 stable_u32_map_editor(ui, "Construction cost", &mut draft.value.cost, &resources);
@@ -1614,36 +2374,104 @@ fn buildings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                 }
             });
             ui.collapsing("Model hierarchy bindings", |ui| {
+                let mut remove_handler = None;
                 for (index, model) in draft.value.model_handlers.iter_mut().enumerate() {
-                    ui.group(|ui| {
-                        ui.label(format!("Model handler {}", index + 1));
-                        ui.add(egui::DragValue::new(&mut model.age).prefix("Age "));
-                        string_choice(ui, "Complete model", &mut model.full_model, &model_nodes);
-                        for (stage, node) in model.construction_stages.iter_mut().enumerate() {
+                    ui.push_id(("building_model_handler", index), |ui| {
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(format!("Model handler {}", index + 1));
+                                ui.add(egui::DragValue::new(&mut model.age).prefix("Age "));
+                                if ui.small_button("Remove handler").clicked() {
+                                    remove_handler = Some(index);
+                                }
+                            });
                             string_choice(
                                 ui,
-                                &format!("Construction stage {}", stage + 1),
-                                node,
+                                "Complete model",
+                                &mut model.full_model,
                                 &model_nodes,
                             );
-                        }
-                        string_vec_choices(ui, "Upgrade layers", &mut model.upgrades, &model_nodes);
-                        string_vec_choices(
-                            ui,
-                            "Other controlled models",
-                            &mut model.other_models,
-                            &model_nodes,
-                        );
+                            for (stage, node) in model.construction_stages.iter_mut().enumerate() {
+                                ui.push_id(("construction_stage", stage), |ui| {
+                                    string_choice(
+                                        ui,
+                                        &format!("Construction stage {}", stage + 1),
+                                        node,
+                                        &model_nodes,
+                                    );
+                                });
+                            }
+                            string_vec_choices(
+                                ui,
+                                "Upgrade layers",
+                                &mut model.upgrades,
+                                &model_nodes,
+                            );
+                            string_vec_choices(
+                                ui,
+                                "Other controlled models",
+                                &mut model.other_models,
+                                &model_nodes,
+                            );
+                        })
                     });
                 }
+                if let Some(index) = remove_handler {
+                    draft.value.model_handlers.remove(index);
+                }
+                if ui.button("Add model handler").clicked()
+                    && let Some(first) = model_nodes.first()
+                {
+                    draft.value.model_handlers.push(BuildingModelDef {
+                        age: 1,
+                        full_model: first.clone(),
+                        construction_stages: [first.clone(), first.clone(), first.clone()],
+                        upgrades: Vec::new(),
+                        other_models: Vec::new(),
+                    });
+                }
+                ui.separator();
+                let mut remove_storage_model = None;
                 for (index, model) in draft.value.storage_models.iter_mut().enumerate() {
-                    ui.group(|ui| {
-                        ui.label(format!("Storage model {}", index + 1));
-                        ui.add(egui::DragValue::new(&mut model.age).prefix("Age "));
-                        stable_id_required_choice(ui, "Resource", &mut model.resource, &resources);
-                        string_choice(ui, "Empty", &mut model.empty_model, &model_nodes);
-                        string_choice(ui, "Half full", &mut model.half_full_model, &model_nodes);
-                        string_choice(ui, "Full", &mut model.full_model, &model_nodes);
+                    ui.push_id(("building_storage_model", index), |ui| {
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(format!("Storage model {}", index + 1));
+                                ui.add(egui::DragValue::new(&mut model.age).prefix("Age "));
+                                if ui.small_button("Remove storage model").clicked() {
+                                    remove_storage_model = Some(index);
+                                }
+                            });
+                            stable_id_required_choice(
+                                ui,
+                                "Resource",
+                                &mut model.resource,
+                                &resources,
+                            );
+                            string_choice(ui, "Empty", &mut model.empty_model, &model_nodes);
+                            string_choice(
+                                ui,
+                                "Half full",
+                                &mut model.half_full_model,
+                                &model_nodes,
+                            );
+                            string_choice(ui, "Full", &mut model.full_model, &model_nodes);
+                        })
+                    });
+                }
+                if let Some(index) = remove_storage_model {
+                    draft.value.storage_models.remove(index);
+                }
+                if ui.button("Add storage model").clicked()
+                    && let (Some(first), Some((resource, _))) =
+                        (model_nodes.first(), resources.first())
+                {
+                    draft.value.storage_models.push(StorageModelDef {
+                        age: 1,
+                        resource: resource.clone(),
+                        empty_model: first.clone(),
+                        half_full_model: first.clone(),
+                        full_model: first.clone(),
                     });
                 }
             });
@@ -2293,6 +3121,129 @@ fn role_i32(ui: &mut egui::Ui, label: &str, value: &mut i32) {
     ui.end_row();
 }
 
+fn objective_catalog_editor(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    objective_choices: &[(StableId, String)],
+    resources: &[(StableId, String)],
+    buildings: &[(StableId, String)],
+    enemies: &[(StableId, String)],
+) {
+    ui.collapsing("Vote requirement catalog", |ui| {
+        ui.label(
+            "Technology requirements are reusable typed records. Create them here, then attach them to node cards with the searchable requirement menu.",
+        );
+        let before = state.selected_objective.clone();
+        stable_id_option_choice(
+            ui,
+            "Selected requirement",
+            &mut state.selected_objective,
+            objective_choices,
+        );
+        if before != state.selected_objective {
+            refresh_objective_draft(state);
+        }
+        let mut duplicate = false;
+        let mut delete = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("New stable ID");
+            ui.text_edit_singleline(&mut state.new_objective_id);
+            duplicate = ui
+                .add_enabled(
+                    state.objective_draft.is_some(),
+                    egui::Button::new("Duplicate selected requirement"),
+                )
+                .clicked();
+            delete = ui
+                .add_enabled(
+                    state.objective_draft.is_some(),
+                    egui::Button::new("Delete unreferenced requirement"),
+                )
+                .clicked();
+        });
+        let mut apply = false;
+        let mut discard = false;
+        if let Some(draft) = state.objective_draft.as_mut() {
+            ui.group(|ui| {
+                ui.monospace(draft.id.to_string());
+                ui.horizontal_wrapped(|ui| {
+                    objective_kind_choice(ui, &mut draft.value.kind);
+                    ui.add(
+                        egui::DragValue::new(&mut draft.value.required_amount)
+                            .range(1..=u32::MAX)
+                            .prefix("Required amount "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut draft.value.float_value_milli)
+                            .prefix("Float value milli "),
+                    );
+                });
+                stable_id_option_choice(
+                    ui,
+                    "Resource target",
+                    &mut draft.value.resource,
+                    resources,
+                );
+                stable_id_option_choice(
+                    ui,
+                    "Building target",
+                    &mut draft.value.building,
+                    buildings,
+                );
+                stable_id_option_choice(
+                    ui,
+                    "Enemy target",
+                    &mut draft.value.enemy,
+                    enemies,
+                );
+                ui.horizontal(|ui| {
+                    apply = ui.button("Apply validated requirement").clicked();
+                    discard = ui.button("Discard requirement draft").clicked();
+                });
+            });
+        }
+        if duplicate {
+            state.status = match duplicate_selected_objective(state) {
+                Ok(()) => "Created vote requirement from selected template".to_owned(),
+                Err(error) => format!("Requirement creation rejected: {error}"),
+            };
+        } else if delete {
+            state.status = match delete_selected_objective(state) {
+                Ok(()) => "Deleted unreferenced vote requirement".to_owned(),
+                Err(error) => format!("Requirement deletion rejected: {error}"),
+            };
+        } else if apply {
+            state.status = match apply_objective_draft(state) {
+                Ok(()) => "Vote requirement applied and validated".to_owned(),
+                Err(error) => format!("Requirement edit rejected: {error}"),
+            };
+        } else if discard {
+            refresh_objective_draft(state);
+        }
+    });
+}
+
+fn objective_kind_choice(ui: &mut egui::Ui, value: &mut ObjectiveKind) {
+    egui::ComboBox::from_id_salt(("objective_kind", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            for kind in [
+                ObjectiveKind::Build,
+                ObjectiveKind::BuildAny,
+                ObjectiveKind::Collect,
+                ObjectiveKind::Kill,
+                ObjectiveKind::KillAny,
+                ObjectiveKind::EarnPerHour,
+                ObjectiveKind::Sell,
+                ObjectiveKind::SellAny,
+                ObjectiveKind::Buy,
+                ObjectiveKind::BuyAny,
+            ] {
+                ui.selectable_value(value, kind, format!("{kind:?}"));
+            }
+        });
+}
+
 fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.horizontal_wrapped(|ui| {
         ui.heading("Technology graph authoring");
@@ -2359,7 +3310,7 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         ui.checkbox(&mut state.technology_graph_view.show_minimap, "Minimap");
     });
     ui.label(
-        "The graph is the primary workspace: drag nodes and group headers, resize groups, and edit the complete selected node in the inspector beside it.",
+        "The graph is the primary workspace. Node cards expose requirements and effects; drag an output socket into another node's input to create a prerequisite.",
     );
 
     let technology_choices: Vec<_> = state
@@ -2401,230 +3352,439 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             )
         })
         .collect();
+    let enemy_choices: Vec<_> = state
+        .catalog
+        .archetypes
+        .iter()
+        .filter(|(_, archetype)| archetype.enemy.is_some())
+        .map(|(id, archetype)| (id.clone(), archetype.display_name.clone()))
+        .collect();
     let icon_choices = technology_icon_choices(state);
 
-    ui.columns(2, |columns| {
-        columns[0].horizontal_wrapped(|ui| {
-            ui.label("Search");
-            ui.text_edit_singleline(&mut state.technology_search);
-            ui.label("New group");
-            ui.text_edit_singleline(&mut state.new_group_id);
-            ui.text_edit_singleline(&mut state.new_group_name);
-            if ui.button("Add group").clicked() {
-                state.status = match create_technology_group(state) {
-                    Ok(()) => "Created technology group".to_owned(),
-                    Err(error) => format!("Group creation rejected: {error}"),
-                };
-            }
-        });
-        columns[0].horizontal_wrapped(|ui| {
-            stable_id_option_choice(
-                ui,
-                "New node group",
-                &mut state.selected_group,
-                &group_choices,
-            );
-            ui.text_edit_singleline(&mut state.new_technology_id);
-            ui.text_edit_singleline(&mut state.new_technology_name);
-            if ui
-                .add_enabled(
-                    state.selected_group.is_some(),
-                    egui::Button::new("Add node"),
-                )
-                .clicked()
-            {
-                state.status = match create_technology_node(state) {
-                    Ok(()) => "Created complete technology node draft".to_owned(),
-                    Err(error) => format!("Node creation rejected: {error}"),
-                };
-            }
-        });
-        let selected_node = state
-            .technology_draft
-            .as_ref()
-            .map(|draft| draft.id.clone());
-        let before = state.technology_layout.clone();
-        let output = show_technology_graph(
-            &mut columns[0],
-            &state.catalog,
-            &mut state.technology_layout,
-            &mut state.technology_graph_view,
-            selected_node.as_ref(),
-            state.selected_group.as_ref(),
-            &state.technology_search,
-        );
-        if output.layout_edit_started {
-            push_authoring_undo(
-                state,
-                AuthoringSnapshot {
-                    catalog: state.catalog.clone(),
-                    technology_layout: before,
-                },
-            );
-        }
-        if let Some(group) = output.selected_group {
-            state.selected_group = Some(group);
-        }
-        if let Some(node) = output.selected_node {
-            state.technology_draft = technology_draft(&state.catalog, &node);
-        }
+    objective_catalog_editor(
+        ui,
+        state,
+        &objective_choices,
+        &resources,
+        &building_choices,
+        &enemy_choices,
+    );
 
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Search");
+        ui.text_edit_singleline(&mut state.technology_search);
+        ui.label("New group");
+        ui.text_edit_singleline(&mut state.new_group_id);
+        ui.text_edit_singleline(&mut state.new_group_name);
+        if ui.button("Add group").clicked() {
+            state.status = match create_technology_group(state) {
+                Ok(()) => "Created technology group".to_owned(),
+                Err(error) => format!("Group creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_group.is_some(),
+                egui::Button::new("Delete selected group"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_technology_group(state) {
+                Ok(()) => "Deleted empty technology group".to_owned(),
+                Err(error) => format!("Group deletion rejected: {error}"),
+            };
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        stable_id_option_choice(
+            ui,
+            "New node group",
+            &mut state.selected_group,
+            &group_choices,
+        );
+        ui.text_edit_singleline(&mut state.new_technology_id);
+        ui.text_edit_singleline(&mut state.new_technology_name);
+        if ui
+            .add_enabled(
+                state.selected_group.is_some(),
+                egui::Button::new("Add node"),
+            )
+            .clicked()
+        {
+            state.status = match create_technology_node(state) {
+                Ok(()) => "Created complete technology node draft".to_owned(),
+                Err(error) => format!("Node creation rejected: {error}"),
+            };
+        }
+    });
+
+    let selected_node = state
+        .technology_draft
+        .as_ref()
+        .map(|draft| draft.id.clone());
+    let before = state.technology_layout.clone();
+    let output = show_technology_graph(
+        ui,
+        &state.catalog,
+        &mut state.technology_layout,
+        &mut state.technology_graph_view,
+        selected_node.as_ref(),
+        state.selected_group.as_ref(),
+        &state.technology_search,
+    );
+    if output.layout_edit_started {
+        push_authoring_undo(
+            state,
+            AuthoringSnapshot {
+                catalog: state.catalog.clone(),
+                technology_layout: before,
+            },
+        );
+    }
+    if let Some(group) = output.selected_group {
+        state.selected_group = Some(group);
+    }
+    if let Some(node) = output.selected_node {
+        state.technology_draft = technology_draft(&state.catalog, &node);
+    }
+    if let Some((source, target)) = output.connection_requested {
+        state.status = match connect_technology_nodes(state, &source, &target) {
+            Ok(()) => format!("Connected {source} as a prerequisite of {target}"),
+            Err(error) => format!("Connection rejected: {error}"),
+        };
+    }
+
+    let objective_details = state.catalog.objectives.clone();
+    let mut apply = false;
+    let mut discard = false;
+    let mut delete = false;
+    if let Some(selected) = state
+        .technology_draft
+        .as_ref()
+        .map(|draft| draft.id.clone())
+    {
+        egui::Window::new("Technology node editor")
+            .id(egui::Id::new(("technology_node_editor", selected.as_str())))
+            .default_pos(egui::pos2(
+                ui.max_rect().right() - 580.0,
+                ui.max_rect().top() + 110.0,
+            ))
+            .default_size(egui::vec2(550.0, 720.0))
+            .resizable(true)
+            .show(ui.ctx(), |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("technology_node_editor_scroll")
+                    .show(ui, |ui| {
+                        let Some(draft) = state.technology_draft.as_mut() else {
+                            return;
+                        };
+                        ui.heading(&draft.value.display_name);
+                        ui.monospace(draft.id.to_string());
+                        ui.label("Display name");
+                        ui.text_edit_singleline(&mut draft.value.display_name);
+                        ui.label("Description");
+                        ui.text_edit_multiline(&mut draft.value.description);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Age");
+                            ui.text_edit_singleline(&mut draft.value.age);
+                            ui.add(egui::DragValue::new(&mut draft.value.tier).prefix("Tier "));
+                        });
+                        stable_id_option_choice(
+                            ui,
+                            "Group",
+                            &mut draft.value.group,
+                            &group_choices,
+                        );
+                        searchable_string_choice(
+                            ui,
+                            "technology_icon",
+                            "Icon",
+                            &mut draft.value.icon_path,
+                            &icon_choices,
+                            &mut draft.icon_search,
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            ui.checkbox(&mut draft.value.initially_unlocked, "Initially unlocked");
+                            ui.checkbox(&mut draft.value.unavailable, "Unavailable");
+                        });
+
+                        let node_choices: Vec<_> = technology_choices
+                            .iter()
+                            .filter(|(id, _)| id != &draft.id)
+                            .cloned()
+                            .collect();
+                        searchable_stable_id_vec_editor(
+                            ui,
+                            "prerequisites",
+                            "Prerequisites",
+                            &mut draft.value.prerequisites,
+                            &node_choices,
+                            &mut draft.prerequisite_search,
+                        );
+                        searchable_stable_id_vec_editor(
+                            ui,
+                            "unlocks",
+                            "Explicit unlocks",
+                            &mut draft.value.unlocks,
+                            &node_choices,
+                            &mut draft.unlock_search,
+                        );
+                        searchable_stable_id_vec_editor(
+                            ui,
+                            "objectives",
+                            "Vote requirements",
+                            &mut draft.value.objectives,
+                            &objective_choices,
+                            &mut draft.objective_search,
+                        );
+                        for objective_id in &draft.value.objectives {
+                            if let Some(objective) = objective_details.get(objective_id) {
+                                ui.monospace(format!(
+                                    "  {:?} ×{}{}{}{}",
+                                    objective.kind,
+                                    objective.required_amount,
+                                    objective
+                                        .resource
+                                        .as_ref()
+                                        .map_or_else(String::new, |id| format!(" · {id}")),
+                                    objective
+                                        .building
+                                        .as_ref()
+                                        .map_or_else(String::new, |id| format!(" · {id}")),
+                                    objective
+                                        .enemy
+                                        .as_ref()
+                                        .map_or_else(String::new, |id| format!(" · {id}")),
+                                ));
+                            }
+                        }
+
+                        ui.collapsing("Building effects", |ui| {
+                            stable_u16_map_editor(
+                                ui,
+                                "Maximum levels",
+                                &mut draft.value.building_level_caps,
+                                &building_choices,
+                            );
+                            stable_id_set_choices(
+                                ui,
+                                "Unlock buildings",
+                                &mut draft.value.unlocked_buildings,
+                                &building_choices,
+                            );
+                            stable_i32_map_editor(
+                                ui,
+                                "Cost reductions (%)",
+                                &mut draft.value.building_cost_reduction_percent,
+                                &building_choices,
+                            );
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut draft.value.global_building_cost_reduction_percent,
+                                )
+                                .suffix("% global cost reduction"),
+                            );
+                            stable_id_set_choices(
+                                ui,
+                                "Age-up buildings",
+                                &mut draft.value.aged_buildings,
+                                &building_choices,
+                            );
+                        });
+                        ui.collapsing("Storage and stat effects", |ui| {
+                            stable_i32_map_editor(
+                                ui,
+                                "Storage boosts (%)",
+                                &mut draft.value.storage_boost_percent,
+                                &resources,
+                            );
+                            stable_i32_map_editor(
+                                ui,
+                                "Global stat boosts (%)",
+                                &mut draft.value.global_stat_boost_percent,
+                                &stat_options,
+                            );
+                            role_stat_map_editor(
+                                ui,
+                                &mut draft.value.role_stat_boost_percent,
+                                &role_choices,
+                                &stat_options,
+                            );
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            apply = ui.button("Apply validated node").clicked();
+                            discard = ui.button("Discard draft").clicked();
+                            delete = ui.button("Delete node").clicked();
+                        });
+                    });
+            });
+    }
+    if apply {
+        state.status = match apply_technology_draft(state) {
+            Ok(()) => "Technology node applied; graph and references remain valid".to_owned(),
+            Err(error) => format!("Technology edit rejected: {error}"),
+        };
+    } else if discard {
+        refresh_technology_draft(state);
+        "Discarded technology draft".clone_into(&mut state.status);
+    } else if delete {
+        state.status = match delete_selected_technology_node(state) {
+            Ok(()) => "Deleted technology node and cleaned graph references".to_owned(),
+            Err(error) => format!("Technology deletion rejected: {error}"),
+        };
+    }
+}
+
+fn enemy_camp_generation_editor(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+) {
+    ui.collapsing("Enemy camp generation layers", |ui| {
+        let layer_choices = state
+            .catalog
+            .enemy_camp_generation
+            .iter()
+            .map(|layer| (layer.id.clone(), layer.id.to_string()))
+            .collect::<Vec<_>>();
+        let camp_choices = state
+            .catalog
+            .archetypes
+            .iter()
+            .filter(|(_, archetype)| archetype.enemy_spawner.is_some())
+            .map(|(id, archetype)| (id.clone(), archetype.display_name.clone()))
+            .collect::<Vec<_>>();
+        let source_paths = state
+            .catalog
+            .source_records
+            .values()
+            .map(|record| record.source_path.clone())
+            .chain(
+                state
+                    .catalog
+                    .enemy_camp_generation
+                    .iter()
+                    .map(|layer| layer.source_path.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let before = state.selected_enemy_camp_generation.clone();
+        stable_id_option_choice(
+            ui,
+            "Camp layer",
+            &mut state.selected_enemy_camp_generation,
+            &layer_choices,
+        );
+        if before != state.selected_enemy_camp_generation {
+            refresh_enemy_camp_generation_draft(state);
+            state.world_preview_layer = WorldPreviewLayer::EnemyCamps;
+        }
+        let mut duplicate = false;
+        let mut delete = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("New layer ID");
+            ui.text_edit_singleline(&mut state.new_enemy_camp_generation_id);
+            duplicate = ui
+                .add_enabled(
+                    state.enemy_camp_generation_draft.is_some(),
+                    egui::Button::new("Duplicate selected camp layer"),
+                )
+                .clicked();
+            delete = ui
+                .add_enabled(
+                    state.enemy_camp_generation_draft.is_some(),
+                    egui::Button::new("Remove selected camp layer"),
+                )
+                .clicked();
+        });
         let mut apply = false;
         let mut discard = false;
-        let mut delete = false;
-        egui::ScrollArea::vertical()
-            .id_salt("technology_node_inspector")
-            .show(&mut columns[1], |ui| {
-                ui.heading("Selected node");
-                let mut select_node = state
-                    .technology_draft
-                    .as_ref()
-                    .map(|draft| draft.id.clone());
-                let before = select_node.clone();
-                stable_id_option_choice(ui, "Node", &mut select_node, &technology_choices);
-                if select_node != before
-                    && let Some(id) = select_node
-                {
-                    state.technology_draft = technology_draft(&state.catalog, &id);
-                    state.technology_graph_view.request_focus(id);
-                }
-                let Some(draft) = state.technology_draft.as_mut() else {
-                    ui.label("Click a graph node or choose one above.");
-                    return;
-                };
-                ui.monospace(draft.id.to_string());
-                ui.label("Display name");
-                ui.text_edit_singleline(&mut draft.value.display_name);
-                ui.label("Description");
-                ui.text_edit_multiline(&mut draft.value.description);
+        if let Some(layer) = state.enemy_camp_generation_draft.as_mut() {
+            ui.group(|ui| {
+                ui.monospace(layer.id.to_string());
+                stable_id_required_choice(
+                    ui,
+                    "Camp/spawner archetype",
+                    &mut layer.camp_archetype,
+                    &camp_choices,
+                );
+                searchable_string_choice(
+                    ui,
+                    "enemy_camp_source",
+                    "Unity source",
+                    &mut layer.source_path,
+                    &source_paths,
+                    &mut state.world_asset_search,
+                );
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Age");
-                    ui.text_edit_singleline(&mut draft.value.age);
-                    ui.add(egui::DragValue::new(&mut draft.value.tier).prefix("Tier "));
-                });
-                stable_id_option_choice(ui, "Group", &mut draft.value.group, &group_choices);
-                string_choice(ui, "Icon", &mut draft.value.icon_path, &icon_choices);
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut draft.value.initially_unlocked, "Initially unlocked");
-                    ui.checkbox(&mut draft.value.unavailable, "Unavailable");
-                });
-
-                let node_choices: Vec<_> = technology_choices
-                    .iter()
-                    .filter(|(id, _)| id != &draft.id)
-                    .cloned()
-                    .collect();
-                stable_id_vec_choices(
-                    ui,
-                    "Prerequisites",
-                    &mut draft.value.prerequisites,
-                    &node_choices,
-                );
-                stable_id_vec_choices(
-                    ui,
-                    "Explicit unlocks",
-                    &mut draft.value.unlocks,
-                    &node_choices,
-                );
-                stable_id_vec_choices(
-                    ui,
-                    "Objectives / vote requirements",
-                    &mut draft.value.objectives,
-                    &objective_choices,
-                );
-                for objective_id in &draft.value.objectives {
-                    if let Some(objective) = state.catalog.objectives.get(objective_id) {
-                        ui.monospace(format!(
-                            "  {:?} ×{}{}{}{}",
-                            objective.kind,
-                            objective.required_amount,
-                            objective
-                                .resource
-                                .as_ref()
-                                .map_or_else(String::new, |id| format!(" · {id}")),
-                            objective
-                                .building
-                                .as_ref()
-                                .map_or_else(String::new, |id| format!(" · {id}")),
-                            objective
-                                .enemy
-                                .as_ref()
-                                .map_or_else(String::new, |id| format!(" · {id}")),
-                        ));
+                    ui.label("Minimum absolute offset");
+                    for value in &mut layer.minimum_absolute_offset_milli_cells {
+                        ui.add(egui::DragValue::new(value).prefix("milli-cells "));
                     }
-                }
-
-                ui.collapsing("Building effects", |ui| {
-                    stable_u16_map_editor(
-                        ui,
-                        "Maximum levels",
-                        &mut draft.value.building_level_caps,
-                        &building_choices,
-                    );
-                    stable_id_set_choices(
-                        ui,
-                        "Unlock buildings",
-                        &mut draft.value.unlocked_buildings,
-                        &building_choices,
-                    );
-                    stable_i32_map_editor(
-                        ui,
-                        "Cost reductions (%)",
-                        &mut draft.value.building_cost_reduction_percent,
-                        &building_choices,
+                    ui.label("Maximum absolute offset");
+                    for value in &mut layer.maximum_absolute_offset_milli_cells {
+                        ui.add(egui::DragValue::new(value).prefix("milli-cells "));
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut layer.maximum_camps)
+                            .range(1..=u16::MAX)
+                            .prefix("Maximum camps "),
                     );
                     ui.add(
-                        egui::DragValue::new(
-                            &mut draft.value.global_building_cost_reduction_percent,
-                        )
-                        .suffix("% global cost reduction"),
+                        egui::DragValue::new(&mut layer.minimum_distance_from_centre_milli_cells)
+                            .prefix("Minimum centre distance "),
                     );
-                    stable_id_set_choices(
-                        ui,
-                        "Age-up buildings",
-                        &mut draft.value.aged_buildings,
-                        &building_choices,
+                    ui.add(
+                        egui::DragValue::new(&mut layer.minimum_distance_between_camps_milli_cells)
+                            .range(1..=u32::MAX)
+                            .prefix("Minimum camp spacing "),
                     );
-                });
-                ui.collapsing("Storage and stat effects", |ui| {
-                    stable_i32_map_editor(
-                        ui,
-                        "Storage boosts (%)",
-                        &mut draft.value.storage_boost_percent,
-                        &resources,
-                    );
-                    stable_i32_map_editor(
-                        ui,
-                        "Global stat boosts (%)",
-                        &mut draft.value.global_stat_boost_percent,
-                        &stat_options,
-                    );
-                    role_stat_map_editor(
-                        ui,
-                        &mut draft.value.role_stat_boost_percent,
-                        &role_choices,
-                        &stat_options,
+                    ui.add(
+                        egui::DragValue::new(&mut layer.camp_size_milli_cells)
+                            .range(1..=u32::MAX)
+                            .prefix("Camp size "),
                     );
                 });
-                ui.horizontal_wrapped(|ui| {
-                    apply = ui.button("Apply validated node").clicked();
-                    discard = ui.button("Discard draft").clicked();
-                    delete = ui.button("Delete node").clicked();
+                if state.world_preview_layer == WorldPreviewLayer::EnemyCamps {
+                    draw_model_preview(
+                        ui,
+                        preview_texture,
+                        preview_status,
+                        egui::vec2(360.0, 240.0),
+                    );
+                } else if ui
+                    .button("Preview this camp model and placement range")
+                    .clicked()
+                {
+                    state.world_preview_layer = WorldPreviewLayer::EnemyCamps;
+                }
+                ui.horizontal(|ui| {
+                    apply = ui.button("Apply validated camp layer").clicked();
+                    discard = ui.button("Discard camp draft").clicked();
                 });
             });
-        if apply {
-            state.status = match apply_technology_draft(state) {
-                Ok(()) => "Technology node applied; graph and references remain valid".to_owned(),
-                Err(error) => format!("Technology edit rejected: {error}"),
+        }
+        if duplicate {
+            state.status = match duplicate_enemy_camp_generation_layer(state) {
+                Ok(()) => "Duplicated enemy camp generation layer".to_owned(),
+                Err(error) => format!("Camp layer creation rejected: {error}"),
+            };
+        } else if delete {
+            state.status = match delete_enemy_camp_generation_layer(state) {
+                Ok(()) => "Removed enemy camp generation layer".to_owned(),
+                Err(error) => format!("Camp layer removal rejected: {error}"),
+            };
+        } else if apply {
+            state.status = match apply_enemy_camp_generation_draft(state) {
+                Ok(()) => "Enemy camp generation layer applied and validated".to_owned(),
+                Err(error) => format!("Camp generation edit rejected: {error}"),
             };
         } else if discard {
-            refresh_technology_draft(state);
-            "Discarded technology draft".clone_into(&mut state.status);
-        } else if delete {
-            state.status = match delete_selected_technology_node(state) {
-                Ok(()) => "Deleted technology node and cleaned graph references".to_owned(),
-                Err(error) => format!("Technology deletion rejected: {error}"),
-            };
+            refresh_enemy_camp_generation_draft(state);
         }
     });
 }
@@ -2955,7 +4115,12 @@ fn legacy_technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     }
 }
 
-fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+fn world_tab(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+) {
     ui.heading("World-generation lab");
     ui.label(
         "Tune Unity-compatible terrain and foliage generation, then inspect deterministic elevation, occupancy, resource, and foliage previews.",
@@ -3020,6 +4185,188 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         }
     });
 
+    let resource_choices = resource_choices(&state.catalog);
+    let target_choices = target_kind_choices(&state.catalog);
+    let discovered_models = state.discovered_model_assets.clone();
+    ui.collapsing("Land and water resource generation layers", |ui| {
+        let layers: Vec<_> = state
+            .catalog
+            .resource_generation
+            .iter()
+            .map(|layer| (layer.id.clone(), layer.display_name.clone()))
+            .collect();
+        let mut changed = false;
+        stable_id_option_choice(
+            ui,
+            "Resource layer",
+            &mut state.selected_resource_generation,
+            &layers,
+        );
+        if state
+            .resource_generation_draft
+            .as_ref()
+            .map(|draft| &draft.id)
+            != state.selected_resource_generation.as_ref()
+        {
+            changed = true;
+        }
+        if changed {
+            refresh_resource_generation_draft(state);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("New layer ID");
+            ui.text_edit_singleline(&mut state.new_resource_generation_id);
+            ui.label("Name");
+            ui.text_edit_singleline(&mut state.new_resource_generation_name);
+            if ui
+                .add_enabled(
+                    state.selected_resource_generation.is_some(),
+                    egui::Button::new("Duplicate selected layer"),
+                )
+                .clicked()
+            {
+                state.status = match duplicate_resource_generation_layer(state) {
+                    Ok(()) => "Duplicated resource generation layer".to_owned(),
+                    Err(error) => format!("Resource layer creation rejected: {error}"),
+                };
+            }
+            if ui
+                .add_enabled(
+                    state.selected_resource_generation.is_some(),
+                    egui::Button::new("Remove selected layer"),
+                )
+                .clicked()
+            {
+                state.status = match delete_resource_generation_layer(state) {
+                    Ok(()) => "Removed resource generation layer".to_owned(),
+                    Err(error) => format!("Resource layer removal rejected: {error}"),
+                };
+            }
+        });
+        let mut apply = false;
+        let mut discard = false;
+        if let Some(layer) = state.resource_generation_draft.as_mut() {
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.monospace(layer.id.to_string());
+                    ui.label("Display name");
+                    ui.text_edit_singleline(&mut layer.display_name);
+                    egui::ComboBox::from_id_salt("resource_generation_habitat")
+                        .selected_text(format!("{:?}", layer.habitat))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut layer.habitat,
+                                ResourceGenerationHabitat::Land,
+                                "Land",
+                            );
+                            ui.selectable_value(
+                                &mut layer.habitat,
+                                ResourceGenerationHabitat::ShorelineWater,
+                                "Shoreline water",
+                            );
+                        });
+                });
+                stable_id_required_choice(
+                    ui,
+                    "Produced resource",
+                    &mut layer.resource,
+                    &resource_choices,
+                );
+                stable_id_required_choice(
+                    ui,
+                    "Target kind",
+                    &mut layer.target_kind,
+                    &target_choices,
+                );
+                searchable_string_choice(
+                    ui,
+                    "resource_visual_asset",
+                    "Preview/model GLB",
+                    &mut layer.visual_asset_path,
+                    &discovered_models,
+                    &mut state.world_asset_search,
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut layer.amount)
+                            .range(1..=u32::MAX)
+                            .prefix("Amount "),
+                    );
+                    ui.add(egui::DragValue::new(&mut layer.seed).prefix("Seed "));
+                    ui.add(
+                        egui::DragValue::new(&mut layer.density_multiplier_per_thousand)
+                            .range(1..=10_000)
+                            .prefix("Water density multiplier /1000 "),
+                    );
+                });
+                if layer.habitat == ResourceGenerationHabitat::Land {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut layer.source_size)
+                                .range(1..=4_096)
+                                .prefix("Source size "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut layer.noise_scale)
+                                .range(0.001..=10_000.0)
+                                .prefix("Noise scale "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut layer.octaves)
+                                .range(1..=8)
+                                .prefix("Octaves "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut layer.persistence)
+                                .range(0.0..=1.0)
+                                .prefix("Persistence "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut layer.lacunarity)
+                                .range(0.0..=32.0)
+                                .prefix("Lacunarity "),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut layer.spawn_threshold, 0.0..=1.0)
+                                .text("Threshold"),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut layer.spacing)
+                                .range(1..=u16::MAX)
+                                .prefix("Spacing "),
+                        );
+                        ui.checkbox(
+                            &mut layer.half_cell_terrain_offset,
+                            "Half-cell terrain offset",
+                        );
+                    });
+                }
+                ui.label(format!("Unity provenance: {}", layer.source_path));
+                draw_model_preview(
+                    ui,
+                    preview_texture,
+                    preview_status,
+                    egui::vec2(360.0, 240.0),
+                );
+                ui.horizontal(|ui| {
+                    apply = ui.button("Apply validated resource layer").clicked();
+                    discard = ui.button("Discard resource draft").clicked();
+                });
+            });
+        }
+        if apply {
+            state.status = match apply_resource_generation_draft(state) {
+                Ok(()) => "Resource generation layer applied and validated".to_owned(),
+                Err(error) => format!("Resource generation edit rejected: {error}"),
+            };
+            state.generated_world = None;
+        } else if discard {
+            refresh_resource_generation_draft(state);
+        }
+    });
+
+    enemy_camp_generation_editor(ui, state, preview_texture, preview_status);
+
     ui.collapsing("Authored foliage generation layers", |ui| {
         let layers: Vec<_> = state
             .catalog
@@ -3048,6 +4395,71 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         if changed {
             refresh_foliage_draft(state);
         }
+        ui.horizontal_wrapped(|ui| {
+            ui.label("New layer ID");
+            ui.text_edit_singleline(&mut state.new_foliage_id);
+            if ui
+                .add_enabled(
+                    state.selected_foliage.is_some(),
+                    egui::Button::new("Duplicate selected foliage layer"),
+                )
+                .clicked()
+            {
+                state.status = match duplicate_foliage_layer(state) {
+                    Ok(()) => "Duplicated foliage generation layer".to_owned(),
+                    Err(error) => format!("Foliage layer creation rejected: {error}"),
+                };
+            }
+            if ui
+                .add_enabled(
+                    state.selected_foliage.is_some(),
+                    egui::Button::new("Remove selected foliage layer"),
+                )
+                .clicked()
+            {
+                state.status = match delete_foliage_layer(state) {
+                    Ok(()) => "Removed foliage generation layer".to_owned(),
+                    Err(error) => format!("Foliage layer removal rejected: {error}"),
+                };
+            }
+        });
+        let source_paths: Vec<_> = state
+            .catalog
+            .source_records
+            .values()
+            .map(|record| record.source_path.clone())
+            .chain(
+                state
+                    .catalog
+                    .foliage
+                    .iter()
+                    .map(|layer| layer.source_path.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let material_paths: Vec<_> = state
+            .presentation
+            .materials
+            .values()
+            .map(|material| material.source_path.clone())
+            .chain(
+                state
+                    .catalog
+                    .foliage
+                    .iter()
+                    .map(|layer| layer.material_source_path.clone()),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let asset_source_models: BTreeMap<_, _> = state
+            .catalog
+            .archetypes
+            .values()
+            .flat_map(|archetype| archetype.scenes.iter())
+            .map(|scene| (scene.asset_path.clone(), scene.source_model.clone()))
+            .collect();
         let mut apply_foliage = false;
         let mut reset_foliage = false;
         if let Some(layer) = state.foliage_draft.as_mut() {
@@ -3121,39 +4533,96 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                         .prefix("Spacing "),
                 );
             });
-            ui.horizontal(|ui| {
-                ui.label("Unity source");
-                ui.text_edit_singleline(&mut layer.source_path);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Material source");
-                ui.text_edit_singleline(&mut layer.material_source_path);
-            });
+            searchable_string_choice(
+                ui,
+                "foliage_source",
+                "Unity source",
+                &mut layer.source_path,
+                &source_paths,
+                &mut state.world_asset_search,
+            );
+            searchable_string_choice(
+                ui,
+                "foliage_material",
+                "Material source",
+                &mut layer.material_source_path,
+                &material_paths,
+                &mut state.world_asset_search,
+            );
             ui.collapsing(format!("Model variants ({})", layer.variants.len()), |ui| {
+                let mut remove_variant = None;
                 for (index, variant) in layer.variants.iter_mut().enumerate() {
-                    ui.group(|ui| {
-                        ui.label(format!("Variant {}", index + 1));
-                        ui.horizontal(|ui| {
-                            ui.label("Source model");
-                            ui.text_edit_singleline(&mut variant.source_model);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("GLB asset path");
-                            ui.text_edit_singleline(&mut variant.asset_path);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Base scale");
-                            for axis in &mut variant.base_scale {
-                                ui.add(
-                                    egui::DragValue::new(axis)
-                                        .range(0.001..=1_000.0)
-                                        .speed(0.01),
+                    ui.push_id(("foliage_variant", index), |ui| {
+                        ui.group(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(format!("Variant {}", index + 1));
+                                ui.selectable_value(
+                                    &mut state.selected_foliage_variant,
+                                    index,
+                                    "Preview",
                                 );
+                                if ui.small_button("Remove").clicked() {
+                                    remove_variant = Some(index);
+                                }
+                            });
+                            if searchable_string_choice(
+                                ui,
+                                "foliage_variant_asset",
+                                "GLB asset",
+                                &mut variant.asset_path,
+                                &discovered_models,
+                                &mut state.world_asset_search,
+                            ) {
+                                variant.source_model = asset_source_models
+                                    .get(&variant.asset_path)
+                                    .cloned()
+                                    .unwrap_or_else(|| variant.asset_path.clone());
                             }
+                            ui.monospace(format!("Source: {}", variant.source_model));
+                            ui.horizontal(|ui| {
+                                ui.label("Base scale");
+                                for axis in &mut variant.base_scale {
+                                    ui.add(
+                                        egui::DragValue::new(axis)
+                                            .range(0.001..=1_000.0)
+                                            .speed(0.01),
+                                    );
+                                }
+                            });
                         });
                     });
                 }
+                if let Some(index) = remove_variant {
+                    if layer.variants.len() > 1 {
+                        layer.variants.remove(index);
+                        state.selected_foliage_variant = state
+                            .selected_foliage_variant
+                            .min(layer.variants.len().saturating_sub(1));
+                    } else {
+                        "A foliage layer must retain at least one model variant"
+                            .clone_into(&mut state.status);
+                    }
+                }
+                if ui.button("Add model variant").clicked()
+                    && let Some(asset_path) = discovered_models.first()
+                {
+                    layer.variants.push(stream_town_domain::FoliageVariantDef {
+                        source_model: asset_source_models
+                            .get(asset_path)
+                            .cloned()
+                            .unwrap_or_else(|| asset_path.clone()),
+                        asset_path: asset_path.clone(),
+                        base_scale: [1.0, 1.0, 1.0],
+                    });
+                    state.selected_foliage_variant = layer.variants.len() - 1;
+                }
             });
+            draw_model_preview(
+                ui,
+                preview_texture,
+                preview_status,
+                egui::vec2(360.0, 240.0),
+            );
             ui.horizontal(|ui| {
                 apply_foliage = ui.button("Apply validated foliage edit").clicked();
                 reset_foliage = ui.button("Discard foliage draft").clicked();
@@ -3222,6 +4691,11 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             world,
             state.world_preview_layer,
             state.selected_foliage.as_ref(),
+            state
+                .resource_generation_draft
+                .as_ref()
+                .map(|layer| &layer.target_kind),
+            state.enemy_camp_generation_draft.as_ref(),
             state.config.world.water_level_centimetres,
         );
     }
@@ -4673,6 +6147,10 @@ fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<Technolog
         icon_path: node.icon_path.clone(),
         initially_unlocked: node.initially_unlocked,
         unavailable: node.unavailable,
+        prerequisite_search: String::new(),
+        unlock_search: String::new(),
+        objective_search: String::new(),
+        icon_search: String::new(),
     })
 }
 
@@ -5086,6 +6564,209 @@ fn technology_icon_choices(state: &ToolState) -> Vec<String> {
     values.into_iter().collect()
 }
 
+fn archetype_kind_choice(ui: &mut egui::Ui, value: &mut ArchetypeKind) {
+    egui::ComboBox::from_id_salt(("archetype_kind", ui.next_auto_id()))
+        .selected_text(format!("{value:?}"))
+        .show_ui(ui, |ui| {
+            for kind in [
+                ArchetypeKind::Building,
+                ArchetypeKind::Player,
+                ArchetypeKind::Enemy,
+                ArchetypeKind::Resource,
+                ArchetypeKind::Environment,
+                ArchetypeKind::Vfx,
+                ArchetypeKind::Ui,
+                ArchetypeKind::Other,
+            ] {
+                ui.selectable_value(value, kind, format!("{kind:?}"));
+            }
+        });
+}
+
+fn searchable_string_choice(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    value: &mut String,
+    choices: &[String],
+    search: &mut String,
+) -> bool {
+    let mut changed = false;
+    ui.push_id(id_salt, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(label);
+            let selected = value
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Choose…")
+                .to_owned();
+            ui.menu_button(selected, |ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(search)
+                        .hint_text("Type to filter…")
+                        .desired_width(280.0),
+                );
+                if response.gained_focus() {
+                    response.request_focus();
+                }
+                let needle = search.trim().to_ascii_lowercase();
+                egui::ScrollArea::vertical()
+                    .id_salt("searchable_choices")
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        for choice in choices.iter().filter(|choice| {
+                            needle.is_empty() || choice.to_ascii_lowercase().contains(&needle)
+                        }) {
+                            if ui.selectable_label(choice == value, choice).clicked() {
+                                value.clone_from(choice);
+                                changed = true;
+                                search.clear();
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        });
+    });
+    changed
+}
+
+fn source_model_for_asset_path(catalog: &ContentCatalog, asset_path: &str) -> String {
+    catalog
+        .archetypes
+        .values()
+        .flat_map(|archetype| archetype.scenes.iter())
+        .find(|scene| scene.asset_path == asset_path)
+        .map_or_else(|| asset_path.to_owned(), |scene| scene.source_model.clone())
+}
+
+fn create_model_archetype(state: &mut ToolState) -> Result<(), String> {
+    let id = StableId::new(state.new_archetype_id.trim().to_owned())
+        .map_err(|error| error.to_string())?;
+    if state.catalog.archetypes.contains_key(&id) {
+        return Err(format!("model archetype {id} already exists"));
+    }
+    let display_name = state.new_archetype_name.trim();
+    if display_name.is_empty() {
+        return Err("model display name cannot be empty".to_owned());
+    }
+    let asset_path = state.new_archetype_asset.trim();
+    if !state
+        .discovered_model_assets
+        .iter()
+        .any(|candidate| candidate == asset_path)
+    {
+        return Err("choose a discovered GLB asset".to_owned());
+    }
+    let scene = ArchetypeScene {
+        source_model: source_model_for_asset_path(&state.catalog, asset_path),
+        asset_path: asset_path.to_owned(),
+        age: None,
+        is_default: true,
+    };
+    let archetype = ArchetypeDef {
+        display_name: display_name.to_owned(),
+        kind: state.new_archetype_kind,
+        source_guid: format!("authored:{}", id.as_str()),
+        source_path: format!("Authored/{}.glb", display_name.replace(' ', "_")),
+        bounds: ArchetypeBounds {
+            center: [0.0, 0.5, 0.0],
+            size: [1.0, 1.0, 1.0],
+        },
+        footprint: [1, 1],
+        scenes: vec![scene],
+        component_types: Vec::new(),
+        disable_after_milliseconds: None,
+        health_bar_hide_milliseconds: None,
+        rotating_nodes: Vec::new(),
+        target_size_milli_cells: 0,
+        health: None,
+        enemy: None,
+        enemy_models: None,
+        enemy_spawner: None,
+        pet: None,
+    };
+    let mut candidate = state.catalog.clone();
+    candidate.archetypes.insert(id.clone(), archetype);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_archetype = Some(id);
+    state.selected_archetype_scene = 0;
+    Ok(())
+}
+
+fn add_archetype_scene(state: &mut ToolState, id: &StableId) -> Result<(), String> {
+    let asset_path = state.new_archetype_asset.trim().to_owned();
+    if !state
+        .discovered_model_assets
+        .iter()
+        .any(|candidate| candidate == &asset_path)
+    {
+        return Err("choose a discovered GLB asset in Add model archetype first".to_owned());
+    }
+    let source_model = source_model_for_asset_path(&state.catalog, &asset_path);
+    let mut candidate = state.catalog.clone();
+    let archetype = candidate
+        .archetypes
+        .get_mut(id)
+        .ok_or_else(|| format!("missing model archetype {id}"))?;
+    if archetype
+        .scenes
+        .iter()
+        .any(|scene| scene.asset_path == asset_path)
+    {
+        return Err("that GLB is already a variant of this archetype".to_owned());
+    }
+    let is_default = archetype.scenes.is_empty();
+    archetype.scenes.push(ArchetypeScene {
+        source_model,
+        asset_path,
+        age: None,
+        is_default,
+    });
+    let selected = archetype.scenes.len() - 1;
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_archetype_scene = selected;
+    Ok(())
+}
+
+fn remove_archetype_scene(
+    state: &mut ToolState,
+    id: &StableId,
+    index: usize,
+) -> Result<(), String> {
+    let mut candidate = state.catalog.clone();
+    let archetype = candidate
+        .archetypes
+        .get_mut(id)
+        .ok_or_else(|| format!("missing model archetype {id}"))?;
+    if index >= archetype.scenes.len() {
+        return Err("model variant index is stale".to_owned());
+    }
+    let removed_default = archetype.scenes[index].is_default;
+    archetype.scenes.remove(index);
+    if removed_default && let Some(first) = archetype.scenes.first_mut() {
+        first.is_default = true;
+    }
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_archetype_scene = state
+        .selected_archetype_scene
+        .min(state.catalog.archetypes[id].scenes.len().saturating_sub(1));
+    Ok(())
+}
+
+fn delete_model_archetype(state: &mut ToolState, id: &StableId) -> Result<(), String> {
+    let mut candidate = state.catalog.clone();
+    candidate
+        .archetypes
+        .remove(id)
+        .ok_or_else(|| format!("missing model archetype {id}"))?;
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_archetype = state.catalog.archetypes.keys().next().cloned();
+    state.selected_archetype_scene = 0;
+    Ok(())
+}
+
 fn stable_id_required_choice(
     ui: &mut egui::Ui,
     label: &str,
@@ -5175,6 +6856,72 @@ fn stable_id_vec_choices(
     });
 }
 
+fn searchable_stable_id_vec_editor(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    values: &mut Vec<StableId>,
+    choices: &[(StableId, String)],
+    search: &mut String,
+) {
+    ui.push_id(id_salt, |ui| {
+        ui.label(format!("{label} ({})", values.len()));
+        let mut remove = None;
+        ui.horizontal_wrapped(|ui| {
+            for value in values.iter() {
+                let display = choices
+                    .iter()
+                    .find(|(id, _)| id == value)
+                    .map_or(value.as_str(), |(_, display)| display.as_str());
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(display);
+                        if ui.small_button("×").clicked() {
+                            remove = Some(value.clone());
+                        }
+                    });
+                });
+            }
+        });
+        if let Some(remove) = remove {
+            values.retain(|value| value != &remove);
+        }
+        ui.menu_button(format!("Add {label}…"), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(search)
+                    .hint_text("Type a name or stable ID…")
+                    .desired_width(300.0),
+            );
+            let needle = search.trim().to_ascii_lowercase();
+            let candidates = choices
+                .iter()
+                .filter(|(id, display)| {
+                    !values.contains(id)
+                        && (needle.is_empty()
+                            || id.as_str().to_ascii_lowercase().contains(&needle)
+                            || display.to_ascii_lowercase().contains(&needle))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            egui::ScrollArea::vertical()
+                .id_salt("stable_id_search_results")
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for (id, display) in candidates {
+                        if ui
+                            .selectable_label(false, format!("{display}  ({id})"))
+                            .clicked()
+                        {
+                            values.push(id);
+                            search.clear();
+                            ui.close();
+                        }
+                    }
+                });
+        });
+    });
+}
+
 fn string_choice(ui: &mut egui::Ui, label: &str, value: &mut String, choices: &[String]) {
     let selected = if value.is_empty() {
         "None".to_owned()
@@ -5221,11 +6968,13 @@ fn string_vec_choices(
     ui.collapsing(format!("{label} ({})", values.len()), |ui| {
         let mut remove = None;
         for (index, value) in values.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                string_choice(ui, "Model", value, choices);
-                if ui.small_button("Remove").clicked() {
-                    remove = Some(index);
-                }
+            ui.push_id((label, index), |ui| {
+                ui.horizontal(|ui| {
+                    string_choice(ui, "Model", value, choices);
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                });
             });
         }
         if let Some(index) = remove {
@@ -5406,7 +7155,13 @@ fn role_stat_map_editor(
     }
 }
 
-fn draw_building_visual(ui: &mut egui::Ui, building: &BuildingDef, catalog: &ContentCatalog) {
+fn draw_building_visual(
+    ui: &mut egui::Ui,
+    building: &BuildingDef,
+    catalog: &ContentCatalog,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+) {
     ui.group(|ui| {
         let archetype = catalog.archetypes.get(&building.archetype);
         ui.heading(archetype.map_or("Missing archetype", |value| value.display_name.as_str()));
@@ -5419,10 +7174,17 @@ fn draw_building_visual(ui: &mut egui::Ui, building: &BuildingDef, catalog: &Con
                 ));
             }
         }
-        let desired = egui::vec2(190.0, 120.0);
+        draw_model_preview(
+            ui,
+            preview_texture,
+            preview_status,
+            egui::vec2(320.0, 214.0),
+        );
+        ui.small("Logical placement footprint");
+        let desired = egui::vec2(190.0, 80.0);
         let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
         ui.painter()
-            .rect_filled(rect, 5.0, egui::Color32::from_rgb(24, 34, 42));
+            .rect_filled(rect, 5.0, egui::Color32::from_rgb(18, 27, 34));
         let width = f32::from(building.footprint[0].max(1));
         let depth = f32::from(building.footprint[1].max(1));
         let scale = (rect.width() / width).min(rect.height() / depth) * 0.78;
@@ -5660,6 +7422,109 @@ fn apply_foliage_draft(state: &mut ToolState) -> Result<(), String> {
     commit_catalog_candidate(state, candidate)
 }
 
+fn duplicate_foliage_layer(state: &mut ToolState) -> Result<(), String> {
+    let mut layer = state
+        .foliage_draft
+        .clone()
+        .ok_or_else(|| "no foliage layer selected".to_owned())?;
+    let id =
+        StableId::new(state.new_foliage_id.trim().to_owned()).map_err(|error| error.to_string())?;
+    if state.catalog.foliage.iter().any(|layer| layer.id == id) {
+        return Err(format!("foliage layer {id} already exists"));
+    }
+    layer.id = id.clone();
+    let mut candidate = state.catalog.clone();
+    candidate.foliage.push(layer);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_foliage = Some(id);
+    state.selected_foliage_variant = 0;
+    refresh_foliage_draft(state);
+    Ok(())
+}
+
+fn delete_foliage_layer(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_foliage
+        .clone()
+        .ok_or_else(|| "no foliage layer selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    let before = candidate.foliage.len();
+    candidate.foliage.retain(|layer| layer.id != id);
+    if candidate.foliage.len() == before {
+        return Err(format!("missing foliage layer {id}"));
+    }
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_foliage = state.catalog.foliage.first().map(|layer| layer.id.clone());
+    state.selected_foliage_variant = 0;
+    refresh_foliage_draft(state);
+    Ok(())
+}
+
+fn apply_resource_generation_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .resource_generation_draft
+        .clone()
+        .ok_or_else(|| "no resource generation layer selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    let layer = candidate
+        .resource_generation
+        .iter_mut()
+        .find(|layer| layer.id == draft.id)
+        .ok_or_else(|| format!("missing resource generation layer {}", draft.id))?;
+    *layer = draft;
+    commit_catalog_candidate(state, candidate)
+}
+
+fn duplicate_resource_generation_layer(state: &mut ToolState) -> Result<(), String> {
+    let mut layer = state
+        .resource_generation_draft
+        .clone()
+        .ok_or_else(|| "no resource generation layer selected".to_owned())?;
+    let id = StableId::new(state.new_resource_generation_id.trim().to_owned())
+        .map_err(|error| error.to_string())?;
+    if state
+        .catalog
+        .resource_generation
+        .iter()
+        .any(|layer| layer.id == id)
+    {
+        return Err(format!("resource generation layer {id} already exists"));
+    }
+    let display_name = state.new_resource_generation_name.trim();
+    if display_name.is_empty() {
+        return Err("resource generation layer name cannot be empty".to_owned());
+    }
+    layer.id = id.clone();
+    display_name.clone_into(&mut layer.display_name);
+    let mut candidate = state.catalog.clone();
+    candidate.resource_generation.push(layer);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_resource_generation = Some(id);
+    refresh_resource_generation_draft(state);
+    Ok(())
+}
+
+fn delete_resource_generation_layer(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_resource_generation
+        .clone()
+        .ok_or_else(|| "no resource generation layer selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    let before = candidate.resource_generation.len();
+    candidate.resource_generation.retain(|layer| layer.id != id);
+    if candidate.resource_generation.len() == before {
+        return Err(format!("missing resource generation layer {id}"));
+    }
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_resource_generation = state
+        .catalog
+        .resource_generation
+        .first()
+        .map(|layer| layer.id.clone());
+    refresh_resource_generation_draft(state);
+    Ok(())
+}
+
 fn authoring_snapshot(state: &ToolState) -> AuthoringSnapshot {
     AuthoringSnapshot {
         catalog: state.catalog.clone(),
@@ -5825,6 +7690,30 @@ fn delete_selected_technology_node(state: &mut ToolState) -> Result<(), String> 
     Ok(())
 }
 
+fn connect_technology_nodes(
+    state: &mut ToolState,
+    prerequisite: &StableId,
+    dependent: &StableId,
+) -> Result<(), String> {
+    if prerequisite == dependent {
+        return Err("a technology cannot require itself".to_owned());
+    }
+    let mut candidate = state.catalog.clone();
+    if !candidate.technology.nodes.contains_key(prerequisite) {
+        return Err(format!("missing prerequisite technology {prerequisite}"));
+    }
+    let node = candidate
+        .technology
+        .nodes
+        .get_mut(dependent)
+        .ok_or_else(|| format!("missing dependent technology {dependent}"))?;
+    if node.prerequisites.contains(prerequisite) {
+        return Err("that prerequisite connection already exists".to_owned());
+    }
+    node.prerequisites.push(prerequisite.clone());
+    commit_catalog_candidate(state, candidate)
+}
+
 #[cfg(test)]
 mod runtime_console_tests {
     use super::*;
@@ -5876,6 +7765,27 @@ fn refresh_technology_draft(state: &mut ToolState) {
         .and_then(|id| technology_draft(&state.catalog, id));
 }
 
+fn refresh_objective_draft(state: &mut ToolState) {
+    if state
+        .selected_objective
+        .as_ref()
+        .is_none_or(|id| !state.catalog.objectives.contains_key(id))
+    {
+        state.selected_objective = state.catalog.objectives.keys().next().cloned();
+    }
+    state.objective_draft = state.selected_objective.as_ref().and_then(|id| {
+        state
+            .catalog
+            .objectives
+            .get(id)
+            .cloned()
+            .map(|value| ObjectiveDraft {
+                id: id.clone(),
+                value,
+            })
+    });
+}
+
 fn refresh_role_draft(state: &mut ToolState) {
     if state
         .selected_role
@@ -5906,14 +7816,201 @@ fn refresh_foliage_draft(state: &mut ToolState) {
             .find(|layer| &layer.id == id)
             .cloned()
     });
+    state.selected_foliage_variant = state.foliage_draft.as_ref().map_or(0, |layer| {
+        state
+            .selected_foliage_variant
+            .min(layer.variants.len().saturating_sub(1))
+    });
+}
+
+fn refresh_resource_generation_draft(state: &mut ToolState) {
+    if state
+        .selected_resource_generation
+        .as_ref()
+        .is_none_or(|id| {
+            !state
+                .catalog
+                .resource_generation
+                .iter()
+                .any(|layer| &layer.id == id)
+        })
+    {
+        state.selected_resource_generation = state
+            .catalog
+            .resource_generation
+            .first()
+            .map(|layer| layer.id.clone());
+    }
+    state.resource_generation_draft = state.selected_resource_generation.as_ref().and_then(|id| {
+        state
+            .catalog
+            .resource_generation
+            .iter()
+            .find(|layer| &layer.id == id)
+            .cloned()
+    });
+}
+
+fn refresh_enemy_camp_generation_draft(state: &mut ToolState) {
+    if state
+        .selected_enemy_camp_generation
+        .as_ref()
+        .is_none_or(|id| {
+            !state
+                .catalog
+                .enemy_camp_generation
+                .iter()
+                .any(|layer| &layer.id == id)
+        })
+    {
+        state.selected_enemy_camp_generation = state
+            .catalog
+            .enemy_camp_generation
+            .first()
+            .map(|layer| layer.id.clone());
+    }
+    state.enemy_camp_generation_draft =
+        state
+            .selected_enemy_camp_generation
+            .as_ref()
+            .and_then(|id| {
+                state
+                    .catalog
+                    .enemy_camp_generation
+                    .iter()
+                    .find(|layer| &layer.id == id)
+                    .cloned()
+            });
 }
 
 fn refresh_catalog_drafts(state: &mut ToolState) {
     refresh_technology_draft(state);
+    refresh_objective_draft(state);
     refresh_role_draft(state);
     refresh_building_draft(state);
     refresh_foliage_draft(state);
+    refresh_resource_generation_draft(state);
+    refresh_enemy_camp_generation_draft(state);
     state.generated_world = None;
+}
+
+fn apply_enemy_camp_generation_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .enemy_camp_generation_draft
+        .clone()
+        .ok_or_else(|| "no enemy camp generation layer selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    let layer = candidate
+        .enemy_camp_generation
+        .iter_mut()
+        .find(|layer| layer.id == draft.id)
+        .ok_or_else(|| format!("missing enemy camp layer {}", draft.id))?;
+    *layer = draft;
+    commit_catalog_candidate(state, candidate)
+}
+
+fn duplicate_enemy_camp_generation_layer(state: &mut ToolState) -> Result<(), String> {
+    let mut layer = state
+        .enemy_camp_generation_draft
+        .clone()
+        .ok_or_else(|| "no enemy camp generation layer selected".to_owned())?;
+    let id = StableId::new(state.new_enemy_camp_generation_id.trim().to_owned())
+        .map_err(|error| error.to_string())?;
+    if state
+        .catalog
+        .enemy_camp_generation
+        .iter()
+        .any(|layer| layer.id == id)
+    {
+        return Err(format!("enemy camp generation layer {id} already exists"));
+    }
+    layer.id = id.clone();
+    let mut candidate = state.catalog.clone();
+    candidate.enemy_camp_generation.push(layer);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_enemy_camp_generation = Some(id);
+    refresh_enemy_camp_generation_draft(state);
+    Ok(())
+}
+
+fn delete_enemy_camp_generation_layer(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_enemy_camp_generation
+        .clone()
+        .ok_or_else(|| "no enemy camp generation layer selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    let before = candidate.enemy_camp_generation.len();
+    candidate
+        .enemy_camp_generation
+        .retain(|layer| layer.id != id);
+    if candidate.enemy_camp_generation.len() == before {
+        return Err(format!("missing enemy camp generation layer {id}"));
+    }
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_enemy_camp_generation = state
+        .catalog
+        .enemy_camp_generation
+        .first()
+        .map(|layer| layer.id.clone());
+    refresh_enemy_camp_generation_draft(state);
+    Ok(())
+}
+
+fn apply_objective_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .objective_draft
+        .clone()
+        .ok_or_else(|| "no vote requirement selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    if !candidate.objectives.contains_key(&draft.id) {
+        return Err(format!("missing vote requirement {}", draft.id));
+    }
+    candidate.objectives.insert(draft.id, draft.value);
+    commit_catalog_candidate(state, candidate)
+}
+
+fn duplicate_selected_objective(state: &mut ToolState) -> Result<(), String> {
+    let source = state
+        .objective_draft
+        .as_ref()
+        .map(|draft| draft.value.clone())
+        .ok_or_else(|| "no vote requirement selected".to_owned())?;
+    let id = StableId::new(state.new_objective_id.trim().to_owned())
+        .map_err(|error| error.to_string())?;
+    if state.catalog.objectives.contains_key(&id) {
+        return Err(format!("vote requirement {id} already exists"));
+    }
+    let mut candidate = state.catalog.clone();
+    candidate.objectives.insert(id.clone(), source);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_objective = Some(id);
+    refresh_objective_draft(state);
+    Ok(())
+}
+
+fn delete_selected_objective(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_objective
+        .clone()
+        .ok_or_else(|| "no vote requirement selected".to_owned())?;
+    if state
+        .catalog
+        .technology
+        .nodes
+        .values()
+        .any(|node| node.objectives.contains(&id))
+    {
+        return Err("remove this requirement from every technology before deleting it".to_owned());
+    }
+    let mut candidate = state.catalog.clone();
+    candidate
+        .objectives
+        .remove(&id)
+        .ok_or_else(|| format!("missing vote requirement {id}"))?;
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_objective = state.catalog.objectives.keys().next().cloned();
+    refresh_objective_draft(state);
+    Ok(())
 }
 
 fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
@@ -5950,6 +8047,8 @@ fn draw_world_preview(
     world: &GeneratedWorld,
     layer: WorldPreviewLayer,
     selected_foliage: Option<&StableId>,
+    selected_resource_target: Option<&StableId>,
+    enemy_camp_layer: Option<&EnemyCampGenerationDef>,
     water_level_centimetres: i16,
 ) {
     let width = world.navigation.width();
@@ -5999,7 +8098,10 @@ fn draw_world_preview(
                         egui::Color32::from_rgb(42, 52, 62)
                     }
                 }
-                WorldPreviewLayer::Resources | WorldPreviewLayer::Foliage => {
+                WorldPreviewLayer::LandResources
+                | WorldPreviewLayer::WaterResources
+                | WorldPreviewLayer::Foliage
+                | WorldPreviewLayer::EnemyCamps => {
                     if cell_height <= water_level_centimetres {
                         egui::Color32::from_rgb(29, 70, 105)
                     } else if world.navigation.is_walkable(position) {
@@ -6016,18 +8118,34 @@ fn draw_world_preview(
             );
         }
     }
-    if layer == WorldPreviewLayer::Resources {
-        for resource in &world.resources {
-            let color = match resource.kind.as_str() {
-                value if value.contains("wood") => egui::Color32::from_rgb(46, 185, 76),
-                value if value.contains("ore") => egui::Color32::from_rgb(190, 196, 207),
-                value if value.contains("food") => egui::Color32::from_rgb(219, 82, 81),
-                value if value.contains("fish") => egui::Color32::from_rgb(83, 207, 229),
+    if matches!(
+        layer,
+        WorldPreviewLayer::LandResources | WorldPreviewLayer::WaterResources
+    ) {
+        for resource in world.resources.iter().filter(|resource| {
+            let water = resource.target_kind.as_str() == "target:fish";
+            (layer == WorldPreviewLayer::WaterResources) == water
+        }) {
+            let highlighted =
+                selected_resource_target.is_none_or(|target| target == &resource.target_kind);
+            let mut color = match (resource.kind.as_str(), resource.target_kind.as_str()) {
+                (_, "target:fish") => egui::Color32::from_rgb(83, 207, 229),
+                (value, _) if value.contains("wood") => egui::Color32::from_rgb(46, 185, 76),
+                (value, _) if value.contains("ore") => egui::Color32::from_rgb(190, 196, 207),
+                (value, _) if value.contains("food") => egui::Color32::from_rgb(219, 82, 81),
                 _ => egui::Color32::GOLD,
             };
+            if !highlighted {
+                color = egui::Color32::from_rgba_unmultiplied(
+                    color.r() / 2,
+                    color.g() / 2,
+                    color.b() / 2,
+                    100,
+                );
+            }
             ui.painter().circle_filled(
                 preview_grid_point(rect, width, height, resource.position),
-                2.25,
+                if highlighted { 2.5 } else { 1.2 },
                 color,
             );
         }
@@ -6047,11 +8165,43 @@ fn draw_world_preview(
             );
         }
     }
+    if layer == WorldPreviewLayer::EnemyCamps
+        && let Some(camp) = enemy_camp_layer
+    {
+        for z in 0..height {
+            for x in 0..width {
+                let horizontal_milli = (i32::from(x) * 2 + 1 - i32::from(width))
+                    .unsigned_abs()
+                    .saturating_mul(500);
+                let vertical_milli = (i32::from(z) * 2 + 1 - i32::from(height))
+                    .unsigned_abs()
+                    .saturating_mul(500);
+                let squared_distance =
+                    u64::from(horizontal_milli).pow(2) + u64::from(vertical_milli).pow(2);
+                let minimum_squared =
+                    u64::from(camp.minimum_distance_from_centre_milli_cells).pow(2);
+                let in_bounds = horizontal_milli >= camp.minimum_absolute_offset_milli_cells[0]
+                    && vertical_milli >= camp.minimum_absolute_offset_milli_cells[1]
+                    && horizontal_milli <= camp.maximum_absolute_offset_milli_cells[0]
+                    && vertical_milli <= camp.maximum_absolute_offset_milli_cells[1]
+                    && squared_distance >= minimum_squared;
+                if in_bounds && world.navigation.is_walkable(GridPos { x, z }) {
+                    ui.painter().circle_filled(
+                        preview_grid_point(rect, width, height, GridPos { x, z }),
+                        1.1,
+                        egui::Color32::from_rgba_unmultiplied(230, 92, 76, 145),
+                    );
+                }
+            }
+        }
+    }
     ui.label(match layer {
         WorldPreviewLayer::Elevation => "Blue is at/below water level; green through stone encodes terrain elevation.",
         WorldPreviewLayer::Navigation => "Green cells are walkable; charcoal cells are blocked.",
-        WorldPreviewLayer::Resources => "Green/grey/red/cyan markers identify generated wood, ore, food, and fish resources.",
+        WorldPreviewLayer::LandResources => "Green, grey, and red markers identify generated trees, ore, and berry bushes.",
+        WorldPreviewLayer::WaterResources => "Cyan markers identify generated shoreline-water resources such as fish.",
         WorldPreviewLayer::Foliage => "Bright markers belong to the selected foliage layer; dim markers belong to other layers.",
+        WorldPreviewLayer::EnemyCamps => "Red cells satisfy the selected camp layer's absolute-offset and centre-distance constraints; the runtime still applies spacing, occupancy, and maximum-count rules.",
     });
 }
 
@@ -6124,6 +8274,41 @@ mod tests {
     }
 
     #[test]
+    fn discovered_model_assets_are_project_relative_glbs() {
+        let assets = discover_model_assets();
+        assert!(!assets.is_empty());
+        assert!(assets.iter().all(|path| {
+            std::path::Path::new(path)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("glb"))
+        }));
+        assert!(
+            assets
+                .iter()
+                .all(|path| !std::path::Path::new(path).is_absolute() && !path.contains('\\'))
+        );
+    }
+
+    #[test]
+    fn model_archetype_and_variant_lifecycle_remains_valid() {
+        let mut state = ToolState::default();
+        state.new_archetype_id = "archetype:test:model".to_owned();
+        state.new_archetype_name = "Test Model".to_owned();
+        state.new_archetype_asset = state.discovered_model_assets[0].clone();
+
+        create_model_archetype(&mut state).unwrap();
+        let id = StableId::new("archetype:test:model").unwrap();
+        assert_eq!(state.catalog.archetypes[&id].scenes.len(), 1);
+        state.new_archetype_asset = state.discovered_model_assets[1].clone();
+        add_archetype_scene(&mut state, &id).unwrap();
+        assert_eq!(state.catalog.archetypes[&id].scenes.len(), 2);
+        remove_archetype_scene(&mut state, &id, 1).unwrap();
+        delete_model_archetype(&mut state, &id).unwrap();
+        assert!(!state.catalog.archetypes.contains_key(&id));
+        state.catalog.validate().unwrap();
+    }
+
+    #[test]
     fn technology_editor_rejects_cycles_without_mutating_catalog() {
         let mut state = ToolState::default();
         let (node_id, prerequisite) = state
@@ -6142,6 +8327,51 @@ mod tests {
         let before = state.catalog.clone();
         assert!(apply_technology_draft(&mut state).is_err());
         assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn technology_socket_connection_rejects_cycles_without_mutation() {
+        let mut state = ToolState::default();
+        let (dependent, prerequisite) = state
+            .catalog
+            .technology
+            .nodes
+            .iter()
+            .find_map(|(id, node)| {
+                node.prerequisites
+                    .first()
+                    .map(|parent| (id.clone(), parent.clone()))
+            })
+            .expect("shipping graph has an edge");
+        let before = state.catalog.clone();
+
+        assert!(connect_technology_nodes(&mut state, &dependent, &prerequisite).is_err());
+        assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn vote_requirement_lifecycle_is_typed_validated_and_reference_safe() {
+        let mut state = ToolState::default();
+        let original_count = state.catalog.objectives.len();
+        state.new_objective_id = "objective:test".to_owned();
+        duplicate_selected_objective(&mut state).unwrap();
+        let id = StableId::new("objective:test").unwrap();
+        assert!(state.catalog.objectives.contains_key(&id));
+
+        state
+            .objective_draft
+            .as_mut()
+            .unwrap()
+            .value
+            .required_amount = 0;
+        let before = state.catalog.clone();
+        assert!(apply_objective_draft(&mut state).is_err());
+        assert_eq!(state.catalog, before);
+
+        refresh_objective_draft(&mut state);
+        delete_selected_objective(&mut state).unwrap();
+        assert_eq!(state.catalog.objectives.len(), original_count);
+        state.catalog.validate().unwrap();
     }
 
     #[test]
@@ -6377,6 +8607,58 @@ mod tests {
 
         assert!(apply_foliage_draft(&mut state).is_err());
         assert_eq!(state.catalog, before);
+    }
+
+    #[test]
+    fn resource_generation_layers_are_explicit_editable_and_validated() {
+        let mut state = ToolState::default();
+        assert_eq!(state.catalog.resource_generation.len(), 4);
+        let baseline =
+            stream_town_domain::generate_world_with_content(&state.config.world, &state.catalog)
+                .deterministic_hash;
+
+        let before = state.catalog.clone();
+        state.resource_generation_draft.as_mut().unwrap().amount = 0;
+        assert!(apply_resource_generation_draft(&mut state).is_err());
+        assert_eq!(state.catalog, before);
+
+        refresh_resource_generation_draft(&mut state);
+        state.new_resource_generation_id = "resource_generation:test".to_owned();
+        state.new_resource_generation_name = "Test layer".to_owned();
+        duplicate_resource_generation_layer(&mut state).unwrap();
+        assert_eq!(state.catalog.resource_generation.len(), 5);
+        delete_resource_generation_layer(&mut state).unwrap();
+        assert_eq!(state.catalog.resource_generation.len(), 4);
+        assert_eq!(
+            stream_town_domain::generate_world_with_content(&state.config.world, &state.catalog)
+                .deterministic_hash,
+            baseline
+        );
+    }
+
+    #[test]
+    fn enemy_camp_generation_layer_lifecycle_is_complete() {
+        let mut state = ToolState::default();
+        let original_count = state.catalog.enemy_camp_generation.len();
+        let before = state.catalog.clone();
+        state
+            .enemy_camp_generation_draft
+            .as_mut()
+            .unwrap()
+            .minimum_distance_between_camps_milli_cells = 0;
+        assert!(apply_enemy_camp_generation_draft(&mut state).is_err());
+        assert_eq!(state.catalog, before);
+
+        refresh_enemy_camp_generation_draft(&mut state);
+        state.new_enemy_camp_generation_id = "enemy_camp_generation:test".to_owned();
+        duplicate_enemy_camp_generation_layer(&mut state).unwrap();
+        assert_eq!(
+            state.catalog.enemy_camp_generation.len(),
+            original_count + 1
+        );
+        delete_enemy_camp_generation_layer(&mut state).unwrap();
+        assert_eq!(state.catalog.enemy_camp_generation.len(), original_count);
+        state.catalog.validate().unwrap();
     }
 
     #[test]
