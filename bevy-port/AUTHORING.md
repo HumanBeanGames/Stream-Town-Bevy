@@ -53,12 +53,14 @@ tool never writes Twitch access or refresh tokens to RON.
   materials, clips, controllers, layers, states, transitions, parameters,
   curves, events, and renderer bindings; and uses parsed GLB nodes, materials,
   and animation takes for typed choices. Live offscreen previews apply the same
-  renderer/model/fallback material precedence as the game. Drag to orbit,
-  Shift+drag or right-drag to pan, use the wheel to zoom, and use the playback,
-  looping, speed, restart, and reset controls for animation clips. It does not
-  duplicate building, role, or technology records.
+  renderer/model/fallback material precedence as the game. Asset editors and
+  long choice popups scroll independently of the application window. Drag to
+  orbit, Shift+drag or right-drag to pan relative to the current camera facing,
+  use the wheel to zoom, and use the playback, looping, speed, restart, and reset
+  controls for animation clips. It does not duplicate building, role, or
+  technology records.
 - Buildings provides template-based creation, an interactive logical placement
-  footprint editor with rotate/row/column controls and explicit model/runtime
+  footprint editor with rotate/row/column controls and atomic model/runtime
   synchronization, visual GLB inspection,
   construction and level costs, storage, role capacity, passive production,
   station and target settings, projectiles, and model hierarchy bindings. Every
@@ -66,8 +68,12 @@ tool never writes Twitch access or refresh tokens to RON.
 - Roles edits every shipping role's balance/progression values, stable resource,
   station, target and ability references, Animator action contracts, character
   body nodes, hand items, helmets, and carry behavior. Role/model fields use
-  catalog and converted-hierarchy choices instead of free-form reference text. Roles can be duplicated;
-  deletion is allowed only when the full catalog has no remaining reference.
+  catalog and converted-hierarchy choices instead of free-form reference text.
+  Its live composed-character preview uses the shipping character rig and
+  authored materials, applies the selected body/cosmetics/role equipment, and
+  plays any player Animator state with the normal playback and camera controls.
+  Roles can be duplicated; deletion is allowed only when the full catalog has
+  no remaining reference.
 - Technology makes the full-width graph canvas the primary surface. Cards show
   prerequisite, unlock, vote-requirement, building, economy, and stat summaries;
   hovering exposes the complete record, while selecting opens a movable editor
@@ -117,3 +123,23 @@ After saving project data, run the Validation tab or:
 ```powershell
 cargo xtask validate
 ```
+
+## Future role behavior scripting (not implemented)
+
+External behavior scripting is a useful extension point for roles such as a
+forester, but it should not expose Bevy's `World` or transient entity IDs. Keep
+`RoleDef` as the declarative, validated contract and add an optional,
+versioned behavior module that receives stable-ID observations and returns a
+small set of deterministic commands such as select target, move, act, deposit,
+or retry. File/network access, unbounded execution, and direct ECS mutation
+should remain unavailable so saves, replays, Twitch outcomes, and world hashes
+stay reproducible.
+
+Lua via `mlua` is the easiest author-facing option and has excellent hot-reload
+ergonomics. Sandboxed WebAssembly offers a stronger capability boundary and
+better typed Rust interfaces, but asks more of content authors. Before choosing
+either runtime, the next design pass should specify the callback/command API,
+instruction budget, persistent script-state schema, validation diagnostics, and
+hot-reload behavior, then prototype the same small role (for example, a
+forester) in both formats. No scripting dependency or runtime has been added by
+the current authoring work.

@@ -59,6 +59,9 @@ use stream_town_game::twitch::{
     CredentialVault, DeviceAuthorization, OAuthClient, TokenValidation, TwitchControl, TwitchEvent,
     TwitchStatus, TwitchTransport, TwitchUserIdentity,
 };
+use stream_town_game::{
+    PLAYER_ANIMATED_MODEL_PATH, PLAYER_ANIMATED_SOURCE_MODEL, preview_animation_asset_for_rig,
+};
 use technology_graph::{TechnologyGraphViewState, show as show_technology_graph};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -118,14 +121,27 @@ enum PreviewRequest {
         animation_index: u32,
         fingerprint: u64,
     },
+    Role {
+        role: StableId,
+        asset_path: String,
+        animation_index: u32,
+        looping: bool,
+        visible_nodes: BTreeSet<String>,
+        fingerprint: u64,
+    },
 }
+
+const DEFAULT_PREVIEW_YAW: f32 = 0.0;
+const DEFAULT_PREVIEW_PITCH: f32 = 0.18;
+const DEFAULT_PREVIEW_DISTANCE: f32 = 10.0;
+const AUTHORING_COMBO_MAX_HEIGHT: f32 = 320.0;
 
 #[derive(Clone, Debug)]
 struct ModelPreviewControls {
     yaw: f32,
     pitch: f32,
     distance: f32,
-    pan: Vec2,
+    pan: Vec3,
     animation_playing: bool,
     animation_looping: bool,
     animation_speed: f32,
@@ -142,10 +158,10 @@ struct GltfMetadata {
 impl Default for ModelPreviewControls {
     fn default() -> Self {
         Self {
-            yaw: 0.62,
-            pitch: 0.34,
-            distance: 7.5,
-            pan: Vec2::ZERO,
+            yaw: DEFAULT_PREVIEW_YAW,
+            pitch: DEFAULT_PREVIEW_PITCH,
+            distance: DEFAULT_PREVIEW_DISTANCE,
+            pan: Vec3::ZERO,
             animation_playing: true,
             animation_looping: true,
             animation_speed: 1.0,
@@ -156,10 +172,10 @@ impl Default for ModelPreviewControls {
 
 impl ModelPreviewControls {
     fn reset_view(&mut self) {
-        self.yaw = 0.62;
-        self.pitch = 0.34;
-        self.distance = 7.5;
-        self.pan = Vec2::ZERO;
+        self.yaw = DEFAULT_PREVIEW_YAW;
+        self.pitch = DEFAULT_PREVIEW_PITCH;
+        self.distance = DEFAULT_PREVIEW_DISTANCE;
+        self.pan = Vec3::ZERO;
     }
 }
 
@@ -258,6 +274,12 @@ struct ToolState {
     role_draft: Option<RoleDraft>,
     new_role_id: String,
     new_role_name: String,
+    role_preview_body_type: u8,
+    role_preview_carrying: bool,
+    role_preview_animation: Option<StableId>,
+    role_preview_eye: Option<String>,
+    role_preview_hair: Option<String>,
+    role_preview_facial_hair: Option<String>,
     selected_foliage: Option<StableId>,
     foliage_draft: Option<FoliageLayerDef>,
     selected_foliage_variant: usize,
@@ -306,6 +328,8 @@ struct ModelPreviewRuntime {
     animation_node: Option<AnimationNodeIndex>,
     animation_started: bool,
     material_overrides: PreviewMaterialOverrides,
+    visible_nodes: Option<BTreeSet<String>>,
+    camera_target_offset: Vec3,
     framed: bool,
     status: String,
     controls: ModelPreviewControls,
@@ -328,6 +352,9 @@ struct ModelPreviewScene;
 
 #[derive(Component)]
 struct PreviewMaterialApplied;
+
+#[derive(Component)]
+struct PreviewNodeVisibilityApplied;
 
 #[derive(Component)]
 struct ModelPreviewCamera;
@@ -548,6 +575,7 @@ impl Default for ToolState {
             .join(", ");
         let game_master_lookup = config.twitch.channel_login.clone();
         let fish_god_reward_id = config.twitch.fish_god_reward_id.clone().unwrap_or_default();
+        let role_preview_animation = default_role_preview_animation(&presentation, &catalog);
         Self {
             tab: ToolTab::default(),
             unity_root: "..".to_owned(),
@@ -617,6 +645,12 @@ impl Default for ToolState {
             role_draft,
             new_role_id: "role:new".to_owned(),
             new_role_name: "New Role".to_owned(),
+            role_preview_body_type: 0,
+            role_preview_carrying: false,
+            role_preview_animation,
+            role_preview_eye: Some("Eyes_Normal".to_owned()),
+            role_preview_hair: Some("Hair_Short_Normal".to_owned()),
+            role_preview_facial_hair: None,
             selected_foliage,
             foliage_draft,
             selected_foliage_variant: 0,
@@ -696,6 +730,7 @@ fn main() -> anyhow::Result<()> {
             PostUpdate,
             (
                 apply_preview_material_overrides,
+                apply_preview_node_visibility,
                 frame_model_preview,
                 update_model_preview_camera,
             )
@@ -770,6 +805,8 @@ fn setup_model_preview(
         animation_node: None,
         animation_started: false,
         material_overrides: PreviewMaterialOverrides::default(),
+        visible_nodes: None,
+        camera_target_offset: Vec3::ZERO,
         framed: false,
         status: "Choose a model to render it here".to_owned(),
         controls: ModelPreviewControls::default(),
@@ -796,6 +833,8 @@ fn sync_model_preview(
     preview.animation_node = None;
     preview.animation_started = false;
     preview.material_overrides = PreviewMaterialOverrides::default();
+    preview.visible_nodes = None;
+    preview.camera_target_offset = Vec3::ZERO;
     preview.framed = false;
     preview.loaded_request.clone_from(&state.preview_request);
     let Some(request) = state.preview_request.as_ref() else {
@@ -826,8 +865,11 @@ fn sync_model_preview(
             animation_index,
             ..
         } => {
-            preview.material_overrides =
-                preview_material_overrides(asset_path, &state, &asset_server, &mut materials);
+            preview.material_overrides = if asset_path == PLAYER_ANIMATED_MODEL_PATH {
+                player_preview_material_overrides(&state, &asset_server, &mut materials)
+            } else {
+                preview_material_overrides(asset_path, &state, &asset_server, &mut materials)
+            };
             let scene_handle =
                 asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_path.clone()));
             let entity = commands
@@ -855,6 +897,47 @@ fn sync_model_preview(
             preview.status = format!(
                 "Loading animation {} from {}#Animation{}",
                 state.preview_label, asset_path, animation_index
+            );
+        }
+        PreviewRequest::Role {
+            role,
+            asset_path,
+            animation_index,
+            looping,
+            visible_nodes,
+            ..
+        } => {
+            preview.material_overrides =
+                player_preview_material_overrides(&state, &asset_server, &mut materials);
+            preview.visible_nodes = Some(visible_nodes.clone());
+            // The imported skinned AABBs describe the rest pose and sit below
+            // the head motion. Aim at the visible animated figure's centre.
+            preview.camera_target_offset = Vec3::Y * 0.75;
+            let scene_handle =
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(asset_path.clone()));
+            let entity = commands
+                .spawn((
+                    Name::new(format!("Role preview: {role}")),
+                    ModelPreviewScene,
+                    WorldAssetRoot(scene_handle.clone()),
+                    Transform::IDENTITY,
+                ))
+                .id();
+            let animation = asset_server.load(
+                GltfAssetLabel::Animation(
+                    usize::try_from(*animation_index).expect("animation index fits platform"),
+                )
+                .from_asset(asset_path.clone()),
+            );
+            let (graph, node) = AnimationGraph::from_clip(animation);
+            preview.scene_entity = Some(entity);
+            preview.scene_handle = Some(scene_handle);
+            preview.animation_graph = Some(animation_graphs.add(graph));
+            preview.animation_node = Some(node);
+            preview.controls.animation_looping = *looping;
+            preview.status = format!(
+                "Loading composed role {} with animation #{}",
+                state.preview_label, animation_index
             );
         }
         PreviewRequest::Material { id, .. } => {
@@ -1062,6 +1145,72 @@ fn preview_material_overrides(
     }
 }
 
+fn player_preview_material_overrides(
+    state: &ToolState,
+    asset_server: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+) -> PreviewMaterialOverrides {
+    let Some(archetype) = state
+        .catalog
+        .archetypes
+        .values()
+        .find(|archetype| archetype.source_path.ends_with("Player_Character.prefab"))
+    else {
+        return PreviewMaterialOverrides::default();
+    };
+    let make_material = |id: &StableId, materials: &mut Assets<StandardMaterial>| {
+        state.presentation.materials.get(id).map(|definition| {
+            materials.add(preview_standard_material(
+                definition,
+                &state.presentation,
+                asset_server,
+            ))
+        })
+    };
+    let fallback = state
+        .presentation
+        .prefab_materials
+        .get(&archetype.source_guid)
+        .into_iter()
+        .flatten()
+        .find_map(|id| make_material(id, materials));
+    let model_materials = state
+        .presentation
+        .model_materials
+        .get(PLAYER_ANIMATED_SOURCE_MODEL)
+        .into_iter()
+        .flat_map(|bindings| bindings.iter())
+        .filter_map(|(name, id)| {
+            make_material(id, materials).map(|material| (name.clone(), material))
+        })
+        .collect();
+    let renderer_materials = state
+        .presentation
+        .prefab_renderer_materials
+        .get(&archetype.source_guid)
+        .into_iter()
+        .flatten()
+        .filter_map(|binding| {
+            let bound = binding
+                .materials
+                .iter()
+                .filter_map(|(name, id)| {
+                    make_material(id, materials).map(|material| (name.clone(), material))
+                })
+                .collect::<BTreeMap<_, _>>();
+            (!bound.is_empty()).then(|| PreviewRendererMaterialBinding {
+                target_path: binding.target_path.clone(),
+                materials: bound,
+            })
+        })
+        .collect();
+    PreviewMaterialOverrides {
+        fallback,
+        model_materials,
+        renderer_materials,
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn apply_preview_material_overrides(
     mut commands: Commands,
@@ -1109,6 +1258,58 @@ fn apply_preview_material_overrides(
             material.0 = authored.clone();
         }
         commands.entity(entity).insert(PreviewMaterialApplied);
+    }
+}
+
+fn canonical_preview_node_name(name: &str) -> &str {
+    name.strip_suffix("_Starter").unwrap_or(name)
+}
+
+fn player_preview_controlled_node(name: &str) -> bool {
+    const COSMETIC_PREFIXES: [&str; 3] = ["Eyes_", "Hair_", "FacialHair_"];
+    const EQUIPMENT_PREFIXES: [&str; 5] = ["Body_", "Back_", "LHand_", "RHand_", "Helmet_"];
+    let name = canonical_preview_node_name(name);
+    COSMETIC_PREFIXES
+        .iter()
+        .chain(EQUIPMENT_PREFIXES.iter())
+        .any(|prefix| name.starts_with(prefix))
+}
+
+fn apply_preview_node_visibility(
+    mut commands: Commands,
+    preview: Res<ModelPreviewRuntime>,
+    parents: Query<&ChildOf>,
+    roots: Query<(), With<ModelPreviewScene>>,
+    mut nodes: Query<(Entity, &Name, &mut Visibility), Without<PreviewNodeVisibilityApplied>>,
+) {
+    let Some(visible_nodes) = preview.visible_nodes.as_ref() else {
+        return;
+    };
+    for (entity, name, mut visibility) in &mut nodes {
+        let mut ancestor = entity;
+        let mut belongs_to_preview = roots.contains(entity);
+        for _ in 0..64 {
+            if belongs_to_preview {
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+            belongs_to_preview = roots.contains(ancestor);
+        }
+        if !belongs_to_preview {
+            continue;
+        }
+        let canonical = canonical_preview_node_name(name.as_str());
+        if player_preview_controlled_node(canonical) {
+            *visibility = if visible_nodes.contains(canonical) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+        commands.entity(entity).insert(PreviewNodeVisibilityApplied);
     }
 }
 
@@ -1255,16 +1456,28 @@ fn update_model_preview_camera(
         return;
     }
     let controls = &preview.controls;
-    let horizontal = controls.distance * controls.pitch.cos();
-    let target = Vec3::new(controls.pan.x, controls.pan.y, 0.0);
-    let offset = Vec3::new(
-        controls.yaw.sin() * horizontal,
-        controls.distance * controls.pitch.sin(),
-        controls.yaw.cos() * horizontal,
-    );
+    let target = preview.camera_target_offset + controls.pan;
+    let offset = preview_camera_offset(controls.yaw, controls.pitch, controls.distance);
     for mut transform in &mut cameras {
         *transform = Transform::from_translation(target + offset).looking_at(target, Vec3::Y);
     }
+}
+
+fn preview_camera_offset(yaw: f32, pitch: f32, distance: f32) -> Vec3 {
+    let horizontal = distance * pitch.cos();
+    Vec3::new(
+        yaw.sin() * horizontal,
+        distance * pitch.sin(),
+        yaw.cos() * horizontal,
+    )
+}
+
+fn preview_pan_delta(yaw: f32, pitch: f32, drag_x: f32, drag_y: f32, scale: f32) -> Vec3 {
+    let camera_offset = preview_camera_offset(yaw, pitch, 1.0);
+    let forward = (-camera_offset).normalize_or_zero();
+    let right = forward.cross(Vec3::Y).normalize_or_zero();
+    let up = right.cross(forward).normalize_or_zero();
+    -right * drag_x * scale + up * drag_y * scale
 }
 
 fn drive_model_preview_animation(
@@ -1364,7 +1577,13 @@ fn tools_ui(
                 &mut preview.controls,
             );
         }
-        ToolTab::Roles => roles_tab(ui, &mut state),
+        ToolTab::Roles => roles_tab(
+            ui,
+            &mut state,
+            preview_texture,
+            &preview_status,
+            &mut preview.controls,
+        ),
         ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::World => world_tab(
             ui,
@@ -1591,6 +1810,126 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     });
 }
 
+fn player_animation_controller(
+    presentation: &PresentationCatalog,
+) -> Option<&AnimationControllerDef> {
+    let binding = presentation.prefab_bindings.values().find(|binding| {
+        binding
+            .source_prefab_path
+            .ends_with("Player_Character.prefab")
+    })?;
+    presentation.controllers.get(&binding.controller)
+}
+
+fn role_preview_animation_choices(presentation: &PresentationCatalog) -> Vec<(StableId, String)> {
+    player_animation_controller(presentation).map_or_else(Vec::new, |controller| {
+        controller
+            .states
+            .iter()
+            .filter(|(_, state)| !state.motions.is_empty())
+            .map(|(id, state)| (id.clone(), state.display_name.clone()))
+            .collect()
+    })
+}
+
+fn matching_role_animation_state(
+    presentation: &PresentationCatalog,
+    action_animation: &str,
+) -> Option<StableId> {
+    let controller = player_animation_controller(presentation)?;
+    controller
+        .states
+        .iter()
+        .find(|(_, state)| {
+            state.display_name == action_animation
+                || state
+                    .display_name
+                    .strip_suffix(" 0")
+                    .is_some_and(|name| name == action_animation)
+        })
+        .or_else(|| {
+            controller
+                .states
+                .iter()
+                .find(|(_, state)| state.display_name == "Locomotion")
+        })
+        .map(|(id, _)| id.clone())
+}
+
+fn default_role_preview_animation(
+    presentation: &PresentationCatalog,
+    catalog: &ContentCatalog,
+) -> Option<StableId> {
+    catalog
+        .roles
+        .values()
+        .next()
+        .and_then(|role| matching_role_animation_state(presentation, &role.action_animation))
+}
+
+fn role_preview_animation_request(
+    presentation: &PresentationCatalog,
+    state_id: &StableId,
+) -> Option<(String, u32, bool)> {
+    let state = player_animation_controller(presentation)?
+        .states
+        .get(state_id)?;
+    let motion = state.motions.iter().max_by(|left, right| {
+        left.threshold
+            .unwrap_or_default()
+            .total_cmp(&right.threshold.unwrap_or_default())
+    })?;
+    let source = presentation.clips.get(&motion.clip)?;
+    let (path, index) =
+        preview_animation_asset_for_rig(source, PLAYER_ANIMATED_MODEL_PATH, presentation)?;
+    Some((path, index, source.looping))
+}
+
+fn role_preview_visible_nodes(
+    role: &RoleDef,
+    body_type: u8,
+    carrying: bool,
+    eye: Option<&str>,
+    hair: Option<&str>,
+    facial_hair: Option<&str>,
+) -> BTreeSet<String> {
+    let mut visible = BTreeSet::new();
+    let helmet_equipped = role
+        .equipment
+        .as_ref()
+        .and_then(|equipment| equipment.helmet_node.as_ref())
+        .is_some();
+    if let Some(equipment) = role.equipment.as_ref() {
+        visible.insert(
+            equipment.body_nodes[usize::from(body_type).min(equipment.body_nodes.len() - 1)]
+                .clone(),
+        );
+        visible.extend(equipment.right_hand_node.iter().cloned());
+        visible.extend(equipment.helmet_node.iter().cloned());
+        if equipment.left_hand_permanent || carrying {
+            visible.extend(equipment.left_hand_node.iter().cloned());
+        }
+    } else {
+        visible.insert(
+            [
+                "Body_Default_Slim",
+                "Body_Default_Bulk",
+                "Body_Default_Feminine",
+            ][usize::from(body_type).min(2)]
+            .to_owned(),
+        );
+    }
+    visible.extend(eye.map(str::to_owned));
+    if !helmet_equipped {
+        visible.extend(hair.map(str::to_owned));
+    }
+    visible.extend(facial_hair.map(str::to_owned));
+    visible
+        .into_iter()
+        .map(|name| canonical_preview_node_name(&name).to_owned())
+        .collect()
+}
+
 fn update_preview_request(state: &mut ToolState) {
     let requested = match state.tab {
         ToolTab::Assets => match state.asset_section {
@@ -1633,12 +1972,20 @@ fn update_preview_request(state: &mut ToolState) {
             }),
             AssetEditorSection::Animations => state.selected_clip.as_ref().and_then(|id| {
                 let clip = state.presentation.clips.get(id)?;
-                let asset_path = clip
-                    .converted_asset_path
-                    .as_ref()
-                    .or(clip.rig_asset_path.as_ref())?
-                    .clone();
-                let animation_index = clip.gltf_animation_index?;
+                let (asset_path, animation_index) = preview_animation_asset_for_rig(
+                    clip,
+                    PLAYER_ANIMATED_MODEL_PATH,
+                    &state.presentation,
+                )
+                .or_else(|| {
+                    Some((
+                        clip.converted_asset_path
+                            .as_ref()
+                            .or(clip.rig_asset_path.as_ref())?
+                            .clone(),
+                        clip.gltf_animation_index?,
+                    ))
+                })?;
                 Some((
                     PreviewRequest::Animation {
                         clip: id.clone(),
@@ -1667,6 +2014,39 @@ fn update_preview_request(state: &mut ToolState) {
                         )
                     })
             }),
+        ToolTab::Roles => state.role_draft.as_ref().and_then(|draft| {
+            let animation_state = state.role_preview_animation.clone().or_else(|| {
+                matching_role_animation_state(&state.presentation, &draft.value.action_animation)
+            })?;
+            let (asset_path, animation_index, looping) =
+                role_preview_animation_request(&state.presentation, &animation_state)?;
+            let visible_nodes = role_preview_visible_nodes(
+                &draft.value,
+                state.role_preview_body_type,
+                state.role_preview_carrying,
+                state.role_preview_eye.as_deref(),
+                state.role_preview_hair.as_deref(),
+                state.role_preview_facial_hair.as_deref(),
+            );
+            let fingerprint = debug_fingerprint(&(
+                &draft.value,
+                &animation_state,
+                &visible_nodes,
+                state.role_preview_body_type,
+                state.role_preview_carrying,
+            ));
+            Some((
+                PreviewRequest::Role {
+                    role: draft.id.clone(),
+                    asset_path,
+                    animation_index,
+                    looping,
+                    visible_nodes,
+                    fingerprint,
+                },
+                format!("{} · composed character", draft.value.display_name),
+            ))
+        }),
         ToolTab::World
             if matches!(
                 state.world_preview_layer,
@@ -1714,7 +2094,7 @@ fn update_preview_request(state: &mut ToolState) {
         state.preview_label = label;
     } else if matches!(
         state.tab,
-        ToolTab::Assets | ToolTab::Buildings | ToolTab::World
+        ToolTab::Assets | ToolTab::Buildings | ToolTab::Roles | ToolTab::World
     ) {
         state.preview_request = None;
         "Nothing previewable is assigned".clone_into(&mut state.preview_label);
@@ -1780,8 +2160,8 @@ fn draw_model_preview(
                 || (response.dragged_by(egui::PointerButton::Primary) && shift)
             {
                 let pan_scale = controls.distance * 0.0028;
-                controls.pan.x -= delta.x * pan_scale;
-                controls.pan.y += delta.y * pan_scale;
+                controls.pan +=
+                    preview_pan_delta(controls.yaw, controls.pitch, delta.x, delta.y, pan_scale);
             }
             if scroll.abs() > f32::EPSILON {
                 controls.distance =
@@ -2393,6 +2773,7 @@ fn material_assets_editor(
 
 fn material_alpha_choice(ui: &mut egui::Ui, value: &mut MaterialAlphaMode) {
     egui::ComboBox::from_id_salt(("material_alpha", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             ui.selectable_value(value, MaterialAlphaMode::Opaque, "Opaque");
@@ -2666,6 +3047,7 @@ fn animation_assets_editor(
                 ui.add(egui::DragValue::new(index));
             } else {
                 egui::ComboBox::from_id_salt("gltf_animation_index")
+                    .height(AUTHORING_COMBO_MAX_HEIGHT)
                     .selected_text(
                         clip_metadata
                             .animations
@@ -2957,6 +3339,7 @@ fn animation_parameters_editor(
 
 fn animation_parameter_kind_choice(ui: &mut egui::Ui, value: &mut AnimationParameterKind) {
     egui::ComboBox::from_id_salt(("animation_parameter_kind", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             for kind in [
@@ -3235,6 +3618,7 @@ fn animation_transitions_editor(ui: &mut egui::Ui, controller: &mut AnimationCon
 
 fn animation_condition_mode_choice(ui: &mut egui::Ui, value: &mut AnimationConditionMode) {
     egui::ComboBox::from_id_salt(("animation_condition_mode", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             for mode in [
@@ -3404,6 +3788,7 @@ fn animation_layers_editor(
 
 fn animation_layer_blend_choice(ui: &mut egui::Ui, value: &mut AnimationLayerBlendMode) {
     egui::ComboBox::from_id_salt(("animation_layer_blend", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             ui.selectable_value(value, AnimationLayerBlendMode::Override, "Override");
@@ -3677,6 +4062,21 @@ fn content_tab(
     preview_status: &str,
     preview_controls: &mut ModelPreviewControls,
 ) {
+    egui::ScrollArea::vertical()
+        .id_salt("models_assets_editor_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            content_tab_contents(ui, state, preview_texture, preview_status, preview_controls);
+        });
+}
+
+fn content_tab_contents(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
+) {
     ui.heading("Models and presentation assets");
     ui.label(
         "Every shipping presentation catalog is editable here: models, imported textures, PBR materials, and animation clips.",
@@ -3860,6 +4260,7 @@ fn content_tab(
         let mut make_default = None;
         let mut add_scene = false;
         let mut delete_archetype = false;
+        let mut synchronized_footprint = None;
         let asset_search = &mut state.asset_search;
         if let Some(archetype) = state.catalog.archetypes.get_mut(&id) {
             ui.collapsing("Selected archetype and variants", |ui| {
@@ -3868,12 +4269,14 @@ fn content_tab(
                     ui.text_edit_singleline(&mut archetype.display_name);
                     archetype_kind_choice(ui, &mut archetype.kind);
                 });
-                footprint_editor(
+                if footprint_editor(
                     ui,
                     &mut archetype.footprint,
                     "Default logical footprint",
                     4_096,
-                );
+                ) {
+                    synchronized_footprint = Some(archetype.footprint);
+                }
                 ui.collapsing("Bounds, provenance, and components", |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Source GUID");
@@ -3955,6 +4358,19 @@ fn content_tab(
                 delete_archetype = ui.button("Delete unreferenced archetype").clicked();
             });
         }
+        if let Some(footprint) = synchronized_footprint {
+            let updated = synchronize_buildings_for_archetype(&mut state.catalog, &id, footprint);
+            if let Some(draft) = state
+                .building_draft
+                .as_mut()
+                .filter(|draft| draft.value.archetype == id)
+            {
+                draft.value.footprint = footprint;
+            }
+            state.status = format!(
+                "Updated model footprint and synchronized {updated} logical building placement record(s)"
+            );
+        }
         if let Some(index) = make_default
             && let Some(archetype) = state.catalog.archetypes.get_mut(&id)
         {
@@ -4013,7 +4429,7 @@ fn content_tab(
         ui.separator();
         ui.label(format!("Clips: {}", state.presentation.clips.len()));
     });
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    ui.collapsing("Complete catalog reference inventory", |ui| {
         ui.collapsing("Prefab archetypes and GLB variants", |ui| {
             for (id, archetype) in &state.catalog.archetypes {
                 ui.collapsing(format!("{}  ({id})", archetype.display_name), |ui| {
@@ -4827,6 +5243,7 @@ fn buildings_tab(
         .collect();
     let mut changed = false;
     egui::ComboBox::from_label("Building")
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(
             state
                 .selected_building
@@ -4915,7 +5332,6 @@ fn buildings_tab(
     let projectile_pools = projectile_pool_choices(&state.catalog);
     let mut apply = false;
     let mut reset = false;
-    let mut apply_footprint_to_archetype = None;
     if let Some(draft) = state.building_draft.as_mut() {
         ui.separator();
         ui.monospace(draft.id.to_string());
@@ -4923,38 +5339,24 @@ fn buildings_tab(
             ui.columns(2, |columns| {
                 columns[0].label("Display name");
                 columns[0].text_edit_singleline(&mut draft.value.display_name);
-                stable_id_required_choice(
+                if stable_id_required_choice(
                     &mut columns[0],
                     "Model archetype",
                     &mut draft.value.archetype,
                     &archetype_choices,
-                );
+                ) && let Some(archetype) = state.catalog.archetypes.get(&draft.value.archetype)
+                {
+                    draft.value.footprint = archetype.footprint;
+                }
                 footprint_editor(
                     &mut columns[0],
                     &mut draft.value.footprint,
-                    "Logical placement footprint",
+                    "Shared logical placement footprint",
                     64,
                 );
-                if let Some(archetype) = state.catalog.archetypes.get(&draft.value.archetype)
-                    && archetype.footprint != draft.value.footprint
-                {
-                    columns[0].colored_label(
-                        egui::Color32::YELLOW,
-                        format!(
-                            "Model archetype footprint is {} × {}",
-                            archetype.footprint[0], archetype.footprint[1]
-                        ),
-                    );
-                    columns[0].horizontal_wrapped(|ui| {
-                        if ui.button("Copy model footprint here").clicked() {
-                            draft.value.footprint = archetype.footprint;
-                        }
-                        if ui.button("Apply logical footprint to model").clicked() {
-                            apply_footprint_to_archetype =
-                                Some((draft.value.archetype.clone(), draft.value.footprint));
-                        }
-                    });
-                }
+                columns[0].small(
+                    "Changing the model adopts its authored footprint. Applying saves this value to both the building and model archetype atomically.",
+                );
                 columns[0].horizontal_wrapped(|ui| {
                     ui.checkbox(&mut draft.value.placeable, "Placeable");
                     ui.checkbox(&mut draft.value.can_level, "Can level");
@@ -5299,14 +5701,6 @@ fn buildings_tab(
     } else {
         ui.label("Select a building to edit it.");
     }
-    if let Some((archetype, footprint)) = apply_footprint_to_archetype {
-        state.status = match synchronize_archetype_footprint(state, &archetype, footprint) {
-            Ok(()) => {
-                format!("Synchronized logical placement footprint to model archetype {archetype}")
-            }
-            Err(error) => format!("Could not synchronize model footprint: {error}"),
-        };
-    }
     if apply {
         state.status = match apply_building_draft(state) {
             Ok(()) => "Building edit applied; every reference remains valid".to_owned(),
@@ -5318,7 +5712,13 @@ fn buildings_tab(
     }
 }
 
-fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+fn roles_tab(
+    ui: &mut egui::Ui,
+    state: &mut ToolState,
+    preview_texture: Option<egui::TextureId>,
+    preview_status: &str,
+    preview_controls: &mut ModelPreviewControls,
+) {
     ui.heading("Role authoring");
     ui.label(
         "Create roles from a known-good template, then author every runtime reference through catalog-backed choices.",
@@ -5352,6 +5752,7 @@ fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         .collect();
     let mut selected_changed = false;
     egui::ComboBox::from_label("Role")
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(
             state
                 .selected_role
@@ -5409,12 +5810,88 @@ fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     equipment_choices.extend(character_metadata.nodes);
     equipment_choices.sort();
     equipment_choices.dedup();
+    let role_animation_choices = role_preview_animation_choices(&state.presentation);
+    let eye_choices = equipment_choices
+        .iter()
+        .filter(|name| name.starts_with("Eyes_"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let hair_choices = equipment_choices
+        .iter()
+        .filter(|name| name.starts_with("Hair_"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let facial_hair_choices = equipment_choices
+        .iter()
+        .filter(|name| name.starts_with("FacialHair_"))
+        .cloned()
+        .collect::<Vec<_>>();
     let mut apply = false;
     let mut reset = false;
     if let Some(draft) = state.role_draft.as_mut() {
         ui.separator();
         ui.monospace(draft.id.to_string());
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.columns(2, |columns| {
+                draw_model_preview(
+                    &mut columns[0],
+                    preview_texture,
+                    preview_status,
+                    egui::vec2(440.0, 360.0),
+                    preview_controls,
+                    true,
+                );
+                columns[1].group(|ui| {
+                    ui.heading("Preview composition");
+                    ui.label(
+                        "This uses the shipping character rig, the draft role's equipment, and the selected Animator state.",
+                    );
+                    egui::ComboBox::from_label("Body type")
+                        .height(AUTHORING_COMBO_MAX_HEIGHT)
+                        .selected_text(match state.role_preview_body_type {
+                            1 => "Bulk",
+                            2 => "Feminine",
+                            _ => "Slim",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut state.role_preview_body_type, 0, "Slim");
+                            ui.selectable_value(&mut state.role_preview_body_type, 1, "Bulk");
+                            ui.selectable_value(&mut state.role_preview_body_type, 2, "Feminine");
+                        });
+                    stable_id_option_choice(
+                        ui,
+                        "Animation state",
+                        &mut state.role_preview_animation,
+                        &role_animation_choices,
+                    );
+                    ui.checkbox(
+                        &mut state.role_preview_carrying,
+                        "Show conditional carried item",
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Eyes",
+                        &mut state.role_preview_eye,
+                        &eye_choices,
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Hair",
+                        &mut state.role_preview_hair,
+                        &hair_choices,
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Facial hair",
+                        &mut state.role_preview_facial_hair,
+                        &facial_hair_choices,
+                    );
+                    ui.small(
+                        "Helmet-equipped roles hide hair, matching runtime composition. Orbit, camera-relative pan, zoom, playback, and looping controls are live.",
+                    );
+                });
+            });
+            ui.separator();
             ui.horizontal_wrapped(|ui| {
                 ui.label("Display name");
                 ui.text_edit_singleline(&mut draft.value.display_name);
@@ -6054,6 +6531,7 @@ fn objective_catalog_editor(
 
 fn objective_kind_choice(ui: &mut egui::Ui, value: &mut ObjectiveKind) {
     egui::ComboBox::from_id_salt(("objective_kind", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             for kind in [
@@ -6746,6 +7224,7 @@ fn legacy_technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         })
         .unwrap_or("Select group");
     egui::ComboBox::from_label("Group")
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(selected_label)
         .show_ui(ui, |ui| {
             for (id, name) in &groups {
@@ -6888,6 +7367,7 @@ fn legacy_technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             ui.add(egui::DragValue::new(&mut draft.tier).prefix("Tier "));
         });
         egui::ComboBox::from_label("Node group")
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(
                 draft
                     .group
@@ -7091,6 +7571,7 @@ fn world_tab(
                     ui.label("Display name");
                     ui.text_edit_singleline(&mut layer.display_name);
                     egui::ComboBox::from_id_salt("resource_generation_habitat")
+                        .height(AUTHORING_COMBO_MAX_HEIGHT)
                         .selected_text(format!("{:?}", layer.habitat))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -7221,6 +7702,7 @@ fn world_tab(
             .map_or("Select layer", StableId::as_str);
         let mut changed = false;
         egui::ComboBox::from_label("Layer")
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
                 for (id, source) in &layers {
@@ -7307,6 +7789,7 @@ fn world_tab(
             ui.horizontal_wrapped(|ui| {
                 ui.monospace(layer.id.to_string());
                 egui::ComboBox::from_label("Habitat")
+                    .height(AUTHORING_COMBO_MAX_HEIGHT)
                     .selected_text(format!("{:?}", layer.habitat))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut layer.habitat, FoliageHabitat::Land, "Land");
@@ -7508,6 +7991,7 @@ fn world_tab(
             };
         }
         egui::ComboBox::from_label("Preview")
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(state.world_preview_layer.label())
             .show_ui(ui, |ui| {
                 for layer in WorldPreviewLayer::ALL {
@@ -9450,6 +9934,7 @@ fn technology_icon_choices(state: &ToolState) -> Vec<String> {
 
 fn archetype_kind_choice(ui: &mut egui::Ui, value: &mut ArchetypeKind) {
     egui::ComboBox::from_id_salt(("archetype_kind", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             for kind in [
@@ -9656,7 +10141,8 @@ fn stable_id_required_choice(
     label: &str,
     value: &mut StableId,
     choices: &[(StableId, String)],
-) {
+) -> bool {
+    let previous = value.clone();
     let selected = choices
         .iter()
         .find(|(id, _)| id == value)
@@ -9664,6 +10150,7 @@ fn stable_id_required_choice(
     ui.horizontal_wrapped(|ui| {
         ui.label(label);
         egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (id, display) in choices {
@@ -9671,6 +10158,7 @@ fn stable_id_required_choice(
                 }
             });
     });
+    *value != previous
 }
 
 fn stable_id_option_choice(
@@ -9686,6 +10174,7 @@ fn stable_id_option_choice(
     ui.horizontal_wrapped(|ui| {
         ui.label(label);
         egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 ui.selectable_value(value, None, "None");
@@ -9815,6 +10304,7 @@ fn string_choice(ui: &mut egui::Ui, label: &str, value: &mut String, choices: &[
     ui.horizontal_wrapped(|ui| {
         ui.label(label);
         egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for choice in choices {
@@ -9833,6 +10323,7 @@ fn optional_string_choice(
     ui.horizontal_wrapped(|ui| {
         ui.label(label);
         egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .height(AUTHORING_COMBO_MAX_HEIGHT)
             .selected_text(value.as_deref().unwrap_or("None"))
             .show_ui(ui, |ui| {
                 ui.selectable_value(value, None, "None");
@@ -9901,6 +10392,7 @@ fn stable_u32_map_editor(
     }
     let mut add = None;
     egui::ComboBox::from_id_salt((label, "add", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text("Add…")
         .show_ui(ui, |ui| {
             for (id, display) in choices {
@@ -9943,6 +10435,7 @@ fn stable_u16_map_editor(
     }
     let mut add = None;
     egui::ComboBox::from_id_salt((label, "add", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text("Add…")
         .show_ui(ui, |ui| {
             for (id, display) in choices {
@@ -9983,6 +10476,7 @@ fn stable_i32_map_editor(
     }
     let mut add = None;
     egui::ComboBox::from_id_salt((label, "add", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text("Add…")
         .show_ui(ui, |ui| {
             for (id, display) in choices {
@@ -10026,6 +10520,7 @@ fn role_stat_map_editor(
     }
     let mut add = None;
     egui::ComboBox::from_id_salt(("role stat", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text("Add role…")
         .show_ui(ui, |ui| {
             for (id, display) in roles {
@@ -10071,11 +10566,16 @@ fn draw_building_visual(
             "Runtime placement occupies {} × {} cells",
             building.footprint[0], building.footprint[1]
         ));
-        draw_footprint_grid(ui, building.footprint, egui::vec2(250.0, 140.0));
     });
 }
 
-fn footprint_editor(ui: &mut egui::Ui, footprint: &mut [u16; 2], label: &str, maximum: u16) {
+fn footprint_editor(
+    ui: &mut egui::Ui,
+    footprint: &mut [u16; 2],
+    label: &str,
+    maximum: u16,
+) -> bool {
+    let previous = *footprint;
     ui.group(|ui| {
         ui.horizontal_wrapped(|ui| {
             ui.strong(label);
@@ -10112,6 +10612,7 @@ fn footprint_editor(ui: &mut egui::Ui, footprint: &mut [u16; 2], label: &str, ma
             if *footprint == [1, 1] { "" } else { "s" }
         ));
     });
+    *footprint != previous
 }
 
 fn draw_footprint_grid(ui: &mut egui::Ui, footprint: [u16; 2], desired: egui::Vec2) {
@@ -10537,6 +11038,7 @@ fn model_string_vec_editor(
 
 fn enemy_run_animation_choice(ui: &mut egui::Ui, value: &mut EnemyRunAnimation) {
     egui::ComboBox::from_id_salt(("enemy_run_animation", ui.next_auto_id()))
+        .height(AUTHORING_COMBO_MAX_HEIGHT)
         .selected_text(format!("{value:?}"))
         .show_ui(ui, |ui| {
             ui.selectable_value(value, EnemyRunAnimation::Generic, "Generic");
@@ -10726,23 +11228,6 @@ fn refresh_building_draft(state: &mut ToolState) {
         .and_then(|id| building_draft(&state.catalog, id));
 }
 
-fn synchronize_archetype_footprint(
-    state: &mut ToolState,
-    archetype: &StableId,
-    footprint: [u16; 2],
-) -> Result<(), String> {
-    if footprint.contains(&0) {
-        return Err("footprint dimensions must both be non-zero".to_owned());
-    }
-    let value = state
-        .catalog
-        .archetypes
-        .get_mut(archetype)
-        .ok_or_else(|| format!("missing model archetype {archetype}"))?;
-    value.footprint = footprint;
-    Ok(())
-}
-
 fn apply_building_draft(state: &mut ToolState) -> Result<(), String> {
     let draft = state
         .building_draft
@@ -10752,8 +11237,35 @@ fn apply_building_draft(state: &mut ToolState) -> Result<(), String> {
         return Err("building display name cannot be empty".to_owned());
     }
     let mut candidate = state.catalog.clone();
+    candidate
+        .archetypes
+        .get_mut(&draft.value.archetype)
+        .ok_or_else(|| format!("missing model archetype {}", draft.value.archetype))?
+        .footprint = draft.value.footprint;
+    synchronize_buildings_for_archetype(
+        &mut candidate,
+        &draft.value.archetype,
+        draft.value.footprint,
+    );
     candidate.buildings.insert(draft.id, draft.value);
     commit_catalog_candidate(state, candidate)
+}
+
+fn synchronize_buildings_for_archetype(
+    catalog: &mut ContentCatalog,
+    archetype: &StableId,
+    footprint: [u16; 2],
+) -> usize {
+    let mut updated = 0;
+    for building in catalog
+        .buildings
+        .values_mut()
+        .filter(|building| &building.archetype == archetype)
+    {
+        building.footprint = footprint;
+        updated += 1;
+    }
+    updated
 }
 
 fn duplicate_selected_building(state: &mut ToolState) -> Result<(), String> {
@@ -11324,6 +11836,9 @@ fn refresh_role_draft(state: &mut ToolState) {
         .selected_role
         .as_ref()
         .and_then(|id| role_draft(&state.catalog, id));
+    state.role_preview_animation = state.role_draft.as_ref().and_then(|draft| {
+        matching_role_animation_state(&state.presentation, &draft.value.action_animation)
+    });
 }
 
 fn refresh_foliage_draft(state: &mut ToolState) {
@@ -11882,6 +12397,21 @@ mod tests {
     }
 
     #[test]
+    fn preview_camera_starts_in_front_and_pans_in_camera_space() {
+        let controls = ModelPreviewControls::default();
+        let offset = preview_camera_offset(controls.yaw, controls.pitch, controls.distance);
+        assert!(
+            offset.z > 0.0,
+            "the default camera must view +Z-facing models from the front"
+        );
+
+        let front_pan = preview_pan_delta(0.0, 0.0, 1.0, 0.0, 1.0);
+        let side_pan = preview_pan_delta(std::f32::consts::FRAC_PI_2, 0.0, 1.0, 0.0, 1.0);
+        assert!(front_pan.x < -0.99 && front_pan.z.abs() < 0.01);
+        assert!(side_pan.z > 0.99 && side_pan.x.abs() < 0.01);
+    }
+
+    #[test]
     fn presentation_asset_crud_stays_valid_and_reference_safe() {
         let mut state = ToolState::default();
 
@@ -12137,10 +12667,66 @@ mod tests {
     #[test]
     fn logical_footprint_sync_updates_the_runtime_archetype_record() {
         let mut state = ToolState::default();
-        let archetype = state.catalog.archetypes.keys().next().unwrap().clone();
-        synchronize_archetype_footprint(&mut state, &archetype, [7, 3]).unwrap();
+        let building = state.catalog.buildings.keys().next().unwrap().clone();
+        state.selected_building = Some(building.clone());
+        state.building_draft = building_draft(&state.catalog, &building);
+        let archetype = state
+            .building_draft
+            .as_ref()
+            .unwrap()
+            .value
+            .archetype
+            .clone();
+        state.building_draft.as_mut().unwrap().value.footprint = [7, 3];
+
+        apply_building_draft(&mut state).unwrap();
+
+        assert_eq!(state.catalog.buildings[&building].footprint, [7, 3]);
         assert_eq!(state.catalog.archetypes[&archetype].footprint, [7, 3]);
-        assert!(synchronize_archetype_footprint(&mut state, &archetype, [0, 3]).is_err());
+        state.building_draft.as_mut().unwrap().value.footprint = [0, 3];
+        assert!(apply_building_draft(&mut state).is_err());
+    }
+
+    #[test]
+    fn role_preview_uses_shipping_rig_animation_and_composition_rules() {
+        let state = ToolState::default();
+        let logger = state
+            .catalog
+            .roles
+            .get(&StableId::new("role:logger").unwrap())
+            .unwrap();
+        let animation_state =
+            matching_role_animation_state(&state.presentation, &logger.action_animation).unwrap();
+        let (asset_path, animation_index, _) =
+            role_preview_animation_request(&state.presentation, &animation_state).unwrap();
+        assert_eq!(asset_path, PLAYER_ANIMATED_MODEL_PATH);
+        assert_eq!(
+            animation_index, 24,
+            "logger preview should use CharacterWoodCutting"
+        );
+
+        let equipment = logger.equipment.as_ref().unwrap();
+        let idle = role_preview_visible_nodes(
+            logger,
+            2,
+            false,
+            Some("Eyes_Normal"),
+            Some("Hair_Short_Normal"),
+            None,
+        );
+        assert!(idle.contains(&equipment.body_nodes[2]));
+        if let Some(left_hand) = equipment.left_hand_node.as_ref() {
+            assert_eq!(idle.contains(left_hand), equipment.left_hand_permanent);
+            let carrying = role_preview_visible_nodes(
+                logger,
+                2,
+                true,
+                Some("Eyes_Normal"),
+                Some("Hair_Short_Normal"),
+                None,
+            );
+            assert!(carrying.contains(left_hand));
+        }
     }
 
     #[test]

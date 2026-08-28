@@ -153,8 +153,8 @@ const TWITCH_CAMERA_PAN_DISTANCE: f32 = 12.0;
 const TWITCH_CAMERA_HOME_TIMEOUT_SECONDS: f32 = 60.0;
 const FOLIAGE_CAPTURE_TIMES_SECONDS: [f32; 12] =
     [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0];
-const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
-const PLAYER_ANIMATED_SOURCE_MODEL: &str = "Assets/Models/Characters/Characters.fbx";
+pub const PLAYER_ANIMATED_MODEL_PATH: &str = "migrated/models/Models/Characters/Characters.glb";
+pub const PLAYER_ANIMATED_SOURCE_MODEL: &str = "Assets/Models/Characters/Characters.fbx";
 const PING_POINTER_DURATION_SECONDS: f32 = 8.0;
 const PING_POINTER_MODEL_PATH: &str = "migrated/models/Models/VFX/PointerArrow.glb";
 const PING_POINTER_MATERIAL_ID: &str = "material:799ef8ce46a71414286fd24c033a98fe";
@@ -23699,6 +23699,19 @@ fn skin_compatible_animation_request(
             None
         }
     })
+}
+
+/// Resolves an authored clip to an animation embedded in a compatible visible
+/// rig. Focused authoring tools use this same mapping as runtime animation so a
+/// role preview cannot silently select a different take from the shipping game.
+#[must_use]
+pub fn preview_animation_asset_for_rig(
+    source: &AnimationClipDef,
+    rig_scene: &str,
+    presentation: &PresentationCatalog,
+) -> Option<(String, u32)> {
+    let (path, index) = skin_compatible_animation_request(source, rig_scene, presentation)?;
+    Some((path, u32::try_from(index).ok()?))
 }
 
 fn native_character_animation_name(source_name: &str) -> Option<&'static str> {
