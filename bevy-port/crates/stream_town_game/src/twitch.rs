@@ -26,13 +26,15 @@ const VALIDATE_ENDPOINT: &str = "https://id.twitch.tv/oauth2/validate";
 const USERS_ENDPOINT: &str = "https://api.twitch.tv/helix/users";
 const STREAMS_ENDPOINT: &str = "https://api.twitch.tv/helix/streams";
 const STREAM_KEY_ENDPOINT: &str = "https://api.twitch.tv/helix/streams/key";
+const MODERATION_BANS_ENDPOINT: &str = "https://api.twitch.tv/helix/moderation/bans";
 const INGESTS_ENDPOINT: &str = "https://ingest.twitch.tv/ingests";
 const VAULT_SERVICE: &str = "stream-town-twitch";
 const TOKEN_REFRESH_WINDOW_SECONDS: u64 = 90 * 60;
 const TWITCH_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TWITCH_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const REQUIRED_SCOPES: [&str; 2] = ["chat:read", "chat:edit"];
-pub const BROADCAST_SCOPES: [&str; 1] = ["channel:read:stream_key"];
+pub const BROADCAST_SCOPES: [&str; 2] =
+    ["channel:read:stream_key", "moderator:manage:banned_users"];
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct StoredOAuthToken {
@@ -177,6 +179,19 @@ struct TokenResponse {
 #[derive(Deserialize)]
 struct OAuthErrorResponse {
     message: String,
+}
+
+#[derive(Serialize)]
+struct ModerationRequest<'a> {
+    data: ModerationRequestData<'a>,
+}
+
+#[derive(Serialize)]
+struct ModerationRequestData<'a> {
+    user_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<u32>,
+    reason: &'a str,
 }
 
 #[derive(Clone)]
@@ -328,7 +343,7 @@ impl OAuthClient {
     ) -> Result<(StoredOAuthToken, TokenValidation)> {
         let mut token = vault
             .load()?
-            .context("Twitch bot is not authorized; use stream_town_tools first")?;
+            .context("Twitch account is not authorized; open Main Menu > Secrets")?;
         let validation = self.validate(&token).await;
         if let Ok(validation) = validation
             && validation.expires_in > TOKEN_REFRESH_WINDOW_SECONDS
@@ -450,6 +465,41 @@ impl OAuthClient {
         }
         Ok(ingests)
     }
+
+    async fn moderate_user(
+        &self,
+        token: &StoredOAuthToken,
+        broadcaster_id: &str,
+        moderator_id: &str,
+        user_id: &str,
+        duration_seconds: Option<u32>,
+        reason: &str,
+    ) -> Result<()> {
+        if broadcaster_id.is_empty() || moderator_id.is_empty() || user_id.is_empty() {
+            bail!("Twitch moderation requires broadcaster, moderator, and target user IDs");
+        }
+        self.http
+            .post(MODERATION_BANS_ENDPOINT)
+            .query(&[
+                ("broadcaster_id", broadcaster_id),
+                ("moderator_id", moderator_id),
+            ])
+            .header("Client-Id", &self.client_id)
+            .bearer_auth(&token.access_token)
+            .json(&ModerationRequest {
+                data: ModerationRequestData {
+                    user_id,
+                    duration: duration_seconds,
+                    reason,
+                },
+            })
+            .send()
+            .await
+            .context("Twitch moderation request failed")?
+            .error_for_status()
+            .context("Twitch rejected the moderation request")?;
+        Ok(())
+    }
 }
 
 fn response_contains_live_stream(response: &StreamsResponse, broadcaster_id: &str) -> bool {
@@ -564,11 +614,21 @@ pub enum TwitchStatus {
 pub enum TwitchEvent {
     Status(TwitchStatus),
     Chat(TwitchChatEnvelope),
+    Notice(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TwitchControl {
     SendMessage(String),
+    Timeout {
+        user_id: String,
+        duration_seconds: u32,
+        reason: String,
+    },
+    Ban {
+        user_id: String,
+        reason: String,
+    },
     Disconnect,
 }
 
@@ -640,7 +700,16 @@ async fn run_transport(
     let oauth = OAuthClient::new(config.client_id.clone())?;
     let vault = CredentialVault::new(&config.client_id, &config.bot_login);
     let (mut token, validation) = oauth.load_validated_token(&vault).await?;
-    ensure_bot_identity(&validation, &config.bot_login)?;
+    ensure_oauth_identity(&validation, &config.bot_login)?;
+    let moderation_oauth = OAuthClient::broadcaster(config.client_id.clone())?;
+    let moderation_vault = CredentialVault::broadcaster(&config.client_id, &config.channel_login);
+    let (mut moderation_token, moderation_validation) = moderation_oauth
+        .load_validated_token(&moderation_vault)
+        .await
+        .context("Twitch streamer account is not authorized for moderation")?;
+    ensure_oauth_identity(&moderation_validation, &config.channel_login)?;
+    let broadcaster_id = moderation_validation.user_id.clone();
+    let moderator_id = moderation_validation.user_id;
     let mut first_connection = true;
 
     'connection: loop {
@@ -670,7 +739,7 @@ async fn run_transport(
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         let (validated_token, validation) =
                             oauth.load_validated_token(&vault).await?;
-                        ensure_bot_identity(&validation, &config.bot_login)?;
+                        ensure_oauth_identity(&validation, &config.bot_login)?;
                         token = validated_token;
                         continue 'connection;
                     };
@@ -682,9 +751,7 @@ async fn run_transport(
                     }
                     match message {
                         ServerMessage::Privmsg(message)
-                            if message.channel_login == config.channel_login
-                                && (message.message_text.starts_with('!')
-                                    || message.source.tags.0.contains_key("custom-reward-id")) =>
+                            if message.channel_login == config.channel_login =>
                         {
                             events.send(TwitchEvent::Chat(envelope_from_privmsg(message)?))?;
                         }
@@ -703,6 +770,41 @@ async fn run_transport(
                                 .await
                                 .context("failed to send Twitch chat message")?;
                         }
+                        Some(TwitchControl::Timeout { user_id, duration_seconds, reason }) => {
+                            let duration_seconds = duration_seconds.clamp(1, 1_209_600);
+                            let notice = match moderation_oauth
+                                .moderate_user(
+                                    &moderation_token,
+                                    &broadcaster_id,
+                                    &moderator_id,
+                                    &user_id,
+                                    Some(duration_seconds),
+                                    &reason,
+                                )
+                                .await
+                            {
+                                Ok(()) => format!("Timed out Twitch user {user_id} for {duration_seconds} seconds"),
+                                Err(error) => format!("Timeout failed for Twitch user {user_id}: {error:#}"),
+                            };
+                            events.send(TwitchEvent::Notice(notice))?;
+                        }
+                        Some(TwitchControl::Ban { user_id, reason }) => {
+                            let notice = match moderation_oauth
+                                .moderate_user(
+                                    &moderation_token,
+                                    &broadcaster_id,
+                                    &moderator_id,
+                                    &user_id,
+                                    None,
+                                    &reason,
+                                )
+                                .await
+                            {
+                                Ok(()) => format!("Banned Twitch user {user_id}"),
+                                Err(error) => format!("Ban failed for Twitch user {user_id}: {error:#}"),
+                            };
+                            events.send(TwitchEvent::Notice(notice))?;
+                        }
                         Some(TwitchControl::Disconnect) | None => {
                             client.part(config.channel_login.clone());
                             events.send(TwitchEvent::Status(TwitchStatus::Disconnected))?;
@@ -715,7 +817,7 @@ async fn run_transport(
                         .load_validated_token(&vault)
                         .await
                         .context("Twitch hourly token validation/refresh failed")?;
-                    ensure_bot_identity(&validation, &config.bot_login)?;
+                    ensure_oauth_identity(&validation, &config.bot_login)?;
                     if validated_token.access_token != token.access_token {
                         token = validated_token;
                         client.part(config.channel_login.clone());
@@ -723,13 +825,19 @@ async fn run_transport(
                         continue 'connection;
                     }
                     token = validated_token;
+                    let (validated_moderation_token, moderation_validation) = moderation_oauth
+                        .load_validated_token(&moderation_vault)
+                        .await
+                        .context("Twitch streamer moderation token refresh failed")?;
+                    ensure_oauth_identity(&moderation_validation, &config.channel_login)?;
+                    moderation_token = validated_moderation_token;
                 }
             }
         }
     }
 }
 
-fn ensure_bot_identity(validation: &TokenValidation, expected_login: &str) -> Result<()> {
+fn ensure_oauth_identity(validation: &TokenValidation, expected_login: &str) -> Result<()> {
     if validation.login != expected_login {
         bail!(
             "Twitch token belongs to '{}', expected '{}'",
@@ -794,12 +902,16 @@ mod tests {
     }
 
     #[test]
-    fn broadcaster_oauth_uses_only_the_stream_key_scope() {
+    fn bot_and_broadcaster_oauth_keep_chat_and_moderation_authority_separate() {
         let client = OAuthClient::broadcaster("public-client-id").unwrap();
         assert_eq!(
             client.required_scopes,
             BROADCAST_SCOPES.map(ToString::to_string)
         );
+        assert_eq!(REQUIRED_SCOPES, ["chat:read", "chat:edit"]);
+        assert!(BROADCAST_SCOPES.contains(&"channel:read:stream_key"));
+        assert!(BROADCAST_SCOPES.contains(&"moderator:manage:banned_users"));
+        assert!(!REQUIRED_SCOPES.contains(&"moderator:manage:banned_users"));
     }
 
     #[test]

@@ -7,9 +7,12 @@ Stream Town uses three deliberately separate identities:
 - **Twitch application:** the OAuth registration that lets Stream Town act as the bot
 
 Stream Town authorizes the chat bot for IRC and independently authorizes the
-broadcaster for stream-key lookup. The game captures, encodes, and publishes its
-own output; OBS is not required. Never authorize the bot grant while signed in
-as the broadcaster, or the broadcaster grant while signed in as the bot.
+broadcaster for stream-key lookup and channel moderation. The bot sends and
+receives chat, but operator-panel timeouts and bans are made through the
+streamer account and appear as streamer moderation actions. The game captures,
+encodes, and publishes its own output; OBS is not required. Never authorize the
+bot grant while signed in as the broadcaster, or the broadcaster grant while
+signed in as the bot.
 
 The shipping setup path is **Main Menu > Secrets**. Opening it requires an
 explicit Yes/No privacy confirmation. From the instant the confirmation appears
@@ -78,20 +81,16 @@ remains available as a diagnostic and advanced-configuration alternative.
 
 1. In `HumanBeanGames` chat, run `/mod HumanBeanBot`. This is recommended for normal bot rate limits and moderation visibility.
 2. The main-menu Secrets screen has already saved the channel as
-   `humanbeangames`. For a full diagnostic, run
-   `.\bevy-port\scripts\launch-tools.ps1`, open **Twitch**, and click
-   **Run end-to-end diagnostic**. Do not continue until it reports the validated
-   bot, resolved channel, and an authenticated IRC channel join.
-3. For each trusted operator, enter their login beside **Resolve GM login** and click **Resolve and add ID**. The tool resolves the mutable login to Twitch's stable numeric user ID. Only add people who should receive Unity-compatible game-master/cheat commands.
-4. **Chat bot** should already read **Enabled** in Main Menu > Secrets. When
+   `humanbeangames`.
+3. **Chat bot** should already read **Enabled** in Main Menu > Secrets. When
    launched from `bevy-port`, its public settings are in
    `bevy-port/.stream-town/config.ron`; credentials remain in Windows Credential
    Manager.
-5. Wait for the bot card to report that it connected automatically. No chat-side
+4. Wait for the bot card to report that it connected automatically. No chat-side
    connection command is required.
-6. Start or load the world. Stream Town blocks this action and points back to
+5. Start or load the world. Stream Town blocks this action and points back to
    Secrets until the bot is connected and both account grants are stored.
-7. From a separate viewer account, send `!join`, then `!help`. The viewer should receive a stable actor and the bot should return command help in chat.
+6. From a separate viewer account, send `!join`, then `!help`. The viewer should receive a stable actor and the bot should return command help in chat.
 
 Broadcaster and moderator status grants the existing staff command set, but it
 does not grant game-master cheats. Those commands require an exact ID from
@@ -100,13 +99,13 @@ debug injection bypasses the list in the same way Unity's session bridge did.
 
 ## 5. Bind the Fish God Channel Points reward
 
-1. In the `HumanBeanGames` Creator Dashboard, create or select the custom Fish God reward. Enable **Require Viewer to Enter Text** so Twitch emits the chat message carrying its `custom-reward-id` IRC tag.
-2. In Stream Town Tools > **Twitch**, click **Capture next reward**.
-3. Wait until the tool says the channel is connected, then redeem that exact reward once and enter any text. Do not redeem a different custom reward during this three-minute capture window.
-4. Confirm that the UUID appears in **Fish God reward ID**, then click **Save runtime config**.
-5. In a running world, redeem it again. It should enter the same deterministic praise path as `!praise`.
-
-The checked-in default retains the reward ID recovered from the Unity project, but the capture workflow is authoritative for the live channel. If Channel Points are unavailable for the channel, clear the reward ID; `!praise` remains usable.
+The checked-in configuration retains the reward ID recovered from the Unity
+project. In the `HumanBeanGames` Creator Dashboard, use that reward with
+**Require Viewer to Enter Text** enabled so Twitch emits the chat message and
+its `custom-reward-id` IRC tag. Redeeming it should enter the same deterministic
+praise path as `!praise`. If the production reward is replaced, update
+`twitch.fish_god_reward_id` in the authoritative or local `config.ron`; no OAuth
+credential is stored there.
 
 ## 6. Authorize direct broadcasting
 
@@ -118,18 +117,17 @@ The checked-in default retains the reward ID recovered from the Unity project, b
    are correct.
 3. Click **Authorize stream account**. Stream Town automatically opens Twitch's
    activation page; enter the device code, sign in as `HumanBeanGames` (not
-   `HumanBeanBot`), and approve only `channel:read:stream_key`. Stream Town
+   `HumanBeanBot`), and approve `channel:read:stream_key` plus
+   `moderator:manage:banned_users`. Stream Town
    rejects a grant for a different account. The broadcaster status changes to
    **Broadcaster authorized** when the validated token is in Windows Credential
    Manager.
-4. Run `.\bevy-port\scripts\launch-tools.ps1`, open **Twitch**, and click
-   **Test broadcast prerequisites**. Do not continue until the tool
-   confirms the broadcaster, Twitch ingest list, at least one H.264 encoder, and
-   process-scoped Windows audio capture.
+4. If the streamer was authorized by an older build, authorize it again once;
+   refreshing an old token cannot add the moderation scope.
 
 This second token has a distinct Windows Credential Manager entry. Stream Town
 uses it to fetch the stream key from Twitch Helix only after an explicit Go Live
-or Restart stream action. The
+or Restart stream action, and to submit operator-panel timeout/ban requests. The
 key is never written to configuration, the repository, logs, diagnostics, or
 the runtime console.
 
@@ -150,8 +148,8 @@ Start in Main Menu > **Secrets**:
    use the operator panel's **End Stream** control first. Automatic encoder
    selection prefers AMD AMF, then tries other available hardware paths and
    forced-hardware Windows Media Foundation before the OpenH264 CPU fallback.
-   Select a specific encoder only when diagnosing hardware support. The external
-   Tools > **Twitch** tab reports the selected backend and rejected fallback
+   Select a specific encoder only when diagnosing hardware support. The local
+   operator telemetry reports the selected backend and rejected fallback
    candidates.
 3. Leave **Preferred ingest** empty for Twitch's default, or enter a region name
    substring such as `Sydney`.
@@ -159,12 +157,13 @@ Start in Main Menu > **Secrets**:
    the full configured bitrate but Twitch will not put
    the channel live. Open [Twitch Inspector](https://inspector.twitch.tv/) while
    signed in as the broadcaster and confirm that the test session is stable.
-   Let gameplay run for at least five minutes. The local operator dashboard and
-   Runtime tab report rolling captured/output FPS, selected encoder/ingest,
+   Let gameplay run for at least five minutes. The local operator dashboard
+   reports rolling captured/output FPS, selected encoder/ingest,
    capture replacements, cadence skips, actual audio/video rejection counts,
    queue depth, and encode latency. Stream-only mode
-   hides the original game window and opens a lightweight 960×540 operator window
-   with a 320×180 preview. The operator surface is never sent to Twitch.
+   hides the original game window and opens a lightweight 1100×680 operator
+   window with a low-resolution preview, Twitch chat, moderation, and local
+   settings. The operator surface is never sent to Twitch.
 5. End the test with **End Stream** in the operator panel. Relaunch to the Main
    Menu, open **Secrets**, accept the warning, and turn **Bandwidth test** off.
    Start/load a town, answer **Yes**, and wait for the operator panel to show
@@ -217,10 +216,9 @@ switcher; they are not silently captured from the desktop.
 
 - `F1`: intentionally disconnect the Twitch bot.
 - `F2`: reconnect after credentials or channel settings change.
-- Tools diagnostic success: validated bot identity, resolved target channel, and authenticated IRC join.
-- Direct-broadcast diagnostic success: validated broadcaster identity, non-empty
-  Helix stream-key response, usable ingest list, linked H.264 encoder, and
-  process-scoped WASAPI availability.
+- Connection success: the Secrets bot card reports the validated bot and
+  authenticated IRC join; the stream card reports the separately authorized
+  broadcaster.
 - Main-menu status success: the bot card says **Connected** and New/Load Town
   opens the explicit go-live confirmation. After Yes, the operator panel appears
   only with gameplay and changes to **LIVE · END STREAM** after gameplay
@@ -233,7 +231,9 @@ switcher; they are not silently captured from the desktop.
   In stream-only mode the HUD is sent to Twitch while the operator sees the
   separate diagnostics/preview window.
 - A wrong-account authorization is rejected before IRC is started.
-- If authorization is revoked, the app registration changes, or the refresh token has expired from inactivity, reopen the Bevy tools **Twitch** tab, click **Forget token**, authorize again, and rerun the end-to-end diagnostic.
+- If authorization is revoked, the app registration changes, the streamer token
+  lacks the moderation scope, or a refresh token expires, reopen Main Menu >
+  Secrets and authorize the affected account again.
 - `Login authentication failed` normally means the wrong bot authorized the app or the stored grant was revoked.
 - A channel-join timeout normally means the channel login is wrong or Twitch IRC is unreachable from the machine.
 - `WaitingForBroadcasterAuthorization` means the broadcaster grant has not been
@@ -256,4 +256,5 @@ Official references:
 - [Twitch token validation](https://dev.twitch.tv/docs/authentication/validate-tokens/)
 - [Twitch video broadcast requirements](https://dev.twitch.tv/docs/video-broadcast/)
 - [Twitch Get Stream Key API](https://dev.twitch.tv/docs/api/reference#get-stream-key)
+- [Twitch Ban User API](https://dev.twitch.tv/docs/api/reference/#ban-user)
 - [FFmpeg LGPL compliance guidance](https://ffmpeg.org/legal.html)

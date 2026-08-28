@@ -23,6 +23,10 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use bevy::{
     camera::RenderTarget,
+    input::{
+        ButtonState,
+        keyboard::{Key, KeyboardInput},
+    },
     prelude::*,
     render::{
         gpu_readback::{Readback, ReadbackComplete},
@@ -36,7 +40,9 @@ use ffmpeg::{
     ChannelLayout, Codec, Dictionary, Packet, Rational, codec, encoder, format, frame, software,
 };
 use ffmpeg_next as ffmpeg;
-use stream_town_domain::{BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode};
+use stream_town_domain::{
+    BroadcastConfig, BroadcastEncoderPreference, BroadcastRenderMode, PlayerSettingsStore,
+};
 use wasapi::{AudioClient, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
 use windows_capture::{
     capture::{Context as CaptureContext, GraphicsCaptureApiHandler},
@@ -50,7 +56,8 @@ use windows_capture::{
 };
 
 use crate::{
-    RuntimeConfig, SensitiveScreenActive, SensitiveScreenUpdateSet,
+    OperatorChatRuntime, RuntimeConfig, RuntimePlayerSettings, SensitiveScreenActive,
+    SensitiveScreenUpdateSet, TwitchConnection,
     twitch::{CredentialVault, OAuthClient, StoredOAuthToken, TwitchIngest},
 };
 
@@ -63,8 +70,9 @@ const TWITCH_LIVE_VERIFICATION_TIMEOUT: Duration = Duration::from_mins(1);
 const TWITCH_LIVE_VERIFICATION_INTERVAL: Duration = Duration::from_secs(2);
 const TWITCH_LIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RECONNECT_DELAY_SECONDS: u64 = 30;
-const OPERATOR_WINDOW_WIDTH: u32 = 960;
-const OPERATOR_WINDOW_HEIGHT: u32 = 540;
+const OPERATOR_WINDOW_WIDTH: u32 = 1_100;
+const OPERATOR_WINDOW_HEIGHT: u32 = 680;
+const OPERATOR_CHAT_VISIBLE_ROWS: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectBroadcastPhase {
@@ -172,6 +180,53 @@ struct StreamOperatorLiveButton;
 #[derive(Component)]
 struct StreamOperatorLiveButtonText;
 
+#[derive(Component)]
+struct StreamOperatorChatInput;
+
+#[derive(Component)]
+struct StreamOperatorChatInputText;
+
+#[derive(Component)]
+struct StreamOperatorChatSendButton;
+
+#[derive(Component)]
+struct StreamOperatorChatTimeoutButton;
+
+#[derive(Component)]
+struct StreamOperatorChatBanButton;
+
+#[derive(Component)]
+struct StreamOperatorChatSelectedText;
+
+#[derive(Component)]
+struct StreamOperatorChatRow {
+    slot: usize,
+    user_id: String,
+    login: String,
+}
+
+#[derive(Component)]
+struct StreamOperatorChatRowText(usize);
+
+#[derive(Clone, Copy, Component)]
+enum StreamOperatorSettingAction {
+    BrightnessDown,
+    BrightnessUp,
+    MasterDown,
+    MasterUp,
+    MusicDown,
+    MusicUp,
+    EffectsDown,
+    EffectsUp,
+    AmbienceDown,
+    AmbienceUp,
+    ToggleShadows,
+    ToggleReducedMotion,
+}
+
+#[derive(Component)]
+struct StreamOperatorSettingsText;
+
 type StreamCameraTargetQuery<'w, 's> = Query<
     'w,
     's,
@@ -187,6 +242,35 @@ type StreamOperatorLiveButtonQuery<'w, 's> = Query<
         &'static mut BorderColor,
     ),
     (With<StreamOperatorLiveButton>, Changed<Interaction>),
+>;
+type StreamOperatorChatRowTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static StreamOperatorChatRowText, &'static mut Text),
+    (
+        Without<StreamOperatorChatInputText>,
+        Without<StreamOperatorChatSelectedText>,
+    ),
+>;
+type StreamOperatorChatInputTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<StreamOperatorChatInputText>,
+        Without<StreamOperatorChatSelectedText>,
+        Without<StreamOperatorChatRowText>,
+    ),
+>;
+type StreamOperatorChatSelectedTextQuery<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Text,
+    (
+        With<StreamOperatorChatSelectedText>,
+        Without<StreamOperatorChatInputText>,
+        Without<StreamOperatorChatRowText>,
+    ),
 >;
 
 impl Default for DirectBroadcastRuntime {
@@ -331,6 +415,7 @@ impl Plugin for DirectTwitchBroadcastPlugin {
         app.init_resource::<DirectBroadcastRuntime>()
             .init_resource::<DirectBroadcastControl>()
             .init_resource::<StreamOnlyCaptureState>()
+            .init_resource::<OperatorChatRuntime>()
             .add_systems(
                 Update,
                 (
@@ -344,6 +429,10 @@ impl Plugin for DirectTwitchBroadcastPlugin {
                     sync_stream_only_capture,
                     stream_operator_live_button,
                     update_stream_operator_info,
+                    stream_operator_chat_controls,
+                    update_stream_operator_chat,
+                    stream_operator_settings_controls,
+                    update_stream_operator_settings,
                     capture_direct_broadcast_frame.after(SensitiveScreenUpdateSet),
                 )
                     .chain(),
@@ -499,7 +588,9 @@ fn resolve_broadcast_target(
         let oauth = OAuthClient::broadcaster(client_id.to_owned())?;
         let vault = CredentialVault::broadcaster(client_id, channel_login);
         let (token, validation) = oauth.load_validated_token(&vault).await.with_context(|| {
-            format!("Twitch broadcaster '{channel_login}' is not authorized; use stream_town_tools")
+            format!(
+                "Twitch broadcaster '{channel_login}' is not authorized; open Main Menu > Secrets"
+            )
         })?;
         if validation.login != channel_login {
             bail!(
@@ -1072,13 +1163,144 @@ fn spawn_stream_operator_view(
                 TextColor(Color::WHITE),
                 Pickable::IGNORE,
             ));
+            root.spawn((
+                Text::new("LOCAL SETTINGS · EXCLUDED FROM STREAM"),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.64, 0.76, 0.86)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(48),
+                    top: px(320),
+                    ..default()
+                },
+            ));
+            root.spawn((
+                StreamOperatorSettingsText,
+                Text::new("Loading settings…"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.68, 0.75, 0.82)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(48),
+                    top: px(348),
+                    width: px(470),
+                    ..default()
+                },
+            ));
+            let setting_buttons = [
+                (
+                    StreamOperatorSettingAction::BrightnessDown,
+                    "BRIGHT −",
+                    48.0,
+                    430.0,
+                ),
+                (
+                    StreamOperatorSettingAction::BrightnessUp,
+                    "BRIGHT +",
+                    148.0,
+                    430.0,
+                ),
+                (
+                    StreamOperatorSettingAction::MasterDown,
+                    "MASTER −",
+                    248.0,
+                    430.0,
+                ),
+                (
+                    StreamOperatorSettingAction::MasterUp,
+                    "MASTER +",
+                    348.0,
+                    430.0,
+                ),
+                (
+                    StreamOperatorSettingAction::MusicDown,
+                    "MUSIC −",
+                    48.0,
+                    470.0,
+                ),
+                (
+                    StreamOperatorSettingAction::MusicUp,
+                    "MUSIC +",
+                    148.0,
+                    470.0,
+                ),
+                (
+                    StreamOperatorSettingAction::EffectsDown,
+                    "SFX −",
+                    248.0,
+                    470.0,
+                ),
+                (
+                    StreamOperatorSettingAction::EffectsUp,
+                    "SFX +",
+                    348.0,
+                    470.0,
+                ),
+                (
+                    StreamOperatorSettingAction::AmbienceDown,
+                    "AMBIENT −",
+                    48.0,
+                    510.0,
+                ),
+                (
+                    StreamOperatorSettingAction::AmbienceUp,
+                    "AMBIENT +",
+                    148.0,
+                    510.0,
+                ),
+                (
+                    StreamOperatorSettingAction::ToggleShadows,
+                    "SHADOWS",
+                    248.0,
+                    510.0,
+                ),
+                (
+                    StreamOperatorSettingAction::ToggleReducedMotion,
+                    "MOTION",
+                    348.0,
+                    510.0,
+                ),
+            ];
+            for (action, label, left, top) in setting_buttons {
+                root.spawn((
+                    action,
+                    Button,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(left),
+                        top: px(top),
+                        width: px(92),
+                        height: px(30),
+                        border_radius: BorderRadius::all(px(4)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.08, 0.15, 0.22)),
+                ))
+                .with_child((
+                    Text::new(label),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.78, 0.85, 0.91)),
+                    Pickable::IGNORE,
+                ));
+            }
             let mut preview = root.spawn((
                 Node {
                     position_type: PositionType::Absolute,
-                    right: px(42),
-                    bottom: px(42),
-                    width: px(336),
-                    height: px(196),
+                    right: px(32),
+                    top: px(32),
+                    width: px(500),
+                    height: px(281),
                     padding: UiRect::all(px(8)),
                     border: UiRect::all(px(2)),
                     ..default()
@@ -1119,6 +1341,171 @@ fn spawn_stream_operator_view(
                     ));
                 });
             }
+            root.spawn((
+                Name::new("Operator Twitch chat"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(32),
+                    top: px(326),
+                    width: px(500),
+                    height: px(208),
+                    padding: UiRect::all(px(6)),
+                    border: UiRect::all(px(1)),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.025, 0.034, 0.048)),
+                BorderColor::all(Color::srgb(0.16, 0.25, 0.34)),
+            ))
+            .with_children(|chat| {
+                for slot in 0..OPERATOR_CHAT_VISIBLE_ROWS {
+                    chat.spawn((
+                        StreamOperatorChatRow {
+                            slot,
+                            user_id: String::new(),
+                            login: String::new(),
+                        },
+                        Button,
+                        Node {
+                            width: percent(100),
+                            height: px(24),
+                            padding: UiRect::horizontal(px(5)),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_child((
+                        StreamOperatorChatRowText(slot),
+                        Text::new(""),
+                        TextFont {
+                            font_size: FontSize::Px(12.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.78, 0.84, 0.9)),
+                        Pickable::IGNORE,
+                    ));
+                }
+            });
+            root.spawn((
+                StreamOperatorChatInput,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(120),
+                    top: px(546),
+                    width: px(412),
+                    height: px(38),
+                    padding: UiRect::horizontal(px(10)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(5)),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.035, 0.047, 0.065)),
+                BorderColor::all(Color::srgb(0.22, 0.35, 0.48)),
+            ))
+            .with_child((
+                StreamOperatorChatInputText,
+                Text::new("Click to type a Twitch chat message…"),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.64, 0.72, 0.8)),
+                Pickable::IGNORE,
+            ));
+            root.spawn((
+                StreamOperatorChatSendButton,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(32),
+                    top: px(546),
+                    width: px(80),
+                    height: px(38),
+                    border_radius: BorderRadius::all(px(5)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.13, 0.31, 0.48)),
+            ))
+            .with_child((
+                Text::new("SEND"),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+            root.spawn((
+                StreamOperatorChatTimeoutButton,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(164),
+                    top: px(594),
+                    width: px(128),
+                    height: px(34),
+                    border_radius: BorderRadius::all(px(5)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.42, 0.26, 0.07)),
+            ))
+            .with_child((
+                Text::new("TIMEOUT 10M"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+            root.spawn((
+                StreamOperatorChatBanButton,
+                Button,
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(32),
+                    top: px(594),
+                    width: px(124),
+                    height: px(34),
+                    border_radius: BorderRadius::all(px(5)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.42, 0.08, 0.07)),
+            ))
+            .with_child((
+                Text::new("BAN"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+            root.spawn((
+                StreamOperatorChatSelectedText,
+                Text::new("Select a chat row to moderate that user"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.62, 0.7, 0.78)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(300),
+                    top: px(603),
+                    width: px(232),
+                    ..default()
+                },
+            ));
         })
         .id()
 }
@@ -1210,6 +1597,311 @@ fn update_stream_operator_info(
         snapshot.average_encode_ms,
         snapshot.maximum_encode_ms,
     );
+}
+
+fn stream_operator_settings_controls(
+    settings: Option<ResMut<RuntimePlayerSettings>>,
+    interactions: Query<(&Interaction, &StreamOperatorSettingAction), Changed<Interaction>>,
+) {
+    let Some(mut settings) = settings else {
+        return;
+    };
+    let mut changed = false;
+    for (interaction, action) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            StreamOperatorSettingAction::BrightnessDown => {
+                settings.0.video.brightness_ev =
+                    (settings.0.video.brightness_ev - 0.5).clamp(-5.0, 5.0);
+            }
+            StreamOperatorSettingAction::BrightnessUp => {
+                settings.0.video.brightness_ev =
+                    (settings.0.video.brightness_ev + 0.5).clamp(-5.0, 5.0);
+            }
+            StreamOperatorSettingAction::MasterDown => {
+                settings.0.audio.master = (settings.0.audio.master - 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::MasterUp => {
+                settings.0.audio.master = (settings.0.audio.master + 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::MusicDown => {
+                settings.0.audio.music = (settings.0.audio.music - 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::MusicUp => {
+                settings.0.audio.music = (settings.0.audio.music + 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::EffectsDown => {
+                settings.0.audio.sound_effects =
+                    (settings.0.audio.sound_effects - 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::EffectsUp => {
+                settings.0.audio.sound_effects =
+                    (settings.0.audio.sound_effects + 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::AmbienceDown => {
+                settings.0.audio.ambience = (settings.0.audio.ambience - 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::AmbienceUp => {
+                settings.0.audio.ambience = (settings.0.audio.ambience + 0.05).clamp(0.0, 1.0);
+            }
+            StreamOperatorSettingAction::ToggleShadows => {
+                settings.0.video.shadows_enabled = !settings.0.video.shadows_enabled;
+            }
+            StreamOperatorSettingAction::ToggleReducedMotion => {
+                settings.0.interface.reduced_motion = !settings.0.interface.reduced_motion;
+            }
+        }
+        changed = true;
+    }
+
+    if changed {
+        let store = PlayerSettingsStore::new(crate::player_settings_path());
+        if let Err(error) = store.write(&settings.0) {
+            warn!("could not persist operator player settings: {error}");
+        }
+    }
+}
+
+fn update_stream_operator_settings(
+    settings: Option<Res<RuntimePlayerSettings>>,
+    mut text: Query<&mut Text, With<StreamOperatorSettingsText>>,
+) {
+    let Some(settings) = settings else {
+        return;
+    };
+    if !settings.is_changed() {
+        return;
+    }
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+    **text = format!(
+        "Brightness {:+.1} EV  ·  Master {:>3.0}%  ·  Music {:>3.0}%\nSFX {:>3.0}%  ·  Ambience {:>3.0}%  ·  Shadows {}  ·  Motion {}",
+        settings.0.video.brightness_ev,
+        settings.0.audio.master * 100.0,
+        settings.0.audio.music * 100.0,
+        settings.0.audio.sound_effects * 100.0,
+        settings.0.audio.ambience * 100.0,
+        if settings.0.video.shadows_enabled {
+            "ON"
+        } else {
+            "OFF"
+        },
+        if settings.0.interface.reduced_motion {
+            "REDUCED"
+        } else {
+            "FULL"
+        },
+    );
+}
+
+fn stream_operator_chat_controls(
+    state: Res<StreamOnlyCaptureState>,
+    mut chat: ResMut<OperatorChatRuntime>,
+    connection: Option<Res<TwitchConnection>>,
+    keyboard: Option<MessageReader<KeyboardInput>>,
+    input: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatInput>)>,
+    send: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatSendButton>)>,
+    timeout: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatTimeoutButton>)>,
+    ban: Query<&Interaction, (Changed<Interaction>, With<StreamOperatorChatBanButton>)>,
+    rows: Query<(&Interaction, &StreamOperatorChatRow), Changed<Interaction>>,
+) {
+    if input
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        chat.input_focused = true;
+    }
+    for (interaction, row) in &rows {
+        if *interaction == Interaction::Pressed && !row.user_id.is_empty() {
+            chat.selected_user = Some((row.user_id.clone(), row.login.clone()));
+        }
+    }
+
+    let operator_window = state.operator_window;
+    let mut submit = send
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed);
+    if let Some(mut keyboard) = keyboard {
+        for event in keyboard.read() {
+            if !chat.input_focused
+                || event.state != ButtonState::Pressed
+                || Some(event.window) != operator_window
+            {
+                continue;
+            }
+            match &event.logical_key {
+                Key::Enter => submit = true,
+                Key::Escape => chat.input_focused = false,
+                Key::Backspace => {
+                    chat.draft.pop();
+                }
+                _ => {
+                    if let Some(text) = &event.text {
+                        for character in text.chars().filter(|character| !character.is_control()) {
+                            if chat.draft.chars().count() < 500 {
+                                chat.draft.push(character);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if submit {
+        send_operator_chat_message(&mut chat, connection.as_deref());
+    }
+
+    if timeout
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        moderate_selected_operator_user(&mut chat, connection.as_deref(), false);
+    }
+    if ban
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        moderate_selected_operator_user(&mut chat, connection.as_deref(), true);
+    }
+}
+
+fn send_operator_chat_message(
+    chat: &mut OperatorChatRuntime,
+    connection: Option<&TwitchConnection>,
+) {
+    let message = chat.draft.trim();
+    if message.is_empty() {
+        "Enter a message before sending".clone_into(&mut chat.feedback);
+        return;
+    }
+    let Some(transport) = connection.and_then(|connection| connection.transport.as_ref()) else {
+        "Twitch chat is not connected".clone_into(&mut chat.feedback);
+        return;
+    };
+    match transport.send(crate::twitch::TwitchControl::SendMessage(
+        message.to_owned(),
+    )) {
+        Ok(()) => {
+            "Message sent to Twitch".clone_into(&mut chat.feedback);
+            chat.draft.clear();
+        }
+        Err(error) => chat.feedback = format!("Could not send chat message: {error}"),
+    }
+}
+
+fn moderate_selected_operator_user(
+    chat: &mut OperatorChatRuntime,
+    connection: Option<&TwitchConnection>,
+    ban: bool,
+) {
+    let Some((user_id, login)) = chat.selected_user.clone() else {
+        "Select a Twitch chat row before moderating".clone_into(&mut chat.feedback);
+        return;
+    };
+    let Some(transport) = connection.and_then(|connection| connection.transport.as_ref()) else {
+        "Twitch chat is not connected".clone_into(&mut chat.feedback);
+        return;
+    };
+    let control = if ban {
+        crate::twitch::TwitchControl::Ban {
+            user_id,
+            reason: "Moderated from Stream Town operator panel".to_owned(),
+        }
+    } else {
+        crate::twitch::TwitchControl::Timeout {
+            user_id,
+            duration_seconds: 600,
+            reason: "Timed out from Stream Town operator panel".to_owned(),
+        }
+    };
+    match transport.send(control) {
+        Ok(()) => {
+            chat.feedback = if ban {
+                format!("Ban requested for {login}")
+            } else {
+                format!("10-minute timeout requested for {login}")
+            };
+        }
+        Err(error) => chat.feedback = format!("Could not moderate {login}: {error}"),
+    }
+}
+
+fn update_stream_operator_chat(
+    chat: Res<OperatorChatRuntime>,
+    mut rows: Query<(&mut StreamOperatorChatRow, &mut BackgroundColor)>,
+    mut row_text: StreamOperatorChatRowTextQuery,
+    mut input_text: StreamOperatorChatInputTextQuery,
+    mut selected_text: StreamOperatorChatSelectedTextQuery,
+) {
+    let visible: Vec<_> = chat
+        .lines
+        .iter()
+        .rev()
+        .take(OPERATOR_CHAT_VISIBLE_ROWS)
+        .rev()
+        .collect();
+    for (mut row, mut background) in &mut rows {
+        if let Some(line) = visible.get(row.slot) {
+            line.user_id.clone_into(&mut row.user_id);
+            line.login.clone_into(&mut row.login);
+            background.0 = if chat
+                .selected_user
+                .as_ref()
+                .is_some_and(|(user_id, _)| user_id == &line.user_id)
+            {
+                Color::srgb(0.12, 0.22, 0.31)
+            } else {
+                Color::NONE
+            };
+        } else {
+            row.user_id.clear();
+            row.login.clear();
+            background.0 = Color::NONE;
+        }
+    }
+    for (slot, mut text) in &mut row_text {
+        **text = visible.get(slot.0).map_or_else(String::new, |line| {
+            if line.is_system {
+                format!("◆ {}", line.message)
+            } else {
+                let badge = if line.is_broadcaster {
+                    "★"
+                } else if line.is_moderator {
+                    "◆"
+                } else {
+                    ""
+                };
+                format!("{badge}{}: {}", line.display_name, line.message)
+            }
+        });
+    }
+    if let Ok(mut text) = input_text.single_mut() {
+        **text = if chat.draft.is_empty() {
+            if chat.input_focused {
+                "▌".to_owned()
+            } else {
+                "Click to type a Twitch chat message…".to_owned()
+            }
+        } else if chat.input_focused {
+            format!("{}▌", chat.draft)
+        } else {
+            chat.draft.clone()
+        };
+    }
+    if let Ok(mut text) = selected_text.single_mut() {
+        let selected = chat.selected_user.as_ref().map_or_else(
+            || "Select a chat row to moderate".to_owned(),
+            |(_, login)| format!("Selected: {login}"),
+        );
+        **text = if chat.feedback.is_empty() {
+            selected
+        } else {
+            format!("{selected}\n{}", chat.feedback)
+        };
+    }
 }
 
 const fn camera_targets_primary_window(target: &RenderTarget) -> bool {
@@ -3129,6 +3821,17 @@ mod tests {
         assert_eq!(node.left, px(48));
         assert_eq!(node.bottom, px(42));
         assert_eq!(node.top, Val::Auto);
+        let mut chat_inputs = world.query_filtered::<Entity, With<StreamOperatorChatInput>>();
+        assert_eq!(chat_inputs.iter(world).count(), 1);
+        let mut chat_rows = world.query_filtered::<Entity, With<StreamOperatorChatRow>>();
+        assert_eq!(chat_rows.iter(world).count(), OPERATOR_CHAT_VISIBLE_ROWS);
+        let mut moderation = world.query_filtered::<Entity, Or<(
+            With<StreamOperatorChatTimeoutButton>,
+            With<StreamOperatorChatBanButton>,
+        )>>();
+        assert_eq!(moderation.iter(world).count(), 2);
+        let mut settings = world.query_filtered::<Entity, With<StreamOperatorSettingAction>>();
+        assert_eq!(settings.iter(world).count(), 12);
         let mut text = world.query::<&Text>();
         assert!(
             text.iter(world)

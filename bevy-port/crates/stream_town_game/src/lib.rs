@@ -793,6 +793,49 @@ struct TwitchConnection {
     fish_god_reward_id: Option<String>,
 }
 
+const OPERATOR_CHAT_HISTORY_CAPACITY: usize = 200;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OperatorChatLine {
+    user_id: String,
+    login: String,
+    display_name: String,
+    message: String,
+    is_broadcaster: bool,
+    is_moderator: bool,
+    is_system: bool,
+}
+
+#[derive(Resource, Default)]
+struct OperatorChatRuntime {
+    lines: VecDeque<OperatorChatLine>,
+    draft: String,
+    input_focused: bool,
+    selected_user: Option<(String, String)>,
+    feedback: String,
+}
+
+impl OperatorChatRuntime {
+    fn push(&mut self, line: OperatorChatLine) {
+        self.lines.push_back(line);
+        while self.lines.len() > OPERATOR_CHAT_HISTORY_CAPACITY {
+            self.lines.pop_front();
+        }
+    }
+
+    fn push_system(&mut self, message: impl Into<String>) {
+        self.push(OperatorChatLine {
+            user_id: String::new(),
+            login: "stream_town".to_owned(),
+            display_name: "Stream Town".to_owned(),
+            message: message.into(),
+            is_broadcaster: false,
+            is_moderator: false,
+            is_system: true,
+        });
+    }
+}
+
 impl Default for TwitchConnection {
     fn default() -> Self {
         Self {
@@ -3113,7 +3156,6 @@ struct ConvertedAnimationDriver {
 }
 
 struct ConvertedAnimationLayerDriver {
-    display_name: String,
     fallback_state: StableId,
     runtime: AnimationControllerRuntime,
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
@@ -3126,7 +3168,6 @@ struct ConvertedAnimationLayerDriver {
 
 #[derive(Clone)]
 struct ConvertedAnimationLayerTemplate {
-    display_name: String,
     fallback_state: StableId,
     nodes: BTreeMap<StableId, AnimationNodeIndex>,
 }
@@ -3134,7 +3175,6 @@ struct ConvertedAnimationLayerTemplate {
 struct CachedConvertedAnimation {
     graph: Handle<AnimationGraph>,
     layers: Vec<ConvertedAnimationLayerTemplate>,
-    clip_count: usize,
 }
 
 #[derive(Resource, Default)]
@@ -3294,6 +3334,7 @@ impl Plugin for StreamTownGamePlugin {
             .init_resource::<BuildingCommandQueue>()
             .init_resource::<BuildingPlacers>()
             .init_resource::<TwitchConnection>()
+            .init_resource::<OperatorChatRuntime>()
             .init_resource::<SelectedCell>()
             .init_resource::<SelectedActor>()
             .init_resource::<EnvironmentPresentation>()
@@ -13117,7 +13158,7 @@ fn spawn_secrets_overlays(commands: &mut Commands, render: &RenderAssets, config
                             spawn_secrets_account_column(
                                 columns,
                                 "BROADCASTER / STREAM ACCOUNT",
-                                "Separately authorizes channel:read:stream_key for the broadcaster login above. The stream key is fetched at launch and never saved.",
+                                "Separately authorizes stream-key access and moderation for the broadcaster login above. The stream key is never saved; operator timeouts and bans are performed by this streamer account, not the chat bot.",
                                 SecretsConnectionKind::Broadcast,
                                 SecretsAction::ToggleBroadcast,
                                 SecretsAction::AuthorizeBroadcaster,
@@ -23167,7 +23208,6 @@ fn attach_converted_animations(
                 AnimationControllerRuntime::in_state(controller, template.fallback_state.clone())
                     .ok()
                     .map(|runtime| ConvertedAnimationLayerDriver {
-                        display_name: template.display_name.clone(),
                         fallback_state: template.fallback_state.clone(),
                         runtime,
                         nodes: template.nodes.clone(),
@@ -23203,15 +23243,6 @@ fn attach_converted_animations(
         if !is_unbudgeted {
             remaining -= 1;
         }
-        info!(
-            actor = ?actor_root,
-            controller = %spec.controller,
-            state = %spec.state,
-            clips = cached.clip_count,
-            layers = controller.layers.len().max(1),
-            targets = targets.len(),
-            "attached translated Unity animation controller"
-        );
     }
 }
 
@@ -23624,7 +23655,6 @@ fn build_converted_animation(
             .map(|(clip, handle)| (clip.clone(), graph.add_clip(handle.clone(), 1.0, parent)))
             .collect();
         layers.push(ConvertedAnimationLayerTemplate {
-            display_name: layer.display_name,
             fallback_state: state,
             nodes,
         });
@@ -23639,7 +23669,6 @@ fn build_converted_animation(
     Some(CachedConvertedAnimation {
         graph: animation_graphs.add(graph),
         layers,
-        clip_count: converted.len(),
     })
 }
 
@@ -24914,11 +24943,6 @@ fn drive_native_animations(
             MovementAnimationState::Moving => driver.moving,
         };
         player.stop_all().play(node).repeat();
-        info!(
-            actor = ?driver.actor_root,
-            state = ?next,
-            "switched native animation state"
-        );
     }
 }
 
@@ -25072,16 +25096,6 @@ fn drive_converted_animations(
                 transition.as_ref(),
                 transition_playback,
             );
-            if let Some(stream_town_domain::AnimationTransitionOutcome::Entered(state)) =
-                &transition
-            {
-                info!(
-                    actor = ?actor_root,
-                    layer = %layer.display_name,
-                    state = %state,
-                    "translated animation controller entered state"
-                );
-            }
             if let Some(playback) = transition_playback {
                 begin_animation_crossfade(layer, playback, source_duration);
             }
@@ -25126,19 +25140,6 @@ fn drive_converted_animations(
                 );
             }
             let state_speed = layer.runtime.state_speed(controller).unwrap_or(1.0);
-            let changed = !same_animation_blend(&layer.active, &desired);
-            if changed {
-                info!(
-                    actor = ?actor_root,
-                    layer = %layer.display_name,
-                    state = %layer.runtime.current_state(),
-                    primary = %selection.first.clip,
-                    primary_weight = selection.first.weight,
-                    secondary = selection.second.as_ref().map(|motion| motion.clip.as_str()),
-                    secondary_weight = selection.second.as_ref().map(|motion| motion.weight),
-                    "applied translated animation blend"
-                );
-            }
             let destination = animation_playback_for_selection(
                 &selection,
                 &layer.nodes,
@@ -26131,19 +26132,6 @@ fn named_character_slot_ancestor<'a>(
         entity = parents.get(entity).ok()?.parent();
     }
     None
-}
-
-fn same_animation_blend(
-    left: &[(AnimationNodeIndex, f32)],
-    right: &[(AnimationNodeIndex, f32)],
-) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|((left_node, left_weight), (right_node, right_weight))| {
-                left_node == right_node && (left_weight - right_weight).abs() <= f32::EPSILON
-            })
 }
 
 #[allow(clippy::type_complexity)]
@@ -28612,6 +28600,7 @@ fn twitch_connection_input(
 fn poll_twitch_transport(
     mut connection: ResMut<TwitchConnection>,
     mut injected: ResMut<InjectedCommands>,
+    mut operator_chat: ResMut<OperatorChatRuntime>,
 ) {
     let events: Vec<_> = connection
         .transport
@@ -28620,6 +28609,19 @@ fn poll_twitch_transport(
         .flat_map(|transport| std::iter::from_fn(|| transport.try_recv()))
         .collect();
     for event in events {
+        match &event {
+            TwitchEvent::Chat(message) => operator_chat.push(OperatorChatLine {
+                user_id: message.user_id.clone(),
+                login: message.login.clone(),
+                display_name: message.display_name.clone(),
+                message: message.message.clone(),
+                is_broadcaster: message.is_broadcaster,
+                is_moderator: message.is_moderator,
+                is_system: false,
+            }),
+            TwitchEvent::Notice(message) => operator_chat.push_system(message.clone()),
+            TwitchEvent::Status(_) => {}
+        }
         handle_twitch_event(event, &mut connection, &mut injected);
     }
 }
@@ -28677,6 +28679,7 @@ fn handle_twitch_event(
                 }
             }
         }
+        TwitchEvent::Notice(_) => {}
     }
 }
 
@@ -39065,7 +39068,6 @@ mod tests {
         let presentation = embedded_presentation();
         let controller = presentation.controllers.values().next().unwrap();
         let mut layer = ConvertedAnimationLayerDriver {
-            display_name: "Base".into(),
             fallback_state: StableId::new("state:fallback").unwrap(),
             runtime: AnimationControllerRuntime::in_state(
                 controller,
@@ -45345,6 +45347,28 @@ mod tests {
         let dispatched = commands.0.pop_front().unwrap();
         assert_eq!(dispatched.actor_id, StableId::new("twitch:42").unwrap());
         assert_eq!(dispatched.command, ChatCommand::Join);
+    }
+
+    #[test]
+    fn operator_chat_history_is_bounded_and_keeps_the_newest_messages() {
+        let mut chat = OperatorChatRuntime::default();
+        for index in 0..(OPERATOR_CHAT_HISTORY_CAPACITY + 5) {
+            chat.push(OperatorChatLine {
+                user_id: index.to_string(),
+                login: format!("viewer{index}"),
+                display_name: format!("Viewer {index}"),
+                message: format!("message {index}"),
+                is_broadcaster: false,
+                is_moderator: false,
+                is_system: false,
+            });
+        }
+        assert_eq!(chat.lines.len(), OPERATOR_CHAT_HISTORY_CAPACITY);
+        assert_eq!(chat.lines.front().unwrap().message, "message 5");
+        assert_eq!(
+            chat.lines.back().unwrap().message,
+            format!("message {}", OPERATOR_CHAT_HISTORY_CAPACITY + 4)
+        );
     }
 
     #[test]

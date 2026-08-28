@@ -24,7 +24,6 @@ bevy_tidal = {
     git = "https://github.com/HumanBeanGames/bevy-tidal.git",
     rev = "d4e0f954a44df59da11435d030ec7ceebb60388d",
 }
-bevy-inspector-egui = "0.37.0"
 bevy_egui = "0.41.1"
 bevy_hanabi = { version = "0.19.0", default-features = false, features = ["2d", "3d"] }
 clap = { version = "4.5.54", features = ["derive"] }

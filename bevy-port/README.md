@@ -8,14 +8,13 @@ here.
 
 - `stream_town_game`: shipping Bevy application and an explicit 300-agent
   vertical-slice benchmark.
-- `stream_town_tools`: focused content, migration, world-generation, navigation,
-  Twitch, validation, and runtime tooling. Its catalog browser, validated
-  role and technology editors with shared undo/redo, multi-layer terrain,
-  foliage, occupancy, resource, and path lab, prefab/archetype browser,
-  material/texture and Animator-controller diagnostics, and Twitch
-  device-OAuth/vault diagnostics are functional. Its Runtime tab can launch or
-  attach to the game, inject validated commands, request save/load/frame
-  capture, and inspect stable world/session/profiling status.
+- `stream_town_tools`: focused content, migration, world-generation, and
+  validation tooling. Dedicated Buildings and Roles tabs provide complete,
+  template-based catalog creation with typed reference choices. Models + Assets
+  is a visual GLB/material/animation browser; Technology is a graph-first editor;
+  World + Nav previews the production generator without a redundant A* probe.
+  Runtime, player-settings, Twitch, and generic ECS-inspector tabs were removed
+  in favor of the shipping menus and local operator panel.
 - `stream_town_migrate`: Unity metadata/YAML inventory and validated legacy-save
   conversion.
 - `xtask`: repository validation and repeatable developer automation.
@@ -30,8 +29,10 @@ metadata editing. Catalog and stable-ID layout edits share undo/redo. Both
 written, reloaded, and compared before success is reported.
 
 The Game Authority tab edits the source-controlled simulation configuration and
-can also write a machine-local runtime override. The Roles tab covers every
-persisted balance, station, target, ability, animation, and equipment binding.
+can also write a machine-local runtime override. The Buildings and Roles tabs
+cover every persisted balance, station, target, ability, animation, equipment,
+production, storage, projectile, footprint, and model binding through validated
+catalog-backed choices.
 The World + Nav tab edits the Unity-scale terrain inputs and every converted
 foliage noise layer, then renders elevation, occupancy, resource, and foliage
 previews using the production deterministic generator. See
@@ -103,12 +104,11 @@ On Windows, `scripts\launch-tools.ps1` launches the authoring suite from any
 working directory. Pass `-Release` for an optimized build or `-ValidateOnly`
 for a headless authoring-data check.
 
-The tools Runtime tab launches the game with an opt-in atomic control directory
-at `.stream-town/runtime-console`. A separately launched game can be attached by
-setting `STREAM_TOWN_RUNTIME_CONSOLE=1`, or both processes can share an explicit
-`STREAM_TOWN_RUNTIME_CONSOLE_DIR`. The channel carries stable IDs, actions, and
-status only; Twitch OAuth tokens remain exclusively in the operating-system
-credential vault. Normal game launches do not read or write console files.
+The old external Runtime tab is no longer exposed. The opt-in atomic runtime
+console remains available to automated diagnostics through
+`STREAM_TOWN_RUNTIME_CONSOLE=1`, but normal game launches do not read or write
+its files. Operator-facing telemetry and controls live in the local operator
+window instead.
 
 The Windows packager builds optimized game and tools executables, bundles the
 validated runtime assets, README, GPL license, replaceable LGPL
@@ -204,15 +204,15 @@ Player preferences are written atomically to `.stream-town/settings.ron` with a
 backup. On first launch, the Windows game imports Unity's
 `Documents/Panda Belly/Stream Town/SettingsData.json` when available; set
 `STREAM_TOWN_PLAYER_SETTINGS_PATH` or `STREAM_TOWN_UNITY_SETTINGS_PATH` to use
-explicit paths. The Settings tab in `stream_town_tools` and the shipping Main
-Menu/in-game Escape panel edit and validate the native file. The runtime panel
+explicit paths. The shipping Main Menu/in-game settings surfaces and local
+operator panel edit and validate the native file. The runtime panel
 extends Unity's authored Video, Audio, Gameplay, and Connection shell with a
 focused Accessibility tab, pointer controls, Apply, Defaults, Back, and the
 unsaved-draft confirmation. Value rows keep stable UI entities while a draft is
 edited, so changing one audio gain updates only that readout instead of rebuilding
 and flashing every row.
-The Connection tab reports runtime Twitch status while OAuth and secret storage
-remain in the focused tools application.
+Twitch OAuth and secret storage are handled by the protected Main Menu > Secrets
+screen, not the external authoring suite.
 Window mode/resolution, VSync/FPS limit, MSAA/post-process AA,
 shadows/shadow-map size, SSAO, brightness/gamma, four independent audio gains,
 the authored camera projection, name/building-health overlays, the Unity
@@ -236,23 +236,24 @@ inter-track waits are preserved without adding licensed media.
 The cloud material also filters its high-frequency authored noise at subpixel
 sizes, matching Unity's generated mipmaps and preventing menu/credits shimmer.
 
-Twitch is disabled in the checked-in configuration. The tools application writes
+Twitch is disabled in the checked-in configuration. Main Menu > Secrets writes
 public settings to `.stream-town/config.ron`; OAuth access and refresh tokens are
 stored only in the operating-system credential vault. The game validates and
 proactively refreshes the token before starting IRC, revalidates hourly, rebuilds
 the IRC connection after token rotation, and enables text commands as soon as the
-authorized bot has joined the configured channel. The Twitch tab can verify a real channel join, resolve
-operator logins to stable numeric IDs, and capture a live Channel Points reward
-ID. See [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
+authorized bot has joined the configured channel. See
+[`TWITCH_SETUP.md`](../TWITCH_SETUP.md).
 The bot's `!help` response links to the complete, versioned
 [`TWITCH_COMMANDS.md`](../TWITCH_COMMANDS.md) reference. Invalid command attempts
 receive a concise reminder to use `!help`; ordinary non-command chat is ignored.
-On Windows, the same Twitch tab can separately authorize the configured channel
-with `channel:read:stream_key` and enable direct broadcasting. The default
+On Windows, Main Menu > Secrets separately authorizes the configured streamer
+with `channel:read:stream_key` and `moderator:manage:banned_users`. Direct
+broadcasting and operator moderation therefore use the streamer grant, while the
+bot retains only `chat:read` and `chat:edit`. The default
 stream-only mode renders the town once into a full-resolution offscreen target,
 moves that GPU readback allocation directly into a latest-frame mailbox, and
-replaces the local game window with a separate 960x540 operator dashboard and a
-320x180 preview. The optional headed mode uses Windows Graphics Capture instead.
+replaces the local game window with a separate 1100x680 operator dashboard and a
+low-resolution preview. The optional headed mode uses Windows Graphics Capture instead.
 WASAPI application loopback captures only Stream Town's Bevy audio. In
 stream-only mode, Bevy Tidal's bounded pre-monitor PCM tap feeds music directly
 into that encoder mix while its local monitor is silent. FFmpeg's FLV muxer
@@ -273,8 +274,10 @@ New/Load Town requires an explicit confirmation that the internal stream may go
 live. Yes authorizes the destination while loading, but does not open RTMP,
 start media clocks, or capture audio/video until the truthful world-reveal gate
 has retired the loading cover and inserted `GameplayReady`. Gameplay then owns a
-separate local operator panel with the sole Live/Not Live toggle and detailed
-health telemetry. Stream-only mode adds a 320x180 preview, redirects the town to
+separate local operator panel with the Live/Not Live toggle, detailed health
+telemetry, persistent local settings, and a Twitch transcript. The bot account
+sends operator messages; selecting a viewer enables timeout/ban requests through
+the independently authorized streamer account. Stream-only mode adds a preview, redirects the town to
 the full-resolution offscreen target, and hides the original game window;
 headed mode leaves the full game visible. The operator surface is deliberately
 absent from frames sent to Twitch. There is no floating status badge or in-game

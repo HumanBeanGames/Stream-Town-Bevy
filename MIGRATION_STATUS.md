@@ -731,36 +731,33 @@ mistaken for production-ready systems.
 - A full source/settings search found no per-command cooldown state in the
   shipping Unity Twitch dispatcher; its runtime data retains only last-command
   diagnostics. That unauthored subsystem is no longer listed as parity work.
-- A focused Bevy/egui tool application with the planned eight work areas and an
-  embedded ECS inspector. It loads the real catalogs, browses stable building and
-  role references plus prefab archetypes, GLB variants, materials, texture slots,
-  shader provenance, and Animator states/transitions, provides grouped
-  technology search/topology plus validated metadata/prerequisite editing with
-  undo/redo, and renders deterministic world occupancy, resources, and planned
-  paths. Twitch setup is connected to the OS vault; the general runtime panel
-  remains a diagnostic shell rather than a connected control surface.
+- A focused Bevy/egui authoring application with eight useful work areas:
+  Migration, Game Authority, Models + Assets, Buildings, Roles, Technology,
+  World + Nav, and Validation. The generic ECS inspector and duplicate Runtime,
+  Player Settings, and Twitch tabs have been removed. Building and role creation
+  starts from complete validated templates and uses catalog/converted-hierarchy
+  choices instead of fragile reference strings. The asset browser is limited to
+  GLB, renderer/material, texture, controller, and clip inspection.
 - Windows CI covering formatting, compilation, Clippy, tests, and repository
   validation. The focused tools app now runs repository validation and optimized
   Windows packaging as real background jobs. The package workflow atomically
   produces a validated ZIP containing the game/tools executables, runtime
   assets, README, and GPL license; CI publishes the green archive as an
   artifact.
-- The focused tools Runtime tab now uses a versioned, opt-in local control
-  channel instead of a diagnostic shell. It can launch or attach to the Bevy
-  game, inject validated chat commands under a stable debug actor ID, request
-  save/load/frame capture/Main Menu/exit actions, and show live state, world
-  identity, actor/building/resource counts, Twitch status, acknowledgements,
-  and rolling average/p95 frame time. Atomic JSON requests/status never contain
-  OAuth credentials or Bevy entity IDs.
+- The versioned, opt-in runtime-console channel remains available for automated
+  diagnostics, but is no longer exposed as a duplicate authoring tab. Live
+  telemetry and operator controls now live in the local operator window.
 - The technology graph tool is now a complete persistent graph-authoring
   workflow. The YAML fallback imports Unity's authored positions for all 363
   nodes and 20 groups into a versioned stable-ID sidecar. The canvas renders
   cross-group edges and supports pan/zoom, node and group dragging, group
   resizing, search highlighting/focus, fit-all, deterministic auto-layout, and
-  a clickable minimap with a live viewport. Catalog and layout edits share one
-  undo/redo history. Both files use validated atomic writes, backups, reloads,
-  and round-trip comparison; cycle and dangling-reference checks still gate
-  every catalog mutation.
+  a clickable minimap with a live viewport. The graph is the primary surface and
+  its adjacent inspector exposes the complete node: requirements, unlocks,
+  building caps/ages/cost reductions, storage, and global/role stat effects.
+  Catalog and layout edits share one undo/redo history. Both files use validated
+  atomic writes, backups, reloads, and round-trip comparison; cycle and
+  dangling-reference checks still gate every catalog mutation.
 - The external authoring suite now separates authoritative game configuration
   from per-player settings. It edits every shipping role stat/reference and
   equipment binding, all terrain scale/resource-density inputs, all converted
@@ -768,9 +765,16 @@ mistaken for production-ready systems.
   Role, foliage, and technology edits share catalog-wide validation and
   undo/redo. Project configuration and the content catalog use atomic temporary
   files, `.bak` recovery copies, and reload/compare verification. The world lab
-  previews elevation/water, occupancy, resources, selected foliage layers, and
-  A* routes through the production deterministic generator. A Windows launcher
+  previews elevation/water, occupancy, resources, and selected foliage layers;
+  the redundant single-path A* probe is removed. A Windows launcher
   and a monitor-free `--validate-authoring` mode are included.
+- The stream-only operator window now includes a bounded live Twitch transcript,
+  bot-authored chat input, selectable viewers, streamer-authenticated ten-minute
+  timeout and ban actions, plus persistent local brightness/audio/shadow/motion
+  controls. Bot OAuth remains limited to `chat:read`/`chat:edit`; the distinct
+  broadcaster grant owns `channel:read:stream_key` and
+  `moderator:manage:banned_users`. High-volume translated-animation transition
+  logs have been removed from ordinary play.
 - Generated ground cover now follows Unity's mesh/material batching intent
   through Bevy's native opaque and shadow instancing instead of duplicating
   source geometry. The exact 16,581 generated records map to 12 GPU mesh groups

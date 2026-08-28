@@ -33,10 +33,10 @@ cargo run -p stream_town_tools -- --validate-authoring
 | Workflow | Project data | Local/runtime data |
 |---|---|---|
 | Game Authority and World + Nav | `assets/config/game.ron` | `.stream-town/config.ron` |
-| Roles and foliage | `assets/content/catalog.ron` | None |
+| Buildings, roles, and foliage | `assets/content/catalog.ron` | None |
 | Technology content and graph layout | `assets/content/catalog.ron`, `assets/content/technology_layout.ron` | None |
-| Player Settings | None | the platform player-settings path shown in the tool |
-| Twitch credentials | public connection fields only | OS credential vault |
+| Player settings | None | `.stream-town/settings.ron`, edited from the local operator panel or game menus |
+| Twitch accounts and credentials | None | Main Menu > Secrets and the OS credential vault |
 
 `Save project baseline` changes the source-controlled defaults embedded in the
 next game build. `Write local runtime override` is intended for rapid testing;
@@ -47,13 +47,23 @@ tool never writes Twitch access or refresh tokens to RON.
 
 - Game Authority edits window, boot, simulation cadence, starting resources,
   capacities, time-of-day lighting, and emission settings.
+- Models + Assets is a focused visual browser for converted GLB variants,
+  renderer/material bindings, textures, Animator controllers, and clips. It no
+  longer duplicates building, role, or technology records.
+- Buildings provides template-based creation, visual footprint/GLB inspection,
+  construction and level costs, storage, role capacity, passive production,
+  station and target settings, projectiles, and model hierarchy bindings. Every
+  stable reference is chosen from the loaded catalog.
 - Roles edits every shipping role's balance/progression values, stable resource,
   station, target and ability references, Animator action contracts, character
-  body nodes, hand items, helmets, and carry behavior. Roles can be duplicated;
+  body nodes, hand items, helmets, and carry behavior. Role/model fields use
+  catalog and converted-hierarchy choices instead of free-form reference text. Roles can be duplicated;
   deletion is allowed only when the full catalog has no remaining reference.
-- Technology edits groups and nodes, descriptions, age/tier placement,
-  prerequisites, explicit unlocks, objectives, icons, and availability. Its
-  canvas shows the complete graph: use the wheel to zoom, middle-drag or
+- Technology makes the graph canvas the primary surface and keeps the complete
+  selected-node inspector beside it. It edits groups, descriptions, age/tier
+  placement, prerequisites, explicit unlocks, objectives and requirements,
+  icons, building caps/unlocks/cost reductions, storage boosts, building ages,
+  global/role stat boosts, and availability. Use the wheel to zoom, middle-drag or
   Space+primary-drag to pan, drag nodes or group headers to move them, and drag
   a group's lower-right handle to resize it. Search highlights every matching
   node and selecting a search result focuses it. Fit-all, deterministic
@@ -63,14 +73,12 @@ tool never writes Twitch access or refresh tokens to RON.
   levels and resource density plus every foliage layer's Unity-compatible noise,
   habitat, spacing, material, GLB variants, and base scales. Preview modes show
   elevation/water, navigation occupancy, generated resource kinds, and selected
-  foliage layers. Path probes call the production A* implementation.
-- Player Settings edits the complete video, audio, camera/input, interface, and
-  autosave schema used by the game.
-- Migration, Content, Runtime, Twitch, Validation, and ECS Inspector retain the
-  existing conversion, diagnostics, live-control, OAuth, packaging, and
-  inspection workflows. The Twitch tab validates/refreshes the vault token,
-  proves an authenticated channel join, resolves logins to stable game-master
-  IDs, and captures the next redeemed Channel Points reward ID.
+  foliage layers. The redundant point-to-point A* probe has been removed.
+- Migration and Validation retain conversion, data-integrity, and packaging
+  workflows. Runtime control, player settings, Twitch setup, and inspection are
+  no longer duplicate tool tabs: Twitch setup lives in Main Menu > Secrets, and
+  the local operator panel owns stream telemetry, player settings, Twitch chat,
+  and moderation.
 
 The account-bound Twitch setup sequence is documented in
 [`TWITCH_SETUP.md`](../TWITCH_SETUP.md).

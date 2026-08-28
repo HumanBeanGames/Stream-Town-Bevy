@@ -61,7 +61,10 @@ pub(crate) fn show(
     selected_group: Option<&StableId>,
     search: &str,
 ) -> TechnologyGraphCanvasOutput {
-    let desired = egui::vec2(ui.available_width().max(320.0), 510.0);
+    let desired = egui::vec2(
+        ui.available_width().max(320.0),
+        ui.available_height().clamp(480.0, 900.0),
+    );
     let (rect, background_response) =
         ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);

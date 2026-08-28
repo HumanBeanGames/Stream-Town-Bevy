@@ -13,14 +13,14 @@ mod technology_graph;
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, EguiStartupSet, egui};
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use stream_town_domain::{
-    BroadcastEncoderPreference, BuildingHealthDisplayMode, ChatCommand, ContentCatalog,
-    DisplayMode, FoliageHabitat, FoliageLayerDef, GameConfig, GeneratedWorld, GridPos,
-    NameDisplayMode, PlayerSettings, PlayerSettingsStore, PostProcessAntiAliasing,
-    PresentationCatalog, RoleDef, RoleEquipmentDef, RuntimeConsoleAction, RuntimeConsoleRequest,
-    RuntimeConsoleStatus, RuntimeConsoleStore, StableId, TechGroup, TechNode,
-    TechnologyGraphLayout,
+    ArchetypeKind, BroadcastEncoderPreference, BuildingDef, BuildingHealthDisplayMode, ChatCommand,
+    ContentCatalog, DisplayMode, FoliageHabitat, FoliageLayerDef, GameConfig, GeneratedWorld,
+    GridPos, NameDisplayMode, PassiveResourceContribution, PlayerSettings, PlayerSettingsStore,
+    PostProcessAntiAliasing, PresentationCatalog, ProjectileShooterDef, RoleDef, RoleEquipmentDef,
+    RoleSlotContribution, RuntimeConsoleAction, RuntimeConsoleRequest, RuntimeConsoleStatus,
+    RuntimeConsoleStore, StableId, StationDef, StorageContribution, TargetingScoreDef, TechGroup,
+    TechNode, TechnologyGraphLayout,
 };
 #[cfg(target_os = "windows")]
 use stream_town_game::direct_broadcast::{BroadcastPrerequisites, inspect_broadcast_prerequisites};
@@ -35,45 +35,36 @@ enum ToolTab {
     #[default]
     Migration,
     Authority,
-    Content,
+    Assets,
+    Buildings,
     Roles,
     Technology,
     World,
-    Runtime,
-    Settings,
-    Twitch,
     Validation,
-    Inspector,
 }
 
 impl ToolTab {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 8] = [
         Self::Migration,
         Self::Authority,
-        Self::Content,
+        Self::Assets,
+        Self::Buildings,
         Self::Roles,
         Self::Technology,
         Self::World,
-        Self::Runtime,
-        Self::Settings,
-        Self::Twitch,
         Self::Validation,
-        Self::Inspector,
     ];
 
     const fn label(self) -> &'static str {
         match self {
             Self::Migration => "Migration",
             Self::Authority => "Game Authority",
-            Self::Content => "Content",
+            Self::Assets => "Models + Assets",
+            Self::Buildings => "Buildings",
             Self::Roles => "Roles",
             Self::Technology => "Technology",
             Self::World => "World + Nav",
-            Self::Runtime => "Runtime",
-            Self::Settings => "Settings",
-            Self::Twitch => "Twitch",
             Self::Validation => "Validation",
-            Self::Inspector => "ECS Inspector",
         }
     }
 }
@@ -90,9 +81,6 @@ struct ToolState {
     catalog: ContentCatalog,
     presentation: PresentationCatalog,
     generated_world: Option<GeneratedWorld>,
-    preview_path: Vec<GridPos>,
-    path_start: GridPos,
-    path_goal: GridPos,
     technology_search: String,
     selected_group: Option<StableId>,
     technology_draft: Option<TechnologyDraft>,
@@ -100,6 +88,10 @@ struct ToolState {
     technology_layout: TechnologyGraphLayout,
     technology_layout_path: String,
     technology_graph_view: TechnologyGraphViewState,
+    selected_building: Option<StableId>,
+    building_draft: Option<BuildingDraft>,
+    new_building_id: String,
+    new_building_name: String,
     role_search: String,
     selected_role: Option<StableId>,
     role_draft: Option<RoleDraft>,
@@ -170,6 +162,7 @@ enum ToolJobEvent {
 #[derive(Clone)]
 struct TechnologyDraft {
     id: StableId,
+    value: TechNode,
     display_name: String,
     description: String,
     age: String,
@@ -198,6 +191,12 @@ struct RoleDraft {
     helmet_node: String,
     carry_animation: String,
     left_hand_permanent: bool,
+}
+
+#[derive(Clone)]
+struct BuildingDraft {
+    id: StableId,
+    value: BuildingDef,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -248,6 +247,10 @@ impl Default for ToolState {
             .as_ref()
             .and_then(|id| role_draft(&catalog, id));
         let selected_foliage = catalog.foliage.first().map(|layer| layer.id.clone());
+        let selected_building = catalog.buildings.keys().next().cloned();
+        let building_draft = selected_building
+            .as_ref()
+            .and_then(|id| building_draft(&catalog, id));
         let foliage_draft = selected_foliage.as_ref().and_then(|id| {
             catalog
                 .foliage
@@ -287,9 +290,6 @@ impl Default for ToolState {
             catalog,
             presentation,
             generated_world: None,
-            preview_path: Vec::new(),
-            path_start: GridPos { x: 20, z: 32 },
-            path_goal: GridPos { x: 44, z: 32 },
             technology_search: String::new(),
             selected_group,
             technology_draft: None,
@@ -297,6 +297,10 @@ impl Default for ToolState {
             technology_layout,
             technology_layout_path: default_technology_layout_path().display().to_string(),
             technology_graph_view: TechnologyGraphViewState::default(),
+            selected_building,
+            building_draft,
+            new_building_id: "building:new".to_owned(),
+            new_building_name: "New Building".to_owned(),
             role_search: String::new(),
             selected_role,
             role_draft,
@@ -348,9 +352,7 @@ fn main() -> anyhow::Result<()> {
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
-        .add_plugins(WorldInspectorPlugin::new().run_if(resource_equals(ToolInspector(true))))
         .init_resource::<ToolState>()
-        .insert_resource(ToolInspector(false))
         .add_systems(
             PreStartup,
             setup_camera.before(EguiStartupSet::InitContexts),
@@ -360,18 +362,11 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Resource, Clone, Copy, Eq, PartialEq)]
-struct ToolInspector(bool);
-
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
-fn tools_ui(
-    mut contexts: EguiContexts,
-    mut state: ResMut<ToolState>,
-    mut inspector: ResMut<ToolInspector>,
-) -> Result {
+fn tools_ui(mut contexts: EguiContexts, mut state: ResMut<ToolState>) -> Result {
     poll_twitch_tool_events(&mut state);
     poll_tool_job_events(&mut state);
     poll_runtime_console(&mut state);
@@ -390,7 +385,6 @@ fn tools_ui(
             for tab in ToolTab::ALL {
                 if ui.selectable_label(state.tab == tab, tab.label()).clicked() {
                     state.tab = tab;
-                    inspector.0 = tab == ToolTab::Inspector;
                 }
             }
         });
@@ -401,15 +395,12 @@ fn tools_ui(
     egui::CentralPanel::default().show(&mut viewport_ui, |ui| match state.tab {
         ToolTab::Migration => migration_tab(ui, &mut state),
         ToolTab::Authority => authority_tab(ui, &mut state),
-        ToolTab::Content => content_tab(ui, &state),
+        ToolTab::Assets => content_tab(ui, &state),
+        ToolTab::Buildings => buildings_tab(ui, &mut state),
         ToolTab::Roles => roles_tab(ui, &mut state),
         ToolTab::Technology => technology_tab(ui, &mut state),
         ToolTab::World => world_tab(ui, &mut state),
-        ToolTab::Runtime => runtime_tab(ui, &mut state),
-        ToolTab::Settings => settings_tab(ui, &mut state),
-        ToolTab::Twitch => twitch_tab(ui, &mut state),
         ToolTab::Validation => validation_tab(ui, &mut state),
-        ToolTab::Inspector => inspector_tab(ui),
     });
     Ok(())
 }
@@ -628,6 +619,124 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 }
 
 fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
+    ui.heading("Models and presentation assets");
+    ui.label(
+        "Inspect converted GLB scenes, renderer/material bindings, animation controllers, and clips. Gameplay content is authored in its dedicated Building, Role, Technology, and World tabs.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("Archetypes: {}", state.catalog.archetypes.len()));
+        ui.separator();
+        ui.label(format!(
+            "GLB variants: {}",
+            state
+                .catalog
+                .archetypes
+                .values()
+                .map(|archetype| archetype.scenes.len())
+                .sum::<usize>()
+        ));
+        ui.separator();
+        ui.label(format!("Materials: {}", state.presentation.materials.len()));
+        ui.separator();
+        ui.label(format!("Textures: {}", state.presentation.textures.len()));
+        ui.separator();
+        ui.label(format!(
+            "Controllers: {}",
+            state.presentation.controllers.len()
+        ));
+        ui.separator();
+        ui.label(format!("Clips: {}", state.presentation.clips.len()));
+    });
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.collapsing("Prefab archetypes and GLB variants", |ui| {
+            for (id, archetype) in &state.catalog.archetypes {
+                ui.collapsing(format!("{}  ({id})", archetype.display_name), |ui| {
+                    ui.label(format!("Kind: {:?}", archetype.kind));
+                    ui.monospace(format!("Unity source: {}", archetype.source_path));
+                    for scene in &archetype.scenes {
+                        ui.horizontal(|ui| {
+                            ui.label(if scene.is_default { "●" } else { "○" });
+                            ui.monospace(&scene.asset_path);
+                        });
+                    }
+                    if let Some(bindings) = state
+                        .presentation
+                        .prefab_renderer_materials
+                        .get(&archetype.source_guid)
+                    {
+                        ui.label(format!("{} renderer binding(s)", bindings.len()));
+                    }
+                });
+            }
+        });
+        ui.collapsing("Materials and texture bindings", |ui| {
+            for (id, material) in &state.presentation.materials {
+                ui.collapsing(format!("{}  ({id})", material.display_name), |ui| {
+                    let color: egui::Color32 = egui::Rgba::from_rgba_unmultiplied(
+                        material.base_color[0].clamp(0.0, 1.0),
+                        material.base_color[1].clamp(0.0, 1.0),
+                        material.base_color[2].clamp(0.0, 1.0),
+                        material.base_color[3].clamp(0.0, 1.0),
+                    )
+                    .into();
+                    ui.colored_label(color, "████  authored base colour");
+                    ui.monospace(format!("Unity source: {}", material.source_path));
+                    ui.label(format!(
+                        "Metallic {:.2} · roughness {:.2} · {:?}",
+                        material.metallic, material.perceptual_roughness, material.alpha_mode
+                    ));
+                    for (slot, texture) in &material.textures {
+                        let path = state
+                            .presentation
+                            .textures
+                            .get(texture)
+                            .map_or("missing", |texture| texture.asset_path.as_str());
+                        ui.monospace(format!("{slot}: {path}"));
+                    }
+                });
+            }
+        });
+        ui.collapsing("Animation controllers and clips", |ui| {
+            for (id, controller) in &state.presentation.controllers {
+                ui.collapsing(format!("{}  ({id})", controller.display_name), |ui| {
+                    ui.monospace(format!("Unity source: {}", controller.source_path));
+                    ui.label(format!(
+                        "{} layers · {} states · {} transitions · {} parameters",
+                        controller.layers.len(),
+                        controller.states.len(),
+                        controller.transitions.len(),
+                        controller.parameters.len()
+                    ));
+                    for state_def in controller.states.values() {
+                        ui.monospace(format!(
+                            "{} · {:.2}x · {} motion(s)",
+                            state_def.display_name,
+                            state_def.speed,
+                            state_def.motions.len()
+                        ));
+                    }
+                });
+            }
+            ui.separator();
+            for (id, clip) in &state.presentation.clips {
+                ui.collapsing(format!("{}  ({id})", clip.display_name), |ui| {
+                    ui.monospace(format!("Unity source: {}", clip.source_path));
+                    ui.label(format!(
+                        "{:.3}s · {:.1} Hz · {} tracks · {} events · looping {}",
+                        clip.duration_seconds,
+                        clip.sample_rate,
+                        clip.transform_tracks.len(),
+                        clip.events.len(),
+                        clip.looping
+                    ));
+                });
+            }
+        });
+    });
+}
+
+#[allow(dead_code)]
+fn legacy_content_tab(ui: &mut egui::Ui, state: &ToolState) {
     let converted_clips = state
         .presentation
         .clips
@@ -1152,7 +1261,730 @@ fn content_tab(ui: &mut egui::Ui, state: &ToolState) {
     });
 }
 
+fn buildings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Building authoring");
+    ui.label(
+        "Create a building from a complete shipping template, choose its model archetype visually, and edit gameplay references without typing stable IDs.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(!state.undo_authoring.is_empty(), egui::Button::new("Undo"))
+            .clicked()
+        {
+            undo_authoring_edit(state);
+        }
+        if ui
+            .add_enabled(!state.redo_authoring.is_empty(), egui::Button::new("Redo"))
+            .clicked()
+        {
+            redo_authoring_edit(state);
+        }
+        if ui.button("Save catalog").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved validated building catalog to {}", path.display()),
+                Err(error) => format!("Could not save building catalog: {error:#}"),
+            };
+        }
+    });
+    let building_choices: Vec<_> = state
+        .catalog
+        .buildings
+        .iter()
+        .map(|(id, building)| (id.clone(), building.display_name.clone()))
+        .collect();
+    let mut changed = false;
+    egui::ComboBox::from_label("Building")
+        .selected_text(
+            state
+                .selected_building
+                .as_ref()
+                .and_then(|id| state.catalog.buildings.get(id))
+                .map_or("Select building", |building| building.display_name.as_str()),
+        )
+        .show_ui(ui, |ui| {
+            for (id, name) in &building_choices {
+                changed |= ui
+                    .selectable_value(&mut state.selected_building, Some(id.clone()), name)
+                    .changed();
+            }
+        });
+    if changed {
+        refresh_building_draft(state);
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label("New stable ID");
+        ui.text_edit_singleline(&mut state.new_building_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_building_name);
+        if ui
+            .add_enabled(
+                state.selected_building.is_some(),
+                egui::Button::new("Create from selected"),
+            )
+            .on_hover_text("Copies every model, balance, station, and presentation field")
+            .clicked()
+        {
+            state.status = match duplicate_selected_building(state) {
+                Ok(()) => "Created a complete building draft from the selected template".to_owned(),
+                Err(error) => format!("Building creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(
+                state.selected_building.is_some(),
+                egui::Button::new("Delete"),
+            )
+            .clicked()
+        {
+            state.status = match delete_selected_building(state) {
+                Ok(()) => "Deleted unreferenced building".to_owned(),
+                Err(error) => format!("Building deletion rejected: {error}"),
+            };
+        }
+    });
+
+    let archetype_choices: Vec<_> = state
+        .catalog
+        .archetypes
+        .iter()
+        .filter(|(_, archetype)| archetype.kind == ArchetypeKind::Building)
+        .map(|(id, archetype)| (id.clone(), archetype.display_name.clone()))
+        .collect();
+    let resources = resource_choices(&state.catalog);
+    let roles: Vec<_> = state
+        .catalog
+        .roles
+        .iter()
+        .map(|(id, role)| (id.clone(), role.display_name.clone()))
+        .collect();
+    let station_kinds = station_kind_choices(&state.catalog);
+    let target_kinds = target_kind_choices(&state.catalog);
+    let model_nodes = building_model_node_choices(&state.catalog);
+    let projectile_pools = projectile_pool_choices(&state.catalog);
+    let mut apply = false;
+    let mut reset = false;
+    if let Some(draft) = state.building_draft.as_mut() {
+        ui.separator();
+        ui.monospace(draft.id.to_string());
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.columns(2, |columns| {
+                columns[0].label("Display name");
+                columns[0].text_edit_singleline(&mut draft.value.display_name);
+                stable_id_required_choice(
+                    &mut columns[0],
+                    "Model archetype",
+                    &mut draft.value.archetype,
+                    &archetype_choices,
+                );
+                columns[0].horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut draft.value.footprint[0])
+                            .range(1..=64)
+                            .prefix("Width "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut draft.value.footprint[1])
+                            .range(1..=64)
+                            .prefix("Depth "),
+                    );
+                    ui.checkbox(&mut draft.value.placeable, "Placeable");
+                    ui.checkbox(&mut draft.value.can_level, "Can level");
+                });
+                columns[0].add(
+                    egui::DragValue::new(&mut draft.value.level_cost_multiplier_per_thousand)
+                        .range(1..=100_000)
+                        .prefix("Level cost multiplier /1000 "),
+                );
+                draw_building_visual(&mut columns[1], &draft.value, &state.catalog);
+            });
+            ui.collapsing("Construction and level costs", |ui| {
+                stable_u32_map_editor(ui, "Construction cost", &mut draft.value.cost, &resources);
+                stable_u32_map_editor(
+                    ui,
+                    "Per-level cost",
+                    &mut draft.value.level_cost,
+                    &resources,
+                );
+            });
+            ui.collapsing("Storage", |ui| {
+                let mut remove = None;
+                for (index, storage) in draft.value.storage.iter_mut().enumerate() {
+                    ui.horizontal_wrapped(|ui| {
+                        stable_id_required_choice(
+                            ui,
+                            "Resource",
+                            &mut storage.resource,
+                            &resources,
+                        );
+                        ui.add(egui::DragValue::new(&mut storage.base_amount).prefix("Base "));
+                        ui.add(
+                            egui::DragValue::new(&mut storage.increment_amount)
+                                .prefix("Per level "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut storage.level_multiplier_per_thousand)
+                                .prefix("Multiplier /1000 "),
+                        );
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = remove {
+                    draft.value.storage.remove(index);
+                }
+                if ui.button("Add storage contribution").clicked()
+                    && let Some((resource, _)) = resources.first()
+                {
+                    draft.value.storage.push(StorageContribution {
+                        resource: resource.clone(),
+                        base_amount: 100,
+                        increment_amount: 0,
+                        level_multiplier_per_thousand: 1_000,
+                    });
+                }
+            });
+            ui.collapsing("Role capacity", |ui| {
+                let mut remove = None;
+                for (index, slot) in draft.value.role_slots.iter_mut().enumerate() {
+                    ui.horizontal_wrapped(|ui| {
+                        stable_id_required_choice(ui, "Role", &mut slot.role, &roles);
+                        ui.add(egui::DragValue::new(&mut slot.base_amount).prefix("Base slots "));
+                        ui.add(
+                            egui::DragValue::new(&mut slot.increment_amount).prefix("Per level "),
+                        );
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = remove {
+                    draft.value.role_slots.remove(index);
+                }
+                if ui.button("Add role capacity").clicked()
+                    && let Some((role, _)) = roles.first()
+                {
+                    draft.value.role_slots.push(RoleSlotContribution {
+                        role: role.clone(),
+                        base_amount: 1,
+                        increment_amount: 0,
+                    });
+                }
+            });
+            ui.collapsing("Passive production", |ui| {
+                let mut remove = None;
+                for (index, income) in draft.value.passive_resources.iter_mut().enumerate() {
+                    ui.horizontal_wrapped(|ui| {
+                        stable_id_required_choice(ui, "Resource", &mut income.resource, &resources);
+                        ui.add(
+                            egui::DragValue::new(&mut income.base_milli_per_second)
+                                .prefix("Base milli/s "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut income.increment_milli_per_level)
+                                .prefix("Per level "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut income.level_event_repetitions)
+                                .prefix("Callbacks "),
+                        );
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = remove {
+                    draft.value.passive_resources.remove(index);
+                }
+                if ui.button("Add passive resource").clicked()
+                    && let Some((resource, _)) = resources.first()
+                {
+                    draft
+                        .value
+                        .passive_resources
+                        .push(PassiveResourceContribution {
+                            resource: resource.clone(),
+                            base_milli_per_second: 1_000,
+                            increment_milli_per_level: 0,
+                            level_event_repetitions: 1,
+                        });
+                }
+            });
+            ui.collapsing("Station and target selection", |ui| {
+                let mut enabled = draft.value.station.is_some();
+                if ui
+                    .checkbox(&mut enabled, "Acts as a work station")
+                    .changed()
+                {
+                    draft.value.station = enabled.then(|| StationDef {
+                        accepts_all_roles: false,
+                        accepted_role_kinds: BTreeSet::new(),
+                        targets_all: false,
+                        target_kinds: BTreeSet::new(),
+                        max_targets: 1,
+                        update_milliseconds: 1_000,
+                        search_range_milli_cells: 10_000,
+                    });
+                }
+                if let Some(station) = draft.value.station.as_mut() {
+                    ui.checkbox(&mut station.accepts_all_roles, "Accept all roles");
+                    stable_id_set_choices(
+                        ui,
+                        "Accepted role kinds",
+                        &mut station.accepted_role_kinds,
+                        &station_kinds,
+                    );
+                    ui.checkbox(&mut station.targets_all, "Target every kind");
+                    stable_id_set_choices(
+                        ui,
+                        "Target kinds",
+                        &mut station.target_kinds,
+                        &target_kinds,
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut station.max_targets)
+                                .prefix("Maximum targets "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut station.update_milliseconds)
+                                .prefix("Refresh ms "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut station.search_range_milli_cells)
+                                .prefix("Range milli-cells "),
+                        );
+                    });
+                }
+                let mut targeting = draft.value.targeting.is_some();
+                if ui.checkbox(&mut targeting, "Uses target scoring").changed() {
+                    draft.value.targeting = targeting.then_some(TargetingScoreDef {
+                        assignment_penalty_milli: 1_000,
+                        distance_penalty_milli_per_cell: 1_000,
+                    });
+                }
+                if let Some(targeting) = draft.value.targeting.as_mut() {
+                    ui.add(
+                        egui::DragValue::new(&mut targeting.assignment_penalty_milli)
+                            .prefix("Assignment penalty "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut targeting.distance_penalty_milli_per_cell)
+                            .prefix("Distance penalty/cell "),
+                    );
+                }
+            });
+            ui.collapsing("Projectile attack", |ui| {
+                let mut enabled = draft.value.projectile_shooter.is_some();
+                if ui.checkbox(&mut enabled, "Shoots projectiles").changed() {
+                    let pool = projectile_pools
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "projectile:default".to_owned());
+                    draft.value.projectile_shooter = enabled.then_some(ProjectileShooterDef {
+                        projectile_pool: pool,
+                        movement_milli_cells_per_second: 10_000,
+                        damage: 1,
+                        range_milli_cells: 10_000,
+                        fire_milliseconds: 1_000,
+                    });
+                }
+                if let Some(shooter) = draft.value.projectile_shooter.as_mut() {
+                    string_choice(
+                        ui,
+                        "Projectile pool",
+                        &mut shooter.projectile_pool,
+                        &projectile_pools,
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add(egui::DragValue::new(&mut shooter.damage).prefix("Damage "));
+                        ui.add(
+                            egui::DragValue::new(&mut shooter.fire_milliseconds)
+                                .prefix("Cadence ms "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut shooter.range_milli_cells)
+                                .prefix("Range milli-cells "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut shooter.movement_milli_cells_per_second)
+                                .prefix("Projectile speed "),
+                        );
+                    });
+                }
+            });
+            ui.collapsing("Model hierarchy bindings", |ui| {
+                for (index, model) in draft.value.model_handlers.iter_mut().enumerate() {
+                    ui.group(|ui| {
+                        ui.label(format!("Model handler {}", index + 1));
+                        ui.add(egui::DragValue::new(&mut model.age).prefix("Age "));
+                        string_choice(ui, "Complete model", &mut model.full_model, &model_nodes);
+                        for (stage, node) in model.construction_stages.iter_mut().enumerate() {
+                            string_choice(
+                                ui,
+                                &format!("Construction stage {}", stage + 1),
+                                node,
+                                &model_nodes,
+                            );
+                        }
+                        string_vec_choices(ui, "Upgrade layers", &mut model.upgrades, &model_nodes);
+                        string_vec_choices(
+                            ui,
+                            "Other controlled models",
+                            &mut model.other_models,
+                            &model_nodes,
+                        );
+                    });
+                }
+                for (index, model) in draft.value.storage_models.iter_mut().enumerate() {
+                    ui.group(|ui| {
+                        ui.label(format!("Storage model {}", index + 1));
+                        ui.add(egui::DragValue::new(&mut model.age).prefix("Age "));
+                        stable_id_required_choice(ui, "Resource", &mut model.resource, &resources);
+                        string_choice(ui, "Empty", &mut model.empty_model, &model_nodes);
+                        string_choice(ui, "Half full", &mut model.half_full_model, &model_nodes);
+                        string_choice(ui, "Full", &mut model.full_model, &model_nodes);
+                    });
+                }
+            });
+            ui.horizontal(|ui| {
+                apply = ui.button("Apply validated building").clicked();
+                reset = ui.button("Discard draft").clicked();
+            });
+        });
+    } else {
+        ui.label("Select a building to edit it.");
+    }
+    if apply {
+        state.status = match apply_building_draft(state) {
+            Ok(()) => "Building edit applied; every reference remains valid".to_owned(),
+            Err(error) => format!("Building edit rejected: {error}"),
+        };
+    } else if reset {
+        refresh_building_draft(state);
+        "Discarded building draft".clone_into(&mut state.status);
+    }
+}
+
 fn roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.heading("Role authoring");
+    ui.label(
+        "Create roles from a known-good template, then author every runtime reference through catalog-backed choices.",
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(!state.undo_authoring.is_empty(), egui::Button::new("Undo"))
+            .clicked()
+        {
+            undo_authoring_edit(state);
+        }
+        if ui
+            .add_enabled(!state.redo_authoring.is_empty(), egui::Button::new("Redo"))
+            .clicked()
+        {
+            redo_authoring_edit(state);
+        }
+        if ui.button("Save catalog").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path) {
+                Ok(path) => format!("Saved validated role catalog to {}", path.display()),
+                Err(error) => format!("Could not save role catalog: {error:#}"),
+            };
+        }
+    });
+
+    let roles: Vec<_> = state
+        .catalog
+        .roles
+        .iter()
+        .map(|(id, role)| (id.clone(), role.display_name.clone()))
+        .collect();
+    let mut selected_changed = false;
+    egui::ComboBox::from_label("Role")
+        .selected_text(
+            state
+                .selected_role
+                .as_ref()
+                .and_then(|id| state.catalog.roles.get(id))
+                .map_or("Select role", |role| role.display_name.as_str()),
+        )
+        .show_ui(ui, |ui| {
+            for (id, name) in &roles {
+                selected_changed |= ui
+                    .selectable_value(&mut state.selected_role, Some(id.clone()), name)
+                    .changed();
+            }
+        });
+    if selected_changed {
+        refresh_role_draft(state);
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label("New stable ID");
+        ui.text_edit_singleline(&mut state.new_role_id);
+        ui.label("Name");
+        ui.text_edit_singleline(&mut state.new_role_name);
+        if ui
+            .add_enabled(
+                state.selected_role.is_some(),
+                egui::Button::new("Create from selected"),
+            )
+            .on_hover_text("Copies a validated role as a complete starting template")
+            .clicked()
+        {
+            state.status = match duplicate_selected_role(state) {
+                Ok(()) => "Created a complete role draft from the selected template".to_owned(),
+                Err(error) => format!("Role creation rejected: {error}"),
+            };
+        }
+        if ui
+            .add_enabled(state.selected_role.is_some(), egui::Button::new("Delete"))
+            .clicked()
+        {
+            state.status = match delete_selected_role(state) {
+                Ok(()) => "Deleted unreferenced role".to_owned(),
+                Err(error) => format!("Role deletion rejected: {error}"),
+            };
+        }
+    });
+
+    let resource_choices = resource_choices(&state.catalog);
+    let station_choices = station_kind_choices(&state.catalog);
+    let target_choices = target_kind_choices(&state.catalog);
+    let ability_choices = ability_choices(&state.catalog);
+    let animation_choices = action_animation_choices(&state.catalog);
+    let equipment_choices = equipment_node_choices(&state.catalog, &state.presentation);
+    let mut apply = false;
+    let mut reset = false;
+    if let Some(draft) = state.role_draft.as_mut() {
+        ui.separator();
+        ui.monospace(draft.id.to_string());
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Display name");
+                ui.text_edit_singleline(&mut draft.value.display_name);
+                string_choice(
+                    ui,
+                    "Action animation",
+                    &mut draft.value.action_animation,
+                    &animation_choices,
+                );
+                ui.add(
+                    egui::DragValue::new(&mut draft.value.action_animation_variants)
+                        .range(1..=u8::MAX)
+                        .prefix("Variants "),
+                );
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut draft.value.has_user_limit, "Limit users");
+                ui.add(
+                    egui::DragValue::new(&mut draft.value.base_max_users).prefix("Base max users "),
+                );
+                ui.checkbox(
+                    &mut draft.value.targets_all,
+                    "Targets all matching entities",
+                );
+            });
+            stable_id_option_choice(
+                ui,
+                "Produced/carried resource",
+                &mut draft.value.resource,
+                &resource_choices,
+            );
+            stable_id_set_choices(
+                ui,
+                "Compatible station kinds",
+                &mut draft.value.station_kinds,
+                &station_choices,
+            );
+            stable_id_set_choices(
+                ui,
+                "Target kinds",
+                &mut draft.value.target_kinds,
+                &target_choices,
+            );
+            stable_id_vec_choices(
+                ui,
+                "Granted abilities",
+                &mut draft.value.granted_abilities,
+                &ability_choices,
+            );
+
+            ui.collapsing("Progression and action balance", |ui| {
+                egui::Grid::new("typed_role_balance_grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        role_u16(
+                            ui,
+                            "Movement multiplier (per thousand)",
+                            &mut draft.value.movement_speed_multiplier_per_thousand,
+                        );
+                        role_u32(
+                            ui,
+                            "Experience multiplier (per thousand)",
+                            &mut draft.value.experience_multiplier_per_thousand,
+                        );
+                        role_u32(
+                            ui,
+                            "Base action amount",
+                            &mut draft.value.base_action_amount,
+                        );
+                        role_u32(
+                            ui,
+                            "Action/level (milli)",
+                            &mut draft.value.action_amount_per_level_milli,
+                        );
+                        role_u32(
+                            ui,
+                            "Base action cadence (ms)",
+                            &mut draft.value.base_action_milliseconds,
+                        );
+                        role_u32(
+                            ui,
+                            "Cadence reduction/level (ms)",
+                            &mut draft.value.action_milliseconds_reduction_per_level,
+                        );
+                        role_u32(
+                            ui,
+                            "Base action range (milli-cells)",
+                            &mut draft.value.base_action_range_milli_cells,
+                        );
+                        role_u32(
+                            ui,
+                            "Action range/level (milli-cells)",
+                            &mut draft.value.action_range_milli_cells_per_level,
+                        );
+                        role_u32(ui, "Base health", &mut draft.value.base_health);
+                        role_u32(
+                            ui,
+                            "Health/level (milli)",
+                            &mut draft.value.health_per_level_milli,
+                        );
+                        role_i32(
+                            ui,
+                            "Base health regeneration/s",
+                            &mut draft.value.base_health_regen_per_second,
+                        );
+                        role_u32(
+                            ui,
+                            "Health regeneration/level (milli/s)",
+                            &mut draft.value.health_regen_milli_per_second_per_level,
+                        );
+                        role_i32(
+                            ui,
+                            "Base damage reduction (%)",
+                            &mut draft.value.base_damage_reduction_percent,
+                        );
+                        role_u32(
+                            ui,
+                            "Damage reduction/level (milli-%)",
+                            &mut draft.value.damage_reduction_milli_percent_per_level,
+                        );
+                        role_u32(
+                            ui,
+                            "Base movement (milli-cells/s)",
+                            &mut draft.value.base_movement_speed_milli_cells_per_second,
+                        );
+                        role_u32(
+                            ui,
+                            "Movement/level (milli-cells/s)",
+                            &mut draft.value.movement_speed_milli_cells_per_second_per_level,
+                        );
+                        role_u32(
+                            ui,
+                            "Base carry capacity",
+                            &mut draft.value.base_carry_capacity,
+                        );
+                        role_u32(
+                            ui,
+                            "Carry capacity/level (milli)",
+                            &mut draft.value.carry_capacity_per_level_milli,
+                        );
+                    });
+            });
+
+            ui.collapsing("Character model and equipment", |ui| {
+                let mut enabled = draft.value.equipment.is_some();
+                if ui
+                    .checkbox(&mut enabled, "Role has equipment bindings")
+                    .changed()
+                {
+                    if enabled {
+                        let first = equipment_choices.first().cloned().unwrap_or_default();
+                        draft.value.equipment = Some(RoleEquipmentDef {
+                            body_nodes: [first.clone(), first.clone(), first],
+                            left_hand_node: None,
+                            right_hand_node: None,
+                            helmet_node: None,
+                            carry_animation: None,
+                            left_hand_permanent: false,
+                        });
+                    } else {
+                        draft.value.equipment = None;
+                    }
+                }
+                if let Some(equipment) = draft.value.equipment.as_mut() {
+                    for (index, label) in ["Slim body", "Bulk body", "Feminine body"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        string_choice(
+                            ui,
+                            label,
+                            &mut equipment.body_nodes[index],
+                            &equipment_choices,
+                        );
+                    }
+                    optional_string_choice(
+                        ui,
+                        "Left-hand model",
+                        &mut equipment.left_hand_node,
+                        &equipment_choices,
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Right-hand model",
+                        &mut equipment.right_hand_node,
+                        &equipment_choices,
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Helmet model",
+                        &mut equipment.helmet_node,
+                        &equipment_choices,
+                    );
+                    optional_string_choice(
+                        ui,
+                        "Carry animation",
+                        &mut equipment.carry_animation,
+                        &animation_choices,
+                    );
+                    ui.checkbox(
+                        &mut equipment.left_hand_permanent,
+                        "Left-hand item remains visible outside carry actions",
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                apply = ui.button("Apply validated role").clicked();
+                reset = ui.button("Discard draft").clicked();
+            });
+        });
+    } else {
+        ui.label("Select a role to edit it.");
+    }
+    if apply {
+        state.status = match apply_role_draft(state) {
+            Ok(()) => "Role edit applied; every catalog reference remains valid".to_owned(),
+            Err(error) => format!("Role edit rejected: {error}"),
+        };
+    } else if reset {
+        refresh_role_draft(state);
+        "Discarded role draft".clone_into(&mut state.status);
+    }
+}
+
+#[allow(dead_code)]
+fn legacy_roles_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Role authoring");
     ui.label(
         "Edit authoritative role balance, targeting, station compatibility, animation contracts, and equipment node bindings. Changes remain a draft until the complete catalog validates.",
@@ -1462,6 +2294,343 @@ fn role_i32(ui: &mut egui::Ui, label: &str, value: &mut i32) {
 }
 
 fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
+    ui.horizontal_wrapped(|ui| {
+        ui.heading("Technology graph authoring");
+        if ui
+            .add_enabled(!state.undo_authoring.is_empty(), egui::Button::new("Undo"))
+            .clicked()
+        {
+            undo_authoring_edit(state);
+        }
+        if ui
+            .add_enabled(!state.redo_authoring.is_empty(), egui::Button::new("Redo"))
+            .clicked()
+        {
+            redo_authoring_edit(state);
+        }
+        if ui.button("Validate").clicked() {
+            let validation = state
+                .catalog
+                .validate()
+                .map_err(|error| error.to_string())
+                .and_then(|()| {
+                    state
+                        .technology_layout
+                        .validate(&state.catalog.technology)
+                        .map_err(|error| error.to_string())
+                });
+            state.status = match validation {
+                Ok(()) => format!(
+                    "Technology graph valid: {} nodes in {} groups",
+                    state.catalog.technology.nodes.len(),
+                    state.catalog.technology.groups.len()
+                ),
+                Err(error) => format!("Technology graph error: {error}"),
+            };
+        }
+        if ui.button("Save catalog + layout").clicked() {
+            state.status = match save_content_catalog(&state.catalog, &state.catalog_path).and_then(
+                |catalog_path| {
+                    save_technology_layout(
+                        &state.technology_layout,
+                        &state.catalog,
+                        &state.technology_layout_path,
+                    )
+                    .map(|layout_path| (catalog_path, layout_path))
+                },
+            ) {
+                Ok((catalog, layout)) => format!(
+                    "Saved technology catalog to {} and layout to {}",
+                    catalog.display(),
+                    layout.display()
+                ),
+                Err(error) => format!("Could not save technology authoring assets: {error:#}"),
+            };
+        }
+        if ui.button("Auto layout").clicked() {
+            let previous = authoring_snapshot(state);
+            state.technology_layout = TechnologyGraphLayout::automatic(&state.catalog.technology);
+            push_authoring_undo(state, previous);
+            state.technology_graph_view.request_fit();
+        }
+        if ui.button("Fit all").clicked() {
+            state.technology_graph_view.request_fit();
+        }
+        ui.checkbox(&mut state.technology_graph_view.show_minimap, "Minimap");
+    });
+    ui.label(
+        "The graph is the primary workspace: drag nodes and group headers, resize groups, and edit the complete selected node in the inspector beside it.",
+    );
+
+    let technology_choices: Vec<_> = state
+        .catalog
+        .technology
+        .nodes
+        .iter()
+        .map(|(id, node)| (id.clone(), node.display_name.clone()))
+        .collect();
+    let group_choices: Vec<_> = state
+        .catalog
+        .technology
+        .groups
+        .iter()
+        .map(|(id, group)| (id.clone(), group.display_name.clone()))
+        .collect();
+    let building_choices: Vec<_> = state
+        .catalog
+        .buildings
+        .iter()
+        .map(|(id, building)| (id.clone(), building.display_name.clone()))
+        .collect();
+    let role_choices: Vec<_> = state
+        .catalog
+        .roles
+        .iter()
+        .map(|(id, role)| (id.clone(), role.display_name.clone()))
+        .collect();
+    let resources = resource_choices(&state.catalog);
+    let stat_options = stat_choices(&state.catalog);
+    let objective_choices: Vec<_> = state
+        .catalog
+        .objectives
+        .iter()
+        .map(|(id, objective)| {
+            (
+                id.clone(),
+                format!("{:?} ×{}", objective.kind, objective.required_amount),
+            )
+        })
+        .collect();
+    let icon_choices = technology_icon_choices(state);
+
+    ui.columns(2, |columns| {
+        columns[0].horizontal_wrapped(|ui| {
+            ui.label("Search");
+            ui.text_edit_singleline(&mut state.technology_search);
+            ui.label("New group");
+            ui.text_edit_singleline(&mut state.new_group_id);
+            ui.text_edit_singleline(&mut state.new_group_name);
+            if ui.button("Add group").clicked() {
+                state.status = match create_technology_group(state) {
+                    Ok(()) => "Created technology group".to_owned(),
+                    Err(error) => format!("Group creation rejected: {error}"),
+                };
+            }
+        });
+        columns[0].horizontal_wrapped(|ui| {
+            stable_id_option_choice(
+                ui,
+                "New node group",
+                &mut state.selected_group,
+                &group_choices,
+            );
+            ui.text_edit_singleline(&mut state.new_technology_id);
+            ui.text_edit_singleline(&mut state.new_technology_name);
+            if ui
+                .add_enabled(
+                    state.selected_group.is_some(),
+                    egui::Button::new("Add node"),
+                )
+                .clicked()
+            {
+                state.status = match create_technology_node(state) {
+                    Ok(()) => "Created complete technology node draft".to_owned(),
+                    Err(error) => format!("Node creation rejected: {error}"),
+                };
+            }
+        });
+        let selected_node = state
+            .technology_draft
+            .as_ref()
+            .map(|draft| draft.id.clone());
+        let before = state.technology_layout.clone();
+        let output = show_technology_graph(
+            &mut columns[0],
+            &state.catalog,
+            &mut state.technology_layout,
+            &mut state.technology_graph_view,
+            selected_node.as_ref(),
+            state.selected_group.as_ref(),
+            &state.technology_search,
+        );
+        if output.layout_edit_started {
+            push_authoring_undo(
+                state,
+                AuthoringSnapshot {
+                    catalog: state.catalog.clone(),
+                    technology_layout: before,
+                },
+            );
+        }
+        if let Some(group) = output.selected_group {
+            state.selected_group = Some(group);
+        }
+        if let Some(node) = output.selected_node {
+            state.technology_draft = technology_draft(&state.catalog, &node);
+        }
+
+        let mut apply = false;
+        let mut discard = false;
+        let mut delete = false;
+        egui::ScrollArea::vertical()
+            .id_salt("technology_node_inspector")
+            .show(&mut columns[1], |ui| {
+                ui.heading("Selected node");
+                let mut select_node = state
+                    .technology_draft
+                    .as_ref()
+                    .map(|draft| draft.id.clone());
+                let before = select_node.clone();
+                stable_id_option_choice(ui, "Node", &mut select_node, &technology_choices);
+                if select_node != before
+                    && let Some(id) = select_node
+                {
+                    state.technology_draft = technology_draft(&state.catalog, &id);
+                    state.technology_graph_view.request_focus(id);
+                }
+                let Some(draft) = state.technology_draft.as_mut() else {
+                    ui.label("Click a graph node or choose one above.");
+                    return;
+                };
+                ui.monospace(draft.id.to_string());
+                ui.label("Display name");
+                ui.text_edit_singleline(&mut draft.value.display_name);
+                ui.label("Description");
+                ui.text_edit_multiline(&mut draft.value.description);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Age");
+                    ui.text_edit_singleline(&mut draft.value.age);
+                    ui.add(egui::DragValue::new(&mut draft.value.tier).prefix("Tier "));
+                });
+                stable_id_option_choice(ui, "Group", &mut draft.value.group, &group_choices);
+                string_choice(ui, "Icon", &mut draft.value.icon_path, &icon_choices);
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut draft.value.initially_unlocked, "Initially unlocked");
+                    ui.checkbox(&mut draft.value.unavailable, "Unavailable");
+                });
+
+                let node_choices: Vec<_> = technology_choices
+                    .iter()
+                    .filter(|(id, _)| id != &draft.id)
+                    .cloned()
+                    .collect();
+                stable_id_vec_choices(
+                    ui,
+                    "Prerequisites",
+                    &mut draft.value.prerequisites,
+                    &node_choices,
+                );
+                stable_id_vec_choices(
+                    ui,
+                    "Explicit unlocks",
+                    &mut draft.value.unlocks,
+                    &node_choices,
+                );
+                stable_id_vec_choices(
+                    ui,
+                    "Objectives / vote requirements",
+                    &mut draft.value.objectives,
+                    &objective_choices,
+                );
+                for objective_id in &draft.value.objectives {
+                    if let Some(objective) = state.catalog.objectives.get(objective_id) {
+                        ui.monospace(format!(
+                            "  {:?} ×{}{}{}{}",
+                            objective.kind,
+                            objective.required_amount,
+                            objective
+                                .resource
+                                .as_ref()
+                                .map_or_else(String::new, |id| format!(" · {id}")),
+                            objective
+                                .building
+                                .as_ref()
+                                .map_or_else(String::new, |id| format!(" · {id}")),
+                            objective
+                                .enemy
+                                .as_ref()
+                                .map_or_else(String::new, |id| format!(" · {id}")),
+                        ));
+                    }
+                }
+
+                ui.collapsing("Building effects", |ui| {
+                    stable_u16_map_editor(
+                        ui,
+                        "Maximum levels",
+                        &mut draft.value.building_level_caps,
+                        &building_choices,
+                    );
+                    stable_id_set_choices(
+                        ui,
+                        "Unlock buildings",
+                        &mut draft.value.unlocked_buildings,
+                        &building_choices,
+                    );
+                    stable_i32_map_editor(
+                        ui,
+                        "Cost reductions (%)",
+                        &mut draft.value.building_cost_reduction_percent,
+                        &building_choices,
+                    );
+                    ui.add(
+                        egui::DragValue::new(
+                            &mut draft.value.global_building_cost_reduction_percent,
+                        )
+                        .suffix("% global cost reduction"),
+                    );
+                    stable_id_set_choices(
+                        ui,
+                        "Age-up buildings",
+                        &mut draft.value.aged_buildings,
+                        &building_choices,
+                    );
+                });
+                ui.collapsing("Storage and stat effects", |ui| {
+                    stable_i32_map_editor(
+                        ui,
+                        "Storage boosts (%)",
+                        &mut draft.value.storage_boost_percent,
+                        &resources,
+                    );
+                    stable_i32_map_editor(
+                        ui,
+                        "Global stat boosts (%)",
+                        &mut draft.value.global_stat_boost_percent,
+                        &stat_options,
+                    );
+                    role_stat_map_editor(
+                        ui,
+                        &mut draft.value.role_stat_boost_percent,
+                        &role_choices,
+                        &stat_options,
+                    );
+                });
+                ui.horizontal_wrapped(|ui| {
+                    apply = ui.button("Apply validated node").clicked();
+                    discard = ui.button("Discard draft").clicked();
+                    delete = ui.button("Delete node").clicked();
+                });
+            });
+        if apply {
+            state.status = match apply_technology_draft(state) {
+                Ok(()) => "Technology node applied; graph and references remain valid".to_owned(),
+                Err(error) => format!("Technology edit rejected: {error}"),
+            };
+        } else if discard {
+            refresh_technology_draft(state);
+            "Discarded technology draft".clone_into(&mut state.status);
+        } else if delete {
+            state.status = match delete_selected_technology_node(state) {
+                Ok(()) => "Deleted technology node and cleaned graph references".to_owned(),
+                Err(error) => format!("Technology deletion rejected: {error}"),
+            };
+        }
+    });
+}
+
+#[allow(dead_code)]
+fn legacy_technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Technology graph editor");
     ui.label(
         "Edit the complete shipping graph directly. Node/group positions are versioned separately from runtime technology data and every mutation participates in the same undo history.",
@@ -1787,9 +2956,9 @@ fn technology_tab(ui: &mut egui::Ui, state: &mut ToolState) {
 }
 
 fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
-    ui.heading("World-generation and navigation lab");
+    ui.heading("World-generation lab");
     ui.label(
-        "Tune the Unity-compatible terrain scale and authored foliage noise, generate deterministic previews, inspect occupancy, and exercise the same A* grid used by the game.",
+        "Tune Unity-compatible terrain and foliage generation, then inspect deterministic elevation, occupancy, resource, and foliage previews.",
     );
     ui.horizontal_wrapped(|ui| {
         ui.add(egui::DragValue::new(&mut state.config.world.seed).prefix("Seed "));
@@ -2020,7 +3189,6 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                         &world.deterministic_hash[..16]
                     );
                     state.generated_world = Some(world);
-                    state.preview_path.clear();
                     status
                 }
                 (Err(error), _) => format!("World configuration is invalid: {error}"),
@@ -2034,48 +3202,6 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
                     ui.selectable_value(&mut state.world_preview_layer, layer, layer.label());
                 }
             });
-    });
-    let max_x = state.config.world.width.saturating_sub(1);
-    let max_z = state.config.world.height.saturating_sub(1);
-    ui.horizontal_wrapped(|ui| {
-        ui.add(
-            egui::DragValue::new(&mut state.path_start.x)
-                .range(0..=max_x)
-                .prefix("Start x "),
-        );
-        ui.add(
-            egui::DragValue::new(&mut state.path_start.z)
-                .range(0..=max_z)
-                .prefix("z "),
-        );
-        ui.add(
-            egui::DragValue::new(&mut state.path_goal.x)
-                .range(0..=max_x)
-                .prefix("Goal x "),
-        );
-        ui.add(
-            egui::DragValue::new(&mut state.path_goal.z)
-                .range(0..=max_z)
-                .prefix("z "),
-        );
-        if ui.button("Plan A* path").clicked() {
-            let result = state.generated_world.as_ref().map(|world| {
-                world
-                    .navigation
-                    .find_path(state.path_start, state.path_goal)
-            });
-            match result {
-                Some(Ok(path)) => {
-                    state.status = format!("Planned {} navigation steps", path.len());
-                    state.preview_path = path;
-                }
-                Some(Err(error)) => {
-                    state.status = format!("Navigation error: {error}");
-                    state.preview_path.clear();
-                }
-                None => "Generate a world before planning a path".clone_into(&mut state.status),
-            }
-        }
     });
     if let Some(world) = &state.generated_world {
         let walkable = (0..world.navigation.height())
@@ -2094,7 +3220,6 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         draw_world_preview(
             ui,
             world,
-            &state.preview_path,
             state.world_preview_layer,
             state.selected_foliage.as_ref(),
             state.config.world.water_level_centimetres,
@@ -2102,6 +3227,7 @@ fn world_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     }
 }
 
+#[allow(dead_code)]
 fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Player settings");
     ui.label("Unity SettingsData parity with validated, atomic RON persistence.");
@@ -2352,6 +3478,7 @@ fn settings_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.label("Restart the game after saving to apply window, renderer, and audio changes.");
 }
 
+#[allow(dead_code)]
 fn runtime_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Runtime developer console");
     let attached = runtime_console_attached(state.runtime_status.as_ref());
@@ -2642,6 +3769,7 @@ fn sync_twitch_tool_fields(state: &mut ToolState) {
     state.twitch_irc_verified = false;
 }
 
+#[allow(dead_code)]
 fn twitch_tab(ui: &mut egui::Ui, state: &mut ToolState) {
     ui.heading("Twitch setup and diagnostics");
     ui.label("Use a Twitch public client with the exact chat:read and chat:edit scopes. OAuth tokens live only in the operating-system credential vault.");
@@ -3514,15 +4642,11 @@ fn start_xtask_job<const N: usize>(
     }
 }
 
-fn inspector_tab(ui: &mut egui::Ui) {
-    ui.heading("ECS/resource inspector");
-    ui.label("The inspector window is enabled while this tab is selected.");
-}
-
 fn technology_draft(catalog: &ContentCatalog, id: &StableId) -> Option<TechnologyDraft> {
     let node = catalog.technology.nodes.get(id)?;
     Some(TechnologyDraft {
         id: id.clone(),
+        value: node.clone(),
         display_name: node.display_name.clone(),
         description: node.description.clone(),
         age: node.age.clone(),
@@ -3747,22 +4871,662 @@ fn save_technology_layout(
     Ok(path)
 }
 
-fn parse_stable_id_list(value: &str) -> Result<Vec<StableId>, String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| StableId::new(value.to_owned()).map_err(|error| error.to_string()))
+fn labeled_ids(ids: BTreeSet<StableId>) -> Vec<(StableId, String)> {
+    ids.into_iter()
+        .map(|id| {
+            let label = id
+                .as_str()
+                .rsplit_once(':')
+                .map_or(id.as_str(), |(_, suffix)| suffix)
+                .replace(['_', '-'], " ");
+            (id, label)
+        })
         .collect()
 }
 
-fn parse_stable_id_set(value: &str) -> Result<BTreeSet<StableId>, String> {
-    parse_stable_id_list(value).map(|values| values.into_iter().collect())
+fn resource_choices(catalog: &ContentCatalog) -> Vec<(StableId, String)> {
+    let mut ids = BTreeSet::new();
+    for role in catalog.roles.values() {
+        ids.extend(role.resource.iter().cloned());
+    }
+    for building in catalog.buildings.values() {
+        ids.extend(building.cost.keys().cloned());
+        ids.extend(building.level_cost.keys().cloned());
+        ids.extend(building.storage.iter().map(|value| value.resource.clone()));
+        ids.extend(
+            building
+                .passive_resources
+                .iter()
+                .map(|value| value.resource.clone()),
+        );
+    }
+    for archetype in catalog.archetypes.values() {
+        if let Some(enemy) = &archetype.enemy {
+            ids.insert(enemy.kill_reward.resource.clone());
+        }
+    }
+    ids.extend(
+        catalog
+            .objectives
+            .values()
+            .filter_map(|objective| objective.resource.clone()),
+    );
+    for node in catalog.technology.nodes.values() {
+        ids.extend(node.storage_boost_percent.keys().cloned());
+    }
+    labeled_ids(ids)
 }
 
-fn optional_text(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
+fn station_kind_choices(catalog: &ContentCatalog) -> Vec<(StableId, String)> {
+    let mut ids = BTreeSet::new();
+    for role in catalog.roles.values() {
+        ids.extend(role.station_kinds.iter().cloned());
+    }
+    for building in catalog.buildings.values() {
+        if let Some(station) = &building.station {
+            ids.extend(station.accepted_role_kinds.iter().cloned());
+        }
+    }
+    labeled_ids(ids)
+}
+
+fn target_kind_choices(catalog: &ContentCatalog) -> Vec<(StableId, String)> {
+    let mut ids = BTreeSet::new();
+    for role in catalog.roles.values() {
+        ids.extend(role.target_kinds.iter().cloned());
+    }
+    for building in catalog.buildings.values() {
+        if let Some(station) = &building.station {
+            ids.extend(station.target_kinds.iter().cloned());
+        }
+    }
+    for archetype in catalog.archetypes.values() {
+        if let Some(enemy) = &archetype.enemy {
+            ids.extend(enemy.target_kinds.iter().cloned());
+        }
+    }
+    labeled_ids(ids)
+}
+
+fn ability_choices(catalog: &ContentCatalog) -> Vec<(StableId, String)> {
+    labeled_ids(
+        catalog
+            .roles
+            .values()
+            .flat_map(|role| role.granted_abilities.iter().cloned())
+            .collect(),
+    )
+}
+
+fn stat_choices(catalog: &ContentCatalog) -> Vec<(StableId, String)> {
+    let mut ids = BTreeSet::new();
+    for node in catalog.technology.nodes.values() {
+        ids.extend(node.global_stat_boost_percent.keys().cloned());
+        for boosts in node.role_stat_boost_percent.values() {
+            ids.extend(boosts.keys().cloned());
+        }
+    }
+    labeled_ids(ids)
+}
+
+fn action_animation_choices(catalog: &ContentCatalog) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    for role in catalog.roles.values() {
+        values.insert(role.action_animation.clone());
+        if let Some(animation) = role
+            .equipment
+            .as_ref()
+            .and_then(|equipment| equipment.carry_animation.clone())
+        {
+            values.insert(animation);
+        }
+    }
+    for archetype in catalog.archetypes.values() {
+        if let Some(models) = &archetype.enemy_models {
+            values.extend(
+                models
+                    .weapons
+                    .iter()
+                    .map(|weapon| weapon.action_animation.clone()),
+            );
+        }
+    }
+    values.retain(|value| !value.trim().is_empty());
+    values.into_iter().collect()
+}
+
+fn equipment_node_choices(
+    catalog: &ContentCatalog,
+    presentation: &PresentationCatalog,
+) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    for equipment in catalog
+        .roles
+        .values()
+        .filter_map(|role| role.equipment.as_ref())
+    {
+        values.extend(equipment.body_nodes.iter().cloned());
+        values.extend(equipment.left_hand_node.iter().cloned());
+        values.extend(equipment.right_hand_node.iter().cloned());
+        values.extend(equipment.helmet_node.iter().cloned());
+    }
+    values.extend(
+        presentation
+            .prefab_renderer_materials
+            .values()
+            .flatten()
+            .filter_map(|binding| binding.target_path.rsplit('/').next())
+            .filter(|name| {
+                name.starts_with("Body_")
+                    || name.starts_with("LHand_")
+                    || name.starts_with("RHand_")
+                    || name.starts_with("Back_")
+                    || name.starts_with("Helmet_")
+            })
+            .map(ToOwned::to_owned),
+    );
+    values.retain(|value| !value.trim().is_empty());
+    values.into_iter().collect()
+}
+
+fn building_model_node_choices(catalog: &ContentCatalog) -> Vec<String> {
+    let mut values = BTreeSet::new();
+    for building in catalog.buildings.values() {
+        for model in &building.model_handlers {
+            values.insert(model.full_model.clone());
+            values.extend(model.construction_stages.iter().cloned());
+            values.extend(model.upgrades.iter().cloned());
+            values.extend(model.other_models.iter().cloned());
+        }
+        for model in &building.storage_models {
+            values.insert(model.empty_model.clone());
+            values.insert(model.half_full_model.clone());
+            values.insert(model.full_model.clone());
+        }
+    }
+    for archetype in catalog.archetypes.values() {
+        values.extend(
+            archetype
+                .rotating_nodes
+                .iter()
+                .map(|rotating| rotating.node.clone()),
+        );
+    }
+    values.retain(|value| !value.trim().is_empty());
+    values.into_iter().collect()
+}
+
+fn projectile_pool_choices(catalog: &ContentCatalog) -> Vec<String> {
+    catalog
+        .buildings
+        .values()
+        .filter_map(|building| building.projectile_shooter.as_ref())
+        .map(|shooter| shooter.projectile_pool.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn technology_icon_choices(state: &ToolState) -> Vec<String> {
+    let mut values: BTreeSet<_> = state
+        .catalog
+        .technology
+        .nodes
+        .values()
+        .map(|node| node.icon_path.clone())
+        .collect();
+    values.extend(
+        state
+            .presentation
+            .textures
+            .values()
+            .map(|texture| texture.asset_path.clone()),
+    );
+    values.retain(|value| !value.trim().is_empty());
+    values.into_iter().collect()
+}
+
+fn stable_id_required_choice(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut StableId,
+    choices: &[(StableId, String)],
+) {
+    let selected = choices
+        .iter()
+        .find(|(id, _)| id == value)
+        .map_or_else(|| value.to_string(), |(_, label)| label.clone());
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (id, display) in choices {
+                    ui.selectable_value(value, id.clone(), format!("{display}  ({id})"));
+                }
+            });
+    });
+}
+
+fn stable_id_option_choice(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<StableId>,
+    choices: &[(StableId, String)],
+) {
+    let selected = value
+        .as_ref()
+        .and_then(|selected| choices.iter().find(|(id, _)| id == selected))
+        .map_or("None", |(_, label)| label.as_str());
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(value, None, "None");
+                for (id, display) in choices {
+                    ui.selectable_value(value, Some(id.clone()), format!("{display}  ({id})"));
+                }
+            });
+    });
+}
+
+fn stable_id_set_choices(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut BTreeSet<StableId>,
+    choices: &[(StableId, String)],
+) {
+    ui.collapsing(format!("{label} ({})", values.len()), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (id, display) in choices {
+                let mut selected = values.contains(id);
+                if ui.checkbox(&mut selected, display).changed() {
+                    if selected {
+                        values.insert(id.clone());
+                    } else {
+                        values.remove(id);
+                    }
+                }
+            }
+        });
+    });
+}
+
+fn stable_id_vec_choices(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut Vec<StableId>,
+    choices: &[(StableId, String)],
+) {
+    ui.collapsing(format!("{label} ({})", values.len()), |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for (id, display) in choices {
+                let mut selected = values.contains(id);
+                if ui.checkbox(&mut selected, display).changed() {
+                    if selected {
+                        values.push(id.clone());
+                    } else {
+                        values.retain(|value| value != id);
+                    }
+                }
+            }
+        });
+    });
+}
+
+fn string_choice(ui: &mut egui::Ui, label: &str, value: &mut String, choices: &[String]) {
+    let selected = if value.is_empty() {
+        "None".to_owned()
+    } else {
+        value.clone()
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for choice in choices {
+                    ui.selectable_value(&mut *value, choice.clone(), choice);
+                }
+            });
+    });
+}
+
+fn optional_string_choice(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<String>,
+    choices: &[String],
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt((label, ui.next_auto_id()))
+            .selected_text(value.as_deref().unwrap_or("None"))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(value, None, "None");
+                for choice in choices {
+                    ui.selectable_value(value, Some(choice.clone()), choice);
+                }
+            });
+    });
+}
+
+fn string_vec_choices(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut Vec<String>,
+    choices: &[String],
+) {
+    ui.collapsing(format!("{label} ({})", values.len()), |ui| {
+        let mut remove = None;
+        for (index, value) in values.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                string_choice(ui, "Model", value, choices);
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            values.remove(index);
+        }
+        if ui.button("Add model").clicked()
+            && let Some(first) = choices.first()
+        {
+            values.push(first.clone());
+        }
+    });
+}
+
+fn stable_u32_map_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut BTreeMap<StableId, u32>,
+    choices: &[(StableId, String)],
+) {
+    ui.label(label);
+    let mut remove = None;
+    for id in values.keys().cloned().collect::<Vec<_>>() {
+        ui.horizontal(|ui| {
+            ui.label(
+                choices
+                    .iter()
+                    .find(|(choice, _)| choice == &id)
+                    .map_or(id.as_str(), |(_, label)| label),
+            );
+            ui.add(egui::DragValue::new(
+                values.get_mut(&id).expect("map key exists"),
+            ));
+            if ui.small_button("Remove").clicked() {
+                remove = Some(id);
+            }
+        });
+    }
+    if let Some(id) = remove {
+        values.remove(&id);
+    }
+    let mut add = None;
+    egui::ComboBox::from_id_salt((label, "add", ui.next_auto_id()))
+        .selected_text("Add…")
+        .show_ui(ui, |ui| {
+            for (id, display) in choices {
+                if !values.contains_key(id) && ui.selectable_label(false, display).clicked() {
+                    add = Some(id.clone());
+                }
+            }
+        });
+    if let Some(id) = add {
+        values.insert(id, 1);
+    }
+}
+
+fn stable_u16_map_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut BTreeMap<StableId, u16>,
+    choices: &[(StableId, String)],
+) {
+    ui.label(label);
+    let mut remove = None;
+    for id in values.keys().cloned().collect::<Vec<_>>() {
+        ui.horizontal(|ui| {
+            ui.label(
+                choices
+                    .iter()
+                    .find(|(choice, _)| choice == &id)
+                    .map_or(id.as_str(), |(_, label)| label),
+            );
+            ui.add(egui::DragValue::new(
+                values.get_mut(&id).expect("map key exists"),
+            ));
+            if ui.small_button("Remove").clicked() {
+                remove = Some(id);
+            }
+        });
+    }
+    if let Some(id) = remove {
+        values.remove(&id);
+    }
+    let mut add = None;
+    egui::ComboBox::from_id_salt((label, "add", ui.next_auto_id()))
+        .selected_text("Add…")
+        .show_ui(ui, |ui| {
+            for (id, display) in choices {
+                if !values.contains_key(id) && ui.selectable_label(false, display).clicked() {
+                    add = Some(id.clone());
+                }
+            }
+        });
+    if let Some(id) = add {
+        values.insert(id, 1);
+    }
+}
+
+fn stable_i32_map_editor(
+    ui: &mut egui::Ui,
+    label: &str,
+    values: &mut BTreeMap<StableId, i32>,
+    choices: &[(StableId, String)],
+) {
+    ui.label(label);
+    let mut remove = None;
+    for id in values.keys().cloned().collect::<Vec<_>>() {
+        ui.horizontal(|ui| {
+            ui.label(
+                choices
+                    .iter()
+                    .find(|(choice, _)| choice == &id)
+                    .map_or(id.as_str(), |(_, label)| label),
+            );
+            ui.add(egui::DragValue::new(values.get_mut(&id).expect("map key exists")).suffix("%"));
+            if ui.small_button("Remove").clicked() {
+                remove = Some(id);
+            }
+        });
+    }
+    if let Some(id) = remove {
+        values.remove(&id);
+    }
+    let mut add = None;
+    egui::ComboBox::from_id_salt((label, "add", ui.next_auto_id()))
+        .selected_text("Add…")
+        .show_ui(ui, |ui| {
+            for (id, display) in choices {
+                if !values.contains_key(id) && ui.selectable_label(false, display).clicked() {
+                    add = Some(id.clone());
+                }
+            }
+        });
+    if let Some(id) = add {
+        values.insert(id, 0);
+    }
+}
+
+fn role_stat_map_editor(
+    ui: &mut egui::Ui,
+    values: &mut BTreeMap<StableId, BTreeMap<StableId, i32>>,
+    roles: &[(StableId, String)],
+    stats: &[(StableId, String)],
+) {
+    ui.label("Role-specific stat boosts");
+    let mut remove = None;
+    for role in values.keys().cloned().collect::<Vec<_>>() {
+        let label = roles
+            .iter()
+            .find(|(id, _)| id == &role)
+            .map_or(role.as_str(), |(_, label)| label);
+        ui.collapsing(label, |ui| {
+            stable_i32_map_editor(
+                ui,
+                "Stats",
+                values.get_mut(&role).expect("role map exists"),
+                stats,
+            );
+            if ui.button("Remove role effects").clicked() {
+                remove = Some(role.clone());
+            }
+        });
+    }
+    if let Some(role) = remove {
+        values.remove(&role);
+    }
+    let mut add = None;
+    egui::ComboBox::from_id_salt(("role stat", ui.next_auto_id()))
+        .selected_text("Add role…")
+        .show_ui(ui, |ui| {
+            for (id, display) in roles {
+                if !values.contains_key(id) && ui.selectable_label(false, display).clicked() {
+                    add = Some(id.clone());
+                }
+            }
+        });
+    if let Some(role) = add {
+        values.insert(role, BTreeMap::new());
+    }
+}
+
+fn draw_building_visual(ui: &mut egui::Ui, building: &BuildingDef, catalog: &ContentCatalog) {
+    ui.group(|ui| {
+        let archetype = catalog.archetypes.get(&building.archetype);
+        ui.heading(archetype.map_or("Missing archetype", |value| value.display_name.as_str()));
+        if let Some(archetype) = archetype {
+            for scene in &archetype.scenes {
+                ui.monospace(format!(
+                    "{}{}",
+                    if scene.is_default { "● " } else { "○ " },
+                    scene.asset_path
+                ));
+            }
+        }
+        let desired = egui::vec2(190.0, 120.0);
+        let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 5.0, egui::Color32::from_rgb(24, 34, 42));
+        let width = f32::from(building.footprint[0].max(1));
+        let depth = f32::from(building.footprint[1].max(1));
+        let scale = (rect.width() / width).min(rect.height() / depth) * 0.78;
+        let footprint =
+            egui::Rect::from_center_size(rect.center(), egui::vec2(width * scale, depth * scale));
+        ui.painter()
+            .rect_filled(footprint, 3.0, egui::Color32::from_rgb(71, 120, 145));
+        for x in 1..building.footprint[0] {
+            let x = footprint.left() + f32::from(x) * scale;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(x, footprint.top()),
+                    egui::pos2(x, footprint.bottom()),
+                ],
+                egui::Stroke::new(0.7, egui::Color32::from_rgb(119, 166, 188)),
+            );
+        }
+        for z in 1..building.footprint[1] {
+            let y = footprint.top() + f32::from(z) * scale;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(footprint.left(), y),
+                    egui::pos2(footprint.right(), y),
+                ],
+                egui::Stroke::new(0.7, egui::Color32::from_rgb(119, 166, 188)),
+            );
+        }
+    });
+}
+
+fn building_draft(catalog: &ContentCatalog, id: &StableId) -> Option<BuildingDraft> {
+    Some(BuildingDraft {
+        id: id.clone(),
+        value: catalog.buildings.get(id)?.clone(),
+    })
+}
+
+fn refresh_building_draft(state: &mut ToolState) {
+    if state
+        .selected_building
+        .as_ref()
+        .is_none_or(|id| !state.catalog.buildings.contains_key(id))
+    {
+        state.selected_building = state.catalog.buildings.keys().next().cloned();
+    }
+    state.building_draft = state
+        .selected_building
+        .as_ref()
+        .and_then(|id| building_draft(&state.catalog, id));
+}
+
+fn apply_building_draft(state: &mut ToolState) -> Result<(), String> {
+    let draft = state
+        .building_draft
+        .clone()
+        .ok_or_else(|| "no building selected".to_owned())?;
+    if draft.value.display_name.trim().is_empty() {
+        return Err("building display name cannot be empty".to_owned());
+    }
+    let mut candidate = state.catalog.clone();
+    candidate.buildings.insert(draft.id, draft.value);
+    commit_catalog_candidate(state, candidate)
+}
+
+fn duplicate_selected_building(state: &mut ToolState) -> Result<(), String> {
+    let source = state
+        .selected_building
+        .as_ref()
+        .and_then(|id| state.catalog.buildings.get(id))
+        .cloned()
+        .ok_or_else(|| "no building selected".to_owned())?;
+    let id = StableId::new(state.new_building_id.trim().to_owned())
+        .map_err(|error| error.to_string())?;
+    if state.catalog.buildings.contains_key(&id) {
+        return Err(format!("building {id} already exists"));
+    }
+    let display_name = state.new_building_name.trim();
+    if display_name.is_empty() {
+        return Err("new building name cannot be empty".to_owned());
+    }
+    let mut value = source;
+    display_name.clone_into(&mut value.display_name);
+    let mut candidate = state.catalog.clone();
+    candidate.buildings.insert(id.clone(), value);
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_building = Some(id);
+    refresh_building_draft(state);
+    Ok(())
+}
+
+fn delete_selected_building(state: &mut ToolState) -> Result<(), String> {
+    let id = state
+        .selected_building
+        .clone()
+        .ok_or_else(|| "no building selected".to_owned())?;
+    let mut candidate = state.catalog.clone();
+    candidate
+        .buildings
+        .remove(&id)
+        .ok_or_else(|| format!("missing building {id}"))?;
+    commit_catalog_candidate(state, candidate)?;
+    state.selected_building = state.catalog.buildings.keys().next().cloned();
+    refresh_building_draft(state);
+    Ok(())
 }
 
 fn role_draft(catalog: &ContentCatalog, id: &StableId) -> Option<RoleDraft> {
@@ -3834,25 +5598,8 @@ fn apply_role_draft(state: &mut ToolState) -> Result<(), String> {
     {
         return Err("movement, experience, and health base values must be positive".to_owned());
     }
-    let resource = optional_text(&draft.resource)
-        .map(StableId::new)
-        .transpose()
-        .map_err(|error| error.to_string())?;
-    let mut value = draft.value;
-    value.resource = resource;
-    value.station_kinds = parse_stable_id_set(&draft.station_kinds)?;
-    value.target_kinds = parse_stable_id_set(&draft.target_kinds)?;
-    value.granted_abilities = parse_stable_id_list(&draft.granted_abilities)?;
-    value.equipment = draft.has_equipment.then(|| RoleEquipmentDef {
-        body_nodes: draft.body_nodes.map(|node| node.trim().to_owned()),
-        left_hand_node: optional_text(&draft.left_hand_node),
-        right_hand_node: optional_text(&draft.right_hand_node),
-        helmet_node: optional_text(&draft.helmet_node),
-        carry_animation: optional_text(&draft.carry_animation),
-        left_hand_permanent: draft.left_hand_permanent,
-    });
     let mut candidate = state.catalog.clone();
-    candidate.roles.insert(draft.id, value);
+    candidate.roles.insert(draft.id, draft.value);
     commit_catalog_candidate(state, candidate)
 }
 
@@ -4164,9 +5911,9 @@ fn refresh_foliage_draft(state: &mut ToolState) {
 fn refresh_catalog_drafts(state: &mut ToolState) {
     refresh_technology_draft(state);
     refresh_role_draft(state);
+    refresh_building_draft(state);
     refresh_foliage_draft(state);
     state.generated_world = None;
-    state.preview_path.clear();
 }
 
 fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
@@ -4174,36 +5921,19 @@ fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
         .technology_draft
         .clone()
         .ok_or_else(|| "no technology selected".to_owned())?;
-    let prerequisites = draft
-        .prerequisites
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| StableId::new(value.to_owned()).map_err(|error| error.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let unlocks = parse_stable_id_list(&draft.unlocks)?;
-    let objectives = parse_stable_id_list(&draft.objectives)?;
     let mut candidate = state.catalog.clone();
-    let node = candidate
+    if !candidate.technology.nodes.contains_key(&draft.id) {
+        return Err(format!("missing technology {}", draft.id));
+    }
+    let group = draft.value.group.clone();
+    candidate
         .technology
         .nodes
-        .get_mut(&draft.id)
-        .ok_or_else(|| format!("missing technology {}", draft.id))?;
-    node.display_name = draft.display_name;
-    node.description = draft.description;
-    node.age = draft.age;
-    node.tier = draft.tier;
-    node.group.clone_from(&draft.group);
-    node.prerequisites = prerequisites;
-    node.unlocks = unlocks;
-    node.objectives = objectives;
-    node.icon_path = draft.icon_path;
-    node.initially_unlocked = draft.initially_unlocked;
-    node.unavailable = draft.unavailable;
+        .insert(draft.id.clone(), draft.value);
     for group in candidate.technology.groups.values_mut() {
         group.nodes.retain(|reference| reference != &draft.id);
     }
-    if let Some(group_id) = &draft.group {
+    if let Some(group_id) = &group {
         candidate
             .technology
             .groups
@@ -4218,7 +5948,6 @@ fn apply_technology_draft(state: &mut ToolState) -> Result<(), String> {
 fn draw_world_preview(
     ui: &mut egui::Ui,
     world: &GeneratedWorld,
-    path: &[GridPos],
     layer: WorldPreviewLayer,
     selected_foliage: Option<&StableId>,
     water_level_centimetres: i16,
@@ -4318,29 +6047,6 @@ fn draw_world_preview(
             );
         }
     }
-    for segment in path.windows(2) {
-        ui.painter().line_segment(
-            [
-                preview_grid_point(rect, width, height, segment[0]),
-                preview_grid_point(rect, width, height, segment[1]),
-            ],
-            egui::Stroke::new(2.0, egui::Color32::YELLOW),
-        );
-    }
-    if let Some(start) = path.first() {
-        ui.painter().circle_filled(
-            preview_grid_point(rect, width, height, *start),
-            3.5,
-            egui::Color32::LIGHT_GREEN,
-        );
-    }
-    if let Some(goal) = path.last() {
-        ui.painter().circle_filled(
-            preview_grid_point(rect, width, height, *goal),
-            3.5,
-            egui::Color32::LIGHT_RED,
-        );
-    }
     ui.label(match layer {
         WorldPreviewLayer::Elevation => "Blue is at/below water level; green through stone encodes terrain elevation.",
         WorldPreviewLayer::Navigation => "Green cells are walkable; charcoal cells are blocked.",
@@ -4392,6 +6098,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn visible_tabs_are_focused_authoring_workflows() {
+        assert_eq!(
+            ToolTab::ALL.map(ToolTab::label),
+            [
+                "Migration",
+                "Game Authority",
+                "Models + Assets",
+                "Buildings",
+                "Roles",
+                "Technology",
+                "World + Nav",
+                "Validation",
+            ]
+        );
+    }
+
+    #[test]
+    fn character_model_choices_include_converted_hierarchy_nodes() {
+        let state = ToolState::default();
+        let choices = equipment_node_choices(&state.catalog, &state.presentation);
+        assert!(choices.iter().any(|node| node == "Body_Blacksmith_Slim"));
+        assert!(choices.iter().any(|node| node == "Body_Logger_Feminine"));
+        assert!(choices.iter().all(|node| !node.trim().is_empty()));
+    }
+
+    #[test]
     fn technology_editor_rejects_cycles_without_mutating_catalog() {
         let mut state = ToolState::default();
         let (node_id, prerequisite) = state
@@ -4406,7 +6138,7 @@ mod tests {
             })
             .expect("shipping graph has an edge");
         state.technology_draft = technology_draft(&state.catalog, &prerequisite);
-        state.technology_draft.as_mut().unwrap().prerequisites = node_id.to_string();
+        state.technology_draft.as_mut().unwrap().value.prerequisites = vec![node_id];
         let before = state.catalog.clone();
         assert!(apply_technology_draft(&mut state).is_err());
         assert_eq!(state.catalog, before);
@@ -4453,6 +6185,67 @@ mod tests {
             .technology_layout
             .validate(&state.catalog.technology)
             .unwrap();
+    }
+
+    #[test]
+    fn technology_editor_preserves_the_complete_effect_record() {
+        let mut state = ToolState::default();
+        let (id, before) = state
+            .catalog
+            .technology
+            .nodes
+            .iter()
+            .find(|(_, node)| {
+                !node.building_level_caps.is_empty()
+                    || !node.global_stat_boost_percent.is_empty()
+                    || !node.role_stat_boost_percent.is_empty()
+            })
+            .map(|(id, node)| (id.clone(), node.clone()))
+            .expect("shipping technology graph has authored effects");
+        state.technology_draft = technology_draft(&state.catalog, &id);
+        state
+            .technology_draft
+            .as_mut()
+            .unwrap()
+            .value
+            .description
+            .push_str(" [edited]");
+
+        apply_technology_draft(&mut state).unwrap();
+
+        let mut expected = before;
+        expected.description.push_str(" [edited]");
+        assert_eq!(state.catalog.technology.nodes[&id], expected);
+    }
+
+    #[test]
+    fn building_editor_preserves_the_complete_template_record() {
+        let mut state = ToolState::default();
+        let (id, before) = state
+            .catalog
+            .buildings
+            .iter()
+            .find(|(_, building)| {
+                !building.model_handlers.is_empty()
+                    && (!building.storage.is_empty() || building.station.is_some())
+            })
+            .map(|(id, building)| (id.clone(), building.clone()))
+            .expect("shipping catalog has a fully authored building");
+        state.selected_building = Some(id.clone());
+        state.building_draft = building_draft(&state.catalog, &id);
+        state
+            .building_draft
+            .as_mut()
+            .unwrap()
+            .value
+            .display_name
+            .push_str(" Edited");
+
+        apply_building_draft(&mut state).unwrap();
+
+        let mut expected = before;
+        expected.display_name.push_str(" Edited");
+        assert_eq!(state.catalog.buildings[&id], expected);
     }
 
     #[test]
@@ -4539,9 +6332,18 @@ mod tests {
         state.role_draft = role_draft(&state.catalog, &id);
         let draft = state.role_draft.as_mut().unwrap();
         draft.value.base_action_amount = 7;
-        draft.station_kinds = "station:food, station:fish".to_owned();
-        draft.target_kinds = "target:bush, target:fish".to_owned();
-        draft.granted_abilities = "resource:food, role_flag:resource".to_owned();
+        draft.value.station_kinds = ["station:food", "station:fish"]
+            .into_iter()
+            .map(|value| StableId::new(value).unwrap())
+            .collect();
+        draft.value.target_kinds = ["target:bush", "target:fish"]
+            .into_iter()
+            .map(|value| StableId::new(value).unwrap())
+            .collect();
+        draft.value.granted_abilities = ["resource:food", "role_flag:resource"]
+            .into_iter()
+            .map(|value| StableId::new(value).unwrap())
+            .collect();
 
         apply_role_draft(&mut state).unwrap();
         let role = &state.catalog.roles[&id];
@@ -4553,7 +6355,16 @@ mod tests {
         state.catalog.validate().unwrap();
 
         let before = state.catalog.clone();
-        state.role_draft.as_mut().unwrap().body_nodes[0].clear();
+        state
+            .role_draft
+            .as_mut()
+            .unwrap()
+            .value
+            .equipment
+            .as_mut()
+            .unwrap()
+            .body_nodes[0]
+            .clear();
         assert!(apply_role_draft(&mut state).is_err());
         assert_eq!(state.catalog, before);
     }
