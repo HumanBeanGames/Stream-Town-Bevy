@@ -938,12 +938,12 @@ struct PointerObjectSelectionEnabled;
 #[derive(Resource, Default)]
 struct EnvironmentPresentation {
     applied_environment: Option<(Season, Weather)>,
-    applied_daylight_milli: u16,
+    applied_daylight_bits: Option<u32>,
 }
 
 #[derive(Resource, Default)]
 struct PostProcessPresentation {
-    applied: Option<(GameState, u16, i32, i32)>,
+    applied: Option<(GameState, u32, i32, i32)>,
 }
 
 #[derive(Resource, Default)]
@@ -953,7 +953,7 @@ struct BuildingMaterialInstance {
     handle: Handle<BuildingMaterial>,
     applied_health: i32,
     applied_season: Season,
-    applied_daylight_milli: u16,
+    applied_daylight_bits: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, ShaderType)]
@@ -4954,18 +4954,29 @@ fn sync_authored_post_processing(
     let Ok(camera) = cameras.single() else {
         return;
     };
-    let daylight_milli = if *state.get() == GameState::InGame {
-        simulation
-            .as_deref()
-            .map_or(environment.applied_daylight_milli, |simulation| {
-                normalized_milli(config.0.time.sample(simulation.0.elapsed_seconds).daylight)
-            })
+    let daylight = if *state.get() == GameState::InGame {
+        simulation.as_deref().map_or_else(
+            || {
+                environment
+                    .applied_daylight_bits
+                    .map_or(1.0, f32::from_bits)
+            },
+            |simulation| {
+                config
+                    .0
+                    .time
+                    .sample(simulation.0.elapsed_seconds)
+                    .daylight
+                    .clamp(0.0, 1.0)
+            },
+        )
     } else {
-        1_000
+        1.0
     };
+    let daylight_bits = daylight_signature(daylight);
     let signature = (
         *state.get(),
-        daylight_milli,
+        daylight_bits,
         i32::from_ne_bytes(settings.0.video.brightness_ev.to_ne_bytes()),
         i32::from_ne_bytes(settings.0.video.gamma.to_ne_bytes()),
     );
@@ -4978,7 +4989,6 @@ fn sync_authored_post_processing(
         GameState::Credits => Some(CREDITS_SCENE_PATH),
         GameState::Boot | GameState::MainMenu | GameState::WorldLoading => None,
     };
-    let daylight = f32::from(daylight_milli) / 1_000.0;
     let stack = scene_path.map_or_else(Vec::new, |scene| {
         authored_post_process_stack(&catalog.0, scene, daylight)
     });
@@ -22806,14 +22816,14 @@ fn update_environment_presentation(
 ) {
     let environment = (simulation.0.season, simulation.0.weather);
     let time_cycle = config.0.time.sample(simulation.0.elapsed_seconds);
-    let daylight_milli = normalized_milli(time_cycle.daylight);
+    let daylight = time_cycle.daylight.clamp(0.0, 1.0);
+    let daylight_bits = daylight_signature(daylight);
     let environment_changed = presentation.applied_environment != Some(environment);
-    let daylight_changed = presentation.applied_daylight_milli != daylight_milli;
+    let daylight_changed = presentation.applied_daylight_bits != Some(daylight_bits);
     if !environment_changed && !daylight_changed {
         return;
     }
     let palette = environment_palette(environment.0, environment.1);
-    let daylight = f32::from(daylight_milli) / 1_000.0;
     let authored_daylight = f32::from(config.0.time.day_light_intensity_milli) / 1_000.0;
     let authored_nightlight = f32::from(config.0.time.night_light_intensity_milli) / 1_000.0;
     let light_ratio = (authored_nightlight + (authored_daylight - authored_nightlight) * daylight)
@@ -22916,24 +22926,21 @@ fn update_environment_presentation(
             palette.particle_count,
         );
     }
-    info!(
-        season = ?environment.0,
-        weather = ?environment.1,
-        daylight,
-        particles = palette.particle_count,
-        "environment presentation updated"
-    );
+    if environment_changed {
+        info!(
+            season = ?environment.0,
+            weather = ?environment.1,
+            daylight,
+            particles = palette.particle_count,
+            "environment presentation updated"
+        );
+    }
     presentation.applied_environment = Some(environment);
-    presentation.applied_daylight_milli = daylight_milli;
+    presentation.applied_daylight_bits = Some(daylight_bits);
 }
 
-fn normalized_milli(value: f32) -> u16 {
-    u16::try_from(
-        Duration::from_secs_f32(value.clamp(0.0, 1.0))
-            .as_millis()
-            .min(1_000),
-    )
-    .expect("normalized milliseconds fit u16")
+fn daylight_signature(value: f32) -> u32 {
+    value.clamp(0.0, 1.0).to_bits()
 }
 
 fn spawn_weather_particles(
@@ -26642,9 +26649,13 @@ fn instantiate_building_materials(
                     building_max_health(&content.0, state)
                 });
             material.extension.parameters.snow_damage.z = building_damage_value(health, max_health);
-            let daylight_milli =
-                normalized_milli(config.0.time.sample(simulation.0.elapsed_seconds).daylight);
-            let daylight = f32::from(daylight_milli) / 1_000.0;
+            let daylight = config
+                .0
+                .time
+                .sample(simulation.0.elapsed_seconds)
+                .daylight
+                .clamp(0.0, 1.0);
+            let daylight_bits = daylight_signature(daylight);
             material.extension.parameters.surface_controls.z =
                 f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
             let handle = materials.add(material);
@@ -26654,7 +26665,7 @@ fn instantiate_building_materials(
                     handle: handle.clone(),
                     applied_health: health,
                     applied_season: season,
-                    applied_daylight_milli: daylight_milli,
+                    applied_daylight_bits: daylight_bits,
                 },
             );
             handle
@@ -26689,11 +26700,16 @@ fn sync_building_material_instances(
         let Some(building) = simulation.0.buildings.get(id) else {
             continue;
         };
-        let daylight_milli =
-            normalized_milli(config.0.time.sample(simulation.0.elapsed_seconds).daylight);
+        let daylight = config
+            .0
+            .time
+            .sample(simulation.0.elapsed_seconds)
+            .daylight
+            .clamp(0.0, 1.0);
+        let daylight_bits = daylight_signature(daylight);
         if instance.applied_health == building.health
             && instance.applied_season == simulation.0.season
-            && instance.applied_daylight_milli == daylight_milli
+            && instance.applied_daylight_bits == daylight_bits
         {
             continue;
         }
@@ -26703,14 +26719,13 @@ fn sync_building_material_instances(
         let snow = building_snow_strength(simulation.0.season);
         material.extension.parameters.snow_damage.x = snow;
         material.extension.parameters.snow_damage.y = snow;
-        let daylight = config.0.time.sample(simulation.0.elapsed_seconds).daylight;
         material.extension.parameters.surface_controls.z =
             f32::from(config.0.time.max_building_emission_milli) / 1_000.0 * (1.0 - daylight);
         material.extension.parameters.snow_damage.z =
             building_damage_value(building.health, building_max_health(&content.0, building));
         instance.applied_health = building.health;
         instance.applied_season = simulation.0.season;
-        instance.applied_daylight_milli = daylight_milli;
+        instance.applied_daylight_bits = daylight_bits;
     }
 }
 
@@ -36679,6 +36694,24 @@ mod tests {
         assert!(dusk.rotation.angle_between(night.rotation).to_degrees() > 59.0);
         assert!((day.rotation.angle_between(night.rotation).to_degrees() - 120.0).abs() < 0.01);
         assert_eq!(day.translation, night.translation);
+    }
+
+    #[test]
+    fn sunset_presentation_preserves_sub_millisecond_daylight_changes() {
+        let config = GameConfig::default();
+        let day_seconds = f64::from(config.time.seconds_per_day);
+        let transition_seconds = f64::from(config.time.transition_seconds);
+        let dusk_midpoint = day_seconds * f64::from(config.time.daylight_per_thousand) / 1_000.0
+            - transition_seconds * 0.5;
+        let first = config.time.sample(dusk_midpoint).daylight;
+        let second = config.time.sample(dusk_midpoint + 0.01).daylight;
+
+        assert!((first - second).abs() < 0.001);
+        assert_ne!(daylight_signature(first), daylight_signature(second));
+        assert_ne!(
+            in_game_sun_transform_for_daylight(first).rotation,
+            in_game_sun_transform_for_daylight(second).rotation
+        );
     }
 
     #[test]
