@@ -2764,6 +2764,11 @@ struct BuildingPlacementVisual {
 }
 
 #[derive(Component)]
+struct BuildingPlacementOwnerOverlay {
+    owner: StableId,
+}
+
+#[derive(Component)]
 struct EnemyCamp {
     id: StableId,
 }
@@ -3894,6 +3899,9 @@ impl Plugin for StreamTownGamePlugin {
                         .after(apply_agent_commands),
                     apply_building_commands.after(process_injected_commands),
                     sync_building_placers.after(process_injected_commands),
+                    sync_building_placement_overlays
+                        .after(process_injected_commands)
+                        .after(sync_building_placers),
                     sync_foliage_clearance
                         .after(apply_building_commands)
                         .after(load_input)
@@ -17313,8 +17321,15 @@ fn ensure_actor_station(
     actor_id: &StableId,
 ) {
     let replacement = simulation.actors.get(actor_id).and_then(|actor| {
-        let valid = assigned_station(content, simulation, config, actor).is_some();
-        (!valid).then(|| best_station_id(content, simulation, config, &actor.role, actor.position))
+        let current = assigned_station(content, simulation, config, actor);
+        let best = best_station_id(content, simulation, config, &actor.role, actor.position);
+        let current_is_town_hall =
+            current.is_some_and(|station| station.id.as_str() == "building:townhall");
+        let specialized_station_available = best
+            .as_ref()
+            .is_some_and(|station| station.as_str() != "building:townhall");
+        (current.is_none() || (current_is_town_hall && specialized_station_available))
+            .then_some(best)
     });
     if let Some(station) = replacement
         && let Some(actor) = simulation.actors.get_mut(actor_id)
@@ -17980,7 +17995,20 @@ fn building_approach(
     footprint: [u16; 2],
     from: GridPos,
 ) -> Option<GridPos> {
-    let region = building_region(position, footprint, world)?;
+    building_approaches(world, position, footprint, from)
+        .into_iter()
+        .next()
+}
+
+fn building_approaches(
+    world: &GeneratedWorld,
+    position: GridPos,
+    footprint: [u16; 2],
+    from: GridPos,
+) -> Vec<GridPos> {
+    let Some(region) = building_region(position, footprint, world) else {
+        return Vec::new();
+    };
     let min_x = region.min.x.saturating_sub(1);
     let min_z = region.min.z.saturating_sub(1);
     let max_x = region
@@ -18011,7 +18039,27 @@ fn building_approach(
             candidate.x,
         )
     });
-    approaches.into_iter().next()
+    approaches
+}
+
+#[allow(clippy::too_many_arguments)]
+fn unoccupied_building_approach(
+    world: &GeneratedWorld,
+    position: GridPos,
+    footprint: [u16; 2],
+    from: GridPos,
+    actor: &StableId,
+    occupied: &BTreeMap<GridPos, StableId>,
+    reservations: &BTreeMap<GridPos, StableId>,
+) -> Option<GridPos> {
+    building_approaches(world, position, footprint, from)
+        .into_iter()
+        .find(|candidate| {
+            occupied.get(candidate).is_none_or(|owner| owner == actor)
+                && reservations
+                    .get(candidate)
+                    .is_none_or(|owner| owner == actor)
+        })
 }
 
 #[cfg(test)]
@@ -18032,6 +18080,8 @@ fn next_agent_goal(
         &station_targets,
         actor_id,
         current,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
     )
@@ -18060,6 +18110,8 @@ fn next_agent_goal_with_reservations(
         current,
         reservations,
         target_assignments,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
     )
 }
 
@@ -18103,6 +18155,8 @@ fn next_agent_goal_with_station_runtime(
     current: GridPos,
     reservations: &BTreeMap<StableId, StableId>,
     target_assignments: &BTreeMap<StableId, u32>,
+    occupied_approaches: &BTreeMap<GridPos, StableId>,
+    construction_approaches: &BTreeMap<GridPos, StableId>,
 ) -> (AgentGoal, GridPos) {
     let Some(actor) = simulation.actors.get(actor_id) else {
         return (
@@ -18260,11 +18314,14 @@ fn next_agent_goal_with_station_runtime(
             actor.role.as_str() == "role:builder"
                 && (!building.complete || building.health < building_max_health(content, building))
         }) && let Some(definition) = building_def_for_archetype(content, &building.archetype)
-            && let Some(approach) = building_approach(
+            && let Some(approach) = unoccupied_building_approach(
                 world,
                 building.position,
                 rotated_footprint(definition.footprint, building.rotation_quarter_turns),
                 current,
+                actor_id,
+                occupied_approaches,
+                construction_approaches,
             )
         {
             return (AgentGoal::Construct(building.id.clone()), approach);
@@ -18458,11 +18515,14 @@ fn next_agent_goal_with_station_runtime(
             })
             .filter_map(|building| {
                 let definition = building_def_for_archetype(content, &building.archetype)?;
-                let approach = building_approach(
+                let approach = unoccupied_building_approach(
                     world,
                     building.position,
                     rotated_footprint(definition.footprint, building.rotation_quarter_turns),
                     current,
+                    actor_id,
+                    occupied_approaches,
+                    construction_approaches,
                 )?;
                 Some((
                     grid_distance_squared(building_visual_grid(content, building), current),
@@ -18621,19 +18681,31 @@ fn next_agent_goal_with_station_runtime(
             resource.id.clone(),
         )
     });
-    resources
+    if let Some(goal) = resources
         .into_iter()
         .filter(|resource| reservation_available(reservations, actor_id, &resource.id))
         .find_map(|resource| {
             resource_approach(world, resource, current)
                 .map(|approach| (AgentGoal::Gather(resource.id.clone()), approach))
         })
-        .unwrap_or_else(|| {
-            (
-                AgentGoal::Wander,
-                deterministic_wander_target(world, actor_id, current),
-            )
-        })
+    {
+        return goal;
+    }
+    if actor
+        .inventory
+        .get(&resource_kind)
+        .copied()
+        .unwrap_or_default()
+        > 0
+    {
+        let destination = station_deposit_approach(content, simulation, world, station, current)
+            .unwrap_or(current);
+        return (AgentGoal::Deposit, destination);
+    }
+    (
+        AgentGoal::Wander,
+        deterministic_wander_target(world, actor_id, current),
+    )
 }
 
 fn complete_agent_goal(
@@ -21146,6 +21218,26 @@ fn move_agents(
     }
     let mut resource_reservations = BTreeMap::new();
     let mut target_assignment_counts: BTreeMap<StableId, u32> = BTreeMap::new();
+    let occupied_approaches = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| actor.alive)
+        .fold(
+            BTreeMap::<GridPos, StableId>::new(),
+            |mut occupied, actor| {
+                occupied
+                    .entry(actor.position)
+                    .and_modify(|owner| {
+                        if actor.id < *owner {
+                            owner.clone_from(&actor.id);
+                        }
+                    })
+                    .or_insert_with(|| actor.id.clone());
+                occupied
+            },
+        );
+    let mut construction_approaches = BTreeMap::<GridPos, StableId>::new();
     for (_, agent, _, _, _, _) in &agents {
         if let Some(target) = goal_reservation(&agent.goal)
             && goal_reservation_is_valid(
@@ -21178,6 +21270,16 @@ fn move_agents(
                 .entry(target.clone())
                 .and_modify(|count| *count = count.saturating_add(1))
                 .or_insert(1_u32);
+        }
+        if matches!(agent.goal, AgentGoal::Construct(_)) {
+            construction_approaches
+                .entry(agent.target)
+                .and_modify(|owner| {
+                    if agent.id < *owner {
+                        owner.clone_from(&agent.id);
+                    }
+                })
+                .or_insert_with(|| agent.id.clone());
         }
     }
     let mut agent_order: Vec<_> = agents
@@ -21390,6 +21492,8 @@ fn move_agents(
                 location.0,
                 &resource_reservations,
                 &target_assignment_counts,
+                &occupied_approaches,
+                &construction_approaches,
             );
             if updated_goal != agent.goal || updated_target != agent.target {
                 agent.path.clear();
@@ -21533,6 +21637,11 @@ fn move_agents(
                     target_assignment_counts.remove(target);
                 }
             }
+            if matches!(agent.goal, AgentGoal::Construct(_))
+                && construction_approaches.get(&agent.target) == Some(&agent.id)
+            {
+                construction_approaches.remove(&agent.target);
+            }
             let mut planning_reservations = resource_reservations.clone();
             let unreachable_owner =
                 StableId::new("system:unreachable-resource").expect("static stable ID");
@@ -21548,6 +21657,8 @@ fn move_agents(
                     location.0,
                     &planning_reservations,
                     &target_assignment_counts,
+                    &occupied_approaches,
+                    &construction_approaches,
                 );
                 if candidate_goal == AgentGoal::Wander {
                     break (candidate_goal, candidate_target, None);
@@ -21622,6 +21733,9 @@ fn move_agents(
                     .entry(target.clone())
                     .and_modify(|count| *count = count.saturating_add(1))
                     .or_insert(1_u32);
+            }
+            if matches!(agent.goal, AgentGoal::Construct(_)) {
+                construction_approaches.insert(target, agent.id.clone());
             }
             agent.target = target;
             agent.path = planned_path.unwrap_or_else(|| vec![location.0]);
@@ -27569,6 +27683,123 @@ fn sync_building_placers(
     }
 }
 
+fn building_placement_overlay_text(
+    simulation: &WorldSimulation,
+    definition: &BuildingDef,
+    owner: &StableId,
+) -> String {
+    let owner_name = simulation
+        .actors
+        .get(owner)
+        .and_then(|actor| {
+            actor
+                .display_name
+                .as_deref()
+                .or(actor.login_name.as_deref())
+        })
+        .unwrap_or_else(|| owner.as_str());
+    format!("{owner_name} · {} floorplan", definition.display_name)
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_building_placement_overlays(
+    mut commands: Commands,
+    config: Res<RuntimeConfig>,
+    content: Res<RuntimeContent>,
+    simulation: Res<SimulationRuntime>,
+    world: Res<WorldRuntime>,
+    placers: Res<BuildingPlacers>,
+    cameras: Query<(&Camera, &GlobalTransform), With<TownCamera>>,
+    mut overlays: Query<(
+        Entity,
+        &BuildingPlacementOwnerOverlay,
+        &mut Text,
+        &mut Node,
+        &mut Visibility,
+    )>,
+) {
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        return;
+    };
+    let mut existing = BTreeSet::new();
+    for (entity, overlay, mut text, mut node, mut visibility) in &mut overlays {
+        existing.insert(overlay.owner.clone());
+        let Some(placement) = placers.0.get(&overlay.owner) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let Some(definition) = content.0.buildings.get(&placement.building) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+        let centre = GridPos {
+            x: placement.position.x.saturating_add(effective[0] / 2),
+            z: placement.position.z.saturating_add(effective[1] / 2),
+        };
+        let world_position = grid_to_world_on_surface(centre, &config.0, &world.generated)
+            + Vec3::Y * config.0.world.cell_size * 0.35;
+        let Some(screen) = overlay_viewport_position(camera, camera_transform, world_position)
+        else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        **text = building_placement_overlay_text(&simulation.0, definition, &overlay.owner);
+        node.left = px(screen.x - 120.0);
+        node.top = px(screen.y - 34.0);
+        *visibility = Visibility::Visible;
+    }
+    for (owner, placement) in &placers.0 {
+        if existing.contains(owner) {
+            continue;
+        }
+        let Some(definition) = content.0.buildings.get(&placement.building) else {
+            continue;
+        };
+        let effective = rotated_footprint(definition.footprint, placement.rotation_quarter_turns);
+        let centre = GridPos {
+            x: placement.position.x.saturating_add(effective[0] / 2),
+            z: placement.position.z.saturating_add(effective[1] / 2),
+        };
+        let world_position = grid_to_world_on_surface(centre, &config.0, &world.generated)
+            + Vec3::Y * config.0.world.cell_size * 0.35;
+        let Some(screen) = overlay_viewport_position(camera, camera_transform, world_position)
+        else {
+            continue;
+        };
+        commands.spawn((
+            WorldEntity,
+            BuildingPlacementOwnerOverlay {
+                owner: owner.clone(),
+            },
+            Text::new(building_placement_overlay_text(
+                &simulation.0,
+                definition,
+                owner,
+            )),
+            TextFont {
+                font_size: FontSize::Px(16.0),
+                ..default()
+            },
+            TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            TextColor(Color::srgb(0.98, 0.94, 0.78)),
+            TextShadow {
+                offset: Vec2::splat(1.5),
+                color: Color::linear_rgba(0.0, 0.0, 0.0, 0.98),
+            },
+            Pickable::IGNORE,
+            GlobalZIndex(20),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(screen.x - 120.0),
+                top: px(screen.y - 34.0),
+                width: px(240),
+                ..default()
+            },
+        ));
+    }
+}
+
 fn update_placer_visual(
     config: &GameConfig,
     world: &GeneratedWorld,
@@ -32090,11 +32321,11 @@ fn shift_grid_position(
         match action.direction {
             // The authored gameplay camera looks toward +X, so command names
             // describe the viewer's on-screen directions rather than raw grid
-            // axes: screen up/down is +/-X and screen left/right is +/-Z.
+            // axes: screen up/down is +/-X and screen left/right is -/+Z.
             BuildingDirection::Up => x = x.saturating_add(action.amount),
             BuildingDirection::Down => x = x.saturating_sub(action.amount),
-            BuildingDirection::Left => z = z.saturating_add(action.amount),
-            BuildingDirection::Right => z = z.saturating_sub(action.amount),
+            BuildingDirection::Left => z = z.saturating_sub(action.amount),
+            BuildingDirection::Right => z = z.saturating_add(action.amount),
             BuildingDirection::Rotate => rotation = rotation.saturating_add(action.amount),
         }
     }
@@ -38011,6 +38242,8 @@ mod tests {
         let mut simulation = WorldSimulation::new(config.world.seed);
         assert!(simulation.join_player(actor_id.clone(), position));
         simulation.assign_role(&actor_id, logger).unwrap();
+        simulation.actors.get_mut(&actor_id).unwrap().station =
+            Some(StableId::new("building:townhall").unwrap());
         simulation.buildings.insert(
             station_id.clone(),
             BuildingState {
@@ -38133,6 +38366,119 @@ mod tests {
                     .contains_key(&resource)
             );
         }
+    }
+
+    #[test]
+    fn partially_loaded_miner_promotes_from_town_hall_and_deposits_when_ore_is_exhausted() {
+        let config = GameConfig::default();
+        let content = embedded_content();
+        let mut world = generate_world_with_content(&config.world, &content);
+        let actor_id = StableId::new("npc:partial_miner_station_regression").unwrap();
+        let station_id = StableId::new("building:partial_miner_stonemason").unwrap();
+        let stonemason = &content.buildings[&StableId::new("building:stonemason").unwrap()];
+        let position = nearest_walkable(
+            &world,
+            GridPos {
+                x: world.navigation.width() / 2,
+                z: world.navigation.height() / 2,
+            },
+        )
+        .unwrap();
+        let mut simulation = WorldSimulation::new(world.seed);
+        ensure_town_hall_state(&content, &config, &mut simulation);
+        simulation.buildings.insert(
+            station_id.clone(),
+            BuildingState {
+                id: station_id.clone(),
+                archetype: stonemason.archetype.clone(),
+                position,
+                rotation_quarter_turns: 0,
+                level: 1,
+                health: i32::try_from(building_base_max_health(&content, stonemason)).unwrap(),
+                complete: true,
+            },
+        );
+        assert!(simulation.join_player(actor_id.clone(), position));
+        simulation
+            .assign_role(&actor_id, StableId::new("role:miner").unwrap())
+            .unwrap();
+        simulation.actors.get_mut(&actor_id).unwrap().station =
+            Some(StableId::new("building:townhall").unwrap());
+        simulation
+            .gather(&actor_id, StableId::new("resource:ore").unwrap(), 6)
+            .unwrap();
+        for resource in &mut world.resources {
+            if resource.kind.as_str() == "resource:ore" {
+                resource.amount = 0;
+            }
+        }
+
+        ensure_actor_station(&content, &mut simulation, &config, &actor_id);
+        assert_eq!(
+            simulation.actors[&actor_id].station,
+            Some(station_id.clone())
+        );
+        let (goal, target) =
+            next_agent_goal(&simulation, &world, &config, &content, &actor_id, position);
+        assert_eq!(goal, AgentGoal::Deposit);
+        let station = assigned_station(
+            &content,
+            &simulation,
+            &config,
+            &simulation.actors[&actor_id],
+        )
+        .unwrap();
+        assert_eq!(station.id, &station_id);
+        assert_eq!(
+            Some(target),
+            station_deposit_approach(&content, &simulation, &world, station, position)
+        );
+    }
+
+    #[test]
+    fn builders_reserve_distinct_unoccupied_construction_approaches() {
+        let world = generate_world(&GameConfig::default().world);
+        let origin = GridPos { x: 95, z: 95 };
+        let first_builder = StableId::new("npc:builder_approach_first").unwrap();
+        let second_builder = StableId::new("npc:builder_approach_second").unwrap();
+        let occupied = BTreeMap::new();
+        let first = unoccupied_building_approach(
+            &world,
+            origin,
+            [3, 3],
+            GridPos { x: 90, z: 95 },
+            &first_builder,
+            &occupied,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let reservations = BTreeMap::from([(first, first_builder)]);
+        let second = unoccupied_building_approach(
+            &world,
+            origin,
+            [3, 3],
+            GridPos { x: 90, z: 95 },
+            &second_builder,
+            &occupied,
+            &reservations,
+        )
+        .unwrap();
+        assert_ne!(second, first);
+    }
+
+    #[test]
+    fn floorplan_owner_label_names_the_player_and_building() {
+        let content = embedded_content();
+        let owner = StableId::new("player:floorplan_owner").unwrap();
+        let mut simulation = WorldSimulation::new(7);
+        assert!(simulation.join_player(owner.clone(), GridPos { x: 4, z: 5 }));
+        simulation.actors.get_mut(&owner).unwrap().display_name = Some("Aidan".to_owned());
+        let definition = &content.buildings[&StableId::new("building:stonemason").unwrap()];
+
+        assert_eq!(
+            building_placement_overlay_text(&simulation, definition, &owner),
+            "Aidan · Stonemason floorplan"
+        );
     }
 
     #[test]
@@ -40024,6 +40370,8 @@ mod tests {
             current,
             &BTreeMap::new(),
             &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
         );
         assert_eq!(first_goal, AgentGoal::Gather(template.id.clone()));
         assert!(
@@ -40050,6 +40398,8 @@ mod tests {
             &actor_id,
             current,
             &retry_reservations,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
             &BTreeMap::new(),
         );
         assert_eq!(retry_goal, AgentGoal::Gather(reachable.id));
@@ -47631,7 +47981,7 @@ mod tests {
             ],
             &world,
         );
-        assert_eq!(position, GridPos { x: 4, z: 5 });
+        assert_eq!(position, GridPos { x: 4, z: 0 });
         assert_eq!(rotation, -2);
     }
 
@@ -47642,8 +47992,8 @@ mod tests {
         for (direction, expected) in [
             (BuildingDirection::Up, GridPos { x: 11, z: 10 }),
             (BuildingDirection::Down, GridPos { x: 9, z: 10 }),
-            (BuildingDirection::Left, GridPos { x: 10, z: 11 }),
-            (BuildingDirection::Right, GridPos { x: 10, z: 9 }),
+            (BuildingDirection::Left, GridPos { x: 10, z: 9 }),
+            (BuildingDirection::Right, GridPos { x: 10, z: 11 }),
         ] {
             let (actual, rotation) = shift_grid_position(
                 origin,

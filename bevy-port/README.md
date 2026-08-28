@@ -279,7 +279,11 @@ resets its backoff after every recovered session and pauses replacement accounti
 while the RTMP encoder is unavailable. Five-second health reports expose
 captured/output FPS, encoder/ingest, recent capture replacements, cadence skips,
 actual rejected video/audio frames, queue
-depth, and capture/encode latency. Auto encoder selection prefers AMD AMF on a
+depth, and capture/encode latency. The same samples and redacted reconnect
+causes are written asynchronously to
+`.stream-town/diagnostics/direct-broadcast.log` (with one rotated previous log),
+so a failed session can be diagnosed after the game exits without putting disk
+I/O on the render or encoder thread. Auto encoder selection prefers AMD AMF on a
 compatible Radeon GPU, falls back to forced-hardware Windows Media Foundation,
 and uses OpenH264 only as the software fallback. The
 independently stored broadcaster token and fetched stream key are always redacted.
@@ -322,6 +326,9 @@ output resolution, frame rate, video/audio bitrate, encoder preference,
 bandwidth-test mode, and stream-only/headed rendering. These controls are visibly locked from authorization through
 shutdown while a broadcast session is active; end the stream before changing or
 applying them. Saved values take effect on the next confirmed stream start.
+`REDUCE MOTION` in the operator panel is the accessibility preference: it
+suppresses non-essential loading/menu/cloud/fish/weather/firework motion and
+reduces foliage wind. It does not pause simulation, actors, or the stream.
 Unity-compatible game-master commands use a separate explicit list of numeric
 Twitch user IDs. Broadcaster/moderator status alone never grants those cheats;
 local `STREAM_TOWN_DEBUG_COMMANDS` injection retains Unity's debug-bridge bypass.

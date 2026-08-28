@@ -11,13 +11,16 @@
 use std::{
     collections::{HashMap, VecDeque},
     fmt,
+    fs::{self, OpenOptions},
+    io::Write as _,
+    path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -58,7 +61,7 @@ use windows_capture::{
 
 use crate::{
     OperatorChatRuntime, RuntimeConfig, RuntimePlayerSettings, SensitiveScreenActive,
-    SensitiveScreenUpdateSet, TwitchConnection,
+    SensitiveScreenUpdateSet, SimulationRuntime, TwitchConnection,
     twitch::{CredentialVault, OAuthClient, StoredOAuthToken, TwitchIngest},
 };
 
@@ -71,8 +74,63 @@ const TWITCH_LIVE_VERIFICATION_TIMEOUT: Duration = Duration::from_mins(1);
 const TWITCH_LIVE_VERIFICATION_INTERVAL: Duration = Duration::from_secs(2);
 const TWITCH_LIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RECONNECT_DELAY_SECONDS: u64 = 30;
+const DIRECT_BROADCAST_LOG_MAX_BYTES: u64 = 1_048_576;
+const DIRECT_BROADCAST_LOG_PATH: &str = ".stream-town/diagnostics/direct-broadcast.log";
+const DIRECT_BROADCAST_LOG_QUEUE_CAPACITY: usize = 256;
 const OPERATOR_WINDOW_WIDTH: u32 = 1_100;
 const OPERATOR_WINDOW_HEIGHT: u32 = 680;
+
+fn direct_broadcast_log_path() -> PathBuf {
+    std::env::var_os("STREAM_TOWN_BROADCAST_LOG")
+        .map_or_else(|| PathBuf::from(DIRECT_BROADCAST_LOG_PATH), PathBuf::from)
+}
+
+fn append_direct_broadcast_diagnostic(level: &str, message: &str) {
+    static DIAGNOSTICS: OnceLock<SyncSender<(String, String)>> = OnceLock::new();
+    let sender = DIAGNOSTICS.get_or_init(|| {
+        let (sender, receiver) =
+            mpsc::sync_channel::<(String, String)>(DIRECT_BROADCAST_LOG_QUEUE_CAPACITY);
+        let path = direct_broadcast_log_path();
+        let _ = thread::Builder::new()
+            .name("stream-town-broadcast-log".to_owned())
+            .spawn(move || {
+                while let Ok((level, message)) = receiver.recv() {
+                    let _ = append_direct_broadcast_diagnostic_to(&path, &level, &message);
+                }
+            });
+        sender
+    });
+    // Diagnostics must never stall rendering or encoding. A full queue means
+    // the disk is already unhealthy, so dropping a sample is safer than
+    // blocking the game thread and causing the very stream hitch being logged.
+    let _ = sender.try_send((level.to_owned(), message.to_owned()));
+}
+
+fn append_direct_broadcast_diagnostic_to(
+    path: &Path,
+    level: &str,
+    message: &str,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if path
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() >= DIRECT_BROADCAST_LOG_MAX_BYTES)
+    {
+        let previous = path.with_extension("previous.log");
+        if previous.exists() {
+            fs::remove_file(&previous)?;
+        }
+        fs::rename(path, previous)?;
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{timestamp} {level} {message}")
+}
 const OPERATOR_CHAT_VISIBLE_ROWS: usize = 8;
 const OPERATOR_CHAT_LEFT: f32 = 568.0;
 const OPERATOR_CHAT_TOP: f32 = 326.0;
@@ -733,12 +791,22 @@ fn poll_direct_broadcast_worker(
         .unwrap_or_default();
     for event in events {
         match event {
-            WorkerEvent::Connecting => runtime.phase = DirectBroadcastPhase::Connecting,
+            WorkerEvent::Connecting => {
+                runtime.phase = DirectBroadcastPhase::Connecting;
+                append_direct_broadcast_diagnostic("INFO", "event=session_connecting");
+            }
             WorkerEvent::Broadcasting {
                 encoder,
                 rejected_encoders,
             } => {
                 info!(%encoder, "direct Twitch broadcast encoder active");
+                append_direct_broadcast_diagnostic(
+                    "INFO",
+                    &format!(
+                        "event=session_broadcasting encoder={encoder:?} rejected_encoders={}",
+                        rejected_encoders.len()
+                    ),
+                );
                 runtime.encoder = Some(encoder);
                 runtime.encoder_rejections = rejected_encoders;
                 let now = Instant::now();
@@ -747,11 +815,31 @@ fn poll_direct_broadcast_worker(
                 begin_twitch_live_verification(&mut runtime);
             }
             WorkerEvent::Reconnecting(error) => {
+                let metrics = runtime.controller.as_ref().map_or_else(
+                    BroadcastMetricsSnapshot::default,
+                    BroadcastController::metrics,
+                );
                 runtime.live_verification = None;
                 runtime.verification_status = Some(format!("RTMP reconnect: {error}"));
                 runtime.phase = DirectBroadcastPhase::Reconnecting;
                 reset_stream_health_window(&mut runtime, Instant::now());
                 warn!(%error, "direct Twitch broadcast reconnecting");
+                append_direct_broadcast_diagnostic(
+                    "WARN",
+                    &format!(
+                        "event=session_reconnecting cause={error:?} captured_video={} encoded_video={} video_drops={} capture_replacements={} cadence_skips={} encoded_audio={} audio_drops={} audio_queue={} maximum_capture_ms={:.2} maximum_encode_ms={:.2}",
+                        metrics.captured_video,
+                        metrics.encoded_video,
+                        metrics.dropped_video,
+                        metrics.replaced_video,
+                        metrics.skipped_video,
+                        metrics.encoded_audio,
+                        metrics.dropped_audio,
+                        metrics.queued_audio,
+                        micros_to_milliseconds(metrics.maximum_capture_micros),
+                        micros_to_milliseconds(metrics.maximum_video_encode_micros),
+                    ),
+                );
             }
             WorkerEvent::Stopped => {
                 runtime.live_verification = None;
@@ -759,10 +847,15 @@ fn poll_direct_broadcast_worker(
                     runtime.phase = DirectBroadcastPhase::Stopped;
                     runtime.verification_status = Some("Broadcast output stopped".to_owned());
                 }
+                append_direct_broadcast_diagnostic("INFO", "event=session_stopped");
                 runtime.controller = None;
             }
             WorkerEvent::Error(error) => {
                 error!(%error, "direct Twitch broadcast worker stopped");
+                append_direct_broadcast_diagnostic(
+                    "ERROR",
+                    &format!("event=worker_stopped cause={error:?}"),
+                );
                 runtime.phase = DirectBroadcastPhase::Error(error);
             }
         }
@@ -940,6 +1033,14 @@ fn report_stream_health(runtime: &mut DirectBroadcastRuntime, target_fps: u8) {
         || new_video_drops > 0
         || new_video_skips > 0
         || new_audio_drops > 0;
+    append_direct_broadcast_diagnostic(
+        if unhealthy { "WARN" } else { "INFO" },
+        &format!(
+            "event=health target_fps={target_fps} captured_fps={captured_fps:.2} encoded_fps={encoded_fps:.2} audio_fps={audio_fps:.2} video_drops={new_video_drops} capture_replacements={new_video_replacements} cadence_skips={new_video_skips} audio_drops={new_audio_drops} audio_queue={} average_encode_ms={average_encode_ms:.2} maximum_encode_ms={:.2}",
+            metrics.queued_audio,
+            micros_to_milliseconds(metrics.maximum_video_encode_micros),
+        ),
+    );
     if unhealthy {
         warn!(
             target_fps,
@@ -1348,7 +1449,7 @@ fn spawn_stream_operator_view(
                 ),
                 (
                     StreamOperatorSettingAction::ToggleReducedMotion,
-                    "MOTION",
+                    "REDUCE MOTION",
                     348.0,
                     510.0,
                 ),
@@ -1765,6 +1866,8 @@ fn operator_live_button_label(phase: &DirectBroadcastPhase) -> &'static str {
 
 fn update_stream_operator_info(
     runtime: Res<DirectBroadcastRuntime>,
+    config: Res<RuntimeConfig>,
+    simulation: Option<Res<SimulationRuntime>>,
     mut text: Query<&mut Text, With<StreamOperatorInfoText>>,
 ) {
     let Ok(mut text) = text.single_mut() else {
@@ -1783,8 +1886,9 @@ fn update_stream_operator_info(
         .verification_status
         .as_deref()
         .unwrap_or("No Twitch public-status check is active");
+    let enemy_status = stream_operator_enemy_status(&config.0, simulation.as_deref());
     **text = format!(
-        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nRecent capture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum",
+        "Status: {:?}\nTwitch check: {}\nEncoder: {}\n{}\nStream motion: {:.1} FPS\nOutput cadence: {:.1} FPS\nRecent capture replacements: {} · Output cadence skips: {}\nRejected video frames: {} · Audio drops: {}\nEncode latency: {:.2} ms average / {:.2} ms maximum\n{}\nDrop log: {}",
         snapshot.phase,
         twitch_status,
         snapshot.encoder.as_deref().unwrap_or("starting"),
@@ -1797,7 +1901,56 @@ fn update_stream_operator_info(
         snapshot.dropped_audio_frames,
         snapshot.average_encode_ms,
         snapshot.maximum_encode_ms,
+        enemy_status,
+        DIRECT_BROADCAST_LOG_PATH,
     );
+}
+
+fn stream_operator_enemy_status(
+    config: &stream_town_domain::GameConfig,
+    simulation: Option<&SimulationRuntime>,
+) -> String {
+    let Some(simulation) = simulation else {
+        return "Enemy threat: world not loaded".to_owned();
+    };
+    let living_enemies = simulation
+        .0
+        .actors
+        .values()
+        .filter(|actor| actor.alive && actor.role.as_str() == "role:enemy")
+        .count();
+    let camps = simulation.0.enemy_camps.len();
+    let timing = if let Some(raid) = &simulation.0.active_raid {
+        format!(
+            "raid wave {}/{} · {} tracked",
+            raid.current_wave,
+            raid.total_waves,
+            raid.tracked_enemies.len()
+        )
+    } else if config.time.sample(simulation.0.elapsed_seconds).is_daytime {
+        let remaining = seconds_until_enemy_night(&config.time, simulation.0.elapsed_seconds);
+        format!("night spawning in {}", format_minutes_seconds(remaining))
+    } else {
+        "night spawning enabled".to_owned()
+    };
+    format!("Enemy threat: {living_enemies} active · {camps} camps · {timing}")
+}
+
+fn seconds_until_enemy_night(
+    time: &stream_town_domain::TimeCycleConfig,
+    elapsed_seconds: f64,
+) -> u64 {
+    let cycle = f64::from(time.seconds_per_day.max(1));
+    let phase = elapsed_seconds.max(0.0).rem_euclid(cycle);
+    let night_start = cycle * f64::from(time.daylight_per_thousand) / 1_000.0;
+    let remaining = Duration::from_secs_f64((night_start - phase).max(0.0));
+    remaining
+        .as_secs()
+        .saturating_add(u64::from(remaining.subsec_nanos() > 0))
+}
+
+fn format_minutes_seconds(seconds: u64) -> String {
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 fn stream_operator_settings_controls(
@@ -3223,7 +3376,7 @@ fn run_broadcast_worker(
             }
             Err(error) => {
                 let wait_seconds = reconnect_wait_seconds(&mut reconnect_delay, session_published);
-                let message = format!("{error:#}");
+                let message = redact_broadcast_target(&format!("{error:#}"), &target.url);
                 let _ = events.send(WorkerEvent::Reconnecting(message));
                 for _ in 0..wait_seconds.saturating_mul(4) {
                     if stop.load(Ordering::Relaxed) {
@@ -3235,6 +3388,18 @@ fn run_broadcast_worker(
             }
         }
     }
+}
+
+fn redact_broadcast_target(message: &str, target_url: &str) -> String {
+    let mut redacted = message.replace(target_url, "[RTMP target redacted]");
+    if let Some(secret) = target_url
+        .rsplit('/')
+        .next()
+        .filter(|secret| !secret.is_empty())
+    {
+        redacted = redacted.replace(secret, "[stream key redacted]");
+    }
+    redacted
 }
 
 fn reconnect_wait_seconds(delay: &mut u64, session_published: bool) -> u64 {
@@ -3912,6 +4077,33 @@ pub fn inspect_broadcast_prerequisites(config: &BroadcastConfig) -> Result<Broad
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnect_diagnostics_redact_the_rtmp_target_and_stream_key() {
+        let target = "rtmp://live.example.invalid/app/live_secret_value";
+        let error = format!("could not write to {target}; key live_secret_value rejected");
+        let redacted = redact_broadcast_target(&error, target);
+        assert!(!redacted.contains(target));
+        assert!(!redacted.contains("live_secret_value"));
+        assert!(redacted.contains("[RTMP target redacted]"));
+    }
+
+    #[test]
+    fn direct_broadcast_diagnostics_are_persisted_without_a_live_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("direct-broadcast.log");
+        append_direct_broadcast_diagnostic_to(&path, "WARN", "event=test cause=network").unwrap();
+        let written = fs::read_to_string(path).unwrap();
+        assert!(written.contains("WARN event=test cause=network"));
+    }
+
+    #[test]
+    fn enemy_operator_countdown_matches_the_unity_day_boundary() {
+        let time = stream_town_domain::TimeCycleConfig::default();
+        assert_eq!(seconds_until_enemy_night(&time, 343.0), 2_055);
+        assert_eq!(format_minutes_seconds(2_055), "34:15");
+        assert_eq!(seconds_until_enemy_night(&time, 2_400.0), 0);
+    }
 
     fn ingest(name: &str, is_default: bool, priority: u32) -> TwitchIngest {
         TwitchIngest {
