@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context as _;
+
 mod technology_graph;
 
 use bevy::animation::{
@@ -1662,7 +1664,7 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
         if ui.button("Save + apply to game").clicked() {
             state.status = match save_and_apply_game_config(&state.config, &state.config_path) {
                 Ok((project, runtime)) => format!(
-                    "Saved {} and applied {}; restart the game to load the changes",
+                    "Saved {} and applied {} while preserving local Twitch setup; restart the game to load the changes",
                     project.display(),
                     runtime.display()
                 ),
@@ -1679,9 +1681,9 @@ fn authority_tab(ui: &mut egui::Ui, state: &mut ToolState) {
             };
         }
         if ui.button("Apply locally only").clicked() {
-            state.status = match save_runtime_config(&state.config) {
+            state.status = match save_authoring_runtime_config(&state.config) {
                 Ok(path) => format!(
-                    "Applied runtime configuration to {}; restart the game to load it",
+                    "Applied authored runtime settings to {} without replacing local Twitch setup; restart the game to load them",
                     path.display()
                 ),
                 Err(error) => format!("Could not save runtime override: {error:#}"),
@@ -7491,7 +7493,7 @@ fn world_tab(
         if ui.button("Save + apply world config").clicked() {
             state.status = match save_and_apply_game_config(&state.config, &state.config_path) {
                 Ok((project, runtime)) => format!(
-                    "Saved {} and applied {}; restart the game to load the changes",
+                    "Saved {} and applied {} while preserving local Twitch setup; restart the game to load the changes",
                     project.display(),
                     runtime.display()
                 ),
@@ -9364,12 +9366,43 @@ fn save_runtime_config(config: &GameConfig) -> anyhow::Result<std::path::PathBuf
     stream_town_game::save_runtime_config(config)
 }
 
+fn merge_authoring_config_with_runtime(
+    authored: &GameConfig,
+    existing_runtime: Option<&GameConfig>,
+) -> GameConfig {
+    let mut applied = authored.clone();
+    if let Some(existing_runtime) = existing_runtime {
+        // Twitch identities and broadcast preferences are local operator data.
+        // The tools app authors simulation/content settings, so applying those
+        // settings must never replace setup entered through the game's Secrets
+        // and Streaming screens with the repository baseline.
+        applied.twitch = existing_runtime.twitch.clone();
+    }
+    applied
+}
+
+fn save_authoring_runtime_config(config: &GameConfig) -> anyhow::Result<PathBuf> {
+    let runtime_path = stream_town_game::runtime_config_path();
+    let existing_runtime = runtime_path
+        .is_file()
+        .then(stream_town_game::load_runtime_config)
+        .transpose()
+        .with_context(|| {
+            format!(
+                "could not preserve local Twitch setup from {}",
+                runtime_path.display()
+            )
+        })?;
+    let applied = merge_authoring_config_with_runtime(config, existing_runtime.as_ref());
+    save_runtime_config(&applied)
+}
+
 fn save_and_apply_game_config(
     config: &GameConfig,
     project_path: &str,
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
     let project = save_game_config(config, project_path)?;
-    let runtime = save_runtime_config(config)?;
+    let runtime = save_authoring_runtime_config(config)?;
     Ok((project, runtime))
 }
 
@@ -12834,6 +12867,42 @@ mod tests {
             load_game_config(path.to_str().unwrap()).unwrap().world.seed,
             42
         );
+    }
+
+    #[test]
+    fn authoring_apply_preserves_the_complete_local_twitch_setup() {
+        let mut authored = GameConfig::default();
+        authored.time.seconds_per_day = 900;
+        authored.world.seed = 42;
+
+        let mut runtime = GameConfig::default();
+        runtime.twitch.enabled = true;
+        runtime.twitch.client_id = "local-public-client-id".to_owned();
+        runtime.twitch.bot_login = "localbot".to_owned();
+        runtime.twitch.channel_login = "localchannel".to_owned();
+        runtime.twitch.broadcast.enabled = true;
+        runtime.twitch.broadcast.width = 1_920;
+        runtime.twitch.broadcast.height = 1_080;
+        runtime.twitch.broadcast.frames_per_second = 60;
+        runtime.twitch.broadcast.video_bitrate_kbps = 6_000;
+        runtime.twitch.broadcast.audio_bitrate_kbps = 160;
+        runtime.twitch.broadcast.encoder = BroadcastEncoderPreference::Amd;
+        runtime.twitch.broadcast.ingest = "Sydney".to_owned();
+
+        let merged = merge_authoring_config_with_runtime(&authored, Some(&runtime));
+
+        assert_eq!(merged.time.seconds_per_day, 900);
+        assert_eq!(merged.world.seed, 42);
+        assert_eq!(merged.twitch, runtime.twitch);
+    }
+
+    #[test]
+    fn first_authoring_apply_uses_authored_twitch_defaults_without_a_runtime_override() {
+        let authored = GameConfig::default();
+
+        let merged = merge_authoring_config_with_runtime(&authored, None);
+
+        assert_eq!(merged, authored);
     }
 
     #[test]

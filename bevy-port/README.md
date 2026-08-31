@@ -34,8 +34,11 @@ stable-ID layout edits share undo/redo. Both
 written, reloaded, and compared before success is reported.
 
 The Game Authority tab edits the source-controlled simulation configuration and
-can also write a machine-local runtime override. The Buildings and Roles tabs
-cover every persisted balance, station, target, ability, animation, equipment,
+can also write a machine-local runtime override. Applying authored simulation or
+world settings merges them into the existing override while preserving the
+complete machine-local Twitch identity and broadcast configuration; repository
+defaults can never replace operator setup entered in the game. The Buildings
+and Roles tabs cover every persisted balance, station, target, ability, animation, equipment,
 production, storage, projectile, footprint, and model binding through validated
 catalog-backed choices.
 The World + Nav tab edits the Unity-scale terrain inputs, explicit land/water
